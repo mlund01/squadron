@@ -1,0 +1,149 @@
+[2026-01-15T22:15:26-06:00] === User Message ===
+shout something for me
+
+[2026-01-15T22:15:28-06:00] === LLM Response ===
+<ACTION>shout</ACTION>
+<ACTION_INPUT>{"text": "Hello there! Hope you're having a fantastic day!"}</ACTION_INPUT>
+
+[2026-01-15T22:15:28-06:00] === User Message ===
+<OBSERVATION>
+HELLO THERE! HOPE YOU'RE HAVING A FANTASTIC DAY!
+</OBSERVATION>
+
+[2026-01-15T22:15:31-06:00] === LLM Response ===
+<ANSWER>
+There you go! I shouted a cheerful greeting for you: "HELLO THERE! HOPE YOU'RE HAVING A FANTASTIC DAY!" 
+
+Is there anything else you'd like me to shout or help you with?
+</ANSWER>
+
+[2026-01-15T22:16:10-06:00] === User Message ===
+hey
+
+[2026-01-15T22:16:12-06:00] === LLM Response ===
+<ANSWER>
+Hey there! How can I help you today?
+</ANSWER>
+
+[2026-01-15T22:16:22-06:00] === User Message ===
+write a few sentences for me
+
+[2026-01-15T22:16:25-06:00] === LLM Response ===
+<ANSWER>
+Here are a few sentences for you:
+
+The morning sun cast long shadows across the quiet street, painting everything in warm golden hues. A gentle breeze rustled through the leaves of the old oak tree, carrying with it the sweet scent of blooming jasmine. In the distance, the sound of children's laughter echoed from the nearby park, reminding everyone that summer had finally arrived.
+</ANSWER>
+
+[2026-01-15T22:16:57-06:00] === User Message ===
+show me some markdown!
+
+[2026-01-15T22:17:02-06:00] === LLM Response ===
+<ANSWER>
+Here's some markdown for you to see in action:
+
+# This is a Main Header
+
+## This is a Subheader
+
+**This text is bold** and *this text is italic*.
+
+Here's a list:
+- First item
+- Second item
+- Third item with **bold text**
+
+And a numbered list:
+1. First step
+2. Second step
+3. Third step
+
+> This is a blockquote - great for highlighting important information!
+
+Here's some `inline code` and a code block:
+
+```python
+def hello_world():
+    print("Hello, World!")
+    return "Markdown is awesome!"
+```
+
+You can also create [links](https://www.example.com) and add horizontal rules:
+
+---
+
+Pretty neat, right? Markdown makes formatting text simple and readable!
+</ANSWER>
+
+[2026-01-15T22:17:16-06:00] === User Message ===
+make a big table
+
+[2026-01-15T22:17:31-06:00] === LLM Response ===
+<ANSWER>
+Here's a big markdown table for you:
+
+| Product | Category | Price | Stock | Rating | Manufacturer | Release Date | Features | Warranty | Available Colors |
+|---------|----------|-------|--------|--------|--------------|--------------|----------|----------|------------------|
+| iPhone 15 Pro | Smartphone | $999 | 150 | 4.8/5 | Apple | Sep 2023 | A17 Pro, Titanium, USB-C | 1 Year | Natural, Blue, White, Black |
+| Galaxy S24 Ultra | Smartphone | $1199 | 89 | 4.7/5 | Samsung | Jan 2024 | S Pen, 200MP Camera | 1 Year | Titanium Gray, Titanium Black |
+| MacBook Pro 14" | Laptop | $1999 | 45 | 4.9/5 | Apple | Oct 2023 | M3 Chip, Liquid Retina XDR | 1 Year | Space Gray, Silver |
+| Dell XPS 13 | Laptop | $1299 | 67 | 4.6/5 | Dell | Mar 2024 | Intel Core i7, OLED Display | 1 Year | Platinum Silver, Graphite |
+| AirPods Pro 2 | Earbuds | $249 | 234 | 4.5/5 | Apple | Sep 2022 | Active Noise Cancellation | 1 Year | White |
+| Sony WH-1000XM5 | Headphones | $399 | 112 | 4.8/5 | Sony | May 2022 | 30hr Battery, NC | 1 Year | Black, Silver |
+| iPad Air 5 | Tablet | $599 | 78 | 4.7/5 | Apple | Mar 2022 | M1 Chip, 10.9" Display | 1 Year | Space Gray, Starlight, Pink |
+| Surface Pro 9 | 2-in-1 | $999 | 34 | 4.4/5 | Microsoft | Oct 2022 | Intel i5, Detachable KB | 1 Year | Platinum, Graphite |
+| Nintendo Switch | Gaming | $299 | 156 | 4.6/5 | Nintendo | Mar 2017 | Portable/Docked Gaming | 1 Year | Neon Blue/Red, Gray |
+| Steam Deck | Gaming | $649 | 23 | 4.3/5 | Valve | Feb 2022 | PC Gaming Portable | 1 Year | Black |
+| Apple Watch S9 | Smartwatch | $399 | 203 | 4.7/5 | Apple | Sep 2023 | S9 Chip, Always-On Display | 1 Year | Midnight, Starlight, Red |
+| Garmin Fenix 7 | Sports Watch | $699 | 56 | 4.8/5 | Garmin | Jan 2022 | GPS, Solar Charging | 2 Years | Black, Silver |
+
+That's a pretty substantial table with 12 rows and 10 columns! It includes various tech products with detailed specifications, pricing, and availability information.
+</ANSWER>
+
+[2026-01-15T22:30:12-06:00] === User Message ===
+what's the weather in KC?
+
+[2026-01-15T22:30:14-06:00] === LLM Response ===
+<ACTION>tools.weather</ACTION>
+<ACTION_INPUT>{"city": "Kansas City"}</ACTION_INPUT>
+
+[2026-01-15T22:30:29-06:00] === User Message ===
+<OBSERVATION>
+Status: 200 200 OK
+
+Kansas City: ☀️   +34°F
+
+</OBSERVATION>
+
+[2026-01-15T22:30:31-06:00] === LLM Response ===
+<ANSWER>
+The current weather in Kansas City is sunny and 34°F.
+</ANSWER>
+
+[2026-01-15T22:31:06-06:00] === User Message ===
+shout!
+
+[2026-01-15T22:31:09-06:00] === LLM Response ===
+<ANSWER>
+What would you like me to shout? I can use the shout tool to make any text ALL CAPS for you!
+</ANSWER>
+
+[2026-01-15T22:31:15-06:00] === User Message ===
+anything
+
+[2026-01-15T22:31:17-06:00] === LLM Response ===
+<ACTION>tools.shout</ACTION>
+<ACTION_INPUT>{"text": "Hello there! Hope you're having a great day!"}</ACTION_INPUT>
+
+[2026-01-15T22:31:17-06:00] === User Message ===
+<OBSERVATION>
+HELLO THERE! HOPE YOU'RE HAVING A GREAT DAY!
+</OBSERVATION>
+
+[2026-01-15T22:31:19-06:00] === LLM Response ===
+<ANSWER>
+HELLO THERE! HOPE YOU'RE HAVING A GREAT DAY!
+
+There you go - shouted with enthusiasm! 🎉
+</ANSWER>
+

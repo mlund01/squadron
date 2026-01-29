@@ -101,6 +101,11 @@ func LoadPlugin(name, version string) (*PluginClient, error) {
 	}, nil
 }
 
+// Configure passes settings to the plugin
+func (p *PluginClient) Configure(settings map[string]string) error {
+	return p.provider.Configure(settings)
+}
+
 // Call invokes a tool on the plugin
 func (p *PluginClient) Call(toolName string, payload string) (string, error) {
 	return p.provider.Call(toolName, payload)

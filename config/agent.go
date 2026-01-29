@@ -17,13 +17,14 @@ const (
 )
 
 // ReservedPluginNamespaces are plugin names reserved for internal tools
-var ReservedPluginNamespaces = []string{"bash", "http"}
+var ReservedPluginNamespaces = []string{"bash", "http", "dataset"}
 
 // InternalPluginTools maps internal plugin namespaces to their tools
 // These are accessed as plugins.bash.bash, plugins.http.get, etc.
 var InternalPluginTools = map[string][]string{
-	"bash": {"bash"},
-	"http": {"get", "post", "put", "patch", "delete"},
+	"bash":    {"bash"},
+	"http":    {"get", "post", "put", "patch", "delete"},
+	"dataset": {"set", "sample", "count"},
 }
 
 // InternalTools is the list of available internal tools (legacy format for backwards compatibility)
@@ -81,27 +82,16 @@ func IsInternalTool(name string) bool {
 
 // Agent represents an AI agent configuration
 type Agent struct {
-	Name        string    `hcl:"name,label"`
-	Model       string    `hcl:"model"`
-	Personality string    `hcl:"personality"`
-	Role        string    `hcl:"role"`
-	Tools       []string  `hcl:"tools,optional"`
-	Mode        AgentMode `hcl:"mode,optional"`
+	Name        string   `hcl:"name,label"`
+	Model       string   `hcl:"model"`
+	Personality string   `hcl:"personality"`
+	Role        string   `hcl:"role"`
+	Tools       []string `hcl:"tools,optional"`
 }
 
 // Validate checks that the agent configuration is valid
 // Note: Toolbox tools are validated in Config.Validate() since we need access to custom tool definitions
 func (a *Agent) Validate() error {
-	// Default mode to chat if not specified
-	if a.Mode == "" {
-		a.Mode = ModeChat
-	}
-
-	// Validate mode
-	if a.Mode != ModeChat && a.Mode != ModeWorkflow {
-		return fmt.Errorf("invalid mode '%s': must be 'chat' or 'workflow'", a.Mode)
-	}
-
 	return nil
 }
 

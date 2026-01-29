@@ -34,6 +34,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRe
 		params.System = systemPrompts
 	}
 
+	if len(req.StopSequences) > 0 {
+		params.StopSequences = req.StopSequences
+	}
+
 	resp, err := p.client.Messages.New(ctx, params)
 	if err != nil {
 		return nil, err
@@ -73,6 +77,10 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 
 	if len(systemPrompts) > 0 {
 		params.System = systemPrompts
+	}
+
+	if len(req.StopSequences) > 0 {
+		params.StopSequences = req.StopSequences
 	}
 
 	stream := p.client.Messages.NewStreaming(ctx, params)

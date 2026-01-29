@@ -105,6 +105,8 @@ func (c *Config) Validate() error {
 		for _, toolName := range tools {
 			validToolRefs[fmt.Sprintf("plugins.%s.%s", namespace, toolName)] = true
 		}
+		// Add "all" marker for loading all tools from this plugin
+		validToolRefs[fmt.Sprintf("plugins.%s.all", namespace)] = true
 	}
 
 	// Add external plugin tools
@@ -115,6 +117,8 @@ func (c *Config) Validate() error {
 				validToolRefs[fmt.Sprintf("plugins.%s.%s", pluginName, t.Name)] = true
 			}
 		}
+		// Add "all" marker for loading all tools from this plugin
+		validToolRefs[fmt.Sprintf("plugins.%s.all", pluginName)] = true
 	}
 
 	// Add custom tools (both tools.{name} and bare {name} for backwards compatibility)
@@ -244,19 +248,25 @@ func loadFromFiles(files []string) (*Config, error) {
 
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Plugins {
-			var p Plugin
-			p.Name = block.Labels[0]
-			diags := gohcl.DecodeBody(block.Body, varsCtx, &p)
-			if diags.HasErrors() {
-				return nil, fmt.Errorf("decode plugin %s: %w", p.Name, diags)
+			p, err := parsePluginBlock(block, varsCtx)
+			if err != nil {
+				return nil, err
 			}
-			allPlugins = append(allPlugins, p)
+			allPlugins = append(allPlugins, *p)
 
 			// Try to load the plugin
 			client, err := plugin.LoadPlugin(p.Name, p.Version)
 			if err != nil {
 				pluginWarnings = append(pluginWarnings, fmt.Sprintf("plugin '%s' (version %s): %v", p.Name, p.Version, err))
 			} else {
+				// Configure the plugin with settings if any
+				if len(p.Settings) > 0 {
+					if err := client.Configure(p.Settings); err != nil {
+						pluginWarnings = append(pluginWarnings, fmt.Sprintf("plugin '%s' configure: %v", p.Name, err))
+						client.Close()
+						continue
+					}
+				}
 				loadedPlugins[p.Name] = client
 			}
 		}
@@ -539,6 +549,8 @@ func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.
 		for _, toolName := range tools {
 			toolsMap[toolName] = cty.StringVal(fmt.Sprintf("plugins.%s.%s", namespace, toolName))
 		}
+		// Add "all" marker that expands to all tools from this plugin
+		toolsMap["all"] = cty.StringVal(fmt.Sprintf("plugins.%s.all", namespace))
 		pluginsMap[namespace] = cty.ObjectVal(toolsMap)
 	}
 
@@ -552,6 +564,8 @@ func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.
 				toolsMap[t.Name] = cty.StringVal(fmt.Sprintf("plugins.%s.%s", pluginName, t.Name))
 			}
 		}
+		// Add "all" marker that expands to all tools from this plugin
+		toolsMap["all"] = cty.StringVal(fmt.Sprintf("plugins.%s.all", pluginName))
 		pluginsMap[pluginName] = cty.ObjectVal(toolsMap)
 	}
 
@@ -626,6 +640,7 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "task", LabelNames: []string{"name"}},
 			{Type: "input", LabelNames: []string{"name"}},
+			{Type: "dataset", LabelNames: []string{"name"}},
 		},
 	})
 	if diags.HasErrors() {
@@ -670,6 +685,28 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 		workflow.Inputs = append(workflow.Inputs, *input)
 	}
 
+	// Build inputs context with placeholder values for dataset bind_to validation
+	inputsType := workflow.BuildInputsCtyType()
+	inputsCtx := &hcl.EvalContext{
+		Variables: make(map[string]cty.Value),
+	}
+	for k, v := range ctx.Variables {
+		inputsCtx.Variables[k] = v
+	}
+	inputsCtx.Variables["inputs"] = cty.UnknownVal(inputsType)
+
+	// Parse dataset blocks
+	for _, datasetBlock := range workflowContent.Blocks {
+		if datasetBlock.Type != "dataset" {
+			continue
+		}
+		dataset, err := parseDatasetBlock(datasetBlock, inputsCtx)
+		if err != nil {
+			return nil, fmt.Errorf("workflow '%s': %w", workflowName, err)
+		}
+		workflow.Datasets = append(workflow.Datasets, *dataset)
+	}
+
 	// Build tasks context for depends_on references
 	taskNames := make(map[string]cty.Value)
 	for _, taskBlock := range workflowContent.Blocks {
@@ -678,10 +715,13 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 		}
 	}
 
-	// Build inputs context with placeholder values for validation
-	inputsType := workflow.BuildInputsCtyType()
+	// Build datasets context for iterator references
+	datasetNames := make(map[string]cty.Value)
+	for _, ds := range workflow.Datasets {
+		datasetNames[ds.Name] = cty.StringVal(ds.Name)
+	}
 
-	// Add tasks and inputs namespaces to context
+	// Add tasks, inputs, datasets, and item namespaces to context
 	taskCtx := &hcl.EvalContext{
 		Variables: make(map[string]cty.Value),
 	}
@@ -690,6 +730,8 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 	}
 	taskCtx.Variables["tasks"] = cty.ObjectVal(taskNames)
 	taskCtx.Variables["inputs"] = cty.UnknownVal(inputsType) // Placeholder for validation
+	taskCtx.Variables["datasets"] = cty.ObjectVal(datasetNames)
+	taskCtx.Variables["item"] = cty.DynamicVal // Placeholder for iteration item
 
 	// Parse task blocks
 	for _, taskBlock := range workflowContent.Blocks {
@@ -754,16 +796,174 @@ func parseWorkflowInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*WorkflowI
 	return input, nil
 }
 
+// parseDatasetBlock parses a dataset block within a workflow
+func parseDatasetBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Dataset, error) {
+	datasetName := block.Labels[0]
+
+	datasetContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "description"},
+			{Name: "bind_to"},
+			{Name: "default"},
+		},
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "schema"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("dataset '%s': %w", datasetName, diags)
+	}
+
+	dataset := &Dataset{
+		Name: datasetName,
+	}
+
+	// Get optional description
+	if descAttr, ok := datasetContent.Attributes["description"]; ok {
+		descVal, diags := descAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("dataset '%s': %w", datasetName, diags)
+		}
+		dataset.Description = descVal.AsString()
+	}
+
+	// Get optional bind_to - store the expression for deferred evaluation
+	// and extract the input name for validation
+	if bindAttr, ok := datasetContent.Attributes["bind_to"]; ok {
+		dataset.BindToExpr = bindAttr.Expr
+
+		// Extract the input name from the traversal
+		// The expression should be "inputs.{input_name}"
+		traversal, travDiags := hcl.AbsTraversalForExpr(bindAttr.Expr)
+		if travDiags.HasErrors() || len(traversal) < 2 {
+			return nil, fmt.Errorf("dataset '%s': bind_to must be in format inputs.{input_name}", datasetName)
+		}
+		if traversal.RootName() != "inputs" {
+			return nil, fmt.Errorf("dataset '%s': bind_to must reference inputs.{input_name}", datasetName)
+		}
+		if attr, ok := traversal[1].(hcl.TraverseAttr); ok {
+			dataset.BindTo = attr.Name
+		} else {
+			return nil, fmt.Errorf("dataset '%s': bind_to must be in format inputs.{input_name}", datasetName)
+		}
+	}
+
+	// Get optional default (list of items)
+	if defaultAttr, ok := datasetContent.Attributes["default"]; ok {
+		defaultVal, diags := defaultAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("dataset '%s': %w", datasetName, diags)
+		}
+		// Convert to list of cty.Value
+		if defaultVal.CanIterateElements() {
+			for it := defaultVal.ElementIterator(); it.Next(); {
+				_, v := it.Element()
+				dataset.Default = append(dataset.Default, v)
+			}
+		} else {
+			return nil, fmt.Errorf("dataset '%s': default must be a list", datasetName)
+		}
+	}
+
+	// Parse schema block if present
+	for _, schemaBlock := range datasetContent.Blocks {
+		if schemaBlock.Type == "schema" {
+			schema, err := parseSchemaBlock(schemaBlock)
+			if err != nil {
+				return nil, fmt.Errorf("dataset '%s': %w", datasetName, err)
+			}
+			dataset.Schema = schema
+		}
+	}
+
+	return dataset, nil
+}
+
+// parseSchemaBlock parses a schema block (reuses inputFieldBlock pattern)
+func parseSchemaBlock(block *hcl.Block) (*InputsSchema, error) {
+	var schemaContent struct {
+		Fields []inputFieldBlock `hcl:"field,block"`
+	}
+	diags := gohcl.DecodeBody(block.Body, nil, &schemaContent)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	schema := &InputsSchema{}
+	for _, f := range schemaContent.Fields {
+		schema.Fields = append(schema.Fields, InputField{
+			Name:        f.Name,
+			Type:        f.Type,
+			Description: f.Description,
+			Required:    f.Required,
+		})
+	}
+	return schema, nil
+}
+
+// parseIteratorBlock parses an iterator block within a task
+func parseIteratorBlock(block *hcl.Block, ctx *hcl.EvalContext) (*TaskIterator, error) {
+	iterContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "dataset", Required: true},
+			{Name: "parallel"},
+			{Name: "max_retries"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	// Get dataset reference
+	datasetVal, diags := iterContent.Attributes["dataset"].Expr.Value(ctx)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	iterator := &TaskIterator{
+		Dataset:    datasetVal.AsString(),
+		Parallel:   false, // Default to sequential
+		MaxRetries: 0,     // Default to no retries
+	}
+
+	// Get optional parallel flag
+	if parallelAttr, ok := iterContent.Attributes["parallel"]; ok {
+		parallelVal, diags := parallelAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+		iterator.Parallel = parallelVal.True()
+	}
+
+	// Get optional max_retries
+	if maxRetriesAttr, ok := iterContent.Attributes["max_retries"]; ok {
+		maxRetriesVal, diags := maxRetriesAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+		// Convert cty.Number to int
+		bf := maxRetriesVal.AsBigFloat()
+		intVal, _ := bf.Int64()
+		iterator.MaxRetries = int(intVal)
+	}
+
+	return iterator, nil
+}
+
 // parseTaskBlock parses a single task block within a workflow
 func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 	taskName := block.Labels[0]
 
-	// Parse task attributes
+	// Parse task attributes and blocks
 	taskContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
 			{Name: "objective", Required: true},
 			{Name: "agents"},    // Optional - uses workflow-level agents if not specified
 			{Name: "depends_on"},
+		},
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "iterator"},
+			{Type: "output"},
 		},
 	})
 	if diags.HasErrors() {
@@ -804,10 +1004,146 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		}
 	}
 
+	// Parse iterator block if present
+	var iterator *TaskIterator
+	for _, iterBlock := range taskContent.Blocks {
+		if iterBlock.Type == "iterator" {
+			iter, err := parseIteratorBlock(iterBlock, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("task '%s': %w", taskName, err)
+			}
+			iterator = iter
+			break
+		}
+	}
+
+	// Parse output block if present
+	var output *OutputSchema
+	for _, outputBlock := range taskContent.Blocks {
+		if outputBlock.Type == "output" {
+			out, err := parseOutputBlock(outputBlock)
+			if err != nil {
+				return nil, fmt.Errorf("task '%s': %w", taskName, err)
+			}
+			output = out
+			break
+		}
+	}
+
 	return &Task{
 		Name:          taskName,
 		ObjectiveExpr: objectiveExpr,
 		Agents:        agents,
 		DependsOn:     dependsOn,
+		Iterator:      iterator,
+		Output:        output,
 	}, nil
+}
+
+// outputFieldBlock is used for parsing output field blocks
+type outputFieldBlock struct {
+	Name        string `hcl:"name,label"`
+	Type        string `hcl:"type"`
+	Description string `hcl:"description,optional"`
+	Required    bool   `hcl:"required,optional"`
+}
+
+// parseOutputBlock parses an output block within a task
+func parseOutputBlock(block *hcl.Block) (*OutputSchema, error) {
+	var outputContent struct {
+		Fields []outputFieldBlock `hcl:"field,block"`
+	}
+	diags := gohcl.DecodeBody(block.Body, nil, &outputContent)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	output := &OutputSchema{}
+	for _, f := range outputContent.Fields {
+		output.Fields = append(output.Fields, OutputField{
+			Name:        f.Name,
+			Type:        f.Type,
+			Description: f.Description,
+			Required:    f.Required,
+		})
+	}
+	return output, nil
+}
+
+// parsePluginBlock parses a plugin block with optional settings
+func parsePluginBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Plugin, error) {
+	pluginName := block.Labels[0]
+
+	// Parse the plugin block content
+	pluginContent, remainBody, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "source", Required: true},
+			{Name: "version", Required: true},
+		},
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "settings"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("plugin '%s': %w", pluginName, diags)
+	}
+
+	// Get source
+	sourceVal, diags := pluginContent.Attributes["source"].Expr.Value(ctx)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("plugin '%s': %w", pluginName, diags)
+	}
+
+	// Get version
+	versionVal, diags := pluginContent.Attributes["version"].Expr.Value(ctx)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("plugin '%s': %w", pluginName, diags)
+	}
+
+	p := &Plugin{
+		Name:     pluginName,
+		Source:   sourceVal.AsString(),
+		Version:  versionVal.AsString(),
+		Settings: make(map[string]string),
+	}
+
+	// Parse settings block if present
+	for _, settingsBlock := range pluginContent.Blocks {
+		if settingsBlock.Type == "settings" {
+			// Get all attributes from settings block dynamically
+			settingsContent, _, diags := settingsBlock.Body.PartialContent(&hcl.BodySchema{})
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("plugin '%s' settings: %w", pluginName, diags)
+			}
+
+			// Parse remaining body as JustAttributes to get all settings
+			attrs, diags := settingsBlock.Body.JustAttributes()
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("plugin '%s' settings: %w", pluginName, diags)
+			}
+
+			for name, attr := range attrs {
+				val, diags := attr.Expr.Value(ctx)
+				if diags.HasErrors() {
+					return nil, fmt.Errorf("plugin '%s' setting '%s': %w", pluginName, name, diags)
+				}
+				// Convert to string
+				if val.Type() == cty.String {
+					p.Settings[name] = val.AsString()
+				} else if val.Type() == cty.Bool {
+					p.Settings[name] = fmt.Sprintf("%v", val.True())
+				} else if val.Type() == cty.Number {
+					bf := val.AsBigFloat()
+					p.Settings[name] = bf.String()
+				} else {
+					p.Settings[name] = val.GoString()
+				}
+			}
+
+			_ = settingsContent // Used for block iteration
+		}
+	}
+
+	_ = remainBody // No remaining body expected
+	return p, nil
 }

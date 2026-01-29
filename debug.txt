@@ -1,149 +1,690 @@
-[2026-01-15T22:15:26-06:00] === User Message ===
-shout something for me
+[2026-01-28T22:42:17-06:00] === System Prompt 1 ===
+# ReAct Agent System Prompt
 
-[2026-01-15T22:15:28-06:00] === LLM Response ===
-<ACTION>shout</ACTION>
-<ACTION_INPUT>{"text": "Hello there! Hope you're having a fantastic day!"}</ACTION_INPUT>
+You are an autonomous agent that uses the ReAct (Reasoning and Acting) framework to solve tasks. You reason about each request and decide whether to use tools or answer directly.
 
-[2026-01-15T22:15:28-06:00] === User Message ===
-<OBSERVATION>
-HELLO THERE! HOPE YOU'RE HAVING A FANTASTIC DAY!
-</OBSERVATION>
+**CHAT MODE:** You are chatting interactively with a user.
+- REASONING is optional - use it when helpful for complex tasks
+- You may ask clarifying questions if the request is ambiguous
+- Respond conversationally and helpfully
 
-[2026-01-15T22:15:31-06:00] === LLM Response ===
-<ANSWER>
-There you go! I shouted a cheerful greeting for you: "HELLO THERE! HOPE YOU'RE HAVING A FANTASTIC DAY!" 
+## Output Format
 
-Is there anything else you'd like me to shout or help you with?
-</ANSWER>
+**CRITICAL: All output must be wrapped in XML tags. Never output raw text outside of tags.**
 
-[2026-01-15T22:16:10-06:00] === User Message ===
-hey
+You must use these exact tags:
 
-[2026-01-15T22:16:12-06:00] === LLM Response ===
-<ANSWER>
-Hey there! How can I help you today?
-</ANSWER>
+- `<REASONING>...</REASONING>` - Your reasoning about the situation
+- `<ACTION>...</ACTION>` - The tool name to call
+- `<ACTION_INPUT>...</ACTION_INPUT>` - The input for the tool (JSON format)
+- `___STOP___` - Output this IMMEDIATELY after closing `</ACTION_INPUT>` or `</ANSWER>` to signal you are done
+- `<ANSWER>...</ANSWER>` - Your final response to the user
 
-[2026-01-15T22:16:22-06:00] === User Message ===
-write a few sentences for me
-
-[2026-01-15T22:16:25-06:00] === LLM Response ===
-<ANSWER>
-Here are a few sentences for you:
-
-The morning sun cast long shadows across the quiet street, painting everything in warm golden hues. A gentle breeze rustled through the leaves of the old oak tree, carrying with it the sweet scent of blooming jasmine. In the distance, the sound of children's laughter echoed from the nearby park, reminding everyone that summer had finally arrived.
-</ANSWER>
-
-[2026-01-15T22:16:57-06:00] === User Message ===
-show me some markdown!
-
-[2026-01-15T22:17:02-06:00] === LLM Response ===
-<ANSWER>
-Here's some markdown for you to see in action:
-
-# This is a Main Header
-
-## This is a Subheader
-
-**This text is bold** and *this text is italic*.
-
-Here's a list:
-- First item
-- Second item
-- Third item with **bold text**
-
-And a numbered list:
-1. First step
-2. Second step
-3. Third step
-
-> This is a blockquote - great for highlighting important information!
-
-Here's some `inline code` and a code block:
-
-```python
-def hello_world():
-    print("Hello, World!")
-    return "Markdown is awesome!"
+**NEVER output text like this:**
+```
+I'll help you with that.
+<ACTION>tool_name</ACTION>
 ```
 
-You can also create [links](https://www.example.com) and add horizontal rules:
+**ALWAYS wrap all text in appropriate tags:**
+```
+<REASONING>
+I'll help the user by using the tool to...
+</REASONING>
+<ACTION>tool_name</ACTION>
+```
 
----
+## Response Patterns
 
-Pretty neat, right? Markdown makes formatting text simple and readable!
-</ANSWER>
+### Pattern 1: Direct Answer
+Use this when you can answer without tools:
 
-[2026-01-15T22:17:16-06:00] === User Message ===
-make a big table
-
-[2026-01-15T22:17:31-06:00] === LLM Response ===
+```
 <ANSWER>
-Here's a big markdown table for you:
+Your response to the user
+</ANSWER>___STOP___
+```
 
-| Product | Category | Price | Stock | Rating | Manufacturer | Release Date | Features | Warranty | Available Colors |
-|---------|----------|-------|--------|--------|--------------|--------------|----------|----------|------------------|
-| iPhone 15 Pro | Smartphone | $999 | 150 | 4.8/5 | Apple | Sep 2023 | A17 Pro, Titanium, USB-C | 1 Year | Natural, Blue, White, Black |
-| Galaxy S24 Ultra | Smartphone | $1199 | 89 | 4.7/5 | Samsung | Jan 2024 | S Pen, 200MP Camera | 1 Year | Titanium Gray, Titanium Black |
-| MacBook Pro 14" | Laptop | $1999 | 45 | 4.9/5 | Apple | Oct 2023 | M3 Chip, Liquid Retina XDR | 1 Year | Space Gray, Silver |
-| Dell XPS 13 | Laptop | $1299 | 67 | 4.6/5 | Dell | Mar 2024 | Intel Core i7, OLED Display | 1 Year | Platinum Silver, Graphite |
-| AirPods Pro 2 | Earbuds | $249 | 234 | 4.5/5 | Apple | Sep 2022 | Active Noise Cancellation | 1 Year | White |
-| Sony WH-1000XM5 | Headphones | $399 | 112 | 4.8/5 | Sony | May 2022 | 30hr Battery, NC | 1 Year | Black, Silver |
-| iPad Air 5 | Tablet | $599 | 78 | 4.7/5 | Apple | Mar 2022 | M1 Chip, 10.9" Display | 1 Year | Space Gray, Starlight, Pink |
-| Surface Pro 9 | 2-in-1 | $999 | 34 | 4.4/5 | Microsoft | Oct 2022 | Intel i5, Detachable KB | 1 Year | Platinum, Graphite |
-| Nintendo Switch | Gaming | $299 | 156 | 4.6/5 | Nintendo | Mar 2017 | Portable/Docked Gaming | 1 Year | Neon Blue/Red, Gray |
-| Steam Deck | Gaming | $649 | 23 | 4.3/5 | Valve | Feb 2022 | PC Gaming Portable | 1 Year | Black |
-| Apple Watch S9 | Smartwatch | $399 | 203 | 4.7/5 | Apple | Sep 2023 | S9 Chip, Always-On Display | 1 Year | Midnight, Starlight, Red |
-| Garmin Fenix 7 | Sports Watch | $699 | 56 | 4.8/5 | Garmin | Jan 2022 | GPS, Solar Charging | 2 Years | Black, Silver |
+### Pattern 2: Reasoning + Answer
+Use this for complex questions that benefit from showing your thought process:
 
-That's a pretty substantial table with 12 rows and 10 columns! It includes various tech products with detailed specifications, pricing, and availability information.
-</ANSWER>
+```
+<REASONING>
+Your reasoning about the situation
+</REASONING>
+<ANSWER>
+Your response to the user
+</ANSWER>___STOP___
+```
 
-[2026-01-15T22:30:12-06:00] === User Message ===
-what's the weather in KC?
+### Pattern 3: Tool Call
+Use this when you need to use a tool. **Any explanation of what you're doing MUST be inside REASONING tags.**
+**Output ___STOP___ after ACTION_INPUT and wait for the result.**
 
-[2026-01-15T22:30:14-06:00] === LLM Response ===
-<ACTION>tools.weather</ACTION>
-<ACTION_INPUT>{"city": "Kansas City"}</ACTION_INPUT>
+```
+<REASONING>
+Explaining what you're about to do and why...
+</REASONING>
+<ACTION>tool_name</ACTION>
+<ACTION_INPUT>{"param": "value"}</ACTION_INPUT>___STOP___
+```
 
-[2026-01-15T22:30:29-06:00] === User Message ===
+**WRONG - never do this:**
+```
+I'll help you by using the tool...
+<ACTION>tool_name</ACTION>
+```
+
+After you output a tool call, the system will execute the tool and provide the result in this format:
+
+```
 <OBSERVATION>
-Status: 200 200 OK
+The result of your action
+</OBSERVATION>
+```
 
-Kansas City: ☀️   +34°F
+For large results, metadata is provided separately:
 
+```
+<OBSERVATION>
+[sample or preview of the data]
+</OBSERVATION>
+<OBSERVATION_METADATA>
+type: array
+id: _result_tool_1
+partial: true
+total_items: 500
+shown_items: 5
+</OBSERVATION_METADATA>
+```
+
+When `partial: true`, only a sample is shown. Use result tools (`result_items`, `result_get`, `result_chunk`) with the `id` to fetch more data if needed.
+
+You will then respond with another turn following the appropriate pattern.
+
+## Rules
+
+1. **All text in tags.** Never output raw text outside of tags. Any explanation before a tool call goes in REASONING.
+2. **Reasoning is optional.** Use REASONING when it helps, skip it for simple responses.
+3. **One pattern per turn.** Either provide an ANSWER or request a tool call, never both.
+4. **Be conversational.** You may ask clarifying questions if needed.
+5. **Stop after ACTION_INPUT.** Do not generate OBSERVATION yourself. Wait for the system to provide it.
+6. **Tools are optional.** Only use tools when you need information you don't have or capabilities you lack.
+7. **Handle errors gracefully.** If an action fails, reason about why and try a different approach.
+
+
+## Handling Follow-up Questions
+
+After completing your task, the supervisor may ask you a follow-up question to get specific details.
+When you receive a `<FOLLOWUP_QUESTION>` tag, provide a concise, factual answer based on your previous work.
+This is NOT a new task - just answer the question directly without using tools. Wrap your answer in `<ANSWER>` tags.
+
+## Learnings (Sequential Iterations)
+
+When working on a task that is part of a sequential iteration, provide learnings that will help the next iteration succeed. Include a `<LEARNINGS>` block after your `<ANSWER>` with insights, failures/solutions, and recommendations:
+
+```
+<ANSWER>
+Your answer here...
+</ANSWER>
+<LEARNINGS>
+{
+  "key_insights": ["Observations that apply to similar problems"],
+  "failures": [{"problem": "What went wrong", "solution": "How you fixed it"}],
+  "recommendations": "Suggested approach for the next iteration"
+}
+</LEARNINGS>
+```
+
+Include learnings when you:
+- Discovered something unexpected about the data or API
+- Encountered and solved a problem
+- Identified optimizations for future runs
+- Have context that would otherwise be lost
+
+The LEARNINGS block is optional but valuable for sequential iterations where context flows between runs.
+
+## Available Tools
+
+### plugins.playwright.browser_navigate
+
+Navigate the browser to a URL. Creates a default local session if none exists.
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID to use. If not provided, uses 'default' session"},"url":{"type":"string","description":"The URL to navigate to"},"wait_until":{"type":"string","description":"When to consider navigation complete: 'load', 'domcontentloaded', 'networkidle'. Defaults to 'load'"}},"required":["url"]}
+```
+
+### plugins.playwright.browser_wait_for_selector
+
+Wait for an element matching the selector to appear in the page
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"selector":{"type":"string","description":"CSS selector to wait for"},"session_id":{"type":"string","description":"Session ID to use. If not provided, uses 'default' session"},"state":{"type":"string","description":"State to wait for: 'attached', 'detached', 'visible', 'hidden'. Defaults to 'visible'"},"timeout":{"type":"integer","description":"Maximum time to wait in milliseconds. Defaults to 30000"}},"required":["selector"]}
+```
+
+### plugins.playwright.browser_get_text
+
+Get the text content of an element or the entire page
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"selector":{"type":"string","description":"CSS selector for the element. If not provided, gets text from body"},"session_id":{"type":"string","description":"Session ID to use. If not provided, uses 'default' session"}}}
+```
+
+### plugins.playwright.browser_close_session
+
+Close a specific browser session
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"session_id":{"type":"string","description":"Session ID to close. If not provided, closes 'default' session"}}}
+```
+
+### result_items
+
+Get items from a large array result by offset and count
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"count":{"type":"integer","description":"Number of items to return"},"id":{"type":"string","description":"The result ID (e.g. _result_http_get_1)"},"offset":{"type":"integer","description":"Starting index (0-based)"}},"required":["id","offset","count"]}
+```
+
+### result_get
+
+Get a value from an object or array result using dot path notation (e.g. 'users.0.name')
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"id":{"type":"string","description":"The result ID"},"path":{"type":"string","description":"Dot-notation path to the value (e.g. 'settings.theme' or 'users.0.name')"}},"required":["id","path"]}
+```
+
+### plugins.playwright.browser_list_sessions
+
+List all active browser sessions
+
+**Input Schema:**
+```json
+{"type":"object","properties":{}}
+```
+
+### plugins.playwright.browser_type
+
+Type text into an input element
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"clear":{"type":"boolean","description":"Clear the input before typing. Defaults to false"},"selector":{"type":"string","description":"CSS selector for the input element"},"session_id":{"type":"string","description":"Session ID to use. If not provided, uses 'default' session"},"text":{"type":"string","description":"Text to type into the element"}},"required":["selector","text"]}
+```
+
+### plugins.playwright.browser_evaluate
+
+Execute JavaScript code in the browser and return the result
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"script":{"type":"string","description":"JavaScript code to execute. Should return a serializable value"},"session_id":{"type":"string","description":"Session ID to use. If not provided, uses 'default' session"}},"required":["script"]}
+```
+
+### plugins.playwright.browser_close_all
+
+Close all browser sessions and cleanup
+
+**Input Schema:**
+```json
+{"type":"object","properties":{}}
+```
+
+### plugins.playwright.browser_new_session
+
+Create a new browser session. Returns a session_id to use with other browser tools. Provider (local/azure) is configured at the plugin level.
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"browser_type":{"type":"string","description":"Browser to use: 'chromium', 'firefox', or 'webkit'. Defaults to plugin setting. Only applies to local provider."},"headless":{"type":"boolean","description":"Run browser in headless mode. Defaults to plugin setting. Only applies to local provider."}}}
+```
+
+### result_info
+
+Get info about a stored large result (type, size, ID)
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"id":{"type":"string","description":"The result ID (e.g. _result_http_get_1)"}},"required":["id"]}
+```
+
+### result_keys
+
+Get the keys of an object result, optionally at a nested path
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"id":{"type":"string","description":"The result ID"},"path":{"type":"string","description":"Optional dot-notation path to a nested object"}},"required":["id"]}
+```
+
+### result_chunk
+
+Get a chunk of text from a large text result by offset and length
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"id":{"type":"string","description":"The result ID"},"length":{"type":"integer","description":"Number of bytes to return"},"offset":{"type":"integer","description":"Starting byte offset"}},"required":["id","offset","length"]}
+```
+
+### plugins.playwright.browser_screenshot
+
+Take a screenshot of the current page
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"full_page":{"type":"boolean","description":"Capture the full scrollable page. Defaults to false"},"path":{"type":"string","description":"File path to save the screenshot. If not provided, returns base64-encoded image"},"selector":{"type":"string","description":"CSS selector to screenshot a specific element instead of the page"},"session_id":{"type":"string","description":"Session ID to use. If not provided, uses 'default' session"}}}
+```
+
+### plugins.playwright.browser_click
+
+Click on an element in the page using a CSS selector
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"selector":{"type":"string","description":"CSS selector for the element to click"},"session_id":{"type":"string","description":"Session ID to use. If not provided, uses 'default' session"}},"required":["selector"]}
+```
+
+### plugins.playwright.browser_get_html
+
+Get the HTML content of an element or the entire page
+
+**Input Schema:**
+```json
+{"type":"object","properties":{"outer":{"type":"boolean","description":"Get outer HTML (including the element itself). Defaults to false (inner HTML)"},"selector":{"type":"string","description":"CSS selector for the element. If not provided, gets HTML from body"},"session_id":{"type":"string","description":"Session ID to use. If not provided, uses 'default' session"}}}
+```
+
+
+
+## Begin
+
+You will now receive a task from the user. Decide how to respond based on the guidelines above.
+
+
+[2026-01-28T22:42:17-06:00] === System Prompt 2 ===
+Personality: Methodical and precise. Carefully navigates web pages and extracts information accurately.
+
+[2026-01-28T22:42:17-06:00] === System Prompt 3 ===
+Role: A browser automation specialist that navigates websites, interacts with elements, and extracts content.
+
+[2026-01-28T22:42:28-06:00] === User Message ===
+go to taxcloud.com and give me a quick summary of what they do
+
+[2026-01-28T22:42:32-06:00] === LLM Response ===
+<REASONING>
+I need to navigate to taxcloud.com and explore the website to understand what they do. I'll use the browser tools to visit the site and extract relevant information about their business.
+</REASONING>
+
+<ACTION>plugins.playwright.browser_navigate</ACTION>
+<ACTION_INPUT>{"url": "https://taxcloud.com"}</ACTION_INPUT>
+
+[2026-01-28T22:42:34-06:00] === User Message ===
+<OBSERVATION>
+[default] Navigated to https://taxcloud.com (title: TaxCloud – Sales Tax Made Simple for eCommerce & SaaS Brands)
 </OBSERVATION>
 
-[2026-01-15T22:30:31-06:00] === LLM Response ===
-<ANSWER>
-The current weather in Kansas City is sunny and 34°F.
-</ANSWER>
+[2026-01-28T22:42:36-06:00] === LLM Response ===
+<ACTION>plugins.playwright.browser_get_text</ACTION>
+<ACTION_INPUT>{"selector": "body"}</ACTION_INPUT>
 
-[2026-01-15T22:31:06-06:00] === User Message ===
-shout!
-
-[2026-01-15T22:31:09-06:00] === LLM Response ===
-<ANSWER>
-What would you like me to shout? I can use the shout tool to make any text ALL CAPS for you!
-</ANSWER>
-
-[2026-01-15T22:31:15-06:00] === User Message ===
-anything
-
-[2026-01-15T22:31:17-06:00] === LLM Response ===
-<ACTION>tools.shout</ACTION>
-<ACTION_INPUT>{"text": "Hello there! Hope you're having a great day!"}</ACTION_INPUT>
-
-[2026-01-15T22:31:17-06:00] === User Message ===
+[2026-01-28T22:42:36-06:00] === User Message ===
 <OBSERVATION>
-HELLO THERE! HOPE YOU'RE HAVING A GREAT DAY!
+<iframe src="https://www.googletagmanager.com/ns.html?id=GTM-W663JPG" height="0" width="0" style="display:none;visibility:hidden">
+</iframe>
+Skip to content
+var hideDuration = "2" || 1;
+function bannerTop() {
+return {
+bannerContainer: null,
+bannerHideTime: null,
+currentTime: Date.now(),
+hideDuration: 1000 * 60 * 60 * 24 * hideDuration,
+init() {
+this.bannerContainer = document.getElementById('banner-container');
+this.bannerHideTime = localStorage.getItem('bannerHideTime');
+if (!this.bannerHideTim...
+</OBSERVATION>
+<OBSERVATION_METADATA>
+type: text
+id: _result_plugins_playwright_browser_get_text_1
+partial: true
+total_bytes: 20878
+shown_bytes: 500
+</OBSERVATION_METADATA>
+
+[2026-01-28T22:42:37-06:00] === LLM Response ===
+<ACTION>result_chunk</ACTION>
+<ACTION_INPUT>{"id": "_result_plugins_playwright_browser_get_text_1", "offset": 500, "length": 2000}</ACTION_INPUT>
+
+[2026-01-28T22:42:38-06:00] === User Message ===
+<OBSERVATION>
+e || this.currentTime > this.bannerHideTime) {
+this.bannerContainer.innerHTML = `
+<div class="banner-top hidden"
+x-init="
+$store.bannerTopHeight = $el.offsetHeight;
+$store.bannerTop = true;
+">
+<div class="container">
+<div class="banner-top__container">
+<span class="banner-close" style="position: absolute; right: 0; top: 5px; cursor: pointer;">
+<svg class="w-[14px] h-[14px] fill-current" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14">
+<path d="M8.012 7.01 12.27 2.75a.723.723 0 1 0-1.021-1.021L6.99 5.988 2.733 1.73A.723.723 0 0 0 1.71 2.751L5.97 7.01l-4.258 4.259a.723.723 0 0 0 1.021 1.02l4.259-4.257 4.258 4.258a.723.723 0 0 0 1.021-1.021z" />
+</svg> </span>
+<div class="banner-top__content">
+<h3 class="banner-top__title">🗓️ Live Webinar Sep 23: How to Build a Compliant Revenue Engine</h3>
+<a class="button-arrow" href="https://taxcloud.com/lp/webinar-saas-revenue-engine/" target='_blank'>
+Sign Up <svg class="w-[14px] h-[14px] fill-current button-arrow__arrow" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 14 14">
+<path d="M7.644 13.126a.67.67 0 0 0 .519 0 .7.7 0 0 0 .219-.148l5.403-5.403.017-.016a.68.68 0 0 0-.018-.975L8.383 1.182a.677.677 0 0 0-.957.957l4.263 4.263H.678a.677.677 0 1 0 0 1.355h11.01l-4.263 4.264a.677.677 0 0 0 .219 1.105" />
+</svg> </a>
+</div>
+</div>
+</div>
+</div>
+`;
+this.addCloseButtonHandler();
+}
+},
+addCloseButtonHandler() {
+var closeButton = this.bannerContainer.querySelector('.banner-close');
+if (closeButton) {
+closeButton.addEventListener('click', () => {
+this.bannerContainer.style.display = 'none';
+this.$store.bannerTopHeight = 0;
+this.$store.bannerTop = false;
+var hideUntil = Date.now() + this.hideDuration;
+localStorage.setItem('bannerHideTime', hideUntil);
+});
+}
+}
+}
+}
+TaxCloud
+Products
+Sales Tax Compliance
+Sales Tax Calculation
+Nexus Insights
+TIC Code Classification
+Tax-Optimized Order Capturing
+Exemption Certificates
+Sales Tax Filing
+Direct Filing
+SST (free filing in 24 states)
+State 
 </OBSERVATION>
 
-[2026-01-15T22:31:19-06:00] === LLM Response ===
-<ANSWER>
-HELLO THERE! HOPE YOU'RE HAVING A GREAT DAY!
+[2026-01-28T22:42:39-06:00] === LLM Response ===
+<ACTION>result_chunk</ACTION>
+<ACTION_INPUT>{"id": "_result_plugins_playwright_browser_get_text_1", "offset": 3000, "length": 3000}</ACTION_INPUT>
 
-There you go - shouted with enthusiasm! 🎉
+[2026-01-28T22:42:39-06:00] === User Message ===
+<OBSERVATION>
+t on sales tax
+Nama saved time, stayed compliant in 30+ states, and scaled faster with TaxCloud.
+Read full story
+Customers
+Pricing
+Contact Sales
+Log In
+Book a Demo
+Contact Sales
+Toggle Menu
+function siteHeader() {
+return {
+lastScroll: 0,
+headerTop: 0,
+alwaysSticky: false,
+init() {
+this.$store.headerHeight = this.$refs.header.offsetHeight;
+this.alwaysSticky = this.$refs.header.dataset?.alwaysSticky;
+this.$watch('$store.bannerTopHeight', (newHeight) => {
+this.headerTop = newHeight;
+});
+window.addEventListener('scroll', () => {
+this.handleScroll();
+});
+},
+handleScroll() {
+if (window.scrollY > 300) {
+this.$store.headerSticky = false;
+this.stickyHeader();
+} else {
+this.$store.headerSticky = true;
+}
+},
+stickyHeader() {
+if (this.alwaysSticky) {
+this.$store.headerSticky = true;
+return;
+}
+if (window.scrollY < this.lastScroll) {
+this.$store.headerSticky = true;
+} else {
+this.$store.headerSticky = false;
+}
+this.lastScroll = window.scrollY;
+}
+}
+}
+function mobileMenu() {
+return {
+open: false,
+toggle() {
+this.open = !this.open;
+this.$store.body.lock = this.open;
+}
+}
+}
+document.addEventListener('alpine:init', () => {
+Alpine.data('dropdownMenu', () => ({
+isOpen: false,
+handleDropdownEnter() {
+this.$store.skipTransition = this.$store.activeDropdown !== null && this.$store.activeDropdown !== this.$el;
+this.closeAllDropdowns();
+this.$store.navigationOverlay = true;
+this.$store.activeDropdown = this.$el;
+this.isOpen = true;
+},
+handleDropdownLeave() {
+setTimeout(() => {
+if (this.$store.activeDropdown === this.$el) {
+this.closeAllDropdowns();
+}
+}, 50);
+},
+handleDropdownClick() {
+if (this.$store.activeDropdown !== null && this.$store.activeDropdown !== this.$el) {
+this.closeAllDropdowns();
+}
+if (this.isOpen) {
+this.closeAllDropdowns();
+} else {
+this.openDropdown(this.$el);
+}
+},
+openDropdown($element) {
+this.isOpen = true;
+this.$store.activeDropdown = $element;
+this.$store.navigationOverlay = true;
+},
+closeAllDropdowns() {
+this.isOpen = false;
+this.$store.activeDropdown = null;
+this.$store.navigationOverlay = false;
+this.$dispatch('close-dropdown');
+},
+}));
+});
+Sales tax compliance made simple and reliable
+The right-sized sales tax solution for growing ecommerce and SaaS businesses. Clear pricing, easy integrations, and responsive US-based support.
+Contact Sales
+Want to explore yourself?
+Start 30-Day Free Trial
+Automated filing
+Forget manual filing. TaxCloud prepares and files your sales tax reports automatically, on your schedule.
+Native integrations and API
+Consolidate sales tax data from every channel into a single dashboard as your business scales using prebuilt integrations and API.
+Tax calculation and collection
+Real-time, accurate sales tax calculations across 13,000 jurisdictions, with automatic rate updates built in.
+Nexus tracking
+Monitor economic nexus thresholds state by state in real time and stay on top of your sales tax obligations.
+State registrations
+We manage your state registrations wherever you have nexus, so you automatically receive the sales tax p
+</OBSERVATION>
+
+[2026-01-28T22:42:41-06:00] === LLM Response ===
+<ACTION>result_chunk</ACTION>
+<ACTION_INPUT>{"id": "_result_plugins_playwright_browser_get_text_1", "offset": 6000, "length": 3000}</ACTION_INPUT>
+
+[2026-01-28T22:42:41-06:00] === User Message ===
+<OBSERVATION>
+ermits you need.
+Certified Service Provider
+TaxCloud is approved by the SST Governing Board as a Certified Service Provider in all 24 member states.
+Sales tax audit support
+Stay protected in an audit with the right data, reconciliation support, and expert guidance every step of the way.
+Trusted by 2,000 growing businesses
+Saved in filing time in 2025
+273k
+hours
+Saved with SST discounts in 2025
+$15
+million
+Shopify App Store rating
+5
+/5
+Why sellers switch to TaxCloud
+We deliver exactly what you're looking for: transparency, reliability, and support that actually helps.
+Transparent and affordable
+Clear pricing without hidden fees. Pay 30-70% less than legacy providers with full SST savings included.
+SST Certified Provider
+Cut costs and administrative paperwork in 24 states through the Streamlined Sales Tax program.
+Multi-channel coverage
+One platform to handle compliance across ecommerce platforms, D2C sites, marketplaces, and B2B sales.
+Stress-free onboarding
+With expert migration support, we import your historical orders, map tax settings, and make switching painless.
+US-based support
+Support always comes from real people on our team, and we don’t outsource or use bots to help with your questions.
+Proof is in the results
+nama
+sleef
+pangobooks
+until-gone
+By integrating with TaxCloud, nama found a scalable, reliable partner for sales tax filing and compliance. The team saved time, eliminated compliance headaches, and refocused entirely on growing their business.
+states covered from registration to filing
+30
+cut time spent on filing sales tax
+100%
+Read full story
+By switching to TaxCloud, SLEEFS automated sales tax filing nationwide. The Shopify sports apparel brand eliminated manual uploads, reduced costs, and gained a hands-off, scalable solution to keep growing confidently.
+states covered from registration to filing
+37
+SST states with free filing
+24
+Read full story
+By migrating from Avalara to TaxCloud, PangoBooks simplified nationwide tax filing and cut operational overhead, gaining a reliable sales tax partner for long-term growth.
+states supported for sales tax filing
+50
+sales tax costs reduction
+75%
+Read full story
+After replacing its legacy sales tax provider with TaxCloud, UntilGone gained peace of mind knowing their filings are accurate across the US and their BigCommerce store remains fully sales tax compliant.
+states covered from registration to filing
+43
+SST states with free filing
+24
+Read full story
+Watch
+"Any Shopify brand that’s starting to grow should not be spending time figuring out sales tax."
+Christopher Whelan
+Founder, nama
+Read full story
+Watch
+"It was the best solution out there for us… Pricing, service, and support — it all just worked."
+Jaime Schuster
+Founder, SLEEFS
+Read full story
+"We paid around $30k for TaxCloud, compared to $100-150k with Avalara. The pricing difference is huge."
+Grant Singleton
+CTO & Co-founder, PangoBooks
+Read full story
+"TaxCloud’s ability to provide accurate tax calculations and simplify c
+</OBSERVATION>
+
+[2026-01-28T22:42:48-06:00] === LLM Response ===
+<ANSWER>
+Based on my visit to TaxCloud.com, here's a quick summary of what they do:
+
+**TaxCloud is a sales tax compliance platform** designed for growing ecommerce and SaaS businesses. Here are their key services:
+
+**Core Services:**
+- **Sales Tax Calculation & Collection** - Real-time, accurate tax calculations across 13,000+ jurisdictions with automatic rate updates
+- **Automated Filing** - Prepares and files sales tax reports automatically on your schedule
+- **State Registrations** - Manages state registrations wherever you have nexus
+- **Nexus Tracking** - Monitors economic nexus thresholds state-by-state in real time
+
+**Key Features:**
+- **SST Certified Service Provider** - Approved in all 24 Streamlined Sales Tax member states with free filing
+- **Multi-channel Coverage** - Handles compliance across ecommerce platforms, D2C sites, marketplaces, and B2B sales
+- **Native Integrations** - Works with platforms like Shopify and offers API connectivity
+- **Audit Support** - Provides data, reconciliation support, and expert guidance during audits
+
+**Value Proposition:**
+- **Cost-effective** - Claims customers pay 30-70% less than legacy providers
+- **Transparent pricing** without hidden fees
+- **US-based support** (no outsourcing or bots)
+- **Easy migration** with expert support to import historical orders
+
+They're positioned as a more affordable, reliable alternative to larger providers like Avalara, serving over 2,000 growing businesses with a focus on transparency and responsive customer support.
+</ANSWER>
+
+[2026-01-28T22:44:34-06:00] === User Message ===
+what is sst?
+
+[2026-01-28T22:44:41-06:00] === LLM Response ===
+<ANSWER>
+SST stands for **Streamlined Sales Tax** - it's a cooperative effort between states and the business community to simplify and modernize sales tax collection and administration.
+
+**Key points about SST:**
+
+- **24 Member States** participate in the program
+- **Simplified Tax Structure** - Reduces the complexity of sales tax rules and rates
+- **Certified Service Providers** like TaxCloud are approved to handle sales tax compliance for businesses
+- **Free Filing** - In SST states, certified providers often offer free filing services
+- **Reduced Administrative Burden** - Less paperwork and streamlined processes for businesses
+
+**Benefits for businesses:**
+- Lower compliance costs
+- Simplified tax rules across participating states
+- Free or reduced-cost filing in member states
+- Less administrative overhead
+
+This is why TaxCloud emphasizes being an "SST Certified Provider" - it means they can offer free filing in those 24 states and provide the cost savings and simplified processes that come with the SST program. It's essentially a way to make sales tax compliance less burdensome for businesses while still ensuring states collect the taxes they're owed.
+</ANSWER>
+
+[2026-01-28T22:45:10-06:00] === User Message ===
+did you pull that from your own knowledge or from the details you pulled from taxcloud.com?
+
+[2026-01-28T22:45:17-06:00] === LLM Response ===
+<ANSWER>
+That was primarily from my own knowledge. From the TaxCloud website, I only pulled these specific SST details:
+
+**From TaxCloud.com:**
+- TaxCloud is "approved by the SST Governing Board as a Certified Service Provider in all 24 member states"
+- They offer "free filing in 24 states" through SST
+- Being SST certified helps "cut costs and administrative paperwork in 24 states"
+
+**From my knowledge:**
+- What "SST" actually stands for (Streamlined Sales Tax)
+- The broader explanation of what the SST program is and how it works
+- The cooperative nature between states and businesses
+- The general benefits and structure of the program
+
+The website mentioned SST benefits and certification but didn't explain what SST actually means or provide the detailed background I included in my response. So I combined the specific details from their site with my existing knowledge to give you a complete explanation.
 </ANSWER>
 

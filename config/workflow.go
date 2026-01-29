@@ -26,6 +26,36 @@ type WorkflowInput struct {
 	Default     *cty.Value // Optional default value (nil means required)
 }
 
+// Dataset represents a collection of items for task iteration
+type Dataset struct {
+	Name        string          // From HCL label
+	Description string          // Documentation for the dataset
+	BindTo      string          // Optional: input name to bind to (e.g., "cities" for inputs.cities)
+	Schema      *InputsSchema   // Optional: schema for validating items
+	Default     []cty.Value     // Optional: default list of items
+	BindToExpr  hcl.Expression  // Stored for deferred evaluation
+}
+
+// TaskIterator configures iteration over a dataset
+type TaskIterator struct {
+	Dataset    string // Dataset name (e.g., "city_list")
+	Parallel   bool   // Default: false (sequential execution)
+	MaxRetries int    // Default: 0 (no retries). Max retry attempts per iteration on failure.
+}
+
+// OutputSchema defines the structured output for a task
+type OutputSchema struct {
+	Fields []OutputField
+}
+
+// OutputField represents a single output field definition
+type OutputField struct {
+	Name        string
+	Type        string // string, number, integer, boolean
+	Description string
+	Required    bool
+}
+
 // Workflow represents a workflow configuration with multiple tasks
 type Workflow struct {
 	Name            string          `hcl:"name,label"`
@@ -33,6 +63,7 @@ type Workflow struct {
 	Agents          []string        `hcl:"agents"`
 	Tasks           []Task          `hcl:"task,block"`
 	Inputs          []WorkflowInput // Parsed from input blocks
+	Datasets        []Dataset       // Parsed from dataset blocks
 }
 
 // Task represents a single task within a workflow
@@ -41,6 +72,8 @@ type Task struct {
 	ObjectiveExpr hcl.Expression // Stored for deferred evaluation with inputs
 	Agents        []string       `hcl:"agents,optional"` // Optional - uses workflow-level agents if not specified
 	DependsOn     []string       `hcl:"depends_on,optional"`
+	Iterator      *TaskIterator  // Optional: iterate over a dataset
+	Output        *OutputSchema  // Optional: structured output schema
 }
 
 // Validate checks that the workflow configuration is valid
@@ -64,13 +97,36 @@ func (w *Workflow) Validate(models []Model, agents []Agent) error {
 
 	// Validate inputs
 	inputNames := make(map[string]bool)
+	inputTypes := make(map[string]string)
 	for _, input := range w.Inputs {
 		if inputNames[input.Name] {
 			return fmt.Errorf("duplicate input name '%s'", input.Name)
 		}
 		inputNames[input.Name] = true
+		inputTypes[input.Name] = input.Type
 		if err := input.Validate(); err != nil {
 			return fmt.Errorf("input '%s': %w", input.Name, err)
+		}
+	}
+
+	// Validate datasets
+	datasetNames := make(map[string]bool)
+	for _, ds := range w.Datasets {
+		if datasetNames[ds.Name] {
+			return fmt.Errorf("duplicate dataset name '%s'", ds.Name)
+		}
+		datasetNames[ds.Name] = true
+		if err := ds.Validate(); err != nil {
+			return fmt.Errorf("dataset '%s': %w", ds.Name, err)
+		}
+		// Validate bind_to references a list-type input
+		if ds.BindTo != "" {
+			if !inputNames[ds.BindTo] {
+				return fmt.Errorf("dataset '%s': bind_to references unknown input '%s'", ds.Name, ds.BindTo)
+			}
+			if inputTypes[ds.BindTo] != InputTypeList {
+				return fmt.Errorf("dataset '%s': bind_to references input '%s' which is not type list", ds.Name, ds.BindTo)
+			}
 		}
 	}
 
@@ -98,7 +154,7 @@ func (w *Workflow) Validate(models []Model, agents []Agent) error {
 
 	// Validate each task
 	for _, t := range w.Tasks {
-		if err := t.Validate(taskNames, agentNames, w.Agents); err != nil {
+		if err := t.Validate(taskNames, agentNames, datasetNames, w.Agents); err != nil {
 			return fmt.Errorf("task '%s': %w", t.Name, err)
 		}
 	}
@@ -125,6 +181,68 @@ func (i *WorkflowInput) Validate() error {
 	}
 	if !validTypes[i.Type] {
 		return fmt.Errorf("invalid type '%s': must be string, number, bool, list, or object", i.Type)
+	}
+	return nil
+}
+
+// Validate checks that the dataset configuration is valid
+func (d *Dataset) Validate() error {
+	if d.Name == "" {
+		return fmt.Errorf("dataset name is required")
+	}
+	// Datasets can have bind_to, default, or neither (populated dynamically via set_dataset tool)
+	return nil
+}
+
+// ValidateItem validates a single item against the dataset schema
+func (d *Dataset) ValidateItem(item cty.Value) error {
+	if d.Schema == nil {
+		return nil // No schema = any item accepted
+	}
+
+	// Item must be an object if schema is defined
+	if !item.Type().IsObjectType() && !item.Type().IsMapType() {
+		return fmt.Errorf("item must be an object when schema is defined")
+	}
+
+	// Validate each field in schema
+	for _, field := range d.Schema.Fields {
+		// Check if field exists in item
+		if item.Type().IsObjectType() {
+			if !item.Type().HasAttribute(field.Name) {
+				if field.Required {
+					return fmt.Errorf("required field '%s' is missing", field.Name)
+				}
+				continue
+			}
+		}
+
+		// For map types, check via GetAttr
+		fieldVal := item.GetAttr(field.Name)
+		if fieldVal.IsNull() && field.Required {
+			return fmt.Errorf("required field '%s' is null", field.Name)
+		}
+
+		// Type validation
+		if !fieldVal.IsNull() {
+			expectedType := stringToCtyType(field.Type)
+			if !fieldVal.Type().Equals(expectedType) && expectedType != cty.DynamicPseudoType {
+				// Allow number to match any numeric type
+				if field.Type == "number" && fieldVal.Type() == cty.Number {
+					continue
+				}
+				return fmt.Errorf("field '%s' has wrong type: expected %s", field.Name, field.Type)
+			}
+		}
+	}
+
+	return nil
+}
+
+// Validate checks that the task iterator configuration is valid
+func (ti *TaskIterator) Validate() error {
+	if ti.Dataset == "" {
+		return fmt.Errorf("iterator dataset is required")
 	}
 	return nil
 }
@@ -220,7 +338,7 @@ func parseJSONList(strVal string) (cty.Value, error) {
 	}
 	ctyItems := make([]cty.Value, len(items))
 	for i, item := range items {
-		ctyItems[i] = goToCtyValue(item)
+		ctyItems[i] = GoToCtyValue(item)
 	}
 	return cty.TupleVal(ctyItems), nil
 }
@@ -235,12 +353,10 @@ func parseJSONObject(strVal string) (cty.Value, error) {
 	}
 	ctyMap := make(map[string]cty.Value)
 	for k, v := range obj {
-		ctyMap[k] = goToCtyValue(v)
+		ctyMap[k] = GoToCtyValue(v)
 	}
 	return cty.ObjectVal(ctyMap), nil
 }
-
-// goToCtyValue is defined in tool.go and reused here
 
 // isValidModelRef checks if a model reference (e.g., "claude_sonnet_4") is valid
 func isValidModelRef(modelRef string, models []Model) bool {
@@ -256,7 +372,7 @@ func isValidModelRef(modelRef string, models []Model) bool {
 
 // Validate checks that the task configuration is valid
 // workflowAgents are the agents defined at the workflow level
-func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, workflowAgents []string) error {
+func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, datasetNames map[string]bool, workflowAgents []string) error {
 	if t.Name == "" {
 		return fmt.Errorf("task name is required")
 	}
@@ -284,6 +400,16 @@ func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, w
 		}
 		if dep == t.Name {
 			return fmt.Errorf("task cannot depend on itself")
+		}
+	}
+
+	// Validate iterator if present
+	if t.Iterator != nil {
+		if err := t.Iterator.Validate(); err != nil {
+			return fmt.Errorf("iterator: %w", err)
+		}
+		if !datasetNames[t.Iterator.Dataset] {
+			return fmt.Errorf("iterator references unknown dataset '%s'", t.Iterator.Dataset)
 		}
 	}
 

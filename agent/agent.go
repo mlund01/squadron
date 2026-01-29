@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"squad/agent/internal/prompts"
 	"squad/aitools"
@@ -21,6 +22,8 @@ type Agent struct {
 	tools        map[string]aitools.Tool
 	provider     llm.Provider
 	ownsProvider bool // true if we created the provider and should close it
+	resultStore  *aitools.MemoryResultStore
+	interceptor  *aitools.ResultInterceptor
 }
 
 // Options for creating an agent
@@ -33,6 +36,8 @@ type Options struct {
 	Mode *config.AgentMode
 	// DebugFile enables debug logging to the specified file (optional)
 	DebugFile string
+	// DatasetStore provides access to workflow datasets (optional, for workflow context)
+	DatasetStore aitools.DatasetStore
 }
 
 // New creates a new agent from config
@@ -73,10 +78,29 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	}
 
 	// Build tools map
-	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins)
+	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
 
-	// Determine mode
-	mode := agentCfg.Mode
+	// Create result store and interceptor for large results
+	resultStore := aitools.NewMemoryResultStore()
+	interceptor := aitools.NewResultInterceptor(resultStore, aitools.DefaultLargeResultConfig())
+
+	// Add result tools to agent's tool map
+	tools["result_info"] = &aitools.ResultInfoTool{Store: resultStore}
+	tools["result_items"] = &aitools.ResultItemsTool{Store: resultStore}
+	tools["result_get"] = &aitools.ResultGetTool{Store: resultStore}
+	tools["result_keys"] = &aitools.ResultKeysTool{Store: resultStore}
+	tools["result_chunk"] = &aitools.ResultChunkTool{Store: resultStore}
+
+	// Add bridge tool if DatasetStore is available (workflow context)
+	if opts.DatasetStore != nil {
+		tools["result_to_dataset"] = &aitools.ResultToDatasetTool{
+			ResultStore:  resultStore,
+			DatasetStore: opts.DatasetStore,
+		}
+	}
+
+	// Determine mode (defaults to chat, can be overridden via Options)
+	mode := config.ModeChat
 	if opts.Mode != nil {
 		mode = *opts.Mode
 	}
@@ -89,8 +113,18 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		fmt.Sprintf("Role: %s", agentCfg.Role),
 	)
 
+	// Add dataset info if running in workflow context
+	if opts.DatasetStore != nil {
+		if datasetPrompt := formatDatasetInfo(opts.DatasetStore.GetDatasetInfo()); datasetPrompt != "" {
+			systemPrompts = append(systemPrompts, datasetPrompt)
+		}
+	}
+
 	// Create session
 	session := llm.NewSession(provider, actualModelName, systemPrompts...)
+
+	// Set stop sequences to prevent LLM from hallucinating observations
+	session.SetStopSequences([]string{"___STOP___"})
 
 	if opts.DebugFile != "" {
 		if err := session.EnableDebug(opts.DebugFile); err != nil {
@@ -107,6 +141,8 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		tools:        tools,
 		provider:     provider,
 		ownsProvider: ownsProvider,
+		resultStore:  resultStore,
+		interceptor:  interceptor,
 	}, nil
 }
 
@@ -126,8 +162,33 @@ func (a *Agent) Close() {
 // The streamer receives real-time updates during processing
 func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatHandler) (string, error) {
 	sessionAdapter := llm.NewSessionAdapter(a.session)
-	orchestrator := newOrchestrator(sessionAdapter, streamer, a.tools)
+	orchestrator := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor)
 	return orchestrator.processTurn(ctx, input)
+}
+
+// AnswerFollowUp handles a follow-up question using the agent's existing conversation context.
+// The agent answers from memory without executing any tool calls.
+func (a *Agent) AnswerFollowUp(ctx context.Context, question string) (string, error) {
+	prompt := fmt.Sprintf(`<FOLLOWUP_QUESTION>%s</FOLLOWUP_QUESTION>
+
+Answer this question based on your previous work. Do not use any tools.
+Provide a direct, factual answer wrapped in <ANSWER> tags.`, question)
+
+	resp, err := a.session.Send(ctx, prompt)
+	if err != nil {
+		return "", err
+	}
+
+	// Parse the answer from the response
+	content := resp.Content
+	if idx := strings.Index(content, "<ANSWER>"); idx != -1 {
+		content = content[idx+8:]
+		if endIdx := strings.Index(content, "</ANSWER>"); endIdx != -1 {
+			content = content[:endIdx]
+		}
+	}
+
+	return strings.TrimSpace(content), nil
 }
 
 // GetTools returns the agent's available tools
@@ -151,4 +212,37 @@ func createProvider(ctx context.Context, modelConfig *config.Model) (llm.Provide
 	default:
 		return nil, false, fmt.Errorf("unknown provider: %s", modelConfig.Provider)
 	}
+}
+
+// formatDatasetInfo creates a system prompt section describing available datasets
+func formatDatasetInfo(datasets []aitools.DatasetInfo) string {
+	if len(datasets) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Available Datasets\n\n")
+	sb.WriteString("You have access to the following datasets. Use the dataset tools (set_dataset, dataset_sample, dataset_count) to interact with them.\n\n")
+
+	for _, ds := range datasets {
+		sb.WriteString(fmt.Sprintf("### %s\n", ds.Name))
+		if ds.Description != "" {
+			sb.WriteString(fmt.Sprintf("%s\n", ds.Description))
+		}
+		sb.WriteString(fmt.Sprintf("Current items: %d\n", ds.ItemCount))
+
+		if len(ds.Schema) > 0 {
+			sb.WriteString("Schema:\n")
+			for _, field := range ds.Schema {
+				req := ""
+				if field.Required {
+					req = " (required)"
+				}
+				sb.WriteString(fmt.Sprintf("  - %s: %s%s\n", field.Name, field.Type, req))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	return sb.String()
 }

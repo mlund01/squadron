@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"squad/config"
 	"squad/streamers/cli"
@@ -14,6 +16,7 @@ import (
 )
 
 var inputFlags []string
+var workflowDebugMode bool
 
 var workflowCmd = &cobra.Command{
 	Use:   "workflow [workflow_name]",
@@ -38,8 +41,24 @@ var workflowCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
+		// Create debug logger if debug mode is enabled
+		var debugDir string
+		if workflowDebugMode {
+			debugDir = filepath.Join("debug", fmt.Sprintf("%s_%s", workflowName, time.Now().Format("20060102_150405")))
+		}
+		debugLogger, err := workflow.NewDebugLogger(debugDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating debug logger: %v\n", err)
+			os.Exit(1)
+		}
+		defer debugLogger.Close()
+
+		if debugLogger.IsEnabled() {
+			fmt.Printf("Debug mode enabled. Writing to: %s\n", debugLogger.GetDebugDir())
+		}
+
 		// Create workflow runner
-		runner, err := workflow.NewRunner(cfg, configPath, workflowName, inputs)
+		runner, err := workflow.NewRunner(cfg, configPath, workflowName, inputs, workflow.WithDebugLogger(debugLogger))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -78,4 +97,5 @@ func init() {
 	rootCmd.AddCommand(workflowCmd)
 	workflowCmd.Flags().StringVarP(&configPath, "config", "c", ".", "Path to config file or directory")
 	workflowCmd.Flags().StringArrayVarP(&inputFlags, "input", "i", nil, "Workflow input in key=value format (can be repeated)")
+	workflowCmd.Flags().BoolVarP(&workflowDebugMode, "debug", "d", false, "Enable debug mode to capture LLM messages and events")
 }

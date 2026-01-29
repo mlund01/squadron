@@ -52,6 +52,11 @@ var tools = map[string]*squadplugin.ToolInfo{
 // PingerPlugin implements the ToolProvider interface
 type PingerPlugin struct{}
 
+// Configure applies settings (no-op for this plugin)
+func (p *PingerPlugin) Configure(settings map[string]string) error {
+	return nil
+}
+
 func (p *PingerPlugin) Call(toolName string, payload string) (string, error) {
 	switch toolName {
 	case "ping":

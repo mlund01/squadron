@@ -102,6 +102,66 @@ func (s *WorkflowHandler) AgentCompleted(taskName string, agentName string) {
 	fmt.Printf("%s[%s] Agent '%s' finished%s\n", ColorLightBrown, taskName, agentName, ColorReset)
 }
 
+// Task iteration events
+
+func (s *WorkflowHandler) TaskIterationStarted(taskName string, totalItems int, parallel bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mode := "sequential"
+	if parallel {
+		mode = "parallel"
+	}
+	fmt.Printf("\n--- Task: %s (iterating %d items, %s) ---\n", taskName, totalItems, mode)
+}
+
+func (s *WorkflowHandler) TaskIterationCompleted(taskName string, completedCount int, workingSummary string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("\n[Task '%s' iterations completed: %d]\n", taskName, completedCount)
+}
+
+func (s *WorkflowHandler) IterationStarted(taskName string, index int, objective string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("\n  [%s][%d] Starting: %s\n", taskName, index, truncate(objective, 80))
+}
+
+func (s *WorkflowHandler) IterationCompleted(taskName string, index int, summary string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("  [%s][%d] Completed\n", taskName, index)
+}
+
+func (s *WorkflowHandler) IterationFailed(taskName string, index int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("  [%s][%d] FAILED: %v\n", taskName, index, err)
+}
+
+func (s *WorkflowHandler) IterationRetrying(taskName string, index int, attempt int, maxRetries int, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("  [%s][%d] Retrying (%d/%d): %v\n", taskName, index, attempt, maxRetries, err)
+}
+
+func (s *WorkflowHandler) IterationReasoning(taskName string, index int, content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("  [%s][%d] Thinking: %s\n", taskName, index, truncate(content, 80))
+}
+
+func (s *WorkflowHandler) IterationAnswer(taskName string, index int, content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("  [%s][%d] Answer: %s\n", taskName, index, truncate(content, 100))
+}
+
+func (s *WorkflowHandler) SummaryAggregation(taskName string, summaryCount int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("  [%s] Aggregating %d summaries...\n", taskName, summaryCount)
+}
+
 // truncate shortens a string to max length, adding ellipsis if needed
 func truncate(s string, max int) string {
 	s = strings.ReplaceAll(s, "\n", " ")

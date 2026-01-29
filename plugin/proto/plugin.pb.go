@@ -21,6 +21,102 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+type ConfigureRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Settings      map[string]string      `protobuf:"bytes,1,rep,name=settings,proto3" json:"settings,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigureRequest) Reset() {
+	*x = ConfigureRequest{}
+	mi := &file_plugin_proto_plugin_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigureRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigureRequest) ProtoMessage() {}
+
+func (x *ConfigureRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_plugin_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigureRequest.ProtoReflect.Descriptor instead.
+func (*ConfigureRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *ConfigureRequest) GetSettings() map[string]string {
+	if x != nil {
+		return x.Settings
+	}
+	return nil
+}
+
+type ConfigureResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	Error         string                 `protobuf:"bytes,2,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigureResponse) Reset() {
+	*x = ConfigureResponse{}
+	mi := &file_plugin_proto_plugin_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigureResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigureResponse) ProtoMessage() {}
+
+func (x *ConfigureResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_plugin_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigureResponse.ProtoReflect.Descriptor instead.
+func (*ConfigureResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ConfigureResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+func (x *ConfigureResponse) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 type CallRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ToolName      string                 `protobuf:"bytes,1,opt,name=tool_name,json=toolName,proto3" json:"tool_name,omitempty"`
@@ -31,7 +127,7 @@ type CallRequest struct {
 
 func (x *CallRequest) Reset() {
 	*x = CallRequest{}
-	mi := &file_plugin_proto_plugin_proto_msgTypes[0]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -43,7 +139,7 @@ func (x *CallRequest) String() string {
 func (*CallRequest) ProtoMessage() {}
 
 func (x *CallRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_plugin_proto_msgTypes[0]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -56,7 +152,7 @@ func (x *CallRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallRequest.ProtoReflect.Descriptor instead.
 func (*CallRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{0}
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *CallRequest) GetToolName() string {
@@ -82,7 +178,7 @@ type CallResponse struct {
 
 func (x *CallResponse) Reset() {
 	*x = CallResponse{}
-	mi := &file_plugin_proto_plugin_proto_msgTypes[1]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -94,7 +190,7 @@ func (x *CallResponse) String() string {
 func (*CallResponse) ProtoMessage() {}
 
 func (x *CallResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_plugin_proto_msgTypes[1]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -107,7 +203,7 @@ func (x *CallResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CallResponse.ProtoReflect.Descriptor instead.
 func (*CallResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{1}
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *CallResponse) GetResult() string {
@@ -126,7 +222,7 @@ type GetToolInfoRequest struct {
 
 func (x *GetToolInfoRequest) Reset() {
 	*x = GetToolInfoRequest{}
-	mi := &file_plugin_proto_plugin_proto_msgTypes[2]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -138,7 +234,7 @@ func (x *GetToolInfoRequest) String() string {
 func (*GetToolInfoRequest) ProtoMessage() {}
 
 func (x *GetToolInfoRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_plugin_proto_msgTypes[2]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -151,7 +247,7 @@ func (x *GetToolInfoRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetToolInfoRequest.ProtoReflect.Descriptor instead.
 func (*GetToolInfoRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{2}
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *GetToolInfoRequest) GetToolName() string {
@@ -170,7 +266,7 @@ type GetToolInfoResponse struct {
 
 func (x *GetToolInfoResponse) Reset() {
 	*x = GetToolInfoResponse{}
-	mi := &file_plugin_proto_plugin_proto_msgTypes[3]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -182,7 +278,7 @@ func (x *GetToolInfoResponse) String() string {
 func (*GetToolInfoResponse) ProtoMessage() {}
 
 func (x *GetToolInfoResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_plugin_proto_msgTypes[3]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -195,7 +291,7 @@ func (x *GetToolInfoResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetToolInfoResponse.ProtoReflect.Descriptor instead.
 func (*GetToolInfoResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{3}
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *GetToolInfoResponse) GetTool() *ToolInfo {
@@ -213,7 +309,7 @@ type ListToolsRequest struct {
 
 func (x *ListToolsRequest) Reset() {
 	*x = ListToolsRequest{}
-	mi := &file_plugin_proto_plugin_proto_msgTypes[4]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -225,7 +321,7 @@ func (x *ListToolsRequest) String() string {
 func (*ListToolsRequest) ProtoMessage() {}
 
 func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_plugin_proto_msgTypes[4]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -238,7 +334,7 @@ func (x *ListToolsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsRequest.ProtoReflect.Descriptor instead.
 func (*ListToolsRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{4}
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{6}
 }
 
 type ListToolsResponse struct {
@@ -250,7 +346,7 @@ type ListToolsResponse struct {
 
 func (x *ListToolsResponse) Reset() {
 	*x = ListToolsResponse{}
-	mi := &file_plugin_proto_plugin_proto_msgTypes[5]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -262,7 +358,7 @@ func (x *ListToolsResponse) String() string {
 func (*ListToolsResponse) ProtoMessage() {}
 
 func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_plugin_proto_msgTypes[5]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -275,7 +371,7 @@ func (x *ListToolsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListToolsResponse.ProtoReflect.Descriptor instead.
 func (*ListToolsResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{5}
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListToolsResponse) GetTools() []*ToolInfo {
@@ -297,7 +393,7 @@ type ToolInfo struct {
 
 func (x *ToolInfo) Reset() {
 	*x = ToolInfo{}
-	mi := &file_plugin_proto_plugin_proto_msgTypes[6]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -309,7 +405,7 @@ func (x *ToolInfo) String() string {
 func (*ToolInfo) ProtoMessage() {}
 
 func (x *ToolInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_plugin_proto_msgTypes[6]
+	mi := &file_plugin_proto_plugin_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -322,7 +418,7 @@ func (x *ToolInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolInfo.ProtoReflect.Descriptor instead.
 func (*ToolInfo) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{6}
+	return file_plugin_proto_plugin_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *ToolInfo) GetName() string {
@@ -350,7 +446,15 @@ var File_plugin_proto_plugin_proto protoreflect.FileDescriptor
 
 const file_plugin_proto_plugin_proto_rawDesc = "" +
 	"\n" +
-	"\x19plugin/proto/plugin.proto\x12\x06plugin\"D\n" +
+	"\x19plugin/proto/plugin.proto\x12\x06plugin\"\x93\x01\n" +
+	"\x10ConfigureRequest\x12B\n" +
+	"\bsettings\x18\x01 \x03(\v2&.plugin.ConfigureRequest.SettingsEntryR\bsettings\x1a;\n" +
+	"\rSettingsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
+	"\x11ConfigureResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x14\n" +
+	"\x05error\x18\x02 \x01(\tR\x05error\"D\n" +
 	"\vCallRequest\x12\x1b\n" +
 	"\ttool_name\x18\x01 \x01(\tR\btoolName\x12\x18\n" +
 	"\apayload\x18\x02 \x01(\tR\apayload\"&\n" +
@@ -367,9 +471,10 @@ const file_plugin_proto_plugin_proto_rawDesc = "" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1f\n" +
 	"\vschema_json\x18\x03 \x01(\tR\n" +
-	"schemaJson2\xc9\x01\n" +
+	"schemaJson2\x8b\x02\n" +
 	"\n" +
-	"ToolPlugin\x121\n" +
+	"ToolPlugin\x12@\n" +
+	"\tConfigure\x12\x18.plugin.ConfigureRequest\x1a\x19.plugin.ConfigureResponse\x121\n" +
 	"\x04Call\x12\x13.plugin.CallRequest\x1a\x14.plugin.CallResponse\x12F\n" +
 	"\vGetToolInfo\x12\x1a.plugin.GetToolInfoRequest\x1a\x1b.plugin.GetToolInfoResponse\x12@\n" +
 	"\tListTools\x12\x18.plugin.ListToolsRequest\x1a\x19.plugin.ListToolsResponseB\x14Z\x12squad/plugin/protob\x06proto3"
@@ -386,30 +491,36 @@ func file_plugin_proto_plugin_proto_rawDescGZIP() []byte {
 	return file_plugin_proto_plugin_proto_rawDescData
 }
 
-var file_plugin_proto_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_plugin_proto_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_plugin_proto_plugin_proto_goTypes = []any{
-	(*CallRequest)(nil),         // 0: plugin.CallRequest
-	(*CallResponse)(nil),        // 1: plugin.CallResponse
-	(*GetToolInfoRequest)(nil),  // 2: plugin.GetToolInfoRequest
-	(*GetToolInfoResponse)(nil), // 3: plugin.GetToolInfoResponse
-	(*ListToolsRequest)(nil),    // 4: plugin.ListToolsRequest
-	(*ListToolsResponse)(nil),   // 5: plugin.ListToolsResponse
-	(*ToolInfo)(nil),            // 6: plugin.ToolInfo
+	(*ConfigureRequest)(nil),    // 0: plugin.ConfigureRequest
+	(*ConfigureResponse)(nil),   // 1: plugin.ConfigureResponse
+	(*CallRequest)(nil),         // 2: plugin.CallRequest
+	(*CallResponse)(nil),        // 3: plugin.CallResponse
+	(*GetToolInfoRequest)(nil),  // 4: plugin.GetToolInfoRequest
+	(*GetToolInfoResponse)(nil), // 5: plugin.GetToolInfoResponse
+	(*ListToolsRequest)(nil),    // 6: plugin.ListToolsRequest
+	(*ListToolsResponse)(nil),   // 7: plugin.ListToolsResponse
+	(*ToolInfo)(nil),            // 8: plugin.ToolInfo
+	nil,                         // 9: plugin.ConfigureRequest.SettingsEntry
 }
 var file_plugin_proto_plugin_proto_depIdxs = []int32{
-	6, // 0: plugin.GetToolInfoResponse.tool:type_name -> plugin.ToolInfo
-	6, // 1: plugin.ListToolsResponse.tools:type_name -> plugin.ToolInfo
-	0, // 2: plugin.ToolPlugin.Call:input_type -> plugin.CallRequest
-	2, // 3: plugin.ToolPlugin.GetToolInfo:input_type -> plugin.GetToolInfoRequest
-	4, // 4: plugin.ToolPlugin.ListTools:input_type -> plugin.ListToolsRequest
-	1, // 5: plugin.ToolPlugin.Call:output_type -> plugin.CallResponse
-	3, // 6: plugin.ToolPlugin.GetToolInfo:output_type -> plugin.GetToolInfoResponse
-	5, // 7: plugin.ToolPlugin.ListTools:output_type -> plugin.ListToolsResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	9, // 0: plugin.ConfigureRequest.settings:type_name -> plugin.ConfigureRequest.SettingsEntry
+	8, // 1: plugin.GetToolInfoResponse.tool:type_name -> plugin.ToolInfo
+	8, // 2: plugin.ListToolsResponse.tools:type_name -> plugin.ToolInfo
+	0, // 3: plugin.ToolPlugin.Configure:input_type -> plugin.ConfigureRequest
+	2, // 4: plugin.ToolPlugin.Call:input_type -> plugin.CallRequest
+	4, // 5: plugin.ToolPlugin.GetToolInfo:input_type -> plugin.GetToolInfoRequest
+	6, // 6: plugin.ToolPlugin.ListTools:input_type -> plugin.ListToolsRequest
+	1, // 7: plugin.ToolPlugin.Configure:output_type -> plugin.ConfigureResponse
+	3, // 8: plugin.ToolPlugin.Call:output_type -> plugin.CallResponse
+	5, // 9: plugin.ToolPlugin.GetToolInfo:output_type -> plugin.GetToolInfoResponse
+	7, // 10: plugin.ToolPlugin.ListTools:output_type -> plugin.ListToolsResponse
+	7, // [7:11] is the sub-list for method output_type
+	3, // [3:7] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_plugin_proto_plugin_proto_init() }
@@ -423,7 +534,7 @@ func file_plugin_proto_plugin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_proto_plugin_proto_rawDesc), len(file_plugin_proto_plugin_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

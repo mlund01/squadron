@@ -3,6 +3,7 @@ package plugin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
@@ -27,6 +28,9 @@ type ToolInfo struct {
 
 // ToolProvider is the interface that all tool plugins must implement
 type ToolProvider interface {
+	// Configure passes settings from HCL config to the plugin
+	Configure(settings map[string]string) error
+
 	// Call invokes a tool with the given JSON payload
 	Call(toolName string, payload string) (string, error)
 
@@ -55,6 +59,19 @@ func (p *ToolPluginGRPCPlugin) GRPCClient(ctx context.Context, broker *plugin.GR
 // GRPCClient is the gRPC client implementation of ToolProvider
 type GRPCClient struct {
 	client pb.ToolPluginClient
+}
+
+func (c *GRPCClient) Configure(settings map[string]string) error {
+	resp, err := c.client.Configure(context.Background(), &pb.ConfigureRequest{
+		Settings: settings,
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("configure failed: %s", resp.Error)
+	}
+	return nil
 }
 
 func (c *GRPCClient) Call(toolName string, payload string) (string, error) {
@@ -113,6 +130,14 @@ func protoToToolInfo(t *pb.ToolInfo) (*ToolInfo, error) {
 type GRPCServer struct {
 	pb.UnimplementedToolPluginServer
 	Impl ToolProvider
+}
+
+func (s *GRPCServer) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
+	err := s.Impl.Configure(req.Settings)
+	if err != nil {
+		return &pb.ConfigureResponse{Success: false, Error: err.Error()}, nil
+	}
+	return &pb.ConfigureResponse{Success: true}, nil
 }
 
 func (s *GRPCServer) Call(ctx context.Context, req *pb.CallRequest) (*pb.CallResponse, error) {

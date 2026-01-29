@@ -65,18 +65,19 @@ func getResponsePatterns(mode config.AgentMode) string {
 	if mode == config.ModeWorkflow {
 		sb.WriteString(`### Pattern 1: Reasoning + Tool Call (continue working)
 Use this when you need to perform an action to complete the task.
-**STOP after ACTION_INPUT and wait for the result.**
+**Output ___STOP___ after ACTION_INPUT and wait for the result.**
 
 ` + "```" + `
 <REASONING>
 Analyze the current state and what needs to be done next...
 </REASONING>
 <ACTION>tool_name</ACTION>
-<ACTION_INPUT>{"param": "value"}</ACTION_INPUT>
+<ACTION_INPUT>{"param": "value"}</ACTION_INPUT>___STOP___
 ` + "```" + `
 
 ### Pattern 2: Reasoning + Answer (task complete)
 Use this ONLY when the task is fully complete.
+**Output ___STOP___ after ANSWER to signal completion.**
 
 ` + "```" + `
 <REASONING>
@@ -84,7 +85,7 @@ The task is complete because...
 </REASONING>
 <ANSWER>
 Summary of what was accomplished and the final result.
-</ANSWER>
+</ANSWER>___STOP___
 ` + "```" + `
 
 ### Pattern 3: Multi-step Reasoning
@@ -98,7 +99,7 @@ First, analyzing the problem...
 Based on that analysis, the next step is...
 </REASONING>
 <ACTION>tool_name</ACTION>
-<ACTION_INPUT>{"param": "value"}</ACTION_INPUT>
+<ACTION_INPUT>{"param": "value"}</ACTION_INPUT>___STOP___
 ` + "```")
 	} else {
 		// Chat mode
@@ -108,7 +109,7 @@ Use this when you can answer without tools:
 ` + "```" + `
 <ANSWER>
 Your response to the user
-</ANSWER>
+</ANSWER>___STOP___
 ` + "```" + `
 
 ### Pattern 2: Reasoning + Answer
@@ -120,18 +121,25 @@ Your reasoning about the situation
 </REASONING>
 <ANSWER>
 Your response to the user
-</ANSWER>
+</ANSWER>___STOP___
 ` + "```" + `
 
 ### Pattern 3: Tool Call
-Use this when you need to use a tool. **STOP after ACTION_INPUT and wait for the result.**
+Use this when you need to use a tool. **Any explanation of what you're doing MUST be inside REASONING tags.**
+**Output ___STOP___ after ACTION_INPUT and wait for the result.**
 
 ` + "```" + `
 <REASONING>
-Your reasoning about why you need this tool (optional)
+Explaining what you're about to do and why...
 </REASONING>
 <ACTION>tool_name</ACTION>
-<ACTION_INPUT>{"param": "value"}</ACTION_INPUT>
+<ACTION_INPUT>{"param": "value"}</ACTION_INPUT>___STOP___
+` + "```" + `
+
+**WRONG - never do this:**
+` + "```" + `
+I'll help you by using the tool...
+<ACTION>tool_name</ACTION>
 ` + "```")
 	}
 
@@ -149,6 +157,7 @@ func getRules(mode config.AgentMode) string {
 		rules = append(rules, "**ANSWER means done.** Only use ANSWER when the entire task is complete.")
 		rules = append(rules, "**Be autonomous.** Don't ask questions - make reasonable assumptions and proceed.")
 	} else {
+		rules = append(rules, "**All text in tags.** Never output raw text outside of tags. Any explanation before a tool call goes in REASONING.")
 		rules = append(rules, "**Reasoning is optional.** Use REASONING when it helps, skip it for simple responses.")
 		rules = append(rules, "**One pattern per turn.** Either provide an ANSWER or request a tool call, never both.")
 		rules = append(rules, "**Be conversational.** You may ask clarifying questions if needed.")

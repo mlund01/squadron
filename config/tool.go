@@ -304,7 +304,7 @@ func (t *customToolRuntime) Call(params string) string {
 		if diags.HasErrors() {
 			return fmt.Sprintf("Error: failed to evaluate field '%s' - %s", fieldName, diags.Error())
 		}
-		baseParams[fieldName] = ctyValueToGo(val)
+		baseParams[fieldName] = CtyValueToGo(val)
 	}
 
 	// Marshal to JSON for the base tool
@@ -324,13 +324,13 @@ func mapToCtyValue(m map[string]any) cty.Value {
 
 	vals := make(map[string]cty.Value)
 	for k, v := range m {
-		vals[k] = goToCtyValue(v)
+		vals[k] = GoToCtyValue(v)
 	}
 	return cty.ObjectVal(vals)
 }
 
-// goToCtyValue converts a Go value to cty.Value
-func goToCtyValue(v any) cty.Value {
+// GoToCtyValue converts a Go value to cty.Value
+func GoToCtyValue(v any) cty.Value {
 	switch val := v.(type) {
 	case string:
 		return cty.StringVal(val)
@@ -348,7 +348,7 @@ func goToCtyValue(v any) cty.Value {
 		}
 		vals := make([]cty.Value, len(val))
 		for i, item := range val {
-			vals[i] = goToCtyValue(item)
+			vals[i] = GoToCtyValue(item)
 		}
 		return cty.TupleVal(vals)
 	case nil:
@@ -358,8 +358,8 @@ func goToCtyValue(v any) cty.Value {
 	}
 }
 
-// ctyValueToGo converts a cty.Value to a Go value
-func ctyValueToGo(val cty.Value) any {
+// CtyValueToGo converts a cty.Value to a Go value
+func CtyValueToGo(val cty.Value) any {
 	if val.IsNull() || !val.IsKnown() {
 		return nil
 	}
@@ -376,14 +376,14 @@ func ctyValueToGo(val cty.Value) any {
 		result := make(map[string]any)
 		for it := val.ElementIterator(); it.Next(); {
 			k, v := it.Element()
-			result[k.AsString()] = ctyValueToGo(v)
+			result[k.AsString()] = CtyValueToGo(v)
 		}
 		return result
 	case val.Type().IsTupleType() || val.Type().IsListType():
 		var result []any
 		for it := val.ElementIterator(); it.Next(); {
 			_, v := it.Element()
-			result = append(result, ctyValueToGo(v))
+			result = append(result, CtyValueToGo(v))
 		}
 		return result
 	default:

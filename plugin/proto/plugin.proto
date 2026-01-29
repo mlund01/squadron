@@ -6,6 +6,9 @@ option go_package = "squad/plugin/proto";
 
 // ToolPlugin is the service that all tool plugins must implement
 service ToolPlugin {
+    // Configure passes plugin settings from HCL config
+    rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+
     // Call invokes a tool on the plugin with the given payload
     rpc Call(CallRequest) returns (CallResponse);
 
@@ -14,6 +17,15 @@ service ToolPlugin {
 
     // ListTools returns info for all tools this plugin provides
     rpc ListTools(ListToolsRequest) returns (ListToolsResponse);
+}
+
+message ConfigureRequest {
+    map<string, string> settings = 1;
+}
+
+message ConfigureResponse {
+    bool success = 1;
+    string error = 2;
 }
 
 message CallRequest {

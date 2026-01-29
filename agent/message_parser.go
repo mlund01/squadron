@@ -63,7 +63,14 @@ func (p *MessageParser) GetAnswer() string {
 }
 
 // Finish signals that streaming is complete
+// If we're in the middle of parsing ACTION_INPUT when the stream ends
+// (due to stop sequences), capture the buffer content as the action input
 func (p *MessageParser) Finish() {
+	if p.state == StateActionInput {
+		// Stream ended while parsing action input (likely due to stop sequence)
+		// Capture whatever is in the buffer as the action input
+		p.actionInput = strings.TrimSpace(p.buffer.String())
+	}
 	p.streamer.FinishAnswer()
 }
 

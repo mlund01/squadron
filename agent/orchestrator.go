@@ -16,17 +16,19 @@ type llmSession interface {
 
 // orchestrator handles the agent conversation loop
 type orchestrator struct {
-	session  llmSession
-	streamer streamers.ChatHandler
-	tools    map[string]aitools.Tool
+	session     llmSession
+	streamer    streamers.ChatHandler
+	tools       map[string]aitools.Tool
+	interceptor *aitools.ResultInterceptor
 }
 
 // newOrchestrator creates a new chat orchestrator
-func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools map[string]aitools.Tool) *orchestrator {
+func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools map[string]aitools.Tool, interceptor *aitools.ResultInterceptor) *orchestrator {
 	return &orchestrator{
-		session:  session,
-		streamer: streamer,
-		tools:    tools,
+		session:     session,
+		streamer:    streamer,
+		tools:       tools,
+		interceptor: interceptor,
 	}
 }
 
@@ -77,10 +79,11 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (string, e
 
 		// Execute the tool
 		result := tool.Call(actionInput)
+
 		o.streamer.ToolComplete(action)
 
-		// Send observation back to LLM
-		currentInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result)
+		// Intercept large results and format observation
+		currentInput = o.formatObservation(action, result)
 	}
 
 	return finalAnswer, nil
@@ -92,4 +95,18 @@ func (o *orchestrator) lookupTool(name string) aitools.Tool {
 		return tool
 	}
 	return nil
+}
+
+// formatObservation formats a tool result as an observation, with optional metadata
+func (o *orchestrator) formatObservation(toolName, result string) string {
+	if o.interceptor == nil {
+		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result)
+	}
+
+	ir := o.interceptor.Intercept(toolName, result)
+	if ir.Metadata == "" {
+		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data)
+	}
+
+	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata)
 }

@@ -7,9 +7,10 @@ import (
 
 // Plugin represents a plugin configuration
 type Plugin struct {
-	Name    string `hcl:"name,label"`
-	Source  string `hcl:"source"`
-	Version string `hcl:"version"`
+	Name     string            `hcl:"name,label"`
+	Source   string            `hcl:"source"`
+	Version  string            `hcl:"version"`
+	Settings map[string]string `hcl:"-"` // Parsed manually from settings block
 }
 
 // semverRegex matches semantic versioning strings like v1.0.0, v0.1.0-beta, etc.

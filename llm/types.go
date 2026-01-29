@@ -22,10 +22,11 @@ type StreamChunk struct {
 }
 
 type ChatRequest struct {
-	Model       string
-	Messages    []Message
-	MaxTokens   int
-	Temperature float64
+	Model         string
+	Messages      []Message
+	MaxTokens     int
+	Temperature   float64
+	StopSequences []string
 }
 
 type ChatResponse struct {

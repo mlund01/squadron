@@ -16,6 +16,7 @@ type Session struct {
 	systemPrompts []string
 	messages      []Message
 	debugFile     *os.File
+	stopSequences []string
 }
 
 func NewSession(provider Provider, model string, systemPrompts ...string) *Session {
@@ -34,6 +35,12 @@ func (s *Session) EnableDebug(filename string) error {
 		return err
 	}
 	s.debugFile = f
+
+	// Log existing system prompts
+	for i, prompt := range s.systemPrompts {
+		s.logMessage(fmt.Sprintf("System Prompt %d", i+1), prompt)
+	}
+
 	return nil
 }
 
@@ -56,6 +63,12 @@ func (s *Session) logMessage(label string, content string) {
 
 func (s *Session) AddSystemPrompt(prompt string) {
 	s.systemPrompts = append(s.systemPrompts, prompt)
+	// Log the new system prompt if debug is enabled
+	s.logMessage(fmt.Sprintf("System Prompt %d", len(s.systemPrompts)), prompt)
+}
+
+func (s *Session) SetStopSequences(sequences []string) {
+	s.stopSequences = sequences
 }
 
 func (s *Session) GetHistory() []Message {
@@ -83,8 +96,9 @@ func (s *Session) Send(ctx context.Context, userMessage string) (*ChatResponse, 
 	s.logMessage("User Message", userMessage)
 
 	req := &ChatRequest{
-		Model:    s.model,
-		Messages: s.buildMessages(userMessage),
+		Model:         s.model,
+		Messages:      s.buildMessages(userMessage),
+		StopSequences: s.stopSequences,
 	}
 
 	resp, err := s.provider.Chat(ctx, req)
@@ -105,8 +119,9 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 	s.logMessage("User Message", userMessage)
 
 	req := &ChatRequest{
-		Model:    s.model,
-		Messages: s.buildMessages(userMessage),
+		Model:         s.model,
+		Messages:      s.buildMessages(userMessage),
+		StopSequences: s.stopSequences,
 	}
 
 	stream, err := s.provider.ChatStream(ctx, req)

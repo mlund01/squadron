@@ -32,6 +32,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		params.Temperature = openai.Float(req.Temperature)
 	}
 
+	if len(req.StopSequences) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{
+			OfStringArray: req.StopSequences,
+		}
+	}
+
 	resp, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, err
@@ -67,6 +73,12 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 
 	if req.Temperature > 0 {
 		params.Temperature = openai.Float(req.Temperature)
+	}
+
+	if len(req.StopSequences) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{
+			OfStringArray: req.StopSequences,
+		}
 	}
 
 	stream := p.client.Chat.Completions.NewStreaming(ctx, params)

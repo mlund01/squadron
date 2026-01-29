@@ -19,6 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	ToolPlugin_Configure_FullMethodName   = "/plugin.ToolPlugin/Configure"
 	ToolPlugin_Call_FullMethodName        = "/plugin.ToolPlugin/Call"
 	ToolPlugin_GetToolInfo_FullMethodName = "/plugin.ToolPlugin/GetToolInfo"
 	ToolPlugin_ListTools_FullMethodName   = "/plugin.ToolPlugin/ListTools"
@@ -30,6 +31,8 @@ const (
 //
 // ToolPlugin is the service that all tool plugins must implement
 type ToolPluginClient interface {
+	// Configure passes plugin settings from HCL config
+	Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error)
 	// Call invokes a tool on the plugin with the given payload
 	Call(ctx context.Context, in *CallRequest, opts ...grpc.CallOption) (*CallResponse, error)
 	// GetToolInfo returns metadata about a specific tool
@@ -44,6 +47,16 @@ type toolPluginClient struct {
 
 func NewToolPluginClient(cc grpc.ClientConnInterface) ToolPluginClient {
 	return &toolPluginClient{cc}
+}
+
+func (c *toolPluginClient) Configure(ctx context.Context, in *ConfigureRequest, opts ...grpc.CallOption) (*ConfigureResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ConfigureResponse)
+	err := c.cc.Invoke(ctx, ToolPlugin_Configure_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *toolPluginClient) Call(ctx context.Context, in *CallRequest, opts ...grpc.CallOption) (*CallResponse, error) {
@@ -82,6 +95,8 @@ func (c *toolPluginClient) ListTools(ctx context.Context, in *ListToolsRequest, 
 //
 // ToolPlugin is the service that all tool plugins must implement
 type ToolPluginServer interface {
+	// Configure passes plugin settings from HCL config
+	Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error)
 	// Call invokes a tool on the plugin with the given payload
 	Call(context.Context, *CallRequest) (*CallResponse, error)
 	// GetToolInfo returns metadata about a specific tool
@@ -98,6 +113,9 @@ type ToolPluginServer interface {
 // pointer dereference when methods are called.
 type UnimplementedToolPluginServer struct{}
 
+func (UnimplementedToolPluginServer) Configure(context.Context, *ConfigureRequest) (*ConfigureResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Configure not implemented")
+}
 func (UnimplementedToolPluginServer) Call(context.Context, *CallRequest) (*CallResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Call not implemented")
 }
@@ -126,6 +144,24 @@ func RegisterToolPluginServer(s grpc.ServiceRegistrar, srv ToolPluginServer) {
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&ToolPlugin_ServiceDesc, srv)
+}
+
+func _ToolPlugin_Configure_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigureRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ToolPluginServer).Configure(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: ToolPlugin_Configure_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ToolPluginServer).Configure(ctx, req.(*ConfigureRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _ToolPlugin_Call_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
@@ -189,6 +225,10 @@ var ToolPlugin_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "plugin.ToolPlugin",
 	HandlerType: (*ToolPluginServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "Configure",
+			Handler:    _ToolPlugin_Configure_Handler,
+		},
 		{
 			MethodName: "Call",
 			Handler:    _ToolPlugin_Call_Handler,

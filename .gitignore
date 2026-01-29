@@ -1,5 +1,9 @@
 squad
 
+# Debug
+debug.txt
+debug/
+
 # Playwright
 node_modules/
 /test-results/

@@ -32,15 +32,18 @@ type Dataset struct {
 	Description string          // Documentation for the dataset
 	BindTo      string          // Optional: input name to bind to (e.g., "cities" for inputs.cities)
 	Schema      *InputsSchema   // Optional: schema for validating items
-	Default     []cty.Value     // Optional: default list of items
+	Items       []cty.Value     // Optional: inline list of items
 	BindToExpr  hcl.Expression  // Stored for deferred evaluation
 }
 
 // TaskIterator configures iteration over a dataset
 type TaskIterator struct {
-	Dataset    string // Dataset name (e.g., "city_list")
-	Parallel   bool   // Default: false (sequential execution)
-	MaxRetries int    // Default: 0 (no retries). Max retry attempts per iteration on failure.
+	Dataset          string // Dataset name (e.g., "city_list")
+	Parallel         bool   // Default: false (sequential execution)
+	MaxRetries       int    // Default: 0 (no retries). Max retry attempts per iteration on failure.
+	ConcurrencyLimit int    // Default: 5. Max concurrent iterations when parallel=true.
+	StartDelay       int    // Default: 0. Milliseconds delay between starts in first concurrent batch.
+	Smoketest        bool   // Default: false. If true, run first iteration completely before starting others.
 }
 
 // OutputSchema defines the structured output for a task

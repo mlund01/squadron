@@ -804,7 +804,7 @@ func parseDatasetBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Dataset, error)
 		Attributes: []hcl.AttributeSchema{
 			{Name: "description"},
 			{Name: "bind_to"},
-			{Name: "default"},
+			{Name: "items"},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "schema"},
@@ -848,20 +848,20 @@ func parseDatasetBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Dataset, error)
 		}
 	}
 
-	// Get optional default (list of items)
-	if defaultAttr, ok := datasetContent.Attributes["default"]; ok {
-		defaultVal, diags := defaultAttr.Expr.Value(ctx)
+	// Get optional items (inline list of items)
+	if itemsAttr, ok := datasetContent.Attributes["items"]; ok {
+		itemsVal, diags := itemsAttr.Expr.Value(ctx)
 		if diags.HasErrors() {
 			return nil, fmt.Errorf("dataset '%s': %w", datasetName, diags)
 		}
 		// Convert to list of cty.Value
-		if defaultVal.CanIterateElements() {
-			for it := defaultVal.ElementIterator(); it.Next(); {
+		if itemsVal.CanIterateElements() {
+			for it := itemsVal.ElementIterator(); it.Next(); {
 				_, v := it.Element()
-				dataset.Default = append(dataset.Default, v)
+				dataset.Items = append(dataset.Items, v)
 			}
 		} else {
-			return nil, fmt.Errorf("dataset '%s': default must be a list", datasetName)
+			return nil, fmt.Errorf("dataset '%s': items must be a list", datasetName)
 		}
 	}
 
@@ -908,6 +908,9 @@ func parseIteratorBlock(block *hcl.Block, ctx *hcl.EvalContext) (*TaskIterator, 
 			{Name: "dataset", Required: true},
 			{Name: "parallel"},
 			{Name: "max_retries"},
+			{Name: "concurrency_limit"},
+			{Name: "start_delay"},
+			{Name: "smoketest"},
 		},
 	})
 	if diags.HasErrors() {
@@ -921,9 +924,10 @@ func parseIteratorBlock(block *hcl.Block, ctx *hcl.EvalContext) (*TaskIterator, 
 	}
 
 	iterator := &TaskIterator{
-		Dataset:    datasetVal.AsString(),
-		Parallel:   false, // Default to sequential
-		MaxRetries: 0,     // Default to no retries
+		Dataset:          datasetVal.AsString(),
+		Parallel:         false, // Default to sequential
+		MaxRetries:       0,     // Default to no retries
+		ConcurrencyLimit: 5,     // Default to 5 concurrent iterations
 	}
 
 	// Get optional parallel flag
@@ -945,6 +949,55 @@ func parseIteratorBlock(block *hcl.Block, ctx *hcl.EvalContext) (*TaskIterator, 
 		bf := maxRetriesVal.AsBigFloat()
 		intVal, _ := bf.Int64()
 		iterator.MaxRetries = int(intVal)
+	}
+
+	// Get optional concurrency_limit (only applies when parallel=true)
+	if concurrencyAttr, ok := iterContent.Attributes["concurrency_limit"]; ok {
+		concurrencyVal, diags := concurrencyAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+		// Convert cty.Number to int
+		bf := concurrencyVal.AsBigFloat()
+		intVal, _ := bf.Int64()
+		if intVal > 0 {
+			iterator.ConcurrencyLimit = int(intVal)
+		}
+	}
+
+	// Get optional start_delay (milliseconds delay between starts in first batch)
+	if startDelayAttr, ok := iterContent.Attributes["start_delay"]; ok {
+		startDelayVal, diags := startDelayAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+		bf := startDelayVal.AsBigFloat()
+		intVal, _ := bf.Int64()
+		if intVal > 0 {
+			iterator.StartDelay = int(intVal)
+		}
+	}
+
+	// Get optional smoketest (run first iteration completely before starting others)
+	if smoketestAttr, ok := iterContent.Attributes["smoketest"]; ok {
+		smoketestVal, diags := smoketestAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, diags
+		}
+		iterator.Smoketest = smoketestVal.True()
+	}
+
+	// Validate: parallel-specific options are only valid when parallel=true
+	if !iterator.Parallel {
+		if _, ok := iterContent.Attributes["concurrency_limit"]; ok {
+			return nil, fmt.Errorf("concurrency_limit is only valid when parallel=true")
+		}
+		if _, ok := iterContent.Attributes["start_delay"]; ok {
+			return nil, fmt.Errorf("start_delay is only valid when parallel=true")
+		}
+		if _, ok := iterContent.Attributes["smoketest"]; ok {
+			return nil, fmt.Errorf("smoketest is only valid when parallel=true")
+		}
 	}
 
 	return iterator, nil

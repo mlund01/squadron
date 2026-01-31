@@ -124,6 +124,57 @@ Add items to a dataset for iteration.
 
 Items must match the dataset's schema if one is defined.
 
+### ask_supe
+
+Ask a follow-up question to a completed supervisor from a dependency task. Use this when you need more details than what was provided in the task summary.
+
+```json
+{
+  "task_name": "fetch_sales",
+  "question": "What was the average order value for premium customers?"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `task_name` | string | Name of the completed dependency task (required) |
+| `question` | string | Follow-up question to ask (required) |
+| `index` | integer | For iterated tasks: the iteration index to query |
+
+The queried supervisor will answer from its existing context and can use `ask_agent` to query its own agents if needed.
+
+#### Querying Iterated Tasks
+
+For tasks that iterate over a dataset, use the `index` parameter to query a specific iteration's supervisor. Get the index from `query_task_output` results—each iteration has an `index` field.
+
+```json
+{
+  "task_name": "process_cities",
+  "index": 2,
+  "question": "Why was this city flagged for review?"
+}
+```
+
+**Context behavior:** The first query to a supervisor creates a clone from its completed state. Subsequent queries to the same supervisor build on previous questions and answers, enabling natural follow-up conversations.
+
+### ask_agent
+
+Query an agent that was used by a dependency task. Use this to get additional information from agents that have already executed and have relevant context.
+
+```json
+{
+  "agent_id": "agent_1_assistant",
+  "question": "What API endpoints did you use?"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `agent_id` | string | ID of the agent (from call_agent results) (required) |
+| `question` | string | Question to ask the agent (required) |
+
+The agent responds from its existing conversation context without making new tool calls.
+
 ## Agent Tools
 
 Agents have access to the tools configured in their agent definition, plus any workflow-level tools. See [Tools](/config/tools) for configuring agent tools.

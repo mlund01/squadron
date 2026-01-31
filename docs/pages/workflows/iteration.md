@@ -25,6 +25,9 @@ task "process_city" {
 | `dataset` | string | Dataset to iterate over |
 | `parallel` | bool | Run iterations in parallel (default: false) |
 | `max_retries` | int | Max retry attempts per iteration on failure (default: 0) |
+| `concurrency_limit` | int | Max concurrent iterations when parallel=true (default: 5). Only valid with `parallel = true`. |
+| `start_delay` | int | Milliseconds delay between starts in first concurrent batch (default: 0). Only valid with `parallel = true`. |
+| `smoketest` | bool | Run first iteration completely before starting others; skip remaining if first fails (default: false). Only valid with `parallel = true`. |
 
 ## The `item` Variable
 
@@ -73,6 +76,32 @@ iterator {
 - Faster for independent operations
 - All iterations run simultaneously
 - Each iteration retries independently before overall failure
+
+#### Parallel Options
+
+Control parallel execution behavior with these options:
+
+```hcl
+iterator {
+  dataset           = datasets.items
+  parallel          = true
+  concurrency_limit = 5     # Max 5 iterations running at once
+  start_delay       = 500   # 500ms delay between starts in first batch
+  smoketest         = true  # Run first iteration before starting others
+}
+```
+
+**concurrency_limit**: Limits how many iterations run simultaneously. Useful for rate-limited APIs or resource constraints.
+
+**start_delay**: Staggers the start of iterations in the first concurrent batch. For example, with `start_delay = 500` and `concurrency_limit = 5`:
+- Iteration 0 starts immediately
+- Iteration 1 starts at +500ms
+- Iteration 2 starts at +1000ms
+- etc.
+
+This helps when iterations need to populate shared caches before others start.
+
+**smoketest**: Runs the first iteration completely before starting the rest. If the first iteration fails (after retries), the remaining iterations are skipped. Useful for catching configuration errors early without wasting resources on doomed iterations.
 
 ## Previous Iteration Context (Sequential Only)
 
@@ -237,6 +266,65 @@ When an iteration fails:
 ### Empty Datasets
 
 If a dataset is empty, the task completes immediately with a "No items to process" summary.
+
+## Querying Iteration Supervisors
+
+Dependent tasks can query specific iteration supervisors using `ask_supe` with the `index` parameter. This enables follow-up questions to the supervisor that processed a particular item.
+
+### Getting Iteration Results
+
+First, use `query_task_output` to get results from the iterated task. Each result includes an `index` field:
+
+```json
+{
+  "task": "get_weather",
+  "filters": [{"field": "conditions", "op": "eq", "value": "snowy"}]
+}
+// Returns: [{"city": "Chicago", "temperature": 28, "index": 0}, ...]
+```
+
+### Querying a Specific Iteration
+
+Use the `index` from the query results to ask follow-up questions:
+
+```json
+{
+  "task_name": "get_weather",
+  "index": 0,
+  "question": "What was the wind speed in Chicago?"
+}
+```
+
+The iteration supervisor responds from its completed context—it remembers the full conversation with its agents and can query them for additional details.
+
+### Example: Character Crossover
+
+```hcl
+task "create_backstories" {
+  objective = "Create a backstory for ${item.name}, who is a ${item.role}"
+
+  iterator {
+    dataset = datasets.characters
+  }
+
+  output {
+    field "origin" { type = "string"; required = true }
+    field "secret_talent" { type = "string"; required = true }
+  }
+}
+
+task "character_crossover" {
+  depends_on = ["create_backstories"]
+
+  objective = <<-EOT
+    1. Use query_task_output to get all backstories
+    2. Pick two interesting characters
+    3. For each, use ask_supe with the character's index to ask:
+       "How would this character react to meeting someone from another world?"
+    4. Write a crossover scene using both answers
+  EOT
+}
+```
 
 ## Streaming Output
 

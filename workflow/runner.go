@@ -32,16 +32,33 @@ type Runner struct {
 	resolvedDatasets map[string][]cty.Value
 
 	// Task state management
-	mu               sync.RWMutex
-	taskResults      map[string]*TaskResult             // Results from completed tasks
-	taskSupervisors  map[string]*agent.Supervisor       // Supervisors for completed tasks (kept for agent inheritance)
-	taskAgents       map[string]map[string]*agent.Agent // Agents from each task (for inheritance)
+	mu                   sync.RWMutex
+	taskResults          map[string]*TaskResult                   // Results from completed tasks
+	taskSupervisors      map[string]*agent.Supervisor             // Supervisors for completed tasks (kept for agent inheritance)
+	iterationSupervisors map[string]map[int]*agent.Supervisor     // Supervisors for iterated tasks: taskName -> index -> supervisor
+	taskAgents           map[string]map[string]*agent.Agent       // Agents from each task (for inheritance)
 
 	// Knowledge store for structured task outputs
 	knowledgeStore *MemoryKnowledgeStore
 
 	// Debug logging
 	debugLogger *DebugLogger
+
+	// Shared store for ask_supe questions across iterations
+	askSupeStore *askSupeStore
+}
+
+// askSupeStore holds questions and answers shared across parallel iterations
+type askSupeStore struct {
+	mu        sync.Mutex
+	questions map[string][]*questionEntry // Map: targetTask -> []questionEntry
+}
+
+// questionEntry represents a question asked to a dependency supervisor
+type questionEntry struct {
+	Question string
+	Answer   string
+	Ready    chan struct{} // Closed when answer is ready
 }
 
 // RunnerOption is a functional option for configuring the Runner
@@ -108,16 +125,20 @@ func NewRunner(cfg *config.Config, configPath string, workflowName string, input
 	}
 
 	r := &Runner{
-		cfg:              cfg,
-		configPath:       configPath,
-		workflow:         workflow,
-		varsValues:       cfg.ResolvedVars,
-		inputValues:      inputValues,
-		resolvedDatasets: resolvedDatasets,
-		taskResults:      make(map[string]*TaskResult),
-		taskSupervisors:  make(map[string]*agent.Supervisor),
-		taskAgents:       make(map[string]map[string]*agent.Agent),
-		knowledgeStore:   NewMemoryKnowledgeStore(),
+		cfg:                  cfg,
+		configPath:           configPath,
+		workflow:             workflow,
+		varsValues:           cfg.ResolvedVars,
+		inputValues:          inputValues,
+		resolvedDatasets:     resolvedDatasets,
+		taskResults:          make(map[string]*TaskResult),
+		taskSupervisors:      make(map[string]*agent.Supervisor),
+		iterationSupervisors: make(map[string]map[int]*agent.Supervisor),
+		taskAgents:           make(map[string]map[string]*agent.Agent),
+		knowledgeStore:       NewMemoryKnowledgeStore(),
+		askSupeStore: &askSupeStore{
+			questions: make(map[string][]*questionEntry),
+		},
 	}
 
 	// Apply options
@@ -151,9 +172,9 @@ func resolveDatasets(workflow *config.Workflow, inputValues map[string]cty.Value
 			} else {
 				return nil, fmt.Errorf("dataset '%s': bound input '%s' is not a list", ds.Name, ds.BindTo)
 			}
-		} else if len(ds.Default) > 0 {
-			// Use default values
-			items = ds.Default
+		} else if len(ds.Items) > 0 {
+			// Use inline items
+			items = ds.Items
 		}
 
 		// Validate items against schema if present
@@ -312,6 +333,9 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.WorkflowHandler) er
 		}
 	}
 
+	// Cleanup iteration supervisors now that all tasks are complete
+	r.cleanupIterationSupervisors()
+
 	streamer.WorkflowCompleted(r.workflow.Name)
 
 	// Log workflow completed event
@@ -322,6 +346,22 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.WorkflowHandler) er
 	}
 
 	return nil
+}
+
+// cleanupIterationSupervisors closes all stored iteration supervisors
+func (r *Runner) cleanupIterationSupervisors() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for taskName, iterSups := range r.iterationSupervisors {
+		for idx, sup := range iterSups {
+			if sup != nil {
+				sup.Close()
+			}
+			delete(iterSups, idx)
+		}
+		delete(r.iterationSupervisors, taskName)
+	}
 }
 
 // runTask executes a single task with its supervisor
@@ -417,6 +457,19 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, depSummaries []a
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
+		GetSupervisorForQuery: func(taskName string, iterationIndex int) (*agent.Supervisor, error) {
+			return r.getSupervisorForQuery(taskName, iterationIndex, task.Name)
+		},
+		// Shared question store callbacks (also available for regular tasks)
+		ListSupeQuestions: func(depTaskName string) []string {
+			return r.listSupeQuestions(depTaskName)
+		},
+		GetSupeAnswer: func(depTaskName string, index int) (string, error) {
+			return r.getSupeAnswer(depTaskName, index)
+		},
+		AskSupeWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
+			return r.askSupeWithCache(ctx, targetTask, iterationIndex, task.Name, question)
+		},
 	}, depSummaries)
 
 	// Create task-specific streamer adapter
@@ -757,7 +810,7 @@ func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, 
 	return iterations
 }
 
-// runParallelIterations runs all iterations in parallel with retry support
+// runParallelIterations runs iterations in parallel with concurrency limit and optional staggered starts
 func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) []IterationResult {
 	iterations := make([]IterationResult, len(items))
 	maxRetries := 0
@@ -765,13 +818,99 @@ func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, it
 		maxRetries = task.Iterator.MaxRetries
 	}
 
+	// Get concurrency limit (default 5)
+	concurrencyLimit := 5
+	if task.Iterator != nil && task.Iterator.ConcurrencyLimit > 0 {
+		concurrencyLimit = task.Iterator.ConcurrencyLimit
+	}
+
+	// Get start delay (default 0 - no staggering)
+	startDelay := 0
+	if task.Iterator != nil && task.Iterator.StartDelay > 0 {
+		startDelay = task.Iterator.StartDelay
+	}
+
+	// Check smoketest mode
+	smoketest := false
+	if task.Iterator != nil {
+		smoketest = task.Iterator.Smoketest
+	}
+
+	// If smoketest is enabled, run first iteration completely before starting others
+	if smoketest && len(items) > 0 {
+		// Run first iteration synchronously
+		var firstResult IterationResult
+		for attempt := 0; attempt <= maxRetries; attempt++ {
+			select {
+			case <-ctx.Done():
+				return []IterationResult{{
+					Index:   0,
+					ItemID:  getItemID(items[0], 0),
+					Success: false,
+					Error:   ctx.Err(),
+				}}
+			default:
+			}
+
+			firstResult = r.runSingleIteration(ctx, task, 0, items[0], nil, nil, depSummaries, streamer)
+			if firstResult.Success {
+				break
+			}
+
+			if attempt < maxRetries {
+				streamer.IterationRetrying(task.Name, 0, attempt+1, maxRetries, firstResult.Error)
+			}
+		}
+
+		iterations[0] = firstResult
+
+		// If smoketest failed, don't start other iterations
+		if !firstResult.Success {
+			return iterations[:1] // Return only the failed first iteration
+		}
+
+		// Continue with remaining items (index 1+)
+		items = items[1:]
+		if len(items) == 0 {
+			return iterations[:1]
+		}
+
+		// Run remaining iterations in parallel
+		remainingIterations := r.runParallelIterationsCore(ctx, task, items, 1, maxRetries, concurrencyLimit, startDelay, depSummaries, streamer)
+		for i, result := range remainingIterations {
+			iterations[i+1] = result
+		}
+		return iterations
+	}
+
+	// No smoketest - run all iterations in parallel
+	return r.runParallelIterationsCore(ctx, task, items, 0, maxRetries, concurrencyLimit, startDelay, depSummaries, streamer)
+}
+
+// runParallelIterationsCore is the core parallel execution logic
+func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task, items []cty.Value, indexOffset int, maxRetries int, concurrencyLimit int, startDelay int, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) []IterationResult {
+	iterations := make([]IterationResult, len(items))
+
+	// Semaphore to limit concurrent iterations
+	sem := make(chan struct{}, concurrencyLimit)
 	var wg sync.WaitGroup
 
 	for i, item := range items {
 		i, item := i, item // capture
+		actualIndex := i + indexOffset
+
+		// Stagger starts for the first batch to allow cache population
+		if startDelay > 0 && i > 0 && i < concurrencyLimit {
+			time.Sleep(time.Duration(startDelay) * time.Millisecond)
+		}
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+
+			// Acquire semaphore slot (blocks if at concurrency limit)
+			sem <- struct{}{}
+			defer func() { <-sem }()
 
 			// Run with retries
 			var result IterationResult
@@ -779,8 +918,8 @@ func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, it
 				select {
 				case <-ctx.Done():
 					iterations[i] = IterationResult{
-						Index:   i,
-						ItemID:  getItemID(item, i),
+						Index:   actualIndex,
+						ItemID:  getItemID(item, actualIndex),
 						Success: false,
 						Error:   ctx.Err(),
 					}
@@ -789,14 +928,14 @@ func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, it
 				}
 
 				// Pass nil for prevOutput and prevLearnings in parallel iterations (no meaningful ordering)
-				result = r.runSingleIteration(ctx, task, i, item, nil, nil, depSummaries, streamer)
+				result = r.runSingleIteration(ctx, task, actualIndex, item, nil, nil, depSummaries, streamer)
 				if result.Success {
 					break
 				}
 
 				// If we have retries remaining, log and retry
 				if attempt < maxRetries {
-					streamer.IterationRetrying(task.Name, i, attempt+1, maxRetries, result.Error)
+					streamer.IterationRetrying(task.Name, actualIndex, attempt+1, maxRetries, result.Error)
 				}
 			}
 
@@ -883,7 +1022,8 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 			Error:   err,
 		}
 	}
-	defer sup.Close()
+	// Note: Don't close sup here - store it for ask_supe queries from dependent tasks
+	// Cleanup happens in cleanupIterationSupervisors() after all dependent tasks complete
 
 	// Set up tool callbacks for iteration
 	sup.SetToolCallbacks(&agent.SupervisorToolCallbacks{
@@ -911,6 +1051,20 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
+		GetSupervisorForQuery: func(depTaskName string, iterationIndex int) (*agent.Supervisor, error) {
+			// Use base task name (without iteration index) for dependency validation
+			return r.getSupervisorForQuery(depTaskName, iterationIndex, task.Name)
+		},
+		// Iteration-specific callbacks for shared question store
+		ListSupeQuestions: func(taskName string) []string {
+			return r.listSupeQuestions(taskName)
+		},
+		GetSupeAnswer: func(taskName string, index int) (string, error) {
+			return r.getSupeAnswer(taskName, index)
+		},
+		AskSupeWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
+			return r.askSupeWithCache(ctx, targetTask, iterationIndex, task.Name, question)
+		},
 	}, depSummaries)
 
 	// Create iteration-specific streamer adapter
@@ -923,6 +1077,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 	// Execute the iteration
 	summary, err := sup.ExecuteTask(ctx, objective, iterStreamer)
 	if err != nil {
+		sup.Close() // Close on failure
 		streamer.IterationFailed(task.Name, index, err)
 		return IterationResult{
 			Index:   index,
@@ -940,6 +1095,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 
 	// Validate output against schema - if required fields are missing, iteration failed
 	if err := validateOutput(output, task.Output); err != nil {
+		sup.Close() // Close on failure
 		streamer.IterationFailed(task.Name, index, err)
 		return IterationResult{
 			Index:     index,
@@ -951,6 +1107,14 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 			Error:     err,
 		}
 	}
+
+	// Store the iteration supervisor for ask_supe queries from dependent tasks
+	r.mu.Lock()
+	if r.iterationSupervisors[task.Name] == nil {
+		r.iterationSupervisors[task.Name] = make(map[int]*agent.Supervisor)
+	}
+	r.iterationSupervisors[task.Name][index] = sup
+	r.mu.Unlock()
 
 	streamer.IterationCompleted(task.Name, index, cleanSummary)
 	return IterationResult{
@@ -1127,6 +1291,193 @@ func (s *iterationStreamerAdapter) CallingTool(name, input string) {
 
 func (s *iterationStreamerAdapter) ToolComplete(name string) {
 	s.streamer.SupervisorToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.index), name)
+}
+
+// =============================================================================
+// Supervisor Query Support - allows supervisors to query previous supervisors
+// =============================================================================
+
+// getSupervisorForQuery returns an isolated clone of a completed supervisor for querying.
+// The requestingTask parameter is used to validate that the requested task is in the
+// dependency chain of the requesting task.
+// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
+func (r *Runner) getSupervisorForQuery(taskName string, iterationIndex int, requestingTask string) (*agent.Supervisor, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	// Check if the requested task is in the dependency chain of the requesting task
+	depChain := r.getDependencyChain(requestingTask)
+	found := false
+	for _, dep := range depChain {
+		if dep == taskName {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("task '%s' is not in the dependency chain of '%s'", taskName, requestingTask)
+	}
+
+	if iterationIndex >= 0 {
+		// Query specific iteration supervisor
+		iterSups, ok := r.iterationSupervisors[taskName]
+		if !ok {
+			return nil, fmt.Errorf("no iteration supervisors found for task '%s'", taskName)
+		}
+		sup, ok := iterSups[iterationIndex]
+		if !ok {
+			return nil, fmt.Errorf("iteration %d not found for task '%s'", iterationIndex, taskName)
+		}
+		return sup.CloneForQuery(), nil
+	}
+
+	// Query regular task supervisor
+	sup, ok := r.taskSupervisors[taskName]
+	if !ok {
+		// Check if this is an iterated task (has iteration supervisors but no regular supervisor)
+		if _, hasIterations := r.iterationSupervisors[taskName]; hasIterations {
+			return nil, fmt.Errorf("task '%s' is an iterated task - you must provide an 'index' parameter to query a specific iteration", taskName)
+		}
+		return nil, fmt.Errorf("supervisor for task '%s' not found (task may not have completed yet)", taskName)
+	}
+
+	// Return a cloned copy for isolated querying
+	return sup.CloneForQuery(), nil
+}
+
+// =============================================================================
+// Shared Question Store - deduplicates ask_supe queries across iterations
+// =============================================================================
+
+// listSupeQuestions returns the list of questions asked to a dependency task.
+// This allows supervisors to see what questions have already been asked by other iterations.
+func (r *Runner) listSupeQuestions(taskName string) []string {
+	r.askSupeStore.mu.Lock()
+	defer r.askSupeStore.mu.Unlock()
+
+	entries := r.askSupeStore.questions[taskName]
+	questions := make([]string, len(entries))
+	for i, e := range entries {
+		questions[i] = e.Question
+	}
+	return questions
+}
+
+// getSupeAnswer returns the answer for a question by index.
+// If the answer is not ready yet, it blocks until the original asker completes.
+func (r *Runner) getSupeAnswer(taskName string, index int) (string, error) {
+	r.askSupeStore.mu.Lock()
+	entries := r.askSupeStore.questions[taskName]
+	if index < 0 || index >= len(entries) {
+		r.askSupeStore.mu.Unlock()
+		return "", fmt.Errorf("question index %d out of range (task '%s' has %d questions)", index, taskName, len(entries))
+	}
+	entry := entries[index]
+	r.askSupeStore.mu.Unlock()
+
+	// Wait for the answer to be ready
+	<-entry.Ready
+
+	// Return the answer (no lock needed - answer is immutable once Ready is closed)
+	return entry.Answer, nil
+}
+
+// askSupeWithCache checks if an exact question already exists in the cache.
+// If yes, it waits for the answer (if pending) and returns it.
+// If no, it registers the question, queries the supervisor, caches the answer, and returns it.
+// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
+func (r *Runner) askSupeWithCache(ctx context.Context, targetTask string, iterationIndex int, requestingTask, question string) (string, error) {
+	// Validate dependency chain first
+	depChain := r.getDependencyChain(requestingTask)
+	found := false
+	for _, dep := range depChain {
+		if dep == targetTask {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("task '%s' is not in the dependency chain of '%s'", targetTask, requestingTask)
+	}
+
+	// Cache key includes iteration index for iterated tasks
+	cacheKey := targetTask
+	if iterationIndex >= 0 {
+		cacheKey = fmt.Sprintf("%s[%d]", targetTask, iterationIndex)
+	}
+
+	r.askSupeStore.mu.Lock()
+
+	// Check if exact question already exists
+	entries := r.askSupeStore.questions[cacheKey]
+	for _, entry := range entries {
+		if entry.Question == question {
+			// Question exists - unlock and wait for answer
+			r.askSupeStore.mu.Unlock()
+			<-entry.Ready
+			return entry.Answer, nil
+		}
+	}
+
+	// Question doesn't exist - register it with a pending answer
+	entry := &questionEntry{
+		Question: question,
+		Answer:   "",
+		Ready:    make(chan struct{}),
+	}
+	r.askSupeStore.questions[cacheKey] = append(r.askSupeStore.questions[cacheKey], entry)
+	r.askSupeStore.mu.Unlock()
+
+	// Query the supervisor (outside lock)
+	var sup *agent.Supervisor
+	var ok bool
+
+	r.mu.RLock()
+	if iterationIndex >= 0 {
+		// Query specific iteration supervisor
+		if iterSups, exists := r.iterationSupervisors[targetTask]; exists {
+			sup, ok = iterSups[iterationIndex]
+		}
+	} else {
+		// Query regular task supervisor
+		sup, ok = r.taskSupervisors[targetTask]
+	}
+	r.mu.RUnlock()
+
+	if !ok {
+		// Mark as failed and close the channel
+		r.askSupeStore.mu.Lock()
+		entry.Answer = "ERROR: supervisor not found"
+		close(entry.Ready)
+		r.askSupeStore.mu.Unlock()
+		if iterationIndex >= 0 {
+			return "", fmt.Errorf("supervisor for task '%s' iteration %d not found", targetTask, iterationIndex)
+		}
+		// Check if this is an iterated task (has iteration supervisors but no regular supervisor)
+		if _, hasIterations := r.iterationSupervisors[targetTask]; hasIterations {
+			return "", fmt.Errorf("task '%s' is an iterated task - you must provide an 'index' parameter to query a specific iteration", targetTask)
+		}
+		return "", fmt.Errorf("supervisor for task '%s' not found", targetTask)
+	}
+
+	clone := sup.CloneForQuery()
+	answer, err := clone.AnswerQueryIsolated(ctx, question)
+	if err != nil {
+		// Mark as failed and close the channel
+		r.askSupeStore.mu.Lock()
+		entry.Answer = fmt.Sprintf("ERROR: %v", err)
+		close(entry.Ready)
+		r.askSupeStore.mu.Unlock()
+		return "", err
+	}
+
+	// Store the answer and signal ready
+	r.askSupeStore.mu.Lock()
+	entry.Answer = answer
+	close(entry.Ready)
+	r.askSupeStore.mu.Unlock()
+
+	return answer, nil
 }
 
 // =============================================================================

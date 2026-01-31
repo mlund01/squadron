@@ -21,41 +21,38 @@ func NewWorkflowHandler() *WorkflowHandler {
 func (s *WorkflowHandler) WorkflowStarted(name string, taskCount int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Printf("\n=== Workflow: %s ===\n", name)
-	fmt.Printf("Tasks: %d\n\n", taskCount)
+	fmt.Printf("\n%s%s=== Workflow: %s ===%s\n", ColorBold, ColorCyan, name, ColorReset)
+	fmt.Printf("%sTasks: %d%s\n\n", ColorGray, taskCount, ColorReset)
 }
 
 func (s *WorkflowHandler) WorkflowCompleted(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Printf("\n=== Workflow '%s' completed ===\n", name)
+	fmt.Printf("\n%s%s=== Workflow '%s' completed ===%s\n", ColorBold, ColorGreen, name, ColorReset)
 }
 
 func (s *WorkflowHandler) TaskStarted(taskName string, objective string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Printf("\n--- Task: %s ---\n", taskName)
-	fmt.Printf("Objective: %s\n\n", objective)
+	fmt.Printf("\n%s%s--- Task: %s ---%s\n", ColorBold, ColorCyan, taskName, ColorReset)
+	fmt.Printf("%sObjective: %s%s\n\n", ColorGray, objective, ColorReset)
 }
 
-func (s *WorkflowHandler) TaskCompleted(taskName string, summary string) {
+func (s *WorkflowHandler) TaskCompleted(taskName string, answer string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Printf("\n[Task '%s' completed]\n", taskName)
-	if summary != "" {
-		// Extract just the SUMMARY section if present
-		if idx := strings.Index(summary, "## SUMMARY"); idx != -1 {
-			summaryPart := summary[idx+len("## SUMMARY"):]
-			summaryPart = strings.TrimSpace(summaryPart)
-			fmt.Printf("Summary: %s\n", summaryPart)
-		}
+	fmt.Printf("\n%s%s[Task '%s' completed]%s\n", ColorBold, ColorGreen, taskName, ColorReset)
+	if answer != "" {
+		// Show a truncated version of the answer
+		truncated := truncate(answer, 300)
+		fmt.Printf("%s%s%s\n", ColorGray, truncated, ColorReset)
 	}
 }
 
 func (s *WorkflowHandler) TaskFailed(taskName string, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Printf("\n[Task '%s' FAILED: %v]\n", taskName, err)
+	fmt.Printf("\n%s%s[Task '%s' FAILED: %v]%s\n", ColorBold, ColorRed, taskName, err, ColorReset)
 }
 
 func (s *WorkflowHandler) SupervisorReasoning(taskName string, content string) {
@@ -111,13 +108,13 @@ func (s *WorkflowHandler) TaskIterationStarted(taskName string, totalItems int, 
 	if parallel {
 		mode = "parallel"
 	}
-	fmt.Printf("\n--- Task: %s (iterating %d items, %s) ---\n", taskName, totalItems, mode)
+	fmt.Printf("\n%s%s--- Task: %s (iterating %d items, %s) ---%s\n", ColorBold, ColorCyan, taskName, totalItems, mode, ColorReset)
 }
 
 func (s *WorkflowHandler) TaskIterationCompleted(taskName string, completedCount int, workingSummary string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	fmt.Printf("\n[Task '%s' iterations completed: %d]\n", taskName, completedCount)
+	fmt.Printf("\n%s%s[Task '%s' iterations completed: %d]%s\n", ColorBold, ColorGreen, taskName, completedCount, ColorReset)
 }
 
 func (s *WorkflowHandler) IterationStarted(taskName string, index int, objective string) {

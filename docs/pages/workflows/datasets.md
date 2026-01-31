@@ -29,6 +29,8 @@ workflow "process_cities" {
 |-----------|------|-------------|
 | `description` | string | Documentation for the dataset |
 | `schema` | block | Optional schema for validating items |
+| `items` | list | Optional inline list of items |
+| `bind_to` | expression | Optional input binding (e.g., `inputs.cities`) |
 
 ## Schema Definition
 
@@ -79,11 +81,11 @@ workflow "process" {
 }
 ```
 
-### 2. Default Values
+### 2. Inline Items
 
 ```hcl
 dataset "regions" {
-  default = [
+  items = [
     { name = "us-east-1" },
     { name = "us-west-2" },
     { name = "eu-west-1" }

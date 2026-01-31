@@ -12,6 +12,13 @@ import (
 	"squad/streamers"
 )
 
+// ChatResult represents the outcome of a chat interaction
+type ChatResult struct {
+	Answer   string // Final answer (if complete)
+	AskSupe  string // Question for supervisor (if agent needs input)
+	Complete bool   // True if task is done
+}
+
 // Agent represents a fully initialized agent ready to chat
 type Agent struct {
 	Name      string
@@ -158,9 +165,9 @@ func (a *Agent) Close() {
 	}
 }
 
-// Chat processes a single message and returns the response
+// Chat processes a single message and returns a ChatResult
 // The streamer receives real-time updates during processing
-func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatHandler) (string, error) {
+func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatHandler) (ChatResult, error) {
 	sessionAdapter := llm.NewSessionAdapter(a.session)
 	orchestrator := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor)
 	return orchestrator.processTurn(ctx, input)

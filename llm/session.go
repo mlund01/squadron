@@ -75,6 +75,42 @@ func (s *Session) GetHistory() []Message {
 	return s.messages
 }
 
+// GetSystemPrompts returns the session's system prompts
+func (s *Session) GetSystemPrompts() []string {
+	return s.systemPrompts
+}
+
+// GetStopSequences returns the session's stop sequences
+func (s *Session) GetStopSequences() []string {
+	return s.stopSequences
+}
+
+// Clone creates a copy of this session with the same state (system prompts, messages, etc.)
+// The clone can be used independently without affecting the original session.
+// Note: The clone shares the same provider instance but has its own message history copy.
+func (s *Session) Clone() *Session {
+	// Copy system prompts
+	systemPromptsCopy := make([]string, len(s.systemPrompts))
+	copy(systemPromptsCopy, s.systemPrompts)
+
+	// Copy messages
+	messagesCopy := make([]Message, len(s.messages))
+	copy(messagesCopy, s.messages)
+
+	// Copy stop sequences
+	stopSequencesCopy := make([]string, len(s.stopSequences))
+	copy(stopSequencesCopy, s.stopSequences)
+
+	return &Session{
+		provider:      s.provider,      // Shared - providers are thread-safe
+		model:         s.model,
+		systemPrompts: systemPromptsCopy,
+		messages:      messagesCopy,
+		stopSequences: stopSequencesCopy,
+		debugFile:     nil, // Don't share debug file - clones are for isolated queries
+	}
+}
+
 func (s *Session) buildMessages(userMessage string) []Message {
 	var msgs []Message
 

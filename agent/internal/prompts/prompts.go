@@ -88,7 +88,20 @@ Summary of what was accomplished and the final result.
 </ANSWER>___STOP___
 ` + "```" + `
 
-### Pattern 3: Multi-step Reasoning
+### Pattern 3: Ask Supervisor for Clarification
+When you need more information from the supervisor before you can complete your task:
+**Only ask when truly necessary. Make reasonable assumptions when possible, but ask if critical details are missing.**
+
+` + "```" + `
+<REASONING>
+I need more information about X to proceed because...
+</REASONING>
+<ASK_SUPE>
+Your question for the supervisor here.
+</ASK_SUPE>___STOP___
+` + "```" + `
+
+### Pattern 4: Multi-step Reasoning
 For complex analysis, you may use multiple REASONING blocks:
 
 ` + "```" + `
@@ -100,7 +113,19 @@ Based on that analysis, the next step is...
 </REASONING>
 <ACTION>tool_name</ACTION>
 <ACTION_INPUT>{"param": "value"}</ACTION_INPUT>___STOP___
-` + "```")
+` + "```" + `
+
+## Supervisor Responses
+
+When you ask the supervisor a question via ASK_SUPE, you may receive one of two responses:
+
+### ` + "`<SUPERVISOR_RESPONSE>`" + ` - Answer to Your Question
+
+The supervisor is providing the information you requested. Continue your task from where you left off using this new information.
+
+### ` + "`<NEW_TASK>`" + ` - New Assignment
+
+The supervisor has decided to give you a different task instead. **Ignore any in-flight work** and start fresh on this new task. Treat it as a completely new assignment.`)
 	} else {
 		// Chat mode
 		sb.WriteString(`### Pattern 1: Direct Answer
@@ -199,12 +224,14 @@ func formatAgents(agents []AgentInfo) string {
 
 	var sb strings.Builder
 	sb.WriteString("### call_agent\n\n")
-	sb.WriteString("Call another agent to perform a subtask.\n\n")
+	sb.WriteString("Call an agent to perform a task or respond to an agent's question.\n\n")
 	sb.WriteString("**Input Schema:**\n```json\n")
 	sb.WriteString("{\n")
 	sb.WriteString("  \"name\": \"string (required) - The name of the agent to call\",\n")
-	sb.WriteString("  \"task\": \"string (required) - The task description for the agent\"\n")
+	sb.WriteString("  \"task\": \"string - A new task for the agent. Always treated as a fresh assignment.\",\n")
+	sb.WriteString("  \"response\": \"string - Response to an agent's ASK_SUPE question. Agent continues from where it left off.\"\n")
 	sb.WriteString("}\n```\n\n")
+	sb.WriteString("Provide exactly one of `task` or `response`, not both.\n\n")
 	sb.WriteString("**Available agents:**\n\n")
 
 	for _, agent := range agents {

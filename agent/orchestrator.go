@@ -33,8 +33,8 @@ func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools m
 }
 
 // processTurn handles a single conversation turn, including any tool calls
-// Returns the final answer text (if any) and any error
-func (o *orchestrator) processTurn(ctx context.Context, input string) (string, error) {
+// Returns a ChatResult with either an answer (complete) or ASK_SUPE question (needs input)
+func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResult, error) {
 	currentInput := input
 	var finalAnswer string
 
@@ -52,7 +52,12 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (string, e
 
 		if err != nil {
 			o.streamer.Error(err)
-			return "", err
+			return ChatResult{}, err
+		}
+
+		// Check for ASK_SUPE first (takes priority - agent needs supervisor input)
+		if askSupe := parser.GetAskSupe(); askSupe != "" {
+			return ChatResult{AskSupe: askSupe, Complete: false}, nil
 		}
 
 		// Capture the answer if one was provided
@@ -86,7 +91,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (string, e
 		currentInput = o.formatObservation(action, result)
 	}
 
-	return finalAnswer, nil
+	return ChatResult{Answer: finalAnswer, Complete: finalAnswer != ""}, nil
 }
 
 // lookupTool finds a tool by name

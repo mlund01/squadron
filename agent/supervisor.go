@@ -79,6 +79,24 @@ type SupervisorToolCallbacks struct {
 	KnowledgeStore KnowledgeStore
 	// DebugLogger provides debug logging capabilities (optional)
 	DebugLogger DebugLogger
+	// GetSupervisorForQuery returns an isolated clone of a completed supervisor for querying.
+	// The returned supervisor can answer questions without modifying the original's state.
+	// The clone is cached per calling supervisor, so follow-up questions build on previous context.
+	// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
+	GetSupervisorForQuery func(taskName string, iterationIndex int) (*Supervisor, error)
+
+	// ListSupeQuestions returns the list of questions already asked to a dependency task.
+	// Used by iterations to see what questions have been asked by other iterations.
+	ListSupeQuestions func(taskName string) []string
+
+	// GetSupeAnswer returns the cached answer for a question by index.
+	// Blocks until the answer is ready if another iteration is still querying.
+	GetSupeAnswer func(taskName string, index int) (string, error)
+
+	// AskSupeWithCache asks a question with deduplication. If the exact question was
+	// already asked, returns the cached answer. Otherwise queries and caches.
+	// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
+	AskSupeWithCache func(targetTask string, iterationIndex int, question string) (string, error)
 }
 
 // DebugLogger is the interface for debug logging during workflow execution
@@ -190,8 +208,10 @@ type Supervisor struct {
 	resultStore     *aitools.MemoryResultStore
 	interceptor     *aitools.ResultInterceptor
 	completedAgents map[string]*completedAgent
+	agentSessions   map[string]*Agent // Persistent agent sessions by name (for multi-turn interaction)
 	agentSeq        int
 	debugLogger     DebugLogger
+	queryClones     map[string]*Supervisor // Cached clones for ask_supe queries (keyed by target task name)
 }
 
 // NewSupervisor creates a new supervisor for a workflow task
@@ -282,6 +302,7 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 		resultStore:     resultStore,
 		interceptor:     interceptor,
 		completedAgents: completedAgents,
+		agentSessions:   make(map[string]*Agent),
 	}
 
 	// Add result tools to supervisor's tool map
@@ -342,6 +363,25 @@ func (s *Supervisor) SetToolCallbacks(callbacks *SupervisorToolCallbacks, depSum
 	if callbacks.KnowledgeStore != nil {
 		s.tools["query_task_output"] = &queryTaskOutputTool{
 			store: callbacks.KnowledgeStore,
+		}
+	}
+
+	// Add ask_supe tool if GetSupervisorForQuery callback is available
+	if callbacks.GetSupervisorForQuery != nil {
+		s.tools["ask_supe"] = &askSupeTool{
+			supervisor: s,
+		}
+	}
+
+	// Add iteration-specific tools if callbacks are available
+	if callbacks.ListSupeQuestions != nil {
+		s.tools["list_supe_questions"] = &listSupeQuestionsTool{
+			supervisor: s,
+		}
+	}
+	if callbacks.GetSupeAnswer != nil {
+		s.tools["get_supe_answer"] = &getSupeAnswerTool{
+			supervisor: s,
 		}
 	}
 }
@@ -591,6 +631,22 @@ Please provide a concise, factual answer based on what you learned during your t
 // Close releases resources held by the supervisor
 // Note: Only closes agents created by this supervisor, not inherited ones
 func (s *Supervisor) Close() {
+	// Close any cached query clones (from ask_supe)
+	for _, clone := range s.queryClones {
+		if clone != nil {
+			clone.Close()
+		}
+	}
+	s.queryClones = nil
+
+	// Close persistent agent sessions (for multi-turn interaction)
+	for _, a := range s.agentSessions {
+		if a != nil {
+			a.Close()
+		}
+	}
+	s.agentSessions = nil
+
 	// Only close agents that this supervisor created (not inherited)
 	for _, ca := range s.completedAgents {
 		if ca.agent != nil && !ca.inherited {
@@ -616,6 +672,145 @@ func (s *Supervisor) GetCompletedAgents() map[string]*Agent {
 		result[id] = ca.agent
 	}
 	return result
+}
+
+// CloneForQuery creates an isolated copy of this supervisor for answering a question.
+// The clone has a copy of the session state (conversation history) but operates independently.
+// Multiple clones can be created and queried in parallel without affecting each other.
+// The clone shares the same provider and completed agents (for ask_agent support).
+func (s *Supervisor) CloneForQuery() *Supervisor {
+	// Clone the session for isolated query processing
+	clonedSession := s.session.Clone()
+
+	// Copy completed agents map (shallow copy - agents are shared for ask_agent)
+	completedAgentsCopy := make(map[string]*completedAgent)
+	for id, ca := range s.completedAgents {
+		completedAgentsCopy[id] = &completedAgent{
+			agent:     ca.agent,
+			agentID:   ca.agentID,
+			inherited: true, // Mark as inherited so clone doesn't close them
+		}
+	}
+
+	// Create result store and interceptor for the clone
+	resultStore := aitools.NewMemoryResultStore()
+	interceptor := aitools.NewResultInterceptor(resultStore, aitools.DefaultLargeResultConfig())
+
+	clone := &Supervisor{
+		Name:            s.Name + "_clone",
+		TaskName:        s.TaskName,
+		ModelName:       s.ModelName,
+		session:         clonedSession,
+		tools:           make(map[string]aitools.Tool),
+		provider:        s.provider,     // Shared - providers are thread-safe
+		ownsProvider:    false,          // Clone doesn't own the provider
+		agents:          s.agents,       // Shared - config is read-only
+		callbacks:       s.callbacks,    // Shared - callbacks are stateless
+		configPath:      s.configPath,
+		cfg:             s.cfg,
+		resultStore:     resultStore,
+		interceptor:     interceptor,
+		completedAgents: completedAgentsCopy,
+		agentSeq:        s.agentSeq,
+		debugLogger:     nil, // No debug logging for query clones
+	}
+
+	// Add result tools
+	clone.tools["result_info"] = &aitools.ResultInfoTool{Store: resultStore}
+	clone.tools["result_items"] = &aitools.ResultItemsTool{Store: resultStore}
+	clone.tools["result_get"] = &aitools.ResultGetTool{Store: resultStore}
+	clone.tools["result_keys"] = &aitools.ResultKeysTool{Store: resultStore}
+	clone.tools["result_chunk"] = &aitools.ResultChunkTool{Store: resultStore}
+
+	// Add ask_agent tool so the clone can query its agents
+	clone.tools["ask_agent"] = &askAgentTool{supervisor: clone}
+
+	return clone
+}
+
+// AnswerQueryIsolated answers a follow-up question using an isolated session.
+// This is called on a cloned supervisor and does not affect the original.
+// It runs an execution loop to handle any tool calls (like ask_agent) before returning.
+func (s *Supervisor) AnswerQueryIsolated(ctx context.Context, question string) (string, error) {
+	currentInput := fmt.Sprintf(`<FOLLOWUP_QUESTION>
+Another supervisor is asking for additional information about your completed task.
+Question: %s
+
+You may use ask_agent to query your agents if you need more details from them.
+Provide a concise, factual answer based on what you learned during your task execution.
+Wrap your final answer in <ANSWER> tags.
+</FOLLOWUP_QUESTION>`, question)
+
+	// Run execution loop to handle any tool calls
+	for {
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		default:
+		}
+
+		resp, err := s.session.Send(ctx, currentInput)
+		if err != nil {
+			return "", err
+		}
+
+		content := resp.Content
+
+		// Check if there's an action to call
+		action, actionInput := s.parseActionFromContent(content)
+		if action == "" {
+			// No tool call, extract and return the answer
+			return s.extractAnswer(content), nil
+		}
+
+		// Look up and execute the tool
+		tool := s.tools[action]
+		if tool == nil {
+			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found. Available tools: ask_agent\n</OBSERVATION>", action)
+			continue
+		}
+
+		result := tool.Call(actionInput)
+		currentInput = s.formatObservation(action, result)
+	}
+}
+
+// parseActionFromContent extracts ACTION and ACTION_INPUT from a response
+func (s *Supervisor) parseActionFromContent(content string) (action, actionInput string) {
+	// Find <ACTION>...</ACTION>
+	actionStart := strings.Index(content, "<ACTION>")
+	if actionStart == -1 {
+		return "", ""
+	}
+	actionEnd := strings.Index(content[actionStart:], "</ACTION>")
+	if actionEnd == -1 {
+		return "", ""
+	}
+	action = strings.TrimSpace(content[actionStart+8 : actionStart+actionEnd])
+
+	// Find <ACTION_INPUT>...</ACTION_INPUT>
+	inputStart := strings.Index(content, "<ACTION_INPUT>")
+	if inputStart == -1 {
+		return action, ""
+	}
+	inputEnd := strings.Index(content[inputStart:], "</ACTION_INPUT>")
+	if inputEnd == -1 {
+		return action, ""
+	}
+	actionInput = strings.TrimSpace(content[inputStart+14 : inputStart+inputEnd])
+
+	return action, actionInput
+}
+
+// extractAnswer extracts the answer content from a response
+func (s *Supervisor) extractAnswer(content string) string {
+	if idx := strings.Index(content, "<ANSWER>"); idx != -1 {
+		content = content[idx+8:]
+		if endIdx := strings.Index(content, "</ANSWER>"); endIdx != -1 {
+			content = content[:endIdx]
+		}
+	}
+	return strings.TrimSpace(content)
 }
 
 // formatObservation formats a tool result as an observation, with optional metadata
@@ -933,7 +1128,12 @@ func (t *callAgentTool) ToolName() string {
 }
 
 func (t *callAgentTool) ToolDescription() string {
-	return "Call another agent to perform a subtask. The agent will execute the task and return the result."
+	return `Call an agent to perform a task or respond to an agent's question.
+
+Use "task" to assign a new task (always starts fresh, ignores any in-flight work).
+Use "response" to answer an agent's ASK_SUPE question (agent continues where it left off).
+
+Provide exactly one of "task" or "response", not both.`
 }
 
 func (t *callAgentTool) ToolPayloadSchema() aitools.Schema {
@@ -946,20 +1146,33 @@ func (t *callAgentTool) ToolPayloadSchema() aitools.Schema {
 			},
 			"task": {
 				Type:        aitools.TypeString,
-				Description: "The task description for the agent to execute",
+				Description: "A new task for the agent. Always treated as a fresh assignment.",
+			},
+			"response": {
+				Type:        aitools.TypeString,
+				Description: "Response to an agent's ASK_SUPE question. Agent continues from where it left off.",
 			},
 		},
-		Required: []string{"name", "task"},
+		Required: []string{"name"},
 	}
 }
 
 func (t *callAgentTool) Call(input string) string {
 	var params struct {
-		Name string `json:"name"`
-		Task string `json:"task"`
+		Name     string `json:"name"`
+		Task     string `json:"task"`
+		Response string `json:"response"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
 		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+	}
+
+	// Validate: must have either task or response, not both
+	if params.Task == "" && params.Response == "" {
+		return "<STATUS>error</STATUS>\n<ERROR>Must provide either 'task' or 'response'</ERROR>"
+	}
+	if params.Task != "" && params.Response != "" {
+		return "<STATUS>error</STATUS>\n<ERROR>Cannot provide both 'task' and 'response'</ERROR>"
 	}
 
 	agentCfg, ok := t.supervisor.agents[params.Name]
@@ -971,32 +1184,53 @@ func (t *callAgentTool) Call(input string) string {
 		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Agent '%s' not found. Available agents: %v</ERROR>", params.Name, available)
 	}
 
-	// Create and run the agent
 	ctx := context.Background()
-	mode := config.ModeWorkflow
 
-	// Get DatasetStore from callbacks if available
-	var datasetStore aitools.DatasetStore
-	if t.supervisor.callbacks != nil {
-		datasetStore = t.supervisor.callbacks.DatasetStore
+	// Get existing session or create new one
+	a, exists := t.supervisor.agentSessions[params.Name]
+	if !exists {
+		mode := config.ModeWorkflow
+
+		// Get DatasetStore from callbacks if available
+		var datasetStore aitools.DatasetStore
+		if t.supervisor.callbacks != nil {
+			datasetStore = t.supervisor.callbacks.DatasetStore
+		}
+
+		// Get debug file for agent if debug mode is enabled
+		var debugFile string
+		if t.supervisor.debugLogger != nil {
+			agentDebugName := fmt.Sprintf("%s_%s_%d", t.supervisor.TaskName, params.Name, t.supervisor.agentSeq+1)
+			debugFile = t.supervisor.debugLogger.GetMessageFile("agent", agentDebugName)
+		}
+
+		var err error
+		a, err = New(ctx, Options{
+			ConfigPath:   t.supervisor.configPath,
+			AgentName:    agentCfg.Name,
+			Mode:         &mode,
+			DatasetStore: datasetStore,
+			DebugFile:    debugFile,
+		})
+		if err != nil {
+			return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>creation_error</ERROR_TYPE>\n<ERROR>Error creating agent '%s': %v</ERROR>\n<RETRYABLE>false</RETRYABLE>", params.Name, err)
+		}
+
+		// Store the session for future interactions
+		t.supervisor.agentSessions[params.Name] = a
 	}
 
-	// Get debug file for agent if debug mode is enabled
-	var debugFile string
-	if t.supervisor.debugLogger != nil {
-		agentDebugName := fmt.Sprintf("%s_%s_%d", t.supervisor.TaskName, params.Name, t.supervisor.agentSeq+1)
-		debugFile = t.supervisor.debugLogger.GetMessageFile("agent", agentDebugName)
-	}
-
-	a, err := New(ctx, Options{
-		ConfigPath:   t.supervisor.configPath,
-		AgentName:    agentCfg.Name,
-		Mode:         &mode,
-		DatasetStore: datasetStore,
-		DebugFile:    debugFile,
-	})
-	if err != nil {
-		return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>creation_error</ERROR_TYPE>\n<ERROR>Error creating agent '%s': %v</ERROR>\n<RETRYABLE>false</RETRYABLE>", params.Name, err)
+	// Format input based on task vs response
+	var agentInput string
+	if params.Response != "" {
+		// Answering the agent's question - continue where it left off
+		agentInput = fmt.Sprintf("<SUPERVISOR_RESPONSE>\n%s\n</SUPERVISOR_RESPONSE>", params.Response)
+	} else if exists {
+		// New task on existing session - agent should ignore any in-flight work
+		agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
+	} else {
+		// Fresh agent, first task - no wrapper needed
+		agentInput = params.Task
 	}
 
 	// Notify that agent is starting and get a streamer for it
@@ -1009,7 +1243,7 @@ func (t *callAgentTool) Call(input string) string {
 		agentHandler = t.supervisor.callbacks.GetAgentHandler(t.supervisor.TaskName, params.Name)
 	}
 
-	answer, err := a.Chat(ctx, params.Task, agentHandler)
+	result, err := a.Chat(ctx, agentInput, agentHandler)
 
 	// Notify that agent is done
 	if t.supervisor.callbacks != nil && t.supervisor.callbacks.OnAgentComplete != nil {
@@ -1022,23 +1256,29 @@ func (t *callAgentTool) Call(input string) string {
 		return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>%s</ERROR_TYPE>\n<ERROR>%v</ERROR>\n<RETRYABLE>%t</RETRYABLE>", errType, err, retryable)
 	}
 
-	if answer == "" {
-		return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>empty_response</ERROR_TYPE>\n<ERROR>Agent '%s' completed but returned no answer.</ERROR>\n<RETRYABLE>true</RETRYABLE>", params.Name)
+	// Check if agent needs more info from supervisor
+	if result.AskSupe != "" {
+		return fmt.Sprintf("<STATUS>needs_input</STATUS>\n<AGENT>%s</AGENT>\n<QUESTION>\n%s\n</QUESTION>", params.Name, result.AskSupe)
 	}
 
-	// Generate agent ID and store the completed agent for follow-up queries
-	t.supervisor.agentSeq++
-	agentID := fmt.Sprintf("agent_%d_%s", t.supervisor.agentSeq, params.Name)
+	// Check if task is complete with an answer
+	if result.Complete {
+		// Generate agent ID and store the completed agent for follow-up queries
+		t.supervisor.agentSeq++
+		agentID := fmt.Sprintf("agent_%d_%s", t.supervisor.agentSeq, params.Name)
 
-	// Store locally - this agent was created by this supervisor
-	t.supervisor.completedAgents[agentID] = &completedAgent{
-		agent:     a,
-		agentID:   agentID,
-		inherited: false, // This supervisor created this agent
+		// Store locally - this agent was created by this supervisor
+		t.supervisor.completedAgents[agentID] = &completedAgent{
+			agent:     a,
+			agentID:   agentID,
+			inherited: false, // This supervisor created this agent
+		}
+
+		return fmt.Sprintf("<STATUS>success</STATUS>\n<AGENT_ID>%s</AGENT_ID>\n<ANSWER>\n%s\n</ANSWER>", agentID, result.Answer)
 	}
 
-	// Return structured success response with agent_id for follow-up queries
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<AGENT_ID>%s</AGENT_ID>\n<ANSWER>\n%s\n</ANSWER>", agentID, answer)
+	// Agent didn't complete or ask for input - unusual state
+	return fmt.Sprintf("<STATUS>in_progress</STATUS>\n<AGENT>%s</AGENT>\n<NOTE>Agent is still processing. Call again to continue.</NOTE>", params.Name)
 }
 
 // classifyAgentError categorizes an error for supervisor decision-making
@@ -1118,6 +1358,228 @@ func (t *askAgentTool) Call(input string) string {
 	}
 
 	return fmt.Sprintf("<STATUS>success</STATUS>\n<ANSWER>\n%s\n</ANSWER>", answer)
+}
+
+// =============================================================================
+// askSupeTool - queries completed supervisors from dependency tasks
+// =============================================================================
+
+// askSupeTool is the tool for querying completed supervisors in the dependency lineage
+type askSupeTool struct {
+	supervisor *Supervisor
+}
+
+func (t *askSupeTool) ToolName() string {
+	return "ask_supe"
+}
+
+func (t *askSupeTool) ToolDescription() string {
+	return `Ask a follow-up question to a completed supervisor from a dependency task. Use this when you need more details than what was provided in the task summary.
+
+The queried supervisor will answer from its existing context and can use ask_agent to query its own agents if needed.
+
+**For iterated tasks:** Use the "index" parameter to query a specific iteration's supervisor. Get the index from query_task_output results (each iteration has an "index" field).
+
+**Context behavior:** The first query to a supervisor creates a clone from its completed state. Subsequent queries to the same supervisor build on previous questions and answers, enabling natural follow-up conversations.`
+}
+
+func (t *askSupeTool) ToolPayloadSchema() aitools.Schema {
+	return aitools.Schema{
+		Type: aitools.TypeObject,
+		Properties: aitools.PropertyMap{
+			"task_name": {
+				Type:        aitools.TypeString,
+				Description: "The name of the completed dependency task to query",
+			},
+			"question": {
+				Type:        aitools.TypeString,
+				Description: "The follow-up question to ask the supervisor",
+			},
+			"index": {
+				Type:        aitools.TypeInteger,
+				Description: "For iterated tasks: the iteration index to query (from query_task_output). Omit for regular tasks.",
+			},
+		},
+		Required: []string{"task_name", "question"},
+	}
+}
+
+func (t *askSupeTool) Call(input string) string {
+	var params struct {
+		TaskName string `json:"task_name"`
+		Question string `json:"question"`
+		Index    *int   `json:"index"` // nil for regular tasks, 0+ for iterated tasks
+	}
+	if err := json.Unmarshal([]byte(input), &params); err != nil {
+		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+	}
+
+	// Determine iteration index (-1 for regular tasks)
+	iterIndex := -1
+	if params.Index != nil {
+		iterIndex = *params.Index
+	}
+
+	// Use cached query if available (for iteration deduplication)
+	if t.supervisor.callbacks != nil && t.supervisor.callbacks.AskSupeWithCache != nil {
+		answer, err := t.supervisor.callbacks.AskSupeWithCache(params.TaskName, iterIndex, params.Question)
+		if err != nil {
+			return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+		}
+		return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, answer)
+	}
+
+	// Fallback to per-supervisor clone logic (for non-iteration contexts)
+	if t.supervisor.callbacks == nil || t.supervisor.callbacks.GetSupervisorForQuery == nil {
+		return "<STATUS>error</STATUS>\n<ERROR>ask_supe is not available in this context</ERROR>"
+	}
+
+	// Check if we already have a cached clone for this target task (and iteration)
+	// Each calling supervisor gets one persistent clone per target task/iteration,
+	// so follow-up questions build on previous context
+	if t.supervisor.queryClones == nil {
+		t.supervisor.queryClones = make(map[string]*Supervisor)
+	}
+
+	// Cache key includes iteration index for iterated tasks
+	cacheKey := params.TaskName
+	if iterIndex >= 0 {
+		cacheKey = fmt.Sprintf("%s[%d]", params.TaskName, iterIndex)
+	}
+
+	supClone, exists := t.supervisor.queryClones[cacheKey]
+	if !exists {
+		// Create a new clone and cache it
+		var err error
+		supClone, err = t.supervisor.callbacks.GetSupervisorForQuery(params.TaskName, iterIndex)
+		if err != nil {
+			return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+		}
+		t.supervisor.queryClones[cacheKey] = supClone
+	}
+
+	// Ask the question to the cloned supervisor (clone persists for follow-ups)
+	ctx := context.Background()
+	answer, err := supClone.AnswerQueryIsolated(ctx, params.Question)
+	if err != nil {
+		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Error querying supervisor: %v</ERROR>", err)
+	}
+
+	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, answer)
+}
+
+// =============================================================================
+// listSupeQuestionsTool - lists questions asked to dependency supervisors
+// =============================================================================
+
+// listSupeQuestionsTool shows what questions have been asked to a dependency task by other iterations
+type listSupeQuestionsTool struct {
+	supervisor *Supervisor
+}
+
+func (t *listSupeQuestionsTool) ToolName() string {
+	return "list_supe_questions"
+}
+
+func (t *listSupeQuestionsTool) ToolDescription() string {
+	return `List questions that have been asked to a dependency supervisor by other iterations.
+
+Use this to see what information has already been requested, so you can reuse existing answers instead of asking duplicate questions. Use get_supe_answer to retrieve the answer for a specific question by its index.`
+}
+
+func (t *listSupeQuestionsTool) ToolPayloadSchema() aitools.Schema {
+	return aitools.Schema{
+		Type: aitools.TypeObject,
+		Properties: aitools.PropertyMap{
+			"task_name": {
+				Type:        aitools.TypeString,
+				Description: "The name of the dependency task to list questions for",
+			},
+		},
+		Required: []string{"task_name"},
+	}
+}
+
+func (t *listSupeQuestionsTool) Call(input string) string {
+	var params struct {
+		TaskName string `json:"task_name"`
+	}
+	if err := json.Unmarshal([]byte(input), &params); err != nil {
+		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+	}
+
+	if t.supervisor.callbacks == nil || t.supervisor.callbacks.ListSupeQuestions == nil {
+		return "<STATUS>error</STATUS>\n<ERROR>list_supe_questions is not available in this context</ERROR>"
+	}
+
+	questions := t.supervisor.callbacks.ListSupeQuestions(params.TaskName)
+	if len(questions) == 0 {
+		return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<QUESTIONS>No questions have been asked yet.</QUESTIONS>", params.TaskName)
+	}
+
+	var sb strings.Builder
+	for i, q := range questions {
+		sb.WriteString(fmt.Sprintf("%d: %q\n", i, q))
+	}
+
+	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<QUESTIONS>\n%s</QUESTIONS>", params.TaskName, sb.String())
+}
+
+// =============================================================================
+// getSupeAnswerTool - gets cached answer by index
+// =============================================================================
+
+// getSupeAnswerTool retrieves a cached answer for a question by its index
+type getSupeAnswerTool struct {
+	supervisor *Supervisor
+}
+
+func (t *getSupeAnswerTool) ToolName() string {
+	return "get_supe_answer"
+}
+
+func (t *getSupeAnswerTool) ToolDescription() string {
+	return `Get the answer for a previously asked question by its index.
+
+Use list_supe_questions first to see available questions and their indices. If the answer is still being fetched by another iteration, this will wait until it's ready.`
+}
+
+func (t *getSupeAnswerTool) ToolPayloadSchema() aitools.Schema {
+	return aitools.Schema{
+		Type: aitools.TypeObject,
+		Properties: aitools.PropertyMap{
+			"task_name": {
+				Type:        aitools.TypeString,
+				Description: "The name of the dependency task",
+			},
+			"index": {
+				Type:        aitools.TypeInteger,
+				Description: "The index of the question (from list_supe_questions)",
+			},
+		},
+		Required: []string{"task_name", "index"},
+	}
+}
+
+func (t *getSupeAnswerTool) Call(input string) string {
+	var params struct {
+		TaskName string `json:"task_name"`
+		Index    int    `json:"index"`
+	}
+	if err := json.Unmarshal([]byte(input), &params); err != nil {
+		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+	}
+
+	if t.supervisor.callbacks == nil || t.supervisor.callbacks.GetSupeAnswer == nil {
+		return "<STATUS>error</STATUS>\n<ERROR>get_supe_answer is not available in this context</ERROR>"
+	}
+
+	answer, err := t.supervisor.callbacks.GetSupeAnswer(params.TaskName, params.Index)
+	if err != nil {
+		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+	}
+
+	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<INDEX>%d</INDEX>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, params.Index, answer)
 }
 
 // =============================================================================

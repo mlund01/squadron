@@ -3,6 +3,7 @@ package aitools
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // LargeResultConfig configures when results are considered "large"
@@ -44,6 +45,11 @@ type InterceptResult struct {
 // Intercept checks if result is large and stores if so
 func (i *ResultInterceptor) Intercept(toolName, result string) InterceptResult {
 	if i.store == nil {
+		return InterceptResult{Data: result}
+	}
+
+	// Don't re-intercept results from result_* tools - they're meant to fetch full data
+	if strings.HasPrefix(toolName, "result_") {
 		return InterceptResult{Data: result}
 	}
 

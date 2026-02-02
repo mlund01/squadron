@@ -1596,10 +1596,12 @@ func (t *queryTaskOutputTool) ToolName() string {
 }
 
 func (t *queryTaskOutputTool) ToolDescription() string {
-	return `Query outputs from completed dependency tasks. Use this to access structured data from tasks that have already finished.
+	return `Query structured outputs from completed dependency tasks. Returns only the structured data fields defined in the task's output schema.
+
+**Note:** For narrative summaries or detailed explanations, use ask_supe instead.
 
 **Query modes:**
-1. Get task summary: {"task": "task_name"}
+1. Get structured output: {"task": "task_name"}
 2. Filter iterations: {"task": "task_name", "filters": [{"field": "temperature", "op": "lt", "value": 32}]}
 3. Get specific items: {"task": "task_name", "item_ids": ["Chicago_IL", "Detroit_MI"]}
 4. Aggregate: {"task": "task_name", "aggregate": {"op": "avg", "field": "temperature"}}
@@ -1741,15 +1743,15 @@ func (t *queryTaskOutputTool) Call(input string) string {
 
 // formatTaskOutput formats a non-iterated task output
 func formatTaskOutput(output *TaskOutputInfo) string {
-	result := fmt.Sprintf("Task: %s\nStatus: %s\n\nSummary:\n%s", output.TaskName, output.Status, output.Summary)
+	// Only return structured output - summaries are accessed via ask_supe
 	if len(output.Output) > 0 {
 		outputJSON, _ := json.MarshalIndent(output.Output, "", "  ")
-		result += fmt.Sprintf("\n\nStructured Output:\n%s", string(outputJSON))
+		return fmt.Sprintf("Task: %s\nStatus: %s\n\nOutput:\n%s", output.TaskName, output.Status, string(outputJSON))
 	}
-	return result
+	return fmt.Sprintf("Task: %s\nStatus: %s\n\nOutput: (none)", output.TaskName, output.Status)
 }
 
-// formatIterationResults formats iteration query results
+// formatIterationResults formats iteration query results (structured output only)
 func formatIterationResults(taskName string, results []IterationInfo, totalMatches int) string {
 	if len(results) == 0 {
 		return fmt.Sprintf("Task '%s': No matching iterations found", taskName)
@@ -1760,10 +1762,11 @@ func formatIterationResults(taskName string, results []IterationInfo, totalMatch
 
 	for _, iter := range results {
 		sb.WriteString(fmt.Sprintf("--- %s (index %d) ---\n", iter.ItemID, iter.Index))
-		sb.WriteString(fmt.Sprintf("Summary: %s\n", iter.Summary))
 		if len(iter.Output) > 0 {
 			outputJSON, _ := json.MarshalIndent(iter.Output, "", "  ")
 			sb.WriteString(fmt.Sprintf("Output: %s\n", string(outputJSON)))
+		} else {
+			sb.WriteString("Output: (none)\n")
 		}
 		sb.WriteString("\n")
 	}

@@ -9,7 +9,7 @@ plugin "playwright" {
 
   settings {
     provider     = "local"
-    headless     = true
+    headless     = false
     browser_type = "chromium"
   }
 }

@@ -5,11 +5,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 
 	"squad/aitools"
+)
+
+// Global plugin registry - plugins are shared across all config loads
+var (
+	globalRegistry     = make(map[string]*PluginClient) // key: "name:version"
+	globalRegistryLock sync.RWMutex
 )
 
 // PluginClient wraps a go-plugin client and provides access to the tool plugin
@@ -46,8 +53,30 @@ func GetPluginDir(name, version string) (string, error) {
 	return filepath.Join(pluginsDir, name, version), nil
 }
 
-// LoadPlugin loads a plugin by name and version
+// LoadPlugin loads a plugin by name and version.
+// Plugins are cached globally - if the same plugin was already loaded,
+// the existing instance is returned. This allows browser sessions and
+// other plugin state to persist across workflow tasks.
 func LoadPlugin(name, version string) (*PluginClient, error) {
+	key := name + ":" + version
+
+	// Check if plugin is already loaded
+	globalRegistryLock.RLock()
+	if existing, ok := globalRegistry[key]; ok {
+		globalRegistryLock.RUnlock()
+		return existing, nil
+	}
+	globalRegistryLock.RUnlock()
+
+	// Not found, need to load it
+	globalRegistryLock.Lock()
+	defer globalRegistryLock.Unlock()
+
+	// Double-check after acquiring write lock
+	if existing, ok := globalRegistry[key]; ok {
+		return existing, nil
+	}
+
 	pluginPath, err := GetPluginPath(name, version)
 	if err != nil {
 		return nil, err
@@ -94,11 +123,16 @@ func LoadPlugin(name, version string) (*PluginClient, error) {
 		return nil, fmt.Errorf("plugin does not implement ToolProvider interface")
 	}
 
-	return &PluginClient{
+	pc := &PluginClient{
 		client:   client,
 		provider: provider,
 		name:     name,
-	}, nil
+	}
+
+	// Store in global registry
+	globalRegistry[key] = pc
+
+	return pc, nil
 }
 
 // Configure passes settings to the plugin
@@ -143,10 +177,26 @@ func (p *PluginClient) GetAllTools() (map[string]aitools.Tool, error) {
 	return tools, nil
 }
 
-// Close shuts down the plugin
+// Close shuts down the plugin.
+// Note: When using globally cached plugins, prefer CloseAll() at program exit
+// rather than closing individual plugins.
 func (p *PluginClient) Close() {
 	if p.client != nil {
 		p.client.Kill()
+	}
+}
+
+// CloseAll shuts down all globally cached plugins.
+// Call this at program exit to clean up plugin processes.
+func CloseAll() {
+	globalRegistryLock.Lock()
+	defer globalRegistryLock.Unlock()
+
+	for key, pc := range globalRegistry {
+		if pc.client != nil {
+			pc.client.Kill()
+		}
+		delete(globalRegistry, key)
 	}
 }
 

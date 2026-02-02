@@ -37,6 +37,8 @@ type Agent struct {
 type Options struct {
 	// ConfigPath is the path to the config directory
 	ConfigPath string
+	// Config is the pre-loaded configuration (optional, avoids reloading and shares plugins)
+	Config *config.Config
 	// AgentName is the name of the agent to load
 	AgentName string
 	// Mode overrides the agent's configured mode (optional)
@@ -49,10 +51,16 @@ type Options struct {
 
 // New creates a new agent from config
 func New(ctx context.Context, opts Options) (*Agent, error) {
-	// Load and validate config
-	cfg, err := config.LoadAndValidate(opts.ConfigPath)
-	if err != nil {
-		return nil, fmt.Errorf("loading config: %w", err)
+	// Use provided config or load from path
+	var cfg *config.Config
+	var err error
+	if opts.Config != nil {
+		cfg = opts.Config
+	} else {
+		cfg, err = config.LoadAndValidate(opts.ConfigPath)
+		if err != nil {
+			return nil, fmt.Errorf("loading config: %w", err)
+		}
 	}
 
 	// Find the agent config

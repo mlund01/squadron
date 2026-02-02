@@ -21,12 +21,10 @@ var whitespaceRegex = regexp.MustCompile(`[ \t]+`)
 // emptyLineRegex matches lines that are empty or contain only whitespace
 var emptyLineRegex = regexp.MustCompile(`(?m)^\s*$[\r\n]*`)
 
-const defaultSessionID = "default"
-
 // sessionIDProperty is added to all tools that need a session
 var sessionIDProperty = aitools.Property{
 	Type:        aitools.TypeString,
-	Description: "Session ID to use. If not provided, uses 'default' session",
+	Description: "Session ID from browser_new_session. Required - sessions must be explicitly created first.",
 }
 
 // tools holds the metadata for each tool provided by this plugin
@@ -58,7 +56,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 	},
 	"browser_navigate": {
 		Name:        "browser_navigate",
-		Description: "Navigate the browser to a URL. Creates a default local session if none exists.",
+		Description: "Navigate the browser to a URL",
 		Schema: aitools.Schema{
 			Type: aitools.TypeObject,
 			Properties: aitools.PropertyMap{
@@ -72,7 +70,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 					Description: "When to consider navigation complete: 'load', 'domcontentloaded', 'networkidle'. Defaults to 'load'",
 				},
 			},
-			Required: []string{"url"},
+			Required: []string{"session_id", "url"},
 		},
 	},
 	"browser_click": {
@@ -87,7 +85,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 					Description: "CSS selector for the element to click",
 				},
 			},
-			Required: []string{"selector"},
+			Required: []string{"session_id", "selector"},
 		},
 	},
 	"browser_type": {
@@ -110,7 +108,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 					Description: "Clear the input before typing. Defaults to false",
 				},
 			},
-			Required: []string{"selector", "text"},
+			Required: []string{"session_id", "selector", "text"},
 		},
 	},
 	"browser_screenshot": {
@@ -133,6 +131,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 					Description: "CSS selector to screenshot a specific element instead of the page",
 				},
 			},
+			Required: []string{"session_id"},
 		},
 	},
 	"browser_get_text": {
@@ -147,6 +146,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 					Description: "CSS selector for the element. If not provided, gets text from body",
 				},
 			},
+			Required: []string{"session_id"},
 		},
 	},
 	"browser_get_html": {
@@ -165,6 +165,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 					Description: "Get outer HTML (including the element itself). Defaults to false (inner HTML)",
 				},
 			},
+			Required: []string{"session_id"},
 		},
 	},
 	"browser_evaluate": {
@@ -179,7 +180,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 					Description: "JavaScript code to execute. Should return a serializable value",
 				},
 			},
-			Required: []string{"script"},
+			Required: []string{"session_id", "script"},
 		},
 	},
 	"browser_wait_for_selector": {
@@ -202,7 +203,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 					Description: "Maximum time to wait in milliseconds. Defaults to 30000",
 				},
 			},
-			Required: []string{"selector"},
+			Required: []string{"session_id", "selector"},
 		},
 	},
 	"browser_close_session": {
@@ -213,9 +214,10 @@ var tools = map[string]*squadplugin.ToolInfo{
 			Properties: aitools.PropertyMap{
 				"session_id": {
 					Type:        aitools.TypeString,
-					Description: "Session ID to close. If not provided, closes 'default' session",
+					Description: "Session ID to close",
 				},
 			},
+			Required: []string{"session_id"},
 		},
 	},
 	"browser_close_all": {
@@ -310,10 +312,11 @@ func (p *PlaywrightPlugin) ensurePlaywright() error {
 	return nil
 }
 
-// getSession returns the session with the given ID, or creates a default one using plugin settings
+// getSession returns the session with the given ID.
+// Sessions must be explicitly created with browser_new_session first.
 func (p *PlaywrightPlugin) getSession(sessionID string) (*browserSession, error) {
 	if sessionID == "" {
-		sessionID = defaultSessionID
+		return nil, fmt.Errorf("session_id is required - use browser_new_session to create a session first")
 	}
 
 	p.mu.Lock()
@@ -324,64 +327,9 @@ func (p *PlaywrightPlugin) getSession(sessionID string) (*browserSession, error)
 	}
 
 	session, exists := p.sessions[sessionID]
-	if exists {
-		return session, nil
+	if !exists {
+		return nil, fmt.Errorf("session '%s' not found - use browser_new_session to create it first", sessionID)
 	}
-
-	// Only auto-create for default session
-	if sessionID != defaultSessionID {
-		return nil, fmt.Errorf("session '%s' not found - use browser_new_session to create it", sessionID)
-	}
-
-	// Create default session using plugin settings
-	if err := p.ensurePlaywright(); err != nil {
-		return nil, err
-	}
-
-	var browser playwright.Browser
-	var err error
-	isAzure := false
-
-	if p.settings.provider == "azure" {
-		// Connect to Azure Playwright
-		browser, err = p.pw.Chromium.Connect(p.settings.azureEndpoint)
-		if err != nil {
-			return nil, fmt.Errorf("could not connect to Azure Playwright: %w", err)
-		}
-		isAzure = true
-	} else {
-		// Launch local browser using settings
-		launchOpts := playwright.BrowserTypeLaunchOptions{
-			Headless: playwright.Bool(p.settings.headless),
-		}
-
-		switch p.settings.browserType {
-		case "firefox":
-			browser, err = p.pw.Firefox.Launch(launchOpts)
-		case "webkit":
-			browser, err = p.pw.WebKit.Launch(launchOpts)
-		default:
-			browser, err = p.pw.Chromium.Launch(launchOpts)
-		}
-
-		if err != nil {
-			return nil, fmt.Errorf("could not launch browser: %w", err)
-		}
-	}
-
-	page, err := browser.NewPage()
-	if err != nil {
-		browser.Close()
-		return nil, fmt.Errorf("could not create page: %w", err)
-	}
-
-	session = &browserSession{
-		browser:     browser,
-		page:        page,
-		isAzure:     isAzure,
-		browserType: p.settings.browserType,
-	}
-	p.sessions[defaultSessionID] = session
 
 	return session, nil
 }
@@ -563,11 +511,7 @@ func (p *PlaywrightPlugin) navigate(payload string) (string, error) {
 	}
 
 	title, _ := session.page.Title()
-	sessionLabel := params.SessionID
-	if sessionLabel == "" {
-		sessionLabel = defaultSessionID
-	}
-	return fmt.Sprintf("[%s] Navigated to %s (title: %s)", sessionLabel, params.URL, title), nil
+	return fmt.Sprintf("[%s] Navigated to %s (title: %s)", params.SessionID, params.URL, title), nil
 }
 
 func (p *PlaywrightPlugin) click(payload string) (string, error) {
@@ -836,17 +780,16 @@ func (p *PlaywrightPlugin) closeSession(payload string) (string, error) {
 		return "", fmt.Errorf("invalid payload: %w", err)
 	}
 
-	sessionID := params.SessionID
-	if sessionID == "" {
-		sessionID = defaultSessionID
+	if params.SessionID == "" {
+		return "", fmt.Errorf("session_id is required")
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	session, exists := p.sessions[sessionID]
+	session, exists := p.sessions[params.SessionID]
 	if !exists {
-		return fmt.Sprintf("Session '%s' not found", sessionID), nil
+		return fmt.Sprintf("Session '%s' not found", params.SessionID), nil
 	}
 
 	if session.page != nil {
@@ -856,9 +799,9 @@ func (p *PlaywrightPlugin) closeSession(payload string) (string, error) {
 		session.browser.Close()
 	}
 
-	delete(p.sessions, sessionID)
+	delete(p.sessions, params.SessionID)
 
-	return fmt.Sprintf("Session '%s' closed", sessionID), nil
+	return fmt.Sprintf("Session '%s' closed", params.SessionID), nil
 }
 
 func (p *PlaywrightPlugin) closeAll(payload string) (string, error) {

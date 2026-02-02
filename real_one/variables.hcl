@@ -13,3 +13,11 @@ variable "gemini_api_key" {
 variable "app_name" {
   default = "squad"
 }
+
+variable "airtable_email" {
+  secret = false
+}
+
+variable "airtable_password" {
+  secret = true
+}

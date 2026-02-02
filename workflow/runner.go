@@ -278,27 +278,15 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.WorkflowHandler) er
 			go func() {
 				defer wg.Done()
 
-				// Get dependency summaries for this task
-				r.mu.RLock()
-				var depSummaries []agent.DependencySummary
-				for _, dep := range r.getDependencyChain(task.Name) {
-					if result, ok := r.taskResults[dep]; ok && result.Success {
-						depSummaries = append(depSummaries, agent.DependencySummary{
-							TaskName: dep,
-							Summary:  result.Summary,
-						})
-					}
-				}
-				r.mu.RUnlock()
-
 				// Run the task (regular or iterated)
+				// Each task queries its ancestors internally using the pull model
 				var result *TaskResult
 				var err error
 
 				if task.Iterator != nil {
-					result, err = r.runIteratedTask(ctx, task, depSummaries, streamer)
+					result, err = r.runIteratedTask(ctx, task, streamer)
 				} else {
-					result, err = r.runTask(ctx, task, depSummaries, streamer)
+					result, err = r.runTask(ctx, task, streamer)
 				}
 
 				if err != nil {
@@ -365,9 +353,20 @@ func (r *Runner) cleanupIterationSupervisors() {
 }
 
 // runTask executes a single task with its supervisor
-func (r *Runner) runTask(ctx context.Context, task config.Task, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) (*TaskResult, error) {
+func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streamers.WorkflowHandler) (*TaskResult, error) {
 	// Resolve the objective with vars and inputs
 	objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
+	if err != nil {
+		streamer.TaskFailed(task.Name, err)
+		return &TaskResult{
+			TaskName: task.Name,
+			Success:  false,
+			Error:    err,
+		}, err
+	}
+
+	// Query ancestors for targeted context based on our objective
+	depSummaries, err := r.queryAncestorsForContext(ctx, task.Name, objective)
 	if err != nil {
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
@@ -648,7 +647,7 @@ func (s *supervisorStreamerAdapter) ToolComplete(name string) {
 }
 
 // runIteratedTask executes a task that iterates over a dataset
-func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) (*TaskResult, error) {
+func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer streamers.WorkflowHandler) (*TaskResult, error) {
 	datasetName := task.Iterator.Dataset
 	items, ok := r.resolvedDatasets[datasetName]
 	if !ok {
@@ -676,6 +675,17 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, depSumma
 			Summary:  "No items to process",
 			Success:  true,
 		}, nil
+	}
+
+	// Query ancestors ONCE with first item's objective for targeted context
+	var depSummaries []agent.DependencySummary
+	representativeObjective, err := r.resolveIterationObjective(task, items[0])
+	if err != nil {
+		return nil, fmt.Errorf("resolving representative objective: %w", err)
+	}
+	depSummaries, err = r.queryAncestorsForContext(ctx, task.Name, representativeObjective)
+	if err != nil {
+		return nil, fmt.Errorf("querying ancestors: %w", err)
 	}
 
 	// Notify workflow handler about iteration start
@@ -1296,6 +1306,58 @@ func (s *iterationStreamerAdapter) ToolComplete(name string) {
 // =============================================================================
 // Supervisor Query Support - allows supervisors to query previous supervisors
 // =============================================================================
+
+// queryAncestorsForContext queries each non-iterated ancestor supervisor with the task's objective
+// to get targeted context instead of generic summaries.
+// For iterated ancestors, we skip the query (they use ask_supe with specific indices instead).
+// Returns error if any ancestor query fails - this is a critical failure.
+func (r *Runner) queryAncestorsForContext(ctx context.Context, taskName string, objective string) ([]agent.DependencySummary, error) {
+	depChain := r.getDependencyChain(taskName)
+	var depSummaries []agent.DependencySummary
+
+	for _, depTaskName := range depChain {
+		// Check if this is an iterated task
+		r.mu.RLock()
+		_, isIterated := r.iterationSupervisors[depTaskName]
+		sup, hasRegularSup := r.taskSupervisors[depTaskName]
+		r.mu.RUnlock()
+
+		if isIterated {
+			// Skip pull query for iterated tasks
+			// Output schema info is injected separately via DepOutputSchemas
+			// Task can use ask_supe with index if it needs specific iteration context
+			continue
+		}
+
+		if !hasRegularSup {
+			return nil, fmt.Errorf("supervisor for dependency '%s' not found", depTaskName)
+		}
+
+		// Create a clone for querying
+		clone := sup.CloneForQuery()
+
+		question := fmt.Sprintf(
+			"A dependent task needs your help. Their objective is:\n\n%s\n\n"+
+				"Based on what you learned during your task, what relevant context, "+
+				"findings, or information should they know to accomplish their objective?",
+			objective,
+		)
+
+		answer, err := clone.AnswerQueryIsolated(ctx, question)
+		clone.Close()
+
+		if err != nil {
+			return nil, fmt.Errorf("failed to query ancestor '%s': %w", depTaskName, err)
+		}
+
+		depSummaries = append(depSummaries, agent.DependencySummary{
+			TaskName: depTaskName,
+			Summary:  answer,
+		})
+	}
+
+	return depSummaries, nil
+}
 
 // getSupervisorForQuery returns an isolated clone of a completed supervisor for querying.
 // The requestingTask parameter is used to validate that the requested task is in the

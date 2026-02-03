@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 
 	"github.com/google/generative-ai-go/genai"
@@ -39,10 +40,10 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 	chat := model.StartChat()
 	chat.History = p.convertHistory(req.Messages)
 
-	// Get the last user message
-	lastUserMsg := p.getLastUserMessage(req.Messages)
+	// Get the last user message parts
+	lastUserParts := p.getLastUserMessageParts(req.Messages)
 
-	resp, err := chat.SendMessage(ctx, genai.Text(lastUserMsg))
+	resp, err := chat.SendMessage(ctx, lastUserParts...)
 	if err != nil {
 		return nil, err
 	}
@@ -73,10 +74,10 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 	chat := model.StartChat()
 	chat.History = p.convertHistory(req.Messages)
 
-	// Get the last user message
-	lastUserMsg := p.getLastUserMessage(req.Messages)
+	// Get the last user message parts
+	lastUserParts := p.getLastUserMessageParts(req.Messages)
 
-	iter := chat.SendMessageStream(ctx, genai.Text(lastUserMsg))
+	iter := chat.SendMessageStream(ctx, lastUserParts...)
 
 	chunks := make(chan StreamChunk)
 
@@ -149,20 +150,46 @@ func (p *GeminiProvider) convertHistory(messages []Message) []*genai.Content {
 
 		history = append(history, &genai.Content{
 			Role:  role,
-			Parts: []genai.Part{genai.Text(m.Content)},
+			Parts: p.buildGeminiParts(m),
 		})
 	}
 
 	return history
 }
 
-func (p *GeminiProvider) getLastUserMessage(messages []Message) string {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == RoleUser {
-			return messages[i].Content
+// buildGeminiParts converts a Message to Gemini parts
+func (p *GeminiProvider) buildGeminiParts(m Message) []genai.Part {
+	if !m.HasParts() {
+		return []genai.Part{genai.Text(m.Content)}
+	}
+
+	var parts []genai.Part
+	for _, part := range m.Parts {
+		switch part.Type {
+		case ContentTypeText:
+			parts = append(parts, genai.Text(part.Text))
+		case ContentTypeImage:
+			if part.ImageData != nil {
+				// Decode base64 to raw bytes for Gemini
+				data, err := base64.StdEncoding.DecodeString(part.ImageData.Data)
+				if err == nil {
+					parts = append(parts, genai.ImageData(part.ImageData.MediaType, data))
+				}
+			}
 		}
 	}
-	return ""
+
+	return parts
+}
+
+// getLastUserMessageParts returns the last user message as Gemini parts
+func (p *GeminiProvider) getLastUserMessageParts(messages []Message) []genai.Part {
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == RoleUser {
+			return p.buildGeminiParts(messages[i])
+		}
+	}
+	return []genai.Part{genai.Text("")}
 }
 
 func (p *GeminiProvider) extractContent(resp *genai.GenerateContentResponse) string {

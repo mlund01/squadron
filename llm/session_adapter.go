@@ -21,3 +21,11 @@ func (a *SessionAdapter) SendStream(ctx context.Context, userMessage string, onC
 	})
 	return err
 }
+
+// SendMessageStream sends a multimodal message and streams the response
+func (a *SessionAdapter) SendMessageStream(ctx context.Context, msg Message, onChunk func(content string)) error {
+	_, err := a.session.SendMessageStream(ctx, msg, func(chunk StreamChunk) {
+		onChunk(chunk.Content)
+	})
+	return err
+}

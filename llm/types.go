@@ -10,9 +10,72 @@ const (
 	RoleSystem    Role = "system"
 )
 
+// ContentType identifies the type of content in a ContentBlock
+type ContentType string
+
+const (
+	ContentTypeText  ContentType = "text"
+	ContentTypeImage ContentType = "image"
+)
+
+// ImageBlock represents base64-encoded image data
+type ImageBlock struct {
+	Data      string // Base64-encoded data (without data URL prefix)
+	MediaType string // MIME type: "image/png", "image/jpeg", "image/gif", "image/webp"
+}
+
+// ContentBlock represents a single piece of content (text or image)
+type ContentBlock struct {
+	Type      ContentType
+	Text      string      // Used when Type == ContentTypeText
+	ImageData *ImageBlock // Used when Type == ContentTypeImage
+}
+
+// Message represents a conversation message with optional multimodal content
 type Message struct {
 	Role    Role
-	Content string
+	Content string         // Simple text content (for backward compatibility)
+	Parts   []ContentBlock // Multimodal content blocks (takes precedence over Content if non-empty)
+}
+
+// HasParts returns true if the message has multimodal content blocks
+func (m Message) HasParts() bool {
+	return len(m.Parts) > 0
+}
+
+// GetTextContent returns the text content of the message
+// If Parts is set, concatenates all text parts; otherwise returns Content
+func (m Message) GetTextContent() string {
+	if !m.HasParts() {
+		return m.Content
+	}
+	var text string
+	for _, part := range m.Parts {
+		if part.Type == ContentTypeText {
+			text += part.Text
+		}
+	}
+	return text
+}
+
+// NewTextMessage creates a simple text-only message
+func NewTextMessage(role Role, text string) Message {
+	return Message{Role: role, Content: text}
+}
+
+// NewImageMessage creates a message containing only an image
+func NewImageMessage(role Role, image *ImageBlock) Message {
+	return Message{
+		Role: role,
+		Parts: []ContentBlock{
+			{Type: ContentTypeImage, ImageData: image},
+		},
+	}
+}
+
+// NewMultimodalMessage creates a message with multiple content blocks
+func NewMultimodalMessage(role Role, parts ...ContentBlock) Message {
+	return Message{Role: role, Parts: parts}
 }
 
 type StreamChunk struct {

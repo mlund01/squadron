@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
@@ -127,11 +128,38 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 		case RoleSystem:
 			msgs = append(msgs, openai.SystemMessage(m.Content))
 		case RoleUser:
-			msgs = append(msgs, openai.UserMessage(m.Content))
+			msgs = append(msgs, p.buildUserMessage(m))
 		case RoleAssistant:
-			msgs = append(msgs, openai.AssistantMessage(m.Content))
+			msgs = append(msgs, openai.AssistantMessage(m.GetTextContent()))
 		}
 	}
 
 	return msgs
+}
+
+// buildUserMessage creates an OpenAI user message, handling multimodal content
+func (p *OpenAIProvider) buildUserMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	// If no Parts, use simple text content
+	if !m.HasParts() {
+		return openai.UserMessage(m.Content)
+	}
+
+	// Build content parts from Parts
+	var parts []openai.ChatCompletionContentPartUnionParam
+	for _, part := range m.Parts {
+		switch part.Type {
+		case ContentTypeText:
+			parts = append(parts, openai.TextContentPart(part.Text))
+		case ContentTypeImage:
+			if part.ImageData != nil {
+				// OpenAI expects data URLs for base64 images
+				dataURL := fmt.Sprintf("data:%s;base64,%s", part.ImageData.MediaType, part.ImageData.Data)
+				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
+					URL: dataURL,
+				}))
+			}
+		}
+	}
+
+	return openai.UserMessage(parts)
 }

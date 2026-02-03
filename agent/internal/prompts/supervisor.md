@@ -230,6 +230,13 @@ shown_items: 5
 
 When `partial: true`, only a sample is shown. Use result tools (`result_items`, `result_get`, `result_chunk`) with the `id` to fetch more data if needed.
 
+## Image Results from Tools
+
+When a tool returns an image (e.g., screenshot), it will NOT be wrapped in `<OBSERVATION>` tags.
+Instead, the image will appear directly in the conversation as visual content.
+
+Analyze the image directly based on what you see. Do not expect `<OBSERVATION>` tags for image results.
+
 You will then respond with another turn following the appropriate pattern.
 
 ## Learnings for Next Iteration (Sequential Only)

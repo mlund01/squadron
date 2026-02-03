@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"squad/aitools"
+	"squad/llm"
 	"squad/streamers"
 )
 
@@ -12,6 +13,8 @@ import (
 type llmSession interface {
 	// SendStream sends a message and streams the response, calling onChunk for each chunk
 	SendStream(ctx context.Context, userMessage string, onChunk func(content string)) error
+	// SendMessageStream sends a multimodal message and streams the response
+	SendMessageStream(ctx context.Context, msg llm.Message, onChunk func(content string)) error
 }
 
 // orchestrator handles the agent conversation loop
@@ -35,18 +38,31 @@ func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools m
 // processTurn handles a single conversation turn, including any tool calls
 // Returns a ChatResult with either an answer (complete) or ASK_SUPE question (needs input)
 func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResult, error) {
-	currentInput := input
+	currentTextInput := input
+	var currentImageInput *llm.ImageBlock
 	var finalAnswer string
 
 	for {
 		// Create parser for this message
 		parser := NewMessageParser(o.streamer)
 
-		err := o.session.SendStream(ctx, currentInput, func(content string) {
-			if content != "" {
-				parser.ProcessChunk(content)
-			}
-		})
+		var err error
+		if currentImageInput != nil {
+			// Send image directly (not wrapped in OBSERVATION)
+			msg := llm.NewImageMessage(llm.RoleUser, currentImageInput)
+			err = o.session.SendMessageStream(ctx, msg, func(content string) {
+				if content != "" {
+					parser.ProcessChunk(content)
+				}
+			})
+			currentImageInput = nil // Reset for next iteration
+		} else {
+			err = o.session.SendStream(ctx, currentTextInput, func(content string) {
+				if content != "" {
+					parser.ProcessChunk(content)
+				}
+			})
+		}
 
 		parser.Finish()
 
@@ -78,7 +94,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 		tool := o.lookupTool(action)
 		if tool == nil {
 			o.streamer.ToolComplete(action)
-			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found\n</OBSERVATION>", action)
+			currentTextInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found\n</OBSERVATION>", action)
 			continue
 		}
 
@@ -87,8 +103,8 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 
 		o.streamer.ToolComplete(action)
 
-		// Intercept large results and format observation
-		currentInput = o.formatObservation(action, result)
+		// Check if result is an image or format as observation
+		currentTextInput, currentImageInput = o.formatObservation(action, result)
 	}
 
 	return ChatResult{Answer: finalAnswer, Complete: finalAnswer != ""}, nil
@@ -103,15 +119,25 @@ func (o *orchestrator) lookupTool(name string) aitools.Tool {
 }
 
 // formatObservation formats a tool result as an observation, with optional metadata
-func (o *orchestrator) formatObservation(toolName, result string) string {
+// If the result is an image, returns empty string and the ImageBlock (images are not wrapped in OBSERVATION)
+func (o *orchestrator) formatObservation(toolName, result string) (string, *llm.ImageBlock) {
+	// Check if result is an image first
+	if img := aitools.DetectImage(result); img != nil {
+		return "", &llm.ImageBlock{
+			Data:      img.Data,
+			MediaType: img.MediaType,
+		}
+	}
+
+	// Not an image - format as text observation
 	if o.interceptor == nil {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result)
+		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result), nil
 	}
 
 	ir := o.interceptor.Intercept(toolName, result)
 	if ir.Metadata == "" {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data)
+		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data), nil
 	}
 
-	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata)
+	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata), nil
 }

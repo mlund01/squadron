@@ -93,16 +93,36 @@ func (s *Session) Clone() *Session {
 	systemPromptsCopy := make([]string, len(s.systemPrompts))
 	copy(systemPromptsCopy, s.systemPrompts)
 
-	// Copy messages
+	// Deep copy messages (including Parts with ImageData)
 	messagesCopy := make([]Message, len(s.messages))
-	copy(messagesCopy, s.messages)
+	for i, msg := range s.messages {
+		messagesCopy[i] = Message{
+			Role:    msg.Role,
+			Content: msg.Content,
+		}
+		if len(msg.Parts) > 0 {
+			messagesCopy[i].Parts = make([]ContentBlock, len(msg.Parts))
+			for j, part := range msg.Parts {
+				messagesCopy[i].Parts[j] = ContentBlock{
+					Type: part.Type,
+					Text: part.Text,
+				}
+				if part.ImageData != nil {
+					messagesCopy[i].Parts[j].ImageData = &ImageBlock{
+						Data:      part.ImageData.Data,
+						MediaType: part.ImageData.MediaType,
+					}
+				}
+			}
+		}
+	}
 
 	// Copy stop sequences
 	stopSequencesCopy := make([]string, len(s.stopSequences))
 	copy(stopSequencesCopy, s.stopSequences)
 
 	return &Session{
-		provider:      s.provider,      // Shared - providers are thread-safe
+		provider:      s.provider, // Shared - providers are thread-safe
 		model:         s.model,
 		systemPrompts: systemPromptsCopy,
 		messages:      messagesCopy,
@@ -112,6 +132,11 @@ func (s *Session) Clone() *Session {
 }
 
 func (s *Session) buildMessages(userMessage string) []Message {
+	return s.buildMessagesWithMessage(NewTextMessage(RoleUser, userMessage))
+}
+
+// buildMessagesWithMessage builds the full message list including a multimodal message
+func (s *Session) buildMessagesWithMessage(userMsg Message) []Message {
 	var msgs []Message
 
 	// Add system prompts first
@@ -123,7 +148,7 @@ func (s *Session) buildMessages(userMessage string) []Message {
 	msgs = append(msgs, s.messages...)
 
 	// Add the new user message
-	msgs = append(msgs, Message{Role: RoleUser, Content: userMessage})
+	msgs = append(msgs, userMsg)
 
 	return msgs
 }
@@ -197,6 +222,66 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 
 	// Append user message and assistant response to history
 	s.messages = append(s.messages, Message{Role: RoleUser, Content: userMessage})
+	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: content})
+
+	return resp, nil
+}
+
+// SendMessageStream sends a multimodal message and streams the response
+// Use this for messages containing images or mixed content
+func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChunk func(StreamChunk)) (*ChatResponse, error) {
+	// Log text content for debugging (images are not logged)
+	s.logMessage("User Message", userMsg.GetTextContent())
+	if userMsg.HasParts() {
+		for _, part := range userMsg.Parts {
+			if part.Type == ContentTypeImage && part.ImageData != nil {
+				s.logMessage("User Message Image", fmt.Sprintf("[Image: %s, %d bytes]", part.ImageData.MediaType, len(part.ImageData.Data)))
+			}
+		}
+	}
+
+	req := &ChatRequest{
+		Model:         s.model,
+		Messages:      s.buildMessagesWithMessage(userMsg),
+		StopSequences: s.stopSequences,
+	}
+
+	stream, err := s.provider.ChatStream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	var contentBuilder strings.Builder
+	var lastChunk StreamChunk
+
+	for chunk := range stream {
+		if chunk.Error != nil {
+			return nil, chunk.Error
+		}
+
+		contentBuilder.WriteString(chunk.Content)
+
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+
+		lastChunk = chunk
+	}
+
+	content := contentBuilder.String()
+
+	s.logMessage("LLM Response", content)
+
+	// Build the final response
+	resp := &ChatResponse{
+		ID:      uuid.New().String(),
+		Content: content,
+	}
+
+	_ = lastChunk // Provider implementations can extend this
+
+	// Append user message and assistant response to history
+	s.messages = append(s.messages, userMsg)
 	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: content})
 
 	return resp, nil

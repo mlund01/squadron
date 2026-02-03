@@ -228,6 +228,40 @@ var tools = map[string]*squadplugin.ToolInfo{
 			Properties: aitools.PropertyMap{},
 		},
 	},
+	"browser_aria_snapshot": {
+		Name:        "browser_aria_snapshot",
+		Description: "Get an ARIA accessibility tree snapshot of the page. Returns a YAML representation of the accessibility tree, which is more compact and AI-friendly than screenshots for understanding page structure and content.",
+		Schema: aitools.Schema{
+			Type: aitools.TypeObject,
+			Properties: aitools.PropertyMap{
+				"session_id": sessionIDProperty,
+				"selector": {
+					Type:        aitools.TypeString,
+					Description: "CSS selector to get snapshot of a specific element. If not provided, gets snapshot of the entire page (body)",
+				},
+			},
+			Required: []string{"session_id"},
+		},
+	},
+	"browser_click_coordinates": {
+		Name:        "browser_click_coordinates",
+		Description: "Click at specific x,y coordinates on the page. Useful when CSS selectors fail or for clicking on canvas/complex UI elements.",
+		Schema: aitools.Schema{
+			Type: aitools.TypeObject,
+			Properties: aitools.PropertyMap{
+				"session_id": sessionIDProperty,
+				"x": {
+					Type:        aitools.TypeNumber,
+					Description: "X coordinate (horizontal position from left edge)",
+				},
+				"y": {
+					Type:        aitools.TypeNumber,
+					Description: "Y coordinate (vertical position from top edge)",
+				},
+			},
+			Required: []string{"session_id", "x", "y"},
+		},
+	},
 }
 
 // browserSession represents a single browser session
@@ -360,6 +394,10 @@ func (p *PlaywrightPlugin) Call(toolName string, payload string) (string, error)
 		return p.closeSession(payload)
 	case "browser_close_all":
 		return p.closeAll(payload)
+	case "browser_aria_snapshot":
+		return p.ariaSnapshot(payload)
+	case "browser_click_coordinates":
+		return p.clickCoordinates(payload)
 	default:
 		return "", fmt.Errorf("unknown tool: %s", toolName)
 	}
@@ -826,6 +864,57 @@ func (p *PlaywrightPlugin) closeAll(payload string) (string, error) {
 	}
 
 	return fmt.Sprintf("Closed %d session(s)", count), nil
+}
+
+func (p *PlaywrightPlugin) ariaSnapshot(payload string) (string, error) {
+	var params struct {
+		SessionID string `json:"session_id"`
+		Selector  string `json:"selector"`
+	}
+	if err := json.Unmarshal([]byte(payload), &params); err != nil {
+		return "", fmt.Errorf("invalid payload: %w", err)
+	}
+
+	session, err := p.getSession(params.SessionID)
+	if err != nil {
+		return "", err
+	}
+
+	selector := params.Selector
+	if selector == "" {
+		selector = "body"
+	}
+
+	locator := session.page.Locator(selector)
+
+	snapshot, err := locator.AriaSnapshot()
+	if err != nil {
+		return "", fmt.Errorf("aria snapshot failed: %w", err)
+	}
+
+	return snapshot, nil
+}
+
+func (p *PlaywrightPlugin) clickCoordinates(payload string) (string, error) {
+	var params struct {
+		SessionID string  `json:"session_id"`
+		X         float64 `json:"x"`
+		Y         float64 `json:"y"`
+	}
+	if err := json.Unmarshal([]byte(payload), &params); err != nil {
+		return "", fmt.Errorf("invalid payload: %w", err)
+	}
+
+	session, err := p.getSession(params.SessionID)
+	if err != nil {
+		return "", err
+	}
+
+	if err := session.page.Mouse().Click(params.X, params.Y); err != nil {
+		return "", fmt.Errorf("click at coordinates failed: %w", err)
+	}
+
+	return fmt.Sprintf("Clicked at coordinates (%v, %v)", params.X, params.Y), nil
 }
 
 func (p *PlaywrightPlugin) GetToolInfo(toolName string) (*squadplugin.ToolInfo, error) {

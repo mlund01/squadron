@@ -131,11 +131,39 @@ func (p *AnthropicProvider) convertMessages(messages []Message) ([]anthropic.Mes
 				Text: m.Content,
 			})
 		case RoleUser:
-			msgs = append(msgs, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Content)))
+			contentBlocks := p.buildContentBlocks(m)
+			msgs = append(msgs, anthropic.NewUserMessage(contentBlocks...))
 		case RoleAssistant:
-			msgs = append(msgs, anthropic.NewAssistantMessage(anthropic.NewTextBlock(m.Content)))
+			contentBlocks := p.buildContentBlocks(m)
+			msgs = append(msgs, anthropic.NewAssistantMessage(contentBlocks...))
 		}
 	}
 
 	return msgs, systemPrompts
+}
+
+// buildContentBlocks converts a Message to Anthropic content blocks
+func (p *AnthropicProvider) buildContentBlocks(m Message) []anthropic.ContentBlockParamUnion {
+	// If no Parts, use simple text content
+	if !m.HasParts() {
+		return []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(m.Content)}
+	}
+
+	// Build content blocks from Parts
+	var blocks []anthropic.ContentBlockParamUnion
+	for _, part := range m.Parts {
+		switch part.Type {
+		case ContentTypeText:
+			blocks = append(blocks, anthropic.NewTextBlock(part.Text))
+		case ContentTypeImage:
+			if part.ImageData != nil {
+				blocks = append(blocks, anthropic.NewImageBlockBase64(
+					part.ImageData.MediaType,
+					part.ImageData.Data,
+				))
+			}
+		}
+	}
+
+	return blocks
 }

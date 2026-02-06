@@ -37,6 +37,35 @@ type Schema struct {
 	Required   []string     `json:"required,omitempty"`
 }
 
+// PruningProperties are optional parameters that can be added to any tool schema
+// to allow the LLM to control context pruning
+var PruningProperties = PropertyMap{
+	"tool_recency_limit": {
+		Type:        TypeInteger,
+		Description: "Keep only the last N results from this tool. Older results are replaced with [RESULT PRUNED]. 0 or omit = no limit.",
+	},
+	"message_recency_limit": {
+		Type:        TypeInteger,
+		Description: "Prune tool results older than N messages ago. 0 or omit = no limit.",
+	},
+}
+
+// WithPruning returns a new schema that includes the pruning properties
+func (s Schema) WithPruning() Schema {
+	newProps := make(PropertyMap, len(s.Properties)+len(PruningProperties))
+	for k, v := range s.Properties {
+		newProps[k] = v
+	}
+	for k, v := range PruningProperties {
+		newProps[k] = v
+	}
+	return Schema{
+		Type:       s.Type,
+		Properties: newProps,
+		Required:   s.Required, // Pruning properties are never required
+	}
+}
+
 // String returns the JSON representation of the schema
 func (s Schema) String() string {
 	b, _ := json.Marshal(s)

@@ -31,11 +31,20 @@ type ContentBlock struct {
 	ImageData *ImageBlock // Used when Type == ContentTypeImage
 }
 
+// MessageMetadata holds tracking information for message pruning
+type MessageMetadata struct {
+	MessageID    string // Unique identifier for this message
+	ToolName     string // Tool that produced this result (empty for non-tool messages)
+	MessageIndex int    // Position in message history when added
+	IsPrunable   bool   // Whether this message can be pruned (true for tool results)
+}
+
 // Message represents a conversation message with optional multimodal content
 type Message struct {
-	Role    Role
-	Content string         // Simple text content (for backward compatibility)
-	Parts   []ContentBlock // Multimodal content blocks (takes precedence over Content if non-empty)
+	Role     Role
+	Content  string           // Simple text content (for backward compatibility)
+	Parts    []ContentBlock   // Multimodal content blocks (takes precedence over Content if non-empty)
+	Metadata *MessageMetadata // Optional metadata for pruning tracking
 }
 
 // HasParts returns true if the message has multimodal content blocks
@@ -82,6 +91,7 @@ type StreamChunk struct {
 	Content string
 	Done    bool
 	Error   error
+	Usage   *Usage // Only populated on final chunk (Done=true)
 }
 
 type ChatRequest struct {
@@ -102,6 +112,11 @@ type ChatResponse struct {
 type Usage struct {
 	InputTokens  int
 	OutputTokens int
+
+	// Cache-related fields (provider-specific, may be zero if not supported)
+	CacheCreationInputTokens int // Anthropic: tokens used to create new cache entry
+	CacheReadInputTokens     int // Anthropic: tokens read from existing cache
+	CachedTokens             int // OpenAI: tokens served from cache (prompt_tokens_details.cached_tokens)
 }
 
 type Provider interface {

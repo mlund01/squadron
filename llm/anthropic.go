@@ -55,8 +55,10 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRe
 		Content:      content,
 		FinishReason: string(resp.StopReason),
 		Usage: Usage{
-			InputTokens:  int(resp.Usage.InputTokens),
-			OutputTokens: int(resp.Usage.OutputTokens),
+			InputTokens:              int(resp.Usage.InputTokens),
+			OutputTokens:             int(resp.Usage.OutputTokens),
+			CacheCreationInputTokens: int(resp.Usage.CacheCreationInputTokens),
+			CacheReadInputTokens:     int(resp.Usage.CacheReadInputTokens),
 		},
 	}, nil
 }
@@ -90,6 +92,8 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 	go func() {
 		defer close(chunks)
 
+		var finalUsage Usage
+
 		for stream.Next() {
 			event := stream.Current()
 
@@ -101,9 +105,19 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 						Done:    false,
 					}
 				}
+			case anthropic.MessageDeltaEvent:
+				// Capture usage from the delta event (has cumulative output tokens)
+				finalUsage.OutputTokens = int(e.Usage.OutputTokens)
+			case anthropic.MessageStartEvent:
+				// Capture input tokens from the message start event
+				finalUsage.InputTokens = int(e.Message.Usage.InputTokens)
+				// Capture cache-related tokens if present
+				finalUsage.CacheCreationInputTokens = int(e.Message.Usage.CacheCreationInputTokens)
+				finalUsage.CacheReadInputTokens = int(e.Message.Usage.CacheReadInputTokens)
 			case anthropic.MessageStopEvent:
 				chunks <- StreamChunk{
-					Done: true,
+					Done:  true,
+					Usage: &finalUsage,
 				}
 			}
 		}

@@ -84,15 +84,23 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 	go func() {
 		defer close(chunks)
 
+		var finalUsage Usage
+
 		for {
 			resp, err := iter.Next()
 			if err == iterator.Done {
-				chunks <- StreamChunk{Done: true}
+				chunks <- StreamChunk{Done: true, Usage: &finalUsage}
 				break
 			}
 			if err != nil {
 				chunks <- StreamChunk{Error: err, Done: true}
 				break
+			}
+
+			// Capture usage from each response (accumulates over stream)
+			if resp.UsageMetadata != nil {
+				finalUsage.InputTokens = int(resp.UsageMetadata.PromptTokenCount)
+				finalUsage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
 			}
 
 			content := p.extractContent(resp)

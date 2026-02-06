@@ -29,8 +29,11 @@ type Agent struct {
 	tools        map[string]aitools.Tool
 	provider     llm.Provider
 	ownsProvider bool // true if we created the provider and should close it
-	resultStore  *aitools.MemoryResultStore
-	interceptor  *aitools.ResultInterceptor
+	resultStore    *aitools.MemoryResultStore
+	interceptor    *aitools.ResultInterceptor
+	pruningManager *llm.PruningManager
+	eventLogger    EventLogger
+	turnLogFile    string
 }
 
 // Options for creating an agent
@@ -47,6 +50,10 @@ type Options struct {
 	DebugFile string
 	// DatasetStore provides access to workflow datasets (optional, for workflow context)
 	DatasetStore aitools.DatasetStore
+	// EventLogger provides structured event logging (optional, workflow context only)
+	EventLogger EventLogger
+	// TurnLogFile enables per-turn session snapshots to the specified JSONL file (optional)
+	TurnLogFile string
 }
 
 // New creates a new agent from config
@@ -148,16 +155,26 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		}
 	}
 
+	// Create pruning manager tied to this session
+	pruningManager := llm.NewPruningManager(
+		session,
+		agentCfg.GetToolRecencyLimit(),
+		agentCfg.GetMessageRecencyLimit(),
+	)
+
 	return &Agent{
-		Name:         agentCfg.Name,
-		ModelName:    actualModelName,
-		Mode:         mode,
-		session:      session,
-		tools:        tools,
-		provider:     provider,
-		ownsProvider: ownsProvider,
-		resultStore:  resultStore,
-		interceptor:  interceptor,
+		Name:           agentCfg.Name,
+		ModelName:      actualModelName,
+		Mode:           mode,
+		session:        session,
+		tools:          tools,
+		provider:       provider,
+		ownsProvider:   ownsProvider,
+		resultStore:    resultStore,
+		interceptor:    interceptor,
+		pruningManager: pruningManager,
+		eventLogger:    opts.EventLogger,
+		turnLogFile:    opts.TurnLogFile,
 	}, nil
 }
 
@@ -177,7 +194,7 @@ func (a *Agent) Close() {
 // The streamer receives real-time updates during processing
 func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatHandler) (ChatResult, error) {
 	sessionAdapter := llm.NewSessionAdapter(a.session)
-	orchestrator := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor)
+	orchestrator := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogFile)
 	return orchestrator.processTurn(ctx, input)
 }
 

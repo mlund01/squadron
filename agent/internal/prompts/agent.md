@@ -68,6 +68,33 @@ Analyze the image directly based on what you see. Do not expect `<OBSERVATION>` 
 
 You will then respond with another turn following the appropriate pattern.
 
+## Context Management (Pruning)
+
+Tool results are automatically pruned to manage context size. Default limits are applied to every tool call:
+
+- **Tool recency**: Only the last few results per tool are kept. Older results from the same tool are replaced with `[RESULT PRUNED]`.
+- **Message recency**: Tool results older than a certain number of messages ago are pruned.
+
+You can **override** these defaults for any tool call by adding pruning parameters to the input JSON:
+
+- `tool_recency_limit`: Keep only the last N results from this specific tool (overrides the default).
+- `message_recency_limit`: Prune all tool results older than N messages ago (overrides the default).
+
+Example - keep only the last 2 screenshots (more aggressive than default):
+```json
+{
+  "url": "https://example.com",
+  "tool_recency_limit": 2
+}
+```
+
+Use overrides when:
+- A tool produces large results and you only need the most recent ones
+- You want to prune a specific tool more aggressively than the default
+- Earlier results from a tool are no longer relevant to the current task
+
+Pruned results show as `[RESULT PRUNED]` - you cannot retrieve their original content.
+
 ## Rules
 
 {{RULES}}

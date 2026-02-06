@@ -80,6 +80,12 @@ func IsInternalTool(name string) bool {
 	return false
 }
 
+// Default pruning limits
+const (
+	DefaultToolRecencyLimit    = 3
+	DefaultMessageRecencyLimit = 20
+)
+
 // Agent represents an AI agent configuration
 type Agent struct {
 	Name        string   `hcl:"name,label"`
@@ -87,6 +93,34 @@ type Agent struct {
 	Personality string   `hcl:"personality"`
 	Role        string   `hcl:"role"`
 	Tools       []string `hcl:"tools,optional"`
+
+	// Pruning defaults: how many recent results to keep per tool, and how
+	// many messages back to keep tool results. LLM can override per-call.
+	// -1 disables that pruning dimension. 0 means "use default".
+	ToolRecencyLimit    int `hcl:"tool_recency_limit,optional"`
+	MessageRecencyLimit int `hcl:"message_recency_limit,optional"`
+}
+
+// GetToolRecencyLimit returns the effective tool recency limit (applying defaults)
+func (a *Agent) GetToolRecencyLimit() int {
+	if a.ToolRecencyLimit < 0 {
+		return 0 // disabled
+	}
+	if a.ToolRecencyLimit == 0 {
+		return DefaultToolRecencyLimit
+	}
+	return a.ToolRecencyLimit
+}
+
+// GetMessageRecencyLimit returns the effective message recency limit (applying defaults)
+func (a *Agent) GetMessageRecencyLimit() int {
+	if a.MessageRecencyLimit < 0 {
+		return 0 // disabled
+	}
+	if a.MessageRecencyLimit == 0 {
+		return DefaultMessageRecencyLimit
+	}
+	return a.MessageRecencyLimit
 }
 
 // Validate checks that the agent configuration is valid

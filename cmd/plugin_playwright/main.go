@@ -113,7 +113,7 @@ var tools = map[string]*squadplugin.ToolInfo{
 	},
 	"browser_screenshot": {
 		Name:        "browser_screenshot",
-		Description: "Take a screenshot of the current page",
+		Description: "Take a screenshot of the current page. Returns a JPEG image by default (smaller size for faster processing).",
 		Schema: aitools.Schema{
 			Type: aitools.TypeObject,
 			Properties: aitools.PropertyMap{
@@ -129,6 +129,10 @@ var tools = map[string]*squadplugin.ToolInfo{
 				"selector": {
 					Type:        aitools.TypeString,
 					Description: "CSS selector to screenshot a specific element instead of the page",
+				},
+				"quality": {
+					Type:        aitools.TypeInteger,
+					Description: "JPEG quality (1-100). Defaults to 80. Lower values produce smaller images.",
 				},
 			},
 			Required: []string{"session_id"},
@@ -608,6 +612,7 @@ func (p *PlaywrightPlugin) screenshot(payload string) (string, error) {
 		Path      string `json:"path"`
 		FullPage  bool   `json:"full_page"`
 		Selector  string `json:"selector"`
+		Quality   int    `json:"quality"`
 	}
 	if err := json.Unmarshal([]byte(payload), &params); err != nil {
 		return "", fmt.Errorf("invalid payload: %w", err)
@@ -616,6 +621,20 @@ func (p *PlaywrightPlugin) screenshot(payload string) (string, error) {
 	session, err := p.getSession(params.SessionID)
 	if err != nil {
 		return "", err
+	}
+
+	// Default JPEG quality
+	quality := params.Quality
+	if quality <= 0 || quality > 100 {
+		quality = 80
+	}
+
+	// Build screenshot options: JPEG format, CSS scale (1x regardless of device DPI)
+	opts := playwright.PageScreenshotOptions{
+		FullPage: playwright.Bool(params.FullPage),
+		Type:     playwright.ScreenshotTypeJpeg,
+		Quality:  playwright.Int(quality),
+		Scale:    playwright.ScreenshotScaleCss,
 	}
 
 	var imageBytes []byte
@@ -628,24 +647,25 @@ func (p *PlaywrightPlugin) screenshot(payload string) (string, error) {
 		if element == nil {
 			return "", fmt.Errorf("element not found: %s", params.Selector)
 		}
-		imageBytes, err = element.Screenshot()
+		imageBytes, err = element.Screenshot(playwright.ElementHandleScreenshotOptions{
+			Type:    playwright.ScreenshotTypeJpeg,
+			Quality: playwright.Int(quality),
+			Scale:   playwright.ScreenshotScaleCss,
+		})
 		if err != nil {
 			return "", fmt.Errorf("screenshot failed: %w", err)
 		}
 	} else {
-		imageBytes, err = session.page.Screenshot(playwright.PageScreenshotOptions{
-			FullPage: playwright.Bool(params.FullPage),
-		})
+		imageBytes, err = session.page.Screenshot(opts)
 		if err != nil {
 			return "", fmt.Errorf("screenshot failed: %w", err)
 		}
 	}
 
 	if params.Path != "" {
-		_, err := session.page.Screenshot(playwright.PageScreenshotOptions{
-			Path:     playwright.String(params.Path),
-			FullPage: playwright.Bool(params.FullPage),
-		})
+		saveOpts := opts
+		saveOpts.Path = playwright.String(params.Path)
+		_, err := session.page.Screenshot(saveOpts)
 		if err != nil {
 			return "", fmt.Errorf("save screenshot failed: %w", err)
 		}
@@ -653,7 +673,7 @@ func (p *PlaywrightPlugin) screenshot(payload string) (string, error) {
 	}
 
 	encoded := base64.StdEncoding.EncodeToString(imageBytes)
-	return fmt.Sprintf("data:image/png;base64,%s", encoded), nil
+	return fmt.Sprintf("data:image/jpeg;base64,%s", encoded), nil
 }
 
 func (p *PlaywrightPlugin) getText(payload string) (string, error) {

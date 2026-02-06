@@ -49,14 +49,20 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		content = resp.Choices[0].Message.Content
 	}
 
+	usage := Usage{
+		InputTokens:  int(resp.Usage.PromptTokens),
+		OutputTokens: int(resp.Usage.CompletionTokens),
+	}
+	// Capture cached tokens if available
+	if resp.Usage.PromptTokensDetails.CachedTokens > 0 {
+		usage.CachedTokens = int(resp.Usage.PromptTokensDetails.CachedTokens)
+	}
+
 	return &ChatResponse{
 		ID:           resp.ID,
 		Content:      content,
 		FinishReason: string(resp.Choices[0].FinishReason),
-		Usage: Usage{
-			InputTokens:  int(resp.Usage.PromptTokens),
-			OutputTokens: int(resp.Usage.CompletionTokens),
-		},
+		Usage:        usage,
 	}, nil
 }
 
@@ -66,6 +72,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 	params := openai.ChatCompletionNewParams{
 		Model:    req.Model,
 		Messages: msgs,
+		// Enable usage reporting in streaming responses
+		StreamOptions: openai.ChatCompletionStreamOptionsParam{
+			IncludeUsage: openai.Bool(true),
+		},
 	}
 
 	if req.MaxTokens > 0 {
@@ -89,8 +99,20 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 	go func() {
 		defer close(chunks)
 
+		var finalUsage Usage
+
 		for stream.Next() {
 			chunk := stream.Current()
+
+			// Capture usage from final chunk (when include_usage is enabled)
+			if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
+				finalUsage.InputTokens = int(chunk.Usage.PromptTokens)
+				finalUsage.OutputTokens = int(chunk.Usage.CompletionTokens)
+				// Capture cached tokens if available
+				if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
+					finalUsage.CachedTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
+				}
+			}
 
 			if len(chunk.Choices) > 0 {
 				delta := chunk.Choices[0].Delta
@@ -103,7 +125,8 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 
 				if chunk.Choices[0].FinishReason != "" {
 					chunks <- StreamChunk{
-						Done: true,
+						Done:  true,
+						Usage: &finalUsage,
 					}
 				}
 			}

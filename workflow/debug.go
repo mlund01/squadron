@@ -116,6 +116,20 @@ func (d *DebugLogger) GetMessageFile(entityType, entityName string) string {
 	return filepath.Join(d.dir, filename)
 }
 
+// GetTurnLogFile returns a .jsonl file path for per-turn session snapshots.
+func (d *DebugLogger) GetTurnLogFile(entityType, entityName string) string {
+	if !d.enabled {
+		return ""
+	}
+
+	safeName := strings.ReplaceAll(entityName, "/", "_")
+	safeName = strings.ReplaceAll(safeName, "[", "_")
+	safeName = strings.ReplaceAll(safeName, "]", "")
+
+	filename := fmt.Sprintf("turns_%s_%s.jsonl", entityType, safeName)
+	return filepath.Join(d.dir, filename)
+}
+
 // WriteSystemPrompt writes a system prompt to an entity's message file
 func (d *DebugLogger) WriteSystemPrompt(entityType, entityName string, prompts []string) {
 	if !d.enabled {
@@ -216,4 +230,10 @@ const (
 	EventToolResult          = "tool_result"
 	EventSupervisorReasoning = "supervisor_reasoning"
 	EventSupervisorAnswer    = "supervisor_answer"
+	EventSupervisorLLMStart  = "supervisor_llm_start"
+	EventSupervisorLLMEnd    = "supervisor_llm_end"
+	EventAgentLLMStart       = "agent_llm_start"
+	EventAgentLLMEnd         = "agent_llm_end"
+	EventAgentToolCall       = "agent_tool_call"
+	EventAgentToolResult     = "agent_tool_result"
 )

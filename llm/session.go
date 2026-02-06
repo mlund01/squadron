@@ -85,6 +85,12 @@ func (s *Session) GetStopSequences() []string {
 	return s.stopSequences
 }
 
+// SnapshotMessages returns the current message history for inspection.
+// The returned slice shares the underlying array — do not modify.
+func (s *Session) SnapshotMessages() []Message {
+	return s.messages
+}
+
 // Clone creates a copy of this session with the same state (system prompts, messages, etc.)
 // The clone can be used independently without affecting the original session.
 // Note: The clone shares the same provider instance but has its own message history copy.
@@ -93,7 +99,7 @@ func (s *Session) Clone() *Session {
 	systemPromptsCopy := make([]string, len(s.systemPrompts))
 	copy(systemPromptsCopy, s.systemPrompts)
 
-	// Deep copy messages (including Parts with ImageData)
+	// Deep copy messages (including Parts with ImageData and Metadata)
 	messagesCopy := make([]Message, len(s.messages))
 	for i, msg := range s.messages {
 		messagesCopy[i] = Message{
@@ -113,6 +119,14 @@ func (s *Session) Clone() *Session {
 						MediaType: part.ImageData.MediaType,
 					}
 				}
+			}
+		}
+		if msg.Metadata != nil {
+			messagesCopy[i].Metadata = &MessageMetadata{
+				MessageID:    msg.Metadata.MessageID,
+				ToolName:     msg.Metadata.ToolName,
+				MessageIndex: msg.Metadata.MessageIndex,
+				IsPrunable:   msg.Metadata.IsPrunable,
 			}
 		}
 	}
@@ -217,8 +231,10 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 		Content: content,
 	}
 
-	// If the provider included finish reason in the last chunk, we'd capture it here
-	_ = lastChunk // Provider implementations can extend this
+	// Capture usage from the final chunk if provider included it
+	if lastChunk.Usage != nil {
+		resp.Usage = *lastChunk.Usage
+	}
 
 	// Append user message and assistant response to history
 	s.messages = append(s.messages, Message{Role: RoleUser, Content: userMessage})
@@ -278,7 +294,10 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 		Content: content,
 	}
 
-	_ = lastChunk // Provider implementations can extend this
+	// Capture usage from the final chunk if provider included it
+	if lastChunk.Usage != nil {
+		resp.Usage = *lastChunk.Usage
+	}
 
 	// Append user message and assistant response to history
 	s.messages = append(s.messages, userMsg)

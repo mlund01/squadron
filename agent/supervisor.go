@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"squad/agent/internal/prompts"
 	"squad/aitools"
@@ -103,6 +104,8 @@ type SupervisorToolCallbacks struct {
 type DebugLogger interface {
 	// GetMessageFile returns a file path for logging LLM messages for a specific entity
 	GetMessageFile(entityType, entityName string) string
+	// GetTurnLogFile returns a .jsonl file path for per-turn session snapshots
+	GetTurnLogFile(entityType, entityName string) string
 	// LogEvent logs a programmatic event
 	LogEvent(eventType string, data map[string]any)
 }
@@ -211,6 +214,7 @@ type Supervisor struct {
 	agentSessions   map[string]*Agent // Persistent agent sessions by name (for multi-turn interaction)
 	agentSeq        int
 	debugLogger     DebugLogger
+	turnLogger      *llm.TurnLogger
 	queryClones     map[string]*Supervisor // Cached clones for ask_supe queries (keyed by target task name)
 }
 
@@ -340,6 +344,16 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 func (s *Supervisor) SetToolCallbacks(callbacks *SupervisorToolCallbacks, depSummaries []DependencySummary) {
 	s.callbacks = callbacks
 	s.debugLogger = callbacks.DebugLogger
+
+	// Create turn logger for supervisor session snapshots
+	if s.debugLogger != nil {
+		turnLogFile := s.debugLogger.GetTurnLogFile("supervisor", s.TaskName)
+		if turnLogFile != "" {
+			if tl, err := llm.NewTurnLogger(turnLogFile); err == nil {
+				s.turnLogger = tl
+			}
+		}
+	}
 
 	// Build call_agent tool
 	s.tools["call_agent"] = &callAgentTool{
@@ -547,11 +561,38 @@ func (s *Supervisor) ExecuteTask(ctx context.Context, objective string, streamer
 		// Create parser for this message
 		parser := newSupervisorParser(streamer)
 
-		_, err := s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
+		if s.debugLogger != nil {
+			s.debugLogger.LogEvent("supervisor_llm_start", map[string]any{"task": s.TaskName})
+		}
+		llmStart := time.Now()
+
+		resp, err := s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
 			if chunk.Content != "" {
 				parser.ProcessChunk(chunk.Content)
 			}
 		})
+
+		if s.debugLogger != nil {
+			eventData := map[string]any{
+				"task":        s.TaskName,
+				"duration_ms": time.Since(llmStart).Milliseconds(),
+			}
+			if resp != nil {
+				eventData["input_tokens"] = resp.Usage.InputTokens
+				eventData["output_tokens"] = resp.Usage.OutputTokens
+				// Include cache-related tokens if present
+				if resp.Usage.CacheCreationInputTokens > 0 {
+					eventData["cache_creation_input_tokens"] = resp.Usage.CacheCreationInputTokens
+				}
+				if resp.Usage.CacheReadInputTokens > 0 {
+					eventData["cache_read_input_tokens"] = resp.Usage.CacheReadInputTokens
+				}
+				if resp.Usage.CachedTokens > 0 {
+					eventData["cached_tokens"] = resp.Usage.CachedTokens
+				}
+			}
+			s.debugLogger.LogEvent("supervisor_llm_end", eventData)
+		}
 
 		parser.Finish()
 
@@ -559,13 +600,19 @@ func (s *Supervisor) ExecuteTask(ctx context.Context, objective string, streamer
 			return "", err
 		}
 
+		// Determine action for turn logging
+		action := parser.GetAction()
+
+		// Log turn snapshot
+		if s.turnLogger != nil {
+			s.turnLogger.LogTurn(action, s.session.SnapshotMessages())
+		}
+
 		// Capture the answer if one was provided
 		if answer := parser.GetAnswer(); answer != "" {
 			finalAnswer = answer
 		}
 
-		// Check if there's an action to call
-		action := parser.GetAction()
 		if action == "" {
 			break // No tool call, done with this turn
 		}
@@ -591,6 +638,7 @@ func (s *Supervisor) ExecuteTask(ctx context.Context, objective string, streamer
 		}
 
 		// Execute the tool
+		toolStart := time.Now()
 		result := tool.Call(actionInput)
 
 		streamer.ToolComplete(action)
@@ -598,14 +646,19 @@ func (s *Supervisor) ExecuteTask(ctx context.Context, objective string, streamer
 		// Log tool result event
 		if s.debugLogger != nil {
 			s.debugLogger.LogEvent("tool_result", map[string]any{
-				"task":   s.TaskName,
-				"tool":   action,
-				"result": result,
+				"task":        s.TaskName,
+				"tool":        action,
+				"result":      result,
+				"duration_ms": time.Since(toolStart).Milliseconds(),
 			})
 		}
 
 		// Intercept large results and format observation
 		currentInput = s.formatObservation(action, result)
+	}
+
+	if s.turnLogger != nil {
+		s.turnLogger.Close()
 	}
 
 	return finalAnswer, nil
@@ -1197,11 +1250,18 @@ func (t *callAgentTool) Call(input string) string {
 			datasetStore = t.supervisor.callbacks.DatasetStore
 		}
 
-		// Get debug file for agent if debug mode is enabled
+		// Get debug file and event logger for agent if debug mode is enabled
 		var debugFile string
+		var turnLogFile string
+		var eventLogger EventLogger
 		if t.supervisor.debugLogger != nil {
 			agentDebugName := fmt.Sprintf("%s_%s_%d", t.supervisor.TaskName, params.Name, t.supervisor.agentSeq+1)
 			debugFile = t.supervisor.debugLogger.GetMessageFile("agent", agentDebugName)
+			turnLogFile = t.supervisor.debugLogger.GetTurnLogFile("agent", agentDebugName)
+			eventLogger = newContextEventLogger(t.supervisor.debugLogger, map[string]any{
+				"task":  t.supervisor.TaskName,
+				"agent": params.Name,
+			})
 		}
 
 		var err error
@@ -1211,6 +1271,8 @@ func (t *callAgentTool) Call(input string) string {
 			Mode:         &mode,
 			DatasetStore: datasetStore,
 			DebugFile:    debugFile,
+			TurnLogFile:  turnLogFile,
+			EventLogger:  eventLogger,
 		})
 		if err != nil {
 			return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>creation_error</ERROR_TYPE>\n<ERROR>Error creating agent '%s': %v</ERROR>\n<RETRYABLE>false</RETRYABLE>", params.Name, err)

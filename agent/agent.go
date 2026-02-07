@@ -25,15 +25,24 @@ type Agent struct {
 	ModelName string
 	Mode      config.AgentMode
 
-	session      *llm.Session
-	tools        map[string]aitools.Tool
-	provider     llm.Provider
-	ownsProvider bool // true if we created the provider and should close it
+	session        *llm.Session
+	tools          map[string]aitools.Tool
+	provider       llm.Provider
+	ownsProvider   bool // true if we created the provider and should close it
 	resultStore    *aitools.MemoryResultStore
 	interceptor    *aitools.ResultInterceptor
 	pruningManager *llm.PruningManager
+	compaction     *CompactionConfig // Compaction settings (nil if disabled)
 	eventLogger    EventLogger
-	turnLogFile    string
+	turnLogger     *llm.TurnLogger   // Persists across Chat() calls for consistent turn numbering
+	secretInfos    []SecretInfo      // Secret names and descriptions (for prompts)
+	secretValues   map[string]string // Actual secret values (for tool call injection)
+}
+
+// CompactionConfig holds settings for context compaction
+type CompactionConfig struct {
+	TokenLimit    int // Trigger compaction when input tokens exceed this threshold
+	TurnRetention int // Keep this many recent turns uncompacted
 }
 
 // Options for creating an agent
@@ -54,6 +63,10 @@ type Options struct {
 	EventLogger EventLogger
 	// TurnLogFile enables per-turn session snapshots to the specified JSONL file (optional)
 	TurnLogFile string
+	// SecretInfos contains names and descriptions of available secrets (for prompts)
+	SecretInfos []SecretInfo
+	// SecretValues contains actual secret values for tool call injection
+	SecretValues map[string]string
 }
 
 // New creates a new agent from config
@@ -129,7 +142,16 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 
 	// Build system prompts
 	var systemPrompts []string
-	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(tools, mode))
+
+	// Convert SecretInfos to prompts.SecretInfo
+	var promptSecrets []prompts.SecretInfo
+	for _, s := range opts.SecretInfos {
+		promptSecrets = append(promptSecrets, prompts.SecretInfo{
+			Name:        s.Name,
+			Description: s.Description,
+		})
+	}
+	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(tools, mode, promptSecrets))
 	systemPrompts = append(systemPrompts,
 		fmt.Sprintf("Personality: %s", agentCfg.Personality),
 		fmt.Sprintf("Role: %s", agentCfg.Role),
@@ -158,9 +180,27 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	// Create pruning manager tied to this session
 	pruningManager := llm.NewPruningManager(
 		session,
-		agentCfg.GetToolRecencyLimit(),
-		agentCfg.GetMessageRecencyLimit(),
+		agentCfg.GetSingleToolLimit(),
+		agentCfg.GetAllToolLimit(),
+		agentCfg.GetTurnLimit(),
 	)
+
+	// Extract compaction settings from config (if present)
+	var compaction *CompactionConfig
+	if agentCfg.Compaction != nil {
+		compaction = &CompactionConfig{
+			TokenLimit:    agentCfg.Compaction.TokenLimit,
+			TurnRetention: agentCfg.Compaction.TurnRetention,
+		}
+	}
+
+	// Create turn logger if path provided (persists across Chat() calls)
+	var turnLogger *llm.TurnLogger
+	if opts.TurnLogFile != "" {
+		if tl, err := llm.NewTurnLogger(opts.TurnLogFile); err == nil {
+			turnLogger = tl
+		}
+	}
 
 	return &Agent{
 		Name:           agentCfg.Name,
@@ -173,8 +213,11 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		resultStore:    resultStore,
 		interceptor:    interceptor,
 		pruningManager: pruningManager,
+		compaction:     compaction,
 		eventLogger:    opts.EventLogger,
-		turnLogFile:    opts.TurnLogFile,
+		turnLogger:     turnLogger,
+		secretInfos:    opts.SecretInfos,
+		secretValues:   opts.SecretValues,
 	}, nil
 }
 
@@ -182,6 +225,9 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 func (a *Agent) Close() {
 	if a.session != nil {
 		a.session.Close()
+	}
+	if a.turnLogger != nil {
+		a.turnLogger.Close()
 	}
 	if a.ownsProvider {
 		if closer, ok := a.provider.(interface{ Close() }); ok {
@@ -194,7 +240,7 @@ func (a *Agent) Close() {
 // The streamer receives real-time updates during processing
 func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatHandler) (ChatResult, error) {
 	sessionAdapter := llm.NewSessionAdapter(a.session)
-	orchestrator := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogFile)
+	orchestrator := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
 	return orchestrator.processTurn(ctx, input)
 }
 

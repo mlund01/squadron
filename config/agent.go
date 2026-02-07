@@ -80,11 +80,22 @@ func IsInternalTool(name string) bool {
 	return false
 }
 
-// Default pruning limits
-const (
-	DefaultToolRecencyLimit    = 3
-	DefaultMessageRecencyLimit = 20
-)
+// Compaction configures context compaction for an agent
+type Compaction struct {
+	TokenLimit    int `hcl:"token_limit"`    // Trigger compaction when input tokens exceed this
+	TurnRetention int `hcl:"turn_retention"` // Keep this many recent turns uncompacted
+}
+
+// Pruning configures context pruning for an agent
+type Pruning struct {
+	// SingleToolLimit: keep only the last N results from each tool (0 = disabled)
+	SingleToolLimit int `hcl:"single_tool_limit,optional"`
+	// AllToolLimit: prune tool results older than N messages ago (0 = disabled)
+	AllToolLimit int `hcl:"all_tool_limit,optional"`
+	// TurnLimit: rolling window - drop messages older than N turns (0 = disabled)
+	// Unlike other pruning, this removes messages entirely (no replacement text)
+	TurnLimit int `hcl:"turn_limit,optional"`
+}
 
 // Agent represents an AI agent configuration
 type Agent struct {
@@ -94,33 +105,35 @@ type Agent struct {
 	Role        string   `hcl:"role"`
 	Tools       []string `hcl:"tools,optional"`
 
-	// Pruning defaults: how many recent results to keep per tool, and how
-	// many messages back to keep tool results. LLM can override per-call.
-	// -1 disables that pruning dimension. 0 means "use default".
-	ToolRecencyLimit    int `hcl:"tool_recency_limit,optional"`
-	MessageRecencyLimit int `hcl:"message_recency_limit,optional"`
+	// Pruning settings (optional block)
+	Pruning *Pruning `hcl:"pruning,block"`
+
+	// Compaction settings (optional block)
+	Compaction *Compaction `hcl:"compaction,block"`
 }
 
-// GetToolRecencyLimit returns the effective tool recency limit (applying defaults)
-func (a *Agent) GetToolRecencyLimit() int {
-	if a.ToolRecencyLimit < 0 {
-		return 0 // disabled
+// GetSingleToolLimit returns the single tool limit (0 = disabled)
+func (a *Agent) GetSingleToolLimit() int {
+	if a.Pruning == nil {
+		return 0
 	}
-	if a.ToolRecencyLimit == 0 {
-		return DefaultToolRecencyLimit
-	}
-	return a.ToolRecencyLimit
+	return a.Pruning.SingleToolLimit
 }
 
-// GetMessageRecencyLimit returns the effective message recency limit (applying defaults)
-func (a *Agent) GetMessageRecencyLimit() int {
-	if a.MessageRecencyLimit < 0 {
-		return 0 // disabled
+// GetAllToolLimit returns the all tool limit (0 = disabled)
+func (a *Agent) GetAllToolLimit() int {
+	if a.Pruning == nil {
+		return 0
 	}
-	if a.MessageRecencyLimit == 0 {
-		return DefaultMessageRecencyLimit
+	return a.Pruning.AllToolLimit
+}
+
+// GetTurnLimit returns the turn limit for rolling window pruning (0 = disabled)
+func (a *Agent) GetTurnLimit() int {
+	if a.Pruning == nil {
+		return 0
 	}
-	return a.MessageRecencyLimit
+	return a.Pruning.TurnLimit
 }
 
 // Validate checks that the agent configuration is valid

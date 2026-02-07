@@ -641,6 +641,7 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 			{Type: "task", LabelNames: []string{"name"}},
 			{Type: "input", LabelNames: []string{"name"}},
 			{Type: "dataset", LabelNames: []string{"name"}},
+			{Type: "secret", LabelNames: []string{"name"}},
 		},
 	})
 	if diags.HasErrors() {
@@ -758,6 +759,8 @@ func parseWorkflowInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*WorkflowI
 			{Name: "type", Required: true},
 			{Name: "description"},
 			{Name: "default"},
+			{Name: "secret"},
+			{Name: "value"},
 		},
 	})
 	if diags.HasErrors() {
@@ -791,6 +794,24 @@ func parseWorkflowInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*WorkflowI
 			return nil, fmt.Errorf("input '%s': %w", inputName, diags)
 		}
 		input.Default = &defaultVal
+	}
+
+	// Get optional secret flag
+	if secretAttr, ok := inputContent.Attributes["secret"]; ok {
+		secretVal, diags := secretAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("input '%s': %w", inputName, diags)
+		}
+		input.Secret = secretVal.True()
+	}
+
+	// Get optional value (required for secrets, from vars.* or literal)
+	if valueAttr, ok := inputContent.Attributes["value"]; ok {
+		valueVal, diags := valueAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("input '%s': %w", inputName, diags)
+		}
+		input.Value = &valueVal
 	}
 
 	return input, nil

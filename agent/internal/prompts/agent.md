@@ -72,19 +72,19 @@ You will then respond with another turn following the appropriate pattern.
 
 Tool results are automatically pruned to manage context size. Default limits are applied to every tool call:
 
-- **Tool recency**: Only the last few results per tool are kept. Older results from the same tool are replaced with `[RESULT PRUNED]`.
-- **Message recency**: Tool results older than a certain number of messages ago are pruned.
+- **Single tool limit**: Only the last few results per tool are kept. Older results from the same tool are replaced with `[RESULT PRUNED]`.
+- **All tool limit**: Tool results older than a certain number of messages ago are pruned.
 
 You can **override** these defaults for any tool call by adding pruning parameters to the input JSON:
 
-- `tool_recency_limit`: Keep only the last N results from this specific tool (overrides the default).
-- `message_recency_limit`: Prune all tool results older than N messages ago (overrides the default).
+- `single_tool_limit`: Keep only the last N results from this specific tool (overrides the default).
+- `all_tool_limit`: Prune all tool results older than N messages ago (overrides the default).
 
 Example - keep only the last 2 screenshots (more aggressive than default):
 ```json
 {
   "url": "https://example.com",
-  "tool_recency_limit": 2
+  "single_tool_limit": 2
 }
 ```
 
@@ -133,6 +133,8 @@ The LEARNINGS block is optional but valuable for sequential iterations where con
 ## Available Tools
 
 {{TOOLS}}
+
+{{SECRETS}}
 
 ## Begin
 

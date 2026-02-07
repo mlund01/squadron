@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"time"
 
 	"squad/agent"
 	"squad/config"
 	"squad/streamers/cli"
+	"squad/workflow"
 
 	"github.com/spf13/cobra"
 )
@@ -38,8 +41,23 @@ var chatCmd = &cobra.Command{
 			opts.Mode = &mode
 		}
 
+		// Create debug logger if debug mode is enabled
+		var debugDir string
 		if debugMode {
-			opts.DebugFile = "debug.txt"
+			debugDir = filepath.Join("debug", fmt.Sprintf("chat_%s_%s", agentName, time.Now().Format("20060102_150405")))
+		}
+		debugLogger, err := workflow.NewDebugLogger(debugDir)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error creating debug logger: %v\n", err)
+			os.Exit(1)
+		}
+		defer debugLogger.Close()
+
+		if debugLogger.IsEnabled() {
+			fmt.Printf("Debug mode enabled. Writing to: %s\n", debugLogger.GetDebugDir())
+			opts.DebugFile = debugLogger.GetMessageFile("agent", agentName)
+			opts.TurnLogFile = debugLogger.GetTurnLogFile("agent", agentName)
+			opts.EventLogger = debugLogger
 		}
 
 		// Create the agent

@@ -16,12 +16,16 @@ var agentPromptTemplate string
 var supervisorPromptTemplate string
 
 // GetAgentPrompt returns the agent system prompt with tools and mode injected
-func GetAgentPrompt(tools map[string]aitools.Tool, mode config.AgentMode) string {
+func GetAgentPrompt(tools map[string]aitools.Tool, mode config.AgentMode, secrets []SecretInfo) string {
 	prompt := agentPromptTemplate
 
 	// Inject tools
 	toolsDescription := formatTools(tools)
 	prompt = strings.Replace(prompt, "{{TOOLS}}", toolsDescription, 1)
+
+	// Inject secrets section
+	secretsSection := formatSecretsSection(secrets)
+	prompt = strings.Replace(prompt, "{{SECRETS}}", secretsSection, 1)
 
 	// Inject mode instructions
 	modeInstructions := getModeInstructions(mode)
@@ -36,6 +40,27 @@ func GetAgentPrompt(tools map[string]aitools.Tool, mode config.AgentMode) string
 	prompt = strings.Replace(prompt, "{{RULES}}", rules, 1)
 
 	return prompt
+}
+
+// formatSecretsSection formats the secrets info for the prompt
+func formatSecretsSection(secrets []SecretInfo) string {
+	if len(secrets) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Available Secrets\n\n")
+	sb.WriteString("Use `${secrets.<name>}` in tool input JSON. The actual values will be injected at runtime.\n\n")
+	sb.WriteString("**Available:**\n")
+	for _, s := range secrets {
+		if s.Description != "" {
+			sb.WriteString(fmt.Sprintf("- `${secrets.%s}` - %s\n", s.Name, s.Description))
+		} else {
+			sb.WriteString(fmt.Sprintf("- `${secrets.%s}`\n", s.Name))
+		}
+	}
+	sb.WriteString("\n**Important:** Never output actual secret values. Always use the placeholder syntax.\n")
+	return sb.String()
 }
 
 // getModeInstructions returns instructions based on agent mode
@@ -205,15 +230,117 @@ type AgentInfo struct {
 	Description string
 }
 
+// SecretInfo contains name and description for a secret (passed to prompts)
+type SecretInfo struct {
+	Name        string
+	Description string
+}
+
+// IterationOptions contains info about task iteration for conditional prompt content
+type IterationOptions struct {
+	IsIteration bool // Whether this is an iterated task
+	IsParallel  bool // If iteration, whether running in parallel (vs sequential)
+}
+
 // GetSupervisorPrompt returns the supervisor system prompt with available agents injected
-func GetSupervisorPrompt(agents []AgentInfo) string {
+func GetSupervisorPrompt(agents []AgentInfo, iterOpts IterationOptions) string {
 	prompt := supervisorPromptTemplate
 
 	// Inject agents
 	agentsDescription := formatAgents(agents)
 	prompt = strings.Replace(prompt, "{{AGENTS}}", agentsDescription, 1)
 
+	// Inject iteration-specific content conditionally
+	parallelContent := ""
+	sequentialContent := ""
+
+	if iterOpts.IsIteration {
+		if iterOpts.IsParallel {
+			parallelContent = getParallelIterationContent()
+		} else {
+			sequentialContent = getSequentialIterationContent()
+		}
+	}
+
+	prompt = strings.Replace(prompt, "{{PARALLEL_ITERATION_CONTEXT}}", parallelContent, 1)
+	prompt = strings.Replace(prompt, "{{SEQUENTIAL_ITERATION_CONTEXT}}", sequentialContent, 1)
+
 	return prompt
+}
+
+// getParallelIterationContent returns content about reusing questions from other iterations
+func getParallelIterationContent() string {
+	return `## Reusing Questions from Other Iterations
+
+When running as part of an iterated task, other iterations may have already asked questions to dependency supervisors. You can reuse their answers to avoid redundant queries.
+
+### Listing Asked Questions
+
+Use ` + "`list_supe_questions`" + ` to see what questions have been asked:
+
+` + "```" + `
+<ACTION>list_supe_questions</ACTION>
+<ACTION_INPUT>{"task_name": "fetch_data"}</ACTION_INPUT>___STOP___
+` + "```" + `
+
+Returns a numbered list of questions (without answers):
+` + "```" + `
+<QUESTIONS>
+0: "What is the user's email?"
+1: "What is the company name?"
+</QUESTIONS>
+` + "```" + `
+
+### Getting Cached Answers
+
+Use ` + "`get_supe_answer`" + ` with the question index to get the cached answer:
+
+` + "```" + `
+<ACTION>get_supe_answer</ACTION>
+<ACTION_INPUT>{"task_name": "fetch_data", "index": 0}</ACTION_INPUT>___STOP___
+` + "```" + `
+
+If the answer is still being fetched by another iteration, this will wait until it's ready.
+
+**Tip:** Check ` + "`list_supe_questions`" + ` first before using ` + "`ask_supe`" + `. If another iteration already asked a similar question, use ` + "`get_supe_answer`" + ` instead to avoid duplicate work.
+
+`
+}
+
+// getSequentialIterationContent returns content about learnings for sequential iterations
+func getSequentialIterationContent() string {
+	return `## Learnings for Next Iteration
+
+When supervising a sequential iteration, you may receive learnings from the previous iteration. These contain insights, failure solutions, and recommendations that can help you succeed.
+
+**Applying Learnings:**
+- Review any "Learnings from Previous Iteration" in your context
+- Apply insights to avoid repeating mistakes
+- Leverage successful strategies mentioned
+
+**Capturing Learnings:**
+When completing your task, include a ` + "`<LEARNINGS>`" + ` block after your ANSWER to help the next iteration:
+
+` + "```" + `
+<ANSWER>
+[Your answer here]
+</ANSWER>
+<LEARNINGS>
+{
+  "key_insights": ["Useful observations for similar problems"],
+  "failures": [{"problem": "What went wrong", "solution": "How it was fixed"}],
+  "recommendations": "Advice for the next iteration"
+}
+</LEARNINGS>
+` + "```" + `
+
+Include learnings when you or your agents:
+- Discovered unexpected behavior or edge cases
+- Encountered and solved problems
+- Identified optimizations or better approaches
+- Have context that would otherwise be lost between iterations
+
+`
 }
 
 // formatAgents formats the agents list into a readable string for the prompt

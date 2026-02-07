@@ -28,6 +28,10 @@ type Runner struct {
 	varsValues  map[string]cty.Value
 	inputValues map[string]cty.Value
 
+	// Resolved secrets for tool call injection
+	secretValues map[string]string    // secret name → actual value
+	secretInfos  []agent.SecretInfo   // name + description for prompts
+
 	// Resolved datasets for iteration
 	resolvedDatasets map[string][]cty.Value
 
@@ -124,12 +128,30 @@ func NewRunner(cfg *config.Config, configPath string, workflowName string, input
 		return nil, fmt.Errorf("workflow '%s': %w", workflowName, err)
 	}
 
+	// Resolve secrets from inputs with secret=true
+	secretValues := make(map[string]string)
+	var secretInfos []agent.SecretInfo
+	for _, input := range workflow.Inputs {
+		if !input.Secret {
+			continue
+		}
+		if input.Value != nil && input.Value.Type() == cty.String {
+			secretValues[input.Name] = input.Value.AsString()
+		}
+		secretInfos = append(secretInfos, agent.SecretInfo{
+			Name:        input.Name,
+			Description: input.Description,
+		})
+	}
+
 	r := &Runner{
 		cfg:                  cfg,
 		configPath:           configPath,
 		workflow:             workflow,
 		varsValues:           cfg.ResolvedVars,
 		inputValues:          inputValues,
+		secretValues:         secretValues,
+		secretInfos:          secretInfos,
 		resolvedDatasets:     resolvedDatasets,
 		taskResults:          make(map[string]*TaskResult),
 		taskSupervisors:      make(map[string]*agent.Supervisor),
@@ -407,7 +429,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		debugFile = r.debugLogger.GetMessageFile("supervisor", task.Name)
 	}
 
-	// Create supervisor for this task
+	// Create supervisor for this task (non-iterated)
 	sup, err := agent.NewSupervisor(ctx, agent.SupervisorOptions{
 		Config:           r.cfg,
 		ConfigPath:       r.configPath,
@@ -419,6 +441,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		DepOutputSchemas: depOutputSchemas,
 		TaskOutputSchema: taskOutputSchema,
 		InheritedAgents:  inheritedAgents,
+		SecretInfos:      r.secretInfos,
+		SecretValues:     r.secretValues,
+		IsIteration:      false, // Not an iterated task
 		DebugFile:        debugFile,
 	})
 	if err != nil {
@@ -1021,6 +1046,10 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		InheritedAgents:        inheritedAgents,
 		PrevIterationOutput:    prevOutput,
 		PrevIterationLearnings: prevLearnings,
+		SecretInfos:            r.secretInfos,
+		SecretValues:           r.secretValues,
+		IsIteration:            true,
+		IsParallel:             task.Iterator.Parallel,
 		DebugFile:              debugFile,
 	})
 	if err != nil {

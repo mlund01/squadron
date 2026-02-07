@@ -40,13 +40,13 @@ type Schema struct {
 // PruningProperties are optional parameters that can be added to any tool schema
 // to allow the LLM to control context pruning
 var PruningProperties = PropertyMap{
-	"tool_recency_limit": {
+	"single_tool_limit": {
 		Type:        TypeInteger,
 		Description: "Keep only the last N results from this tool. Older results are replaced with [RESULT PRUNED]. 0 or omit = no limit.",
 	},
-	"message_recency_limit": {
+	"all_tool_limit": {
 		Type:        TypeInteger,
-		Description: "Prune tool results older than N messages ago. 0 or omit = no limit.",
+		Description: "Prune all tool results older than N messages ago. 0 or omit = no limit.",
 	},
 }
 

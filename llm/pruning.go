@@ -8,24 +8,26 @@ import (
 // PruningManager tracks tool results and prunes old messages based on
 // configured defaults and optional LLM-specified overrides.
 type PruningManager struct {
-	session                    *Session
-	mu                         sync.Mutex
-	messageCount               int              // Total messages tracked
-	toolHistory                map[string][]int  // toolName -> ordered list of message indices
-	trackedMsgs                map[int]string    // messageIndex -> toolName (reverse lookup)
-	defaultToolRecencyLimit    int               // Agent-level default (0 = disabled)
-	defaultMessageRecencyLimit int               // Agent-level default (0 = disabled)
+	session        *Session
+	mu             sync.Mutex
+	messageCount   int              // Total messages tracked
+	toolHistory    map[string][]int // toolName -> ordered list of message indices
+	trackedMsgs    map[int]string   // messageIndex -> toolName (reverse lookup)
+	singleToolLimit int             // Keep only last N results per tool (0 = disabled)
+	allToolLimit    int             // Prune tool results older than N messages (0 = disabled)
+	turnLimit       int             // Rolling window - drop messages older than N turns (0 = disabled)
 }
 
 // NewPruningManager creates a new pruning manager for the given session.
 // Default limits are applied to every tool result unless overridden by the LLM.
-func NewPruningManager(session *Session, defaultToolRecencyLimit, defaultMessageRecencyLimit int) *PruningManager {
+func NewPruningManager(session *Session, singleToolLimit, allToolLimit, turnLimit int) *PruningManager {
 	return &PruningManager{
-		session:                    session,
-		toolHistory:                make(map[string][]int),
-		trackedMsgs:                make(map[int]string),
-		defaultToolRecencyLimit:    defaultToolRecencyLimit,
-		defaultMessageRecencyLimit: defaultMessageRecencyLimit,
+		session:         session,
+		toolHistory:     make(map[string][]int),
+		trackedMsgs:     make(map[int]string),
+		singleToolLimit: singleToolLimit,
+		allToolLimit:    allToolLimit,
+		turnLimit:       turnLimit,
 	}
 }
 
@@ -67,33 +69,38 @@ func (pm *PruningManager) RegisterAndPrune(toolName string, overrideToolRecency,
 	}
 
 	// Resolve effective limits: LLM override > default
-	toolRecencyLimit := pm.defaultToolRecencyLimit
+	singleToolLimit := pm.singleToolLimit
 	if overrideToolRecency > 0 {
-		toolRecencyLimit = overrideToolRecency
+		singleToolLimit = overrideToolRecency
 	}
 
-	messageRecencyLimit := pm.defaultMessageRecencyLimit
+	allToolLimit := pm.allToolLimit
 	if overrideMsgRecency > 0 {
-		messageRecencyLimit = overrideMsgRecency
+		allToolLimit = overrideMsgRecency
 	}
 
 	prunedCount := 0
 
-	// Apply tool recency pruning
-	if toolRecencyLimit > 0 {
-		prunedCount += pm.pruneByToolRecency(toolName, toolRecencyLimit)
+	// Apply single tool limit pruning (per-tool recency)
+	if singleToolLimit > 0 {
+		prunedCount += pm.pruneBySingleToolLimit(toolName, singleToolLimit)
 	}
 
-	// Apply message recency pruning
-	if messageRecencyLimit > 0 {
-		prunedCount += pm.pruneByMessageRecency(messageRecencyLimit)
+	// Apply all tool limit pruning (message recency)
+	if allToolLimit > 0 {
+		prunedCount += pm.pruneByAllToolLimit(allToolLimit)
+	}
+
+	// Apply turn limit pruning (rolling window - drops messages entirely)
+	if pm.turnLimit > 0 {
+		prunedCount += pm.pruneByTurnLimit()
 	}
 
 	return prunedCount
 }
 
-// pruneByToolRecency keeps only the last N results from the specified tool
-func (pm *PruningManager) pruneByToolRecency(toolName string, limit int) int {
+// pruneBySingleToolLimit keeps only the last N results from the specified tool
+func (pm *PruningManager) pruneBySingleToolLimit(toolName string, limit int) int {
 	history := pm.toolHistory[toolName]
 	if len(history) <= limit {
 		return 0
@@ -115,8 +122,8 @@ func (pm *PruningManager) pruneByToolRecency(toolName string, limit int) int {
 	return prunedCount
 }
 
-// pruneByMessageRecency prunes tool results older than N messages ago
-func (pm *PruningManager) pruneByMessageRecency(limit int) int {
+// pruneByAllToolLimit prunes tool results older than N messages ago
+func (pm *PruningManager) pruneByAllToolLimit(limit int) int {
 	currentIdx := len(pm.session.messages) - 1
 	threshold := currentIdx - limit
 
@@ -133,6 +140,54 @@ func (pm *PruningManager) pruneByMessageRecency(limit int) int {
 	}
 
 	return prunedCount
+}
+
+// pruneByTurnLimit implements a rolling window that drops old messages entirely.
+// Unlike other pruning methods, this removes messages from the session rather than
+// replacing them with a marker. System prompts are never affected.
+// A turn = user message + assistant response = 2 messages.
+func (pm *PruningManager) pruneByTurnLimit() int {
+	// Calculate how many messages to keep (turnLimit turns = turnLimit * 2 messages)
+	messagesToKeep := pm.turnLimit * 2
+	msgCount := len(pm.session.messages)
+
+	if msgCount <= messagesToKeep {
+		return 0
+	}
+
+	// Calculate how many messages to drop
+	dropCount := msgCount - messagesToKeep
+
+	// Drop the oldest messages by slicing
+	pm.session.messages = pm.session.messages[dropCount:]
+
+	// Update tracked message indices (shift down by dropCount)
+	newTrackedMsgs := make(map[int]string)
+	for oldIdx, toolName := range pm.trackedMsgs {
+		newIdx := oldIdx - dropCount
+		if newIdx >= 0 {
+			newTrackedMsgs[newIdx] = toolName
+			// Update metadata
+			if pm.session.messages[newIdx].Metadata != nil {
+				pm.session.messages[newIdx].Metadata.MessageIndex = newIdx
+			}
+		}
+	}
+	pm.trackedMsgs = newTrackedMsgs
+
+	// Update tool history indices
+	for toolName, history := range pm.toolHistory {
+		newHistory := make([]int, 0, len(history))
+		for _, oldIdx := range history {
+			newIdx := oldIdx - dropCount
+			if newIdx >= 0 {
+				newHistory = append(newHistory, newIdx)
+			}
+		}
+		pm.toolHistory[toolName] = newHistory
+	}
+
+	return dropCount
 }
 
 // pruneMessage replaces a message's content with the pruned marker
@@ -182,4 +237,16 @@ func (pm *PruningManager) GetToolResultCount(toolName string) int {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	return len(pm.toolHistory[toolName])
+}
+
+// ApplyTurnLimit applies turn limit pruning if configured.
+// This should be called after each LLM response, regardless of tool usage.
+// Returns the number of messages dropped.
+func (pm *PruningManager) ApplyTurnLimit() int {
+	if pm.turnLimit <= 0 {
+		return 0
+	}
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.pruneByTurnLimit()
 }

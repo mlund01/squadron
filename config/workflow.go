@@ -23,7 +23,9 @@ type WorkflowInput struct {
 	Name        string     // From HCL label
 	Type        string     // "string", "number", "bool", "list", "object"
 	Description string     // Documentation for the input
-	Default     *cty.Value // Optional default value (nil means required)
+	Default     *cty.Value // Optional default value (nil means required for non-secrets)
+	Secret      bool       // If true, value is opaque to LLM and uses ${secrets.name} in tool calls
+	Value       *cty.Value // For secrets: the actual value (from vars.* or literal). Nil for regular inputs.
 }
 
 // Dataset represents a collection of items for task iteration
@@ -185,6 +187,19 @@ func (i *WorkflowInput) Validate() error {
 	if !validTypes[i.Type] {
 		return fmt.Errorf("invalid type '%s': must be string, number, bool, list, or object", i.Type)
 	}
+
+	// Secret inputs have additional requirements
+	if i.Secret {
+		// Secrets must have a value (from vars.* or literal)
+		if i.Value == nil || i.Value.IsNull() {
+			return fmt.Errorf("secret input must have a value")
+		}
+		// Secret values must be strings
+		if i.Value.Type() != cty.String {
+			return fmt.Errorf("secret value must be a string, got %s", i.Value.Type().FriendlyName())
+		}
+	}
+
 	return nil
 }
 
@@ -280,11 +295,18 @@ func inputTypeToCtyType(inputType string) cty.Type {
 	}
 }
 
-// ResolveInputValues converts string CLI values to cty.Values, applying defaults
+// ResolveInputValues converts string CLI values to cty.Values, applying defaults.
+// Secret inputs are skipped - they get their value from the 'value' attribute
+// and cannot be interpolated in objectives.
 func (w *Workflow) ResolveInputValues(provided map[string]string) (map[string]cty.Value, error) {
 	result := make(map[string]cty.Value)
 
 	for _, input := range w.Inputs {
+		// Skip secret inputs - they are handled separately and not interpolatable
+		if input.Secret {
+			continue
+		}
+
 		strVal, ok := provided[input.Name]
 		if !ok {
 			// Use default if available

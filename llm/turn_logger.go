@@ -15,8 +15,9 @@ type TurnLogger struct {
 }
 
 // NewTurnLogger creates a turn logger that writes to the given file path.
+// It appends to existing files rather than overwriting.
 func NewTurnLogger(filename string) (*TurnLogger, error) {
-	f, err := os.Create(filename)
+	f, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -118,4 +119,5 @@ func (tl *TurnLogger) LogTurn(action string, messages []Message) {
 		return
 	}
 	tl.file.WriteString(string(data) + "\n")
+	tl.file.Sync() // Flush to disk immediately
 }

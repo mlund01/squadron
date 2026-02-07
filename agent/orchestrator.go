@@ -4,12 +4,52 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 
 	"squad/aitools"
 	"squad/llm"
 	"squad/streamers"
 )
+
+// secretPattern matches ${secrets.name} placeholders in tool inputs
+var secretPattern = regexp.MustCompile(`\$\{secrets\.([a-zA-Z_][a-zA-Z0-9_]*)\}`)
+
+// secretInjector replaces ${secrets.name} placeholders with actual values
+type secretInjector struct {
+	secrets map[string]string
+}
+
+// newSecretInjector creates a new secret injector
+func newSecretInjector(secrets map[string]string) *secretInjector {
+	if secrets == nil {
+		secrets = make(map[string]string)
+	}
+	return &secretInjector{secrets: secrets}
+}
+
+// Inject replaces all ${secrets.name} placeholders with actual values
+// Returns error if an unknown secret is referenced
+func (si *secretInjector) Inject(input string) (string, error) {
+	var lastErr error
+	result := secretPattern.ReplaceAllStringFunc(input, func(match string) string {
+		// Extract secret name from ${secrets.name}
+		submatches := secretPattern.FindStringSubmatch(match)
+		if len(submatches) < 2 {
+			return match
+		}
+		secretName := submatches[1]
+
+		value, ok := si.secrets[secretName]
+		if !ok {
+			lastErr = fmt.Errorf("unknown secret: %s", secretName)
+			return match // Keep placeholder if not found
+		}
+		return value
+	})
+
+	return result, lastErr
+}
 
 // llmSession defines the interface for LLM session operations needed by the orchestrator
 type llmSession interface {
@@ -45,24 +85,23 @@ type orchestrator struct {
 	pendingPrune   *pendingPrune
 	eventLogger    EventLogger
 	turnLogger     *llm.TurnLogger
+	secretInjector *secretInjector
+	compaction     *CompactionConfig
 }
 
 // newOrchestrator creates a new chat orchestrator
-func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools map[string]aitools.Tool, interceptor *aitools.ResultInterceptor, pruningManager *llm.PruningManager, eventLogger EventLogger, turnLogFile string) *orchestrator {
-	o := &orchestrator{
+func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools map[string]aitools.Tool, interceptor *aitools.ResultInterceptor, pruningManager *llm.PruningManager, eventLogger EventLogger, turnLogger *llm.TurnLogger, secretValues map[string]string, compaction *CompactionConfig) *orchestrator {
+	return &orchestrator{
 		session:        session,
 		streamer:       streamer,
 		tools:          tools,
 		interceptor:    interceptor,
 		pruningManager: pruningManager,
 		eventLogger:    eventLogger,
+		turnLogger:     turnLogger,
+		secretInjector: newSecretInjector(secretValues),
+		compaction:     compaction,
 	}
-	if turnLogFile != "" {
-		if tl, err := llm.NewTurnLogger(turnLogFile); err == nil {
-			o.turnLogger = tl
-		}
-	}
-	return o
 }
 
 // processTurn handles a single conversation turn, including any tool calls
@@ -103,6 +142,14 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 		// Apply pending pruning from previous tool call AFTER the observation is in the session.
 		// This registers the correct message (the one just sent) for future pruning.
 		o.applyPendingPrune()
+
+		// Check if compaction is needed after response
+		if resp != nil {
+			o.checkAndCompact(resp.Usage.InputTokens)
+		}
+
+		// Apply turn limit pruning (rolling window) after each response
+		o.applyTurnLimitPruning()
 
 		if o.eventLogger != nil {
 			eventData := map[string]any{
@@ -158,7 +205,16 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 		// Extract and strip pruning parameters from action input
 		cleanInput, pruneParams := o.extractPruneParams(action, actionInput)
 
+		// Log with placeholder version (secrets not exposed in logs)
 		o.streamer.CallingTool(action, cleanInput)
+
+		// Inject secrets before tool execution
+		injectedInput, secretErr := o.secretInjector.Inject(cleanInput)
+		if secretErr != nil {
+			o.streamer.ToolComplete(action)
+			currentTextInput = fmt.Sprintf("<OBSERVATION>\nError: %v\n</OBSERVATION>", secretErr)
+			continue
+		}
 
 		// Look up the tool
 		tool := o.lookupTool(action)
@@ -168,7 +224,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 			continue
 		}
 
-		// Execute the tool with cleaned input (pruning params stripped)
+		// Execute the tool with injected secrets
 		if o.eventLogger != nil {
 			o.eventLogger.LogEvent("agent_tool_call", map[string]any{
 				"tool": action,
@@ -176,7 +232,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 		}
 		toolStart := time.Now()
 
-		result := tool.Call(cleanInput)
+		result := tool.Call(injectedInput)
 
 		if o.eventLogger != nil {
 			o.eventLogger.LogEvent("agent_tool_result", map[string]any{
@@ -196,10 +252,6 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 
 	// Apply any remaining pending prune from the last tool call so it's not lost
 	o.applyPendingPrune()
-
-	if o.turnLogger != nil {
-		o.turnLogger.Close()
-	}
 
 	return ChatResult{Answer: finalAnswer, Complete: finalAnswer != ""}, nil
 }
@@ -234,14 +286,14 @@ func (o *orchestrator) extractPruneParams(toolName, actionInput string) (string,
 	// Extract pruning override parameters
 	var toolRecency, msgRecency int
 	changed := false
-	if v, ok := parsed["tool_recency_limit"].(float64); ok {
+	if v, ok := parsed["single_tool_limit"].(float64); ok {
 		toolRecency = int(v)
-		delete(parsed, "tool_recency_limit")
+		delete(parsed, "single_tool_limit")
 		changed = true
 	}
-	if v, ok := parsed["message_recency_limit"].(float64); ok {
+	if v, ok := parsed["all_tool_limit"].(float64); ok {
 		msgRecency = int(v)
-		delete(parsed, "message_recency_limit")
+		delete(parsed, "all_tool_limit")
 		changed = true
 	}
 
@@ -257,6 +309,47 @@ func (o *orchestrator) extractPruneParams(toolName, actionInput string) (string,
 		toolName:            toolName,
 		overrideToolRecency: toolRecency,
 		overrideMsgRecency:  msgRecency,
+	}
+}
+
+// checkAndCompact checks if compaction is needed and performs it if so
+func (o *orchestrator) checkAndCompact(inputTokens int) {
+	if o.compaction == nil || o.compaction.TokenLimit <= 0 {
+		return
+	}
+
+	if inputTokens <= o.compaction.TokenLimit {
+		return
+	}
+
+	// Get the underlying session to perform compaction
+	adapter, ok := o.session.(*llm.SessionAdapter)
+	if !ok {
+		return
+	}
+
+	compacted := adapter.GetSession().Compact(o.compaction.TurnRetention)
+	if compacted > 0 && o.eventLogger != nil {
+		o.eventLogger.LogEvent("compaction", map[string]any{
+			"input_tokens":      inputTokens,
+			"token_limit":       o.compaction.TokenLimit,
+			"messages_compacted": compacted,
+			"turn_retention":    o.compaction.TurnRetention,
+		})
+	}
+}
+
+// applyTurnLimitPruning applies rolling window pruning if configured
+func (o *orchestrator) applyTurnLimitPruning() {
+	if o.pruningManager == nil {
+		return
+	}
+
+	dropped := o.pruningManager.ApplyTurnLimit()
+	if dropped > 0 && o.eventLogger != nil {
+		o.eventLogger.LogEvent("turn_limit_prune", map[string]any{
+			"messages_dropped": dropped,
+		})
 	}
 }
 

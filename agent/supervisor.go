@@ -20,6 +20,12 @@ type DependencySummary struct {
 	Summary  string
 }
 
+// SecretInfo contains name and description for a secret (passed to prompts)
+type SecretInfo struct {
+	Name        string
+	Description string
+}
+
 // SupervisorOptions holds configuration for creating a supervisor
 type SupervisorOptions struct {
 	// Config is the loaded configuration
@@ -46,6 +52,14 @@ type SupervisorOptions struct {
 	PrevIterationOutput map[string]any
 	// PrevIterationLearnings contains insights and recommendations from the previous iteration (sequential only)
 	PrevIterationLearnings map[string]any
+	// SecretInfos contains names and descriptions of available secrets (for prompts)
+	SecretInfos []SecretInfo
+	// SecretValues contains actual secret values for tool call injection
+	SecretValues map[string]string
+	// IsIteration indicates whether this supervisor is running an iteration of an iterated task
+	IsIteration bool
+	// IsParallel indicates whether the iteration is running in parallel (only relevant if IsIteration is true)
+	IsParallel bool
 	// DebugFile enables debug logging to the specified file (optional)
 	DebugFile string
 }
@@ -216,6 +230,8 @@ type Supervisor struct {
 	debugLogger     DebugLogger
 	turnLogger      *llm.TurnLogger
 	queryClones     map[string]*Supervisor // Cached clones for ask_supe queries (keyed by target task name)
+	secretInfos     []SecretInfo           // Secret names and descriptions for agent prompts
+	secretValues    map[string]string      // Actual secret values for tool call injection
 }
 
 // NewSupervisor creates a new supervisor for a workflow task
@@ -255,8 +271,12 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 	// Build system prompts
 	var systemPrompts []string
 
-	// Main supervisor prompt
-	systemPrompts = append(systemPrompts, prompts.GetSupervisorPrompt(agentInfos))
+	// Main supervisor prompt with iteration context
+	iterationOpts := prompts.IterationOptions{
+		IsIteration: opts.IsIteration,
+		IsParallel:  opts.IsParallel,
+	}
+	systemPrompts = append(systemPrompts, prompts.GetSupervisorPrompt(agentInfos, iterationOpts))
 
 	// Add context about workflow and task
 	systemPrompts = append(systemPrompts, fmt.Sprintf(
@@ -307,6 +327,8 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 		interceptor:     interceptor,
 		completedAgents: completedAgents,
 		agentSessions:   make(map[string]*Agent),
+		secretInfos:     opts.SecretInfos,
+		secretValues:    opts.SecretValues,
 	}
 
 	// Add result tools to supervisor's tool map
@@ -1270,6 +1292,8 @@ func (t *callAgentTool) Call(input string) string {
 			AgentName:    agentCfg.Name,
 			Mode:         &mode,
 			DatasetStore: datasetStore,
+			SecretInfos:  t.supervisor.secretInfos,
+			SecretValues: t.supervisor.secretValues,
 			DebugFile:    debugFile,
 			TurnLogFile:  turnLogFile,
 			EventLogger:  eventLogger,

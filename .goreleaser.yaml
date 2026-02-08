@@ -1,0 +1,30 @@
+version: 2
+
+project_name: squad
+
+builds:
+  - id: squad
+    binary: squad
+    main: ./cmd/cli
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+
+archives:
+  - id: squad
+    format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+release:
+  github:
+    owner: mlund01
+    name: squad-cli

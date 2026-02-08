@@ -1,6 +1,6 @@
 package main
 
-import "squad/cmd"
+import "squadron/cmd"
 
 func main() {
 	cmd.Execute()

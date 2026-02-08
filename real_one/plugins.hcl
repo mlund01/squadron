@@ -1,5 +1,5 @@
 plugin "pinger" {
-  source  = "~/.squad/plugins/pinger"
+  source  = "~/.squadron/plugins/pinger"
   version = "local"
 }
 

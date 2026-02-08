@@ -3,8 +3,8 @@ package config
 import (
 	"strings"
 
-	"squad/aitools"
-	"squad/plugin"
+	"squadron/aitools"
+	"squadron/plugin"
 )
 
 // BuildToolsMap creates a map of tool name -> Tool implementation from the agent's tools list

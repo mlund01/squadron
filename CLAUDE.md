@@ -5,14 +5,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run Commands
 
 ```bash
-go build -o squad .                     # Build the CLI
-./squad verify <path>                   # Validate HCL config
-./squad chat -c <path> <agent_name>     # Start chat with an agent
-./squad workflow -c <path> <workflow>   # Run a workflow
-./squad workflow -c <path> -d <workflow> # Run with debug logging
-./squad vars set <name> <value>         # Set a variable
-./squad vars get <name>                 # Get a variable
-./squad vars list                       # List all variables
+go build -o squadron .                     # Build the CLI
+./squadron verify <path>                   # Validate HCL config
+./squadron chat -c <path> <agent_name>     # Start chat with an agent
+./squadron workflow -c <path> <workflow>   # Run a workflow
+./squadron workflow -c <path> -d <workflow> # Run with debug logging
+./squadron vars set <name> <value>         # Set a variable
+./squadron vars get <name>                 # Get a variable
+./squadron vars list                       # List all variables
 ```
 
 ## Architecture Overview
@@ -128,17 +128,17 @@ type ToolProvider interface {
 
 Plugins are stored in versioned directories:
 ```
-~/.squad/plugins/<name>/<version>/plugin
+~/.squadron/plugins/<name>/<version>/plugin
 ```
 
-Example: `~/.squad/plugins/playwright/local/plugin`
+Example: `~/.squadron/plugins/playwright/local/plugin`
 
 ### Building a Plugin
 
 ```bash
 # Build a plugin to the correct path
-mkdir -p ~/.squad/plugins/playwright/local
-go build -o ~/.squad/plugins/playwright/local/plugin ./cmd/plugin_playwright
+mkdir -p ~/.squadron/plugins/playwright/local
+go build -o ~/.squadron/plugins/playwright/local/plugin ./cmd/plugin_playwright
 ```
 
 ### Plugin Reference in HCL
@@ -272,7 +272,7 @@ Large tool results are automatically intercepted (`aitools/interceptor.go`) and 
 
 Enable debug mode with `-d` flag:
 ```bash
-./squad workflow -c config/ -d my_workflow
+./squadron workflow -c config/ -d my_workflow
 ```
 
 Creates a debug directory: `debug/<workflow>_<timestamp>/`
@@ -297,7 +297,7 @@ Creates a debug directory: `debug/<workflow>_<timestamp>/`
 
 ## Variable Storage
 
-Variables are stored in `~/.squad/vars.txt` as `key=value` pairs. The config system merges these with defaults from `variable` blocks. Secret variables are stored but never displayed.
+Variables are stored in `~/.squadron/vars.txt` as `key=value` pairs. The config system merges these with defaults from `variable` blocks. Secret variables are stored but never displayed.
 
 ---
 

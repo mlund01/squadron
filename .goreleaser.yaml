@@ -1,10 +1,10 @@
 version: 2
 
-project_name: squad
+project_name: squadron
 
 builds:
-  - id: squad
-    binary: squad
+  - id: squadron
+    binary: squadron
     main: ./cmd/cli
     goos:
       - darwin
@@ -16,7 +16,7 @@ builds:
       - -s -w
 
 archives:
-  - id: squad
+  - id: squadron
     format: tar.gz
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
 
@@ -27,4 +27,4 @@ checksum:
 release:
   github:
     owner: mlund01
-    name: squad-cli
+    name: squadron-cli

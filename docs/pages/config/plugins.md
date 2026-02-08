@@ -10,7 +10,7 @@ Plugins extend Squad with additional tools and capabilities.
 
 ```hcl
 plugin "pinger" {
-  source  = "~/.squad/plugins/pinger"
+  source  = "~/.squadron/plugins/pinger"
   version = "local"
 }
 
@@ -83,12 +83,12 @@ The plugin must:
 Plugin tools are validated during config loading:
 
 ```bash
-squad verify ./my-config
+squadron verify ./my-config
 ```
 
 Output:
 
 ```
 Found 1 plugin(s)
-  - slack (source: ~/.squad/plugins/slack, version: 1.0.0, loaded)
+  - slack (source: ~/.squadron/plugins/slack, version: 1.0.0, loaded)
 ```

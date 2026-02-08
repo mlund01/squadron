@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"squad/config"
+	"squadron/config"
 
 	"github.com/spf13/cobra"
 )
@@ -12,7 +12,7 @@ import (
 var varsCmd = &cobra.Command{
 	Use:   "vars",
 	Short: "Manage variables",
-	Long:  `Manage variables stored in ~/.squad/vars.txt`,
+	Long:  `Manage variables stored in ~/.squadron/vars.txt`,
 }
 
 var varsListCmd = &cobra.Command{

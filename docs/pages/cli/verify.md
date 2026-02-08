@@ -2,14 +2,14 @@
 title: verify
 ---
 
-# squad verify
+# squadron verify
 
 Validate an HCL configuration directory.
 
 ## Usage
 
 ```bash
-squad verify <path>
+squadron verify <path>
 ```
 
 ## Arguments
@@ -21,7 +21,7 @@ squad verify <path>
 ## Example
 
 ```bash
-squad verify ./my-config
+squadron verify ./my-config
 ```
 
 ## Output

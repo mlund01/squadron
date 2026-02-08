@@ -5,17 +5,17 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 
-	"squad/aitools"
-	"github.com/mlund01/squad-sdk"
+	"squadron/aitools"
+	squadron "github.com/mlund01/squad-sdk"
 )
 
 // Re-export SDK types for convenience
 var (
 	// Handshake is the handshake config for plugins
-	Handshake = squad.Handshake
+	Handshake = squadron.Handshake
 
 	// PluginMap is the map of plugins we can dispense
-	PluginMap = squad.PluginMap
+	PluginMap = squadron.PluginMap
 )
 
 // ToolInfo contains metadata about a tool (with aitools.Schema for internal use)
@@ -25,7 +25,7 @@ type ToolInfo struct {
 	Schema      aitools.Schema
 }
 
-// ToolProvider wraps squad.ToolProvider to convert schema types
+// ToolProvider wraps squadron.ToolProvider to convert schema types
 type ToolProvider interface {
 	// Configure passes settings from HCL config to the plugin
 	Configure(settings map[string]string) error
@@ -40,9 +40,9 @@ type ToolProvider interface {
 	ListTools() ([]*ToolInfo, error)
 }
 
-// sdkProviderWrapper wraps squad.ToolProvider to implement our ToolProvider
+// sdkProviderWrapper wraps squadron.ToolProvider to implement our ToolProvider
 type sdkProviderWrapper struct {
-	impl squad.ToolProvider
+	impl squadron.ToolProvider
 }
 
 func (w *sdkProviderWrapper) Configure(settings map[string]string) error {
@@ -73,9 +73,9 @@ func (w *sdkProviderWrapper) ListTools() ([]*ToolInfo, error) {
 	return tools, nil
 }
 
-// sdkToLocalToolInfo converts squad.ToolInfo to local ToolInfo with aitools.Schema
-func sdkToLocalToolInfo(t *squad.ToolInfo) *ToolInfo {
-	// Convert squad.Schema to aitools.Schema via JSON (same structure)
+// sdkToLocalToolInfo converts squadron.ToolInfo to local ToolInfo with aitools.Schema
+func sdkToLocalToolInfo(t *squadron.ToolInfo) *ToolInfo {
+	// Convert squadron.Schema to aitools.Schema via JSON (same structure)
 	var schema aitools.Schema
 	schemaJSON, _ := json.Marshal(t.Schema)
 	json.Unmarshal(schemaJSON, &schema)
@@ -87,8 +87,8 @@ func sdkToLocalToolInfo(t *squad.ToolInfo) *ToolInfo {
 	}
 }
 
-// WrapSDKProvider wraps an squad.ToolProvider to implement our ToolProvider interface
-func WrapSDKProvider(impl squad.ToolProvider) ToolProvider {
+// WrapSDKProvider wraps an squadron.ToolProvider to implement our ToolProvider interface
+func WrapSDKProvider(impl squadron.ToolProvider) ToolProvider {
 	return &sdkProviderWrapper{impl: impl}
 }
 
@@ -104,7 +104,7 @@ func DispenseToolProvider(client *goplugin.Client) (ToolProvider, error) {
 		return nil, err
 	}
 
-	sdkProvider, ok := raw.(squad.ToolProvider)
+	sdkProvider, ok := raw.(squadron.ToolProvider)
 	if !ok {
 		return nil, err
 	}

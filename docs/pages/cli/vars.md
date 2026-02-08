@@ -2,11 +2,11 @@
 title: vars
 ---
 
-# squad vars
+# squadron vars
 
 Manage configuration variables.
 
-Variables are stored in `~/.squad/vars.txt` and can be referenced in HCL configs using `vars.name`.
+Variables are stored in `~/.squadron/vars.txt` and can be referenced in HCL configs using `vars.name`.
 
 ## Commands
 
@@ -15,13 +15,13 @@ Variables are stored in `~/.squad/vars.txt` and can be referenced in HCL configs
 Set a variable value.
 
 ```bash
-squad vars set <name> <value>
+squadron vars set <name> <value>
 ```
 
 Example:
 
 ```bash
-squad vars set anthropic_api_key sk-ant-api03-...
+squadron vars set anthropic_api_key sk-ant-api03-...
 ```
 
 ### vars get
@@ -29,13 +29,13 @@ squad vars set anthropic_api_key sk-ant-api03-...
 Get a variable value.
 
 ```bash
-squad vars get <name>
+squadron vars get <name>
 ```
 
 Example:
 
 ```bash
-squad vars get anthropic_api_key
+squadron vars get anthropic_api_key
 # Output: sk-ant-api03-...
 ```
 
@@ -44,7 +44,7 @@ squad vars get anthropic_api_key
 List all variables.
 
 ```bash
-squad vars list
+squadron vars list
 ```
 
 Example output:
@@ -79,7 +79,7 @@ model "anthropic" {
 
 ## Storage
 
-Variables are stored as key=value pairs in `~/.squad/vars.txt`:
+Variables are stored as key=value pairs in `~/.squadron/vars.txt`:
 
 ```
 anthropic_api_key=sk-ant-api03-...

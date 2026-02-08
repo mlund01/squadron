@@ -74,7 +74,7 @@ tools = [plugins.bash.bash, plugins.http.get]
 Always validate your config before running:
 
 ```bash
-squad verify ./my-config
+squadron verify ./my-config
 ```
 
 This catches errors like:

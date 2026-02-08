@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"squad/plugin"
+	"squadron/plugin"
 )
 
 var pluginCmd = &cobra.Command{
@@ -113,7 +113,7 @@ var pluginInfoCmd = &cobra.Command{
 var pluginBuildCmd = &cobra.Command{
 	Use:   "build <plugin-name> <source-path>",
 	Short: "Build a plugin from source",
-	Long:  `Build a plugin from a Go source directory and install it to ~/.squad/plugins/<name>/<version>/plugin`,
+	Long:  `Build a plugin from a Go source directory and install it to ~/.squadron/plugins/<name>/<version>/plugin`,
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pluginName := args[0]

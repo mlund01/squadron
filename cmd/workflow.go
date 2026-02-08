@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"squad/config"
-	"squad/streamers/cli"
-	"squad/workflow"
+	"squadron/config"
+	"squadron/streamers/cli"
+	"squadron/workflow"
 
 	"github.com/spf13/cobra"
 )

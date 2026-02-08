@@ -10,7 +10,7 @@ import (
 	"github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 
-	"squad/aitools"
+	"squadron/aitools"
 )
 
 // Global plugin registry - plugins are shared across all config loads
@@ -32,7 +32,7 @@ func GetPluginsDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get home directory: %w", err)
 	}
-	return filepath.Join(home, ".squad", "plugins"), nil
+	return filepath.Join(home, ".squadron", "plugins"), nil
 }
 
 // GetPluginPath returns the path to a plugin executable

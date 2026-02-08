@@ -5,39 +5,39 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/mlund01/squad-sdk"
+	squadron "github.com/mlund01/squad-sdk"
 )
 
 // tools holds the metadata for each tool provided by this plugin
-var tools = map[string]*squad.ToolInfo{
+var tools = map[string]*squadron.ToolInfo{
 	"ping": {
 		Name:        "ping",
 		Description: "Returns 'pong' when called",
-		Schema: squad.Schema{
-			Type:       squad.TypeObject,
-			Properties: squad.PropertyMap{},
+		Schema: squadron.Schema{
+			Type:       squadron.TypeObject,
+			Properties: squadron.PropertyMap{},
 		},
 	},
 	"pong": {
 		Name:        "pong",
 		Description: "Returns 'ping' when called",
-		Schema: squad.Schema{
-			Type:       squad.TypeObject,
-			Properties: squad.PropertyMap{},
+		Schema: squadron.Schema{
+			Type:       squadron.TypeObject,
+			Properties: squadron.PropertyMap{},
 		},
 	},
 	"echo": {
 		Name:        "echo",
 		Description: "Echoes back the message provided",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"message": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "The message to echo back",
 				},
 				"all_caps": {
-					Type:        squad.TypeBoolean,
+					Type:        squadron.TypeBoolean,
 					Description: "When true, capitalizes the echoed message",
 				},
 			},
@@ -77,7 +77,7 @@ func (p *PingerPlugin) Call(toolName string, payload string) (string, error) {
 	}
 }
 
-func (p *PingerPlugin) GetToolInfo(toolName string) (*squad.ToolInfo, error) {
+func (p *PingerPlugin) GetToolInfo(toolName string) (*squadron.ToolInfo, error) {
 	info, ok := tools[toolName]
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
@@ -85,8 +85,8 @@ func (p *PingerPlugin) GetToolInfo(toolName string) (*squad.ToolInfo, error) {
 	return info, nil
 }
 
-func (p *PingerPlugin) ListTools() ([]*squad.ToolInfo, error) {
-	result := make([]*squad.ToolInfo, 0, len(tools))
+func (p *PingerPlugin) ListTools() ([]*squadron.ToolInfo, error) {
+	result := make([]*squadron.ToolInfo, 0, len(tools))
 	for _, info := range tools {
 		result = append(result, info)
 	}
@@ -94,5 +94,5 @@ func (p *PingerPlugin) ListTools() ([]*squad.ToolInfo, error) {
 }
 
 func main() {
-	squad.Serve(&PingerPlugin{})
+	squadron.Serve(&PingerPlugin{})
 }

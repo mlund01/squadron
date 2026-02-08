@@ -54,7 +54,7 @@ agent "assistant" {
 ## 5. Validate Your Config
 
 ```bash
-squad verify .
+squadron verify .
 ```
 
 You should see:
@@ -69,7 +69,7 @@ Found 1 agent(s)
 ## 6. Start Chatting
 
 ```bash
-squad chat -c . assistant
+squadron chat -c . assistant
 ```
 
 You're now chatting with your agent! Try asking it to:

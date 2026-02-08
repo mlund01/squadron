@@ -1,6 +1,6 @@
 package plugin
 
-import "squad/aitools"
+import "squadron/aitools"
 
 // PluginTool wraps a plugin tool and implements the aitools.Tool interface
 type PluginTool struct {

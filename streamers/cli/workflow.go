@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"squad/streamers"
+	"squadron/streamers"
 )
 
 // WorkflowHandler implements streamers.WorkflowHandler for CLI output

@@ -8,7 +8,7 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "squad",
+	Use:   "squadron",
 	Short: "Squad is a CLI tool",
 	Long:  `Squad is a command-line interface tool built with Cobra.`,
 	Run: func(cmd *cobra.Command, args []string) {

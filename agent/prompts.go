@@ -1,7 +1,7 @@
 package agent
 
 import (
-	"squad/agent/internal/prompts"
+	"squadron/agent/internal/prompts"
 )
 
 // AgentInfo represents basic info about an agent for the supervisor prompt

@@ -10,7 +10,7 @@ import (
 
 	"github.com/playwright-community/playwright-go"
 
-	"github.com/mlund01/squad-sdk"
+	squadron "github.com/mlund01/squad-sdk"
 )
 
 // whitespaceRegex matches multiple consecutive whitespace characters
@@ -20,25 +20,25 @@ var whitespaceRegex = regexp.MustCompile(`[ \t]+`)
 var emptyLineRegex = regexp.MustCompile(`(?m)^\s*$[\r\n]*`)
 
 // sessionIDProperty is added to all tools that need a session
-var sessionIDProperty = squad.Property{
-	Type:        squad.TypeString,
+var sessionIDProperty = squadron.Property{
+	Type:        squadron.TypeString,
 	Description: "Session ID from browser_new_session. Required - sessions must be explicitly created first.",
 }
 
 // tools holds the metadata for each tool provided by this plugin
-var tools = map[string]*squad.ToolInfo{
+var tools = map[string]*squadron.ToolInfo{
 	"browser_new_session": {
 		Name:        "browser_new_session",
 		Description: "Create a new browser session. Returns a session_id to use with other browser tools. Provider (local/azure) is configured at the plugin level.",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"headless": {
-					Type:        squad.TypeBoolean,
+					Type:        squadron.TypeBoolean,
 					Description: "Run browser in headless mode. Defaults to plugin setting. Only applies to local provider.",
 				},
 				"browser_type": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "Browser to use: 'chromium', 'firefox', or 'webkit'. Defaults to plugin setting. Only applies to local provider.",
 				},
 			},
@@ -47,24 +47,24 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_list_sessions": {
 		Name:        "browser_list_sessions",
 		Description: "List all active browser sessions",
-		Schema: squad.Schema{
-			Type:       squad.TypeObject,
-			Properties: squad.PropertyMap{},
+		Schema: squadron.Schema{
+			Type:       squadron.TypeObject,
+			Properties: squadron.PropertyMap{},
 		},
 	},
 	"browser_navigate": {
 		Name:        "browser_navigate",
 		Description: "Navigate the browser to a URL",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"url": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "The URL to navigate to",
 				},
 				"wait_until": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "When to consider navigation complete: 'load', 'domcontentloaded', 'networkidle'. Defaults to 'load'",
 				},
 			},
@@ -74,12 +74,12 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_click": {
 		Name:        "browser_click",
 		Description: "Click on an element in the page using a CSS selector",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "CSS selector for the element to click",
 				},
 			},
@@ -89,20 +89,20 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_type": {
 		Name:        "browser_type",
 		Description: "Type text into an input element",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "CSS selector for the input element",
 				},
 				"text": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "Text to type into the element",
 				},
 				"clear": {
-					Type:        squad.TypeBoolean,
+					Type:        squadron.TypeBoolean,
 					Description: "Clear the input before typing. Defaults to false",
 				},
 			},
@@ -112,24 +112,24 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_screenshot": {
 		Name:        "browser_screenshot",
 		Description: "Take a screenshot of the current page. Returns a JPEG image by default (smaller size for faster processing).",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"path": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "File path to save the screenshot. If not provided, returns base64-encoded image",
 				},
 				"full_page": {
-					Type:        squad.TypeBoolean,
+					Type:        squadron.TypeBoolean,
 					Description: "Capture the full scrollable page. Defaults to false",
 				},
 				"selector": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "CSS selector to screenshot a specific element instead of the page",
 				},
 				"quality": {
-					Type:        squad.TypeInteger,
+					Type:        squadron.TypeInteger,
 					Description: "JPEG quality (1-100). Defaults to 80. Lower values produce smaller images.",
 				},
 			},
@@ -139,12 +139,12 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_get_text": {
 		Name:        "browser_get_text",
 		Description: "Get the text content of an element or the entire page",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "CSS selector for the element. If not provided, gets text from body",
 				},
 			},
@@ -154,16 +154,16 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_get_html": {
 		Name:        "browser_get_html",
 		Description: "Get the HTML content of an element or the entire page",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "CSS selector for the element. If not provided, gets HTML from body",
 				},
 				"outer": {
-					Type:        squad.TypeBoolean,
+					Type:        squadron.TypeBoolean,
 					Description: "Get outer HTML (including the element itself). Defaults to false (inner HTML)",
 				},
 			},
@@ -173,12 +173,12 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_evaluate": {
 		Name:        "browser_evaluate",
 		Description: "Execute JavaScript code in the browser and return the result",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"script": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "JavaScript code to execute. Should return a serializable value",
 				},
 			},
@@ -188,20 +188,20 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_wait_for_selector": {
 		Name:        "browser_wait_for_selector",
 		Description: "Wait for an element matching the selector to appear in the page",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "CSS selector to wait for",
 				},
 				"state": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "State to wait for: 'attached', 'detached', 'visible', 'hidden'. Defaults to 'visible'",
 				},
 				"timeout": {
-					Type:        squad.TypeInteger,
+					Type:        squadron.TypeInteger,
 					Description: "Maximum time to wait in milliseconds. Defaults to 30000",
 				},
 			},
@@ -211,11 +211,11 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_close_session": {
 		Name:        "browser_close_session",
 		Description: "Close a specific browser session",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "Session ID to close",
 				},
 			},
@@ -225,20 +225,20 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_close_all": {
 		Name:        "browser_close_all",
 		Description: "Close all browser sessions and cleanup",
-		Schema: squad.Schema{
-			Type:       squad.TypeObject,
-			Properties: squad.PropertyMap{},
+		Schema: squadron.Schema{
+			Type:       squadron.TypeObject,
+			Properties: squadron.PropertyMap{},
 		},
 	},
 	"browser_aria_snapshot": {
 		Name:        "browser_aria_snapshot",
 		Description: "Get an ARIA accessibility tree snapshot of the page. Returns a YAML representation of the accessibility tree, which is more compact and AI-friendly than screenshots for understanding page structure and content.",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        squad.TypeString,
+					Type:        squadron.TypeString,
 					Description: "CSS selector to get snapshot of a specific element. If not provided, gets snapshot of the entire page (body)",
 				},
 			},
@@ -248,16 +248,16 @@ var tools = map[string]*squad.ToolInfo{
 	"browser_click_coordinates": {
 		Name:        "browser_click_coordinates",
 		Description: "Click at specific x,y coordinates on the page. Useful when CSS selectors fail or for clicking on canvas/complex UI elements.",
-		Schema: squad.Schema{
-			Type: squad.TypeObject,
-			Properties: squad.PropertyMap{
+		Schema: squadron.Schema{
+			Type: squadron.TypeObject,
+			Properties: squadron.PropertyMap{
 				"session_id": sessionIDProperty,
 				"x": {
-					Type:        squad.TypeNumber,
+					Type:        squadron.TypeNumber,
 					Description: "X coordinate (horizontal position from left edge)",
 				},
 				"y": {
-					Type:        squad.TypeNumber,
+					Type:        squadron.TypeNumber,
 					Description: "Y coordinate (vertical position from top edge)",
 				},
 			},
@@ -935,7 +935,7 @@ func (p *PlaywrightPlugin) clickCoordinates(payload string) (string, error) {
 	return fmt.Sprintf("Clicked at coordinates (%v, %v)", params.X, params.Y), nil
 }
 
-func (p *PlaywrightPlugin) GetToolInfo(toolName string) (*squad.ToolInfo, error) {
+func (p *PlaywrightPlugin) GetToolInfo(toolName string) (*squadron.ToolInfo, error) {
 	info, ok := tools[toolName]
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
@@ -943,8 +943,8 @@ func (p *PlaywrightPlugin) GetToolInfo(toolName string) (*squad.ToolInfo, error)
 	return info, nil
 }
 
-func (p *PlaywrightPlugin) ListTools() ([]*squad.ToolInfo, error) {
-	result := make([]*squad.ToolInfo, 0, len(tools))
+func (p *PlaywrightPlugin) ListTools() ([]*squadron.ToolInfo, error) {
+	result := make([]*squadron.ToolInfo, 0, len(tools))
 	for _, info := range tools {
 		result = append(result, info)
 	}
@@ -952,5 +952,5 @@ func (p *PlaywrightPlugin) ListTools() ([]*squad.ToolInfo, error) {
 }
 
 func main() {
-	squad.Serve(&PlaywrightPlugin{})
+	squadron.Serve(&PlaywrightPlugin{})
 }

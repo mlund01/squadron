@@ -13,7 +13,7 @@ func GetVarsFilePath() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".squad", "vars.txt"), nil
+	return filepath.Join(home, ".squadron", "vars.txt"), nil
 }
 
 func ensureVarsDir() error {

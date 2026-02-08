@@ -2,14 +2,14 @@
 title: chat
 ---
 
-# squad chat
+# squadron chat
 
 Start an interactive chat session with an agent.
 
 ## Usage
 
 ```bash
-squad chat -c <config-path> <agent-name>
+squadron chat -c <config-path> <agent-name>
 ```
 
 ## Flags
@@ -30,7 +30,7 @@ squad chat -c <config-path> <agent-name>
 ## Example
 
 ```bash
-squad chat -c ./my-config assistant
+squadron chat -c ./my-config assistant
 ```
 
 This opens an interactive REPL where you can send messages to the agent.
@@ -40,7 +40,7 @@ This opens an interactive REPL where you can send messages to the agent.
 Use the `--workflow` flag to run an agent in autonomous task completion mode:
 
 ```bash
-squad chat -c ./my-config assistant --workflow --task "Summarize the README file"
+squadron chat -c ./my-config assistant --workflow --task "Summarize the README file"
 ```
 
 In workflow mode:
@@ -53,7 +53,7 @@ In workflow mode:
 Use the `--debug` flag to log all LLM request/response messages to `debug.txt`:
 
 ```bash
-squad chat -c ./my-config assistant --debug
+squadron chat -c ./my-config assistant --debug
 ```
 
 ## Available Tools

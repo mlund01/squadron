@@ -145,7 +145,7 @@ External plugins can provide additional tools:
 
 ```hcl
 plugin "slack" {
-  source  = "~/.squad/plugins/slack"
+  source  = "~/.squadron/plugins/slack"
   version = "local"
 }
 

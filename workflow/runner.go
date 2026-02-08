@@ -12,10 +12,10 @@ import (
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"
 
-	"squad/agent"
-	"squad/aitools"
-	"squad/config"
-	"squad/streamers"
+	"squadron/agent"
+	"squadron/aitools"
+	"squadron/config"
+	"squadron/streamers"
 )
 
 // Runner executes a workflow by orchestrating supervisors for each task

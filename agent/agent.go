@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"strings"
 
-	"squad/agent/internal/prompts"
-	"squad/aitools"
-	"squad/config"
-	"squad/llm"
-	"squad/streamers"
+	"squadron/agent/internal/prompts"
+	"squadron/aitools"
+	"squadron/config"
+	"squadron/llm"
+	"squadron/streamers"
 )
 
 // ChatResult represents the outcome of a chat interaction

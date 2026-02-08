@@ -37,7 +37,7 @@ agent "assistant" {
 Start chatting:
 
 ```bash
-squad chat -c ./config assistant
+squadron chat -c ./config assistant
 ```
 
 ## Next Steps

@@ -2,14 +2,14 @@
 title: run
 ---
 
-# squad run
+# squadron run
 
 Execute a workflow.
 
 ## Usage
 
 ```bash
-squad run -c <config-path> <workflow-name> [--input key=value...]
+squadron run -c <config-path> <workflow-name> [--input key=value...]
 ```
 
 ## Flags
@@ -29,10 +29,10 @@ squad run -c <config-path> <workflow-name> [--input key=value...]
 
 ```bash
 # Run a workflow
-squad run -c ./my-config data_pipeline
+squadron run -c ./my-config data_pipeline
 
 # Run with inputs
-squad run -c ./my-config weather_report --input city=Chicago --input units=celsius
+squadron run -c ./my-config weather_report --input city=Chicago --input units=celsius
 ```
 
 ## Workflow Execution

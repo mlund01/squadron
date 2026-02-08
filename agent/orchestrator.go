@@ -7,9 +7,9 @@ import (
 	"regexp"
 	"time"
 
-	"squad/aitools"
-	"squad/llm"
-	"squad/streamers"
+	"squadron/aitools"
+	"squadron/llm"
+	"squadron/streamers"
 )
 
 // secretPattern matches ${secrets.name} placeholders in tool inputs

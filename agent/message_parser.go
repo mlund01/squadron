@@ -3,7 +3,7 @@ package agent
 import (
 	"strings"
 
-	"squad/streamers"
+	"squadron/streamers"
 )
 
 // MessageParserState represents the current parsing state

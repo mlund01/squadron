@@ -27,18 +27,18 @@ variable "max_retries" {
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `secret` | bool | If true, value is masked in CLI output |
-| `default` | any | Default value if not set via `squad vars set` |
+| `default` | any | Default value if not set via `squadron vars set` |
 
 ## Setting Values
 
 Use the CLI to set variable values:
 
 ```bash
-squad vars set api_key sk-ant-...
-squad vars set app_name production-app
+squadron vars set api_key sk-ant-...
+squadron vars set app_name production-app
 ```
 
-Values are stored in `~/.squad/vars.txt`.
+Values are stored in `~/.squadron/vars.txt`.
 
 ## Referencing Variables
 
@@ -56,7 +56,7 @@ agent "assistant" {
 
 ## Resolution Order
 
-1. Value set via `squad vars set` (stored in `~/.squad/vars.txt`)
+1. Value set via `squadron vars set` (stored in `~/.squadron/vars.txt`)
 2. Default value from `variable` block
 3. Error if neither exists
 

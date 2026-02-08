@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-const userAgent = "squad-cli"
+const userAgent = "squadron-cli"
 
 var httpClient = &http.Client{
 	Timeout: 30 * time.Second,

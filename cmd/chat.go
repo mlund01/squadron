@@ -8,10 +8,10 @@ import (
 	"path/filepath"
 	"time"
 
-	"squad/agent"
-	"squad/config"
-	"squad/streamers/cli"
-	"squad/workflow"
+	"squadron/agent"
+	"squadron/config"
+	"squadron/streamers/cli"
+	"squadron/workflow"
 
 	"github.com/spf13/cobra"
 )

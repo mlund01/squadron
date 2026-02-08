@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"squad/aitools"
-	"squad/config"
+	"squadron/aitools"
+	"squadron/config"
 )
 
 //go:embed agent.md

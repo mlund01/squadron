@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"squad/config"
+	"squadron/config"
 
 	"github.com/spf13/cobra"
 )

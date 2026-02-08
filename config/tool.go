@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"squad/aitools"
-	"squad/plugin"
+	"squadron/aitools"
+	"squadron/plugin"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/zclconf/go-cty/cty"

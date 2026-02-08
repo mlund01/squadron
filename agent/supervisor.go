@@ -9,11 +9,11 @@ import (
 
 	"github.com/zclconf/go-cty/cty"
 
-	"squad/agent/internal/prompts"
-	"squad/aitools"
-	"squad/config"
-	"squad/llm"
-	"squad/streamers"
+	"squadron/agent/internal/prompts"
+	"squadron/aitools"
+	"squadron/config"
+	"squadron/llm"
+	"squadron/streamers"
 )
 
 // DependencySummary holds the summary from a completed dependency task

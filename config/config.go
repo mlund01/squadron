@@ -11,7 +11,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/zclconf/go-cty/cty"
 
-	"squad/plugin"
+	"squadron/plugin"
 )
 
 // Config holds all configuration

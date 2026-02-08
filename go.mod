@@ -1,4 +1,4 @@
-module squad
+module squadron
 
 go 1.25.4
 

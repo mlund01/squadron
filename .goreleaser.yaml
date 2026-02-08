@@ -27,4 +27,4 @@ checksum:
 release:
   github:
     owner: mlund01
-    name: squadron-cli
+    name: squadron

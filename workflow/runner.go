@@ -787,60 +787,166 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 	}, nil
 }
 
-// runSequentialIterations runs iterations one at a time with retry support
+// runSequentialIterations runs all iterations in a single supervisor session with agent reuse
 func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) []IterationResult {
-	var iterations []IterationResult
-	var prevOutput map[string]any    // Track previous iteration's output for context passing
-	var prevLearnings map[string]any // Track previous iteration's learnings for context passing
-	maxRetries := 0
-	if task.Iterator != nil {
-		maxRetries = task.Iterator.MaxRetries
+	// Get agents for this task
+	agents := task.Agents
+	if len(agents) == 0 {
+		agents = r.workflow.Agents
 	}
 
-	for i, item := range items {
-		select {
-		case <-ctx.Done():
-			iterations = append(iterations, IterationResult{
-				Index:   i,
-				ItemID:  getItemID(item, i),
+	// Build inherited agents from all dependency tasks in the lineage
+	inheritedAgents := r.collectInheritedAgents(task.Name)
+
+	// Collect dependency output schemas for the supervisor
+	depOutputSchemas := r.collectDepOutputSchemas(task.Name)
+
+	// Get task's own output schema if defined
+	taskOutputSchema := r.getTaskOutputSchema(task)
+
+	// Get debug file for supervisor if debug mode is enabled
+	var debugFile string
+	if r.debugLogger != nil {
+		debugFile = r.debugLogger.GetMessageFile("supervisor", task.Name)
+	}
+
+	// Build objective for sequential dataset processing
+	// Use the first item to resolve a representative objective
+	representativeObjective, err := r.resolveIterationObjective(task, items[0])
+	if err != nil {
+		return []IterationResult{{
+			Index:   0,
+			Success: false,
+			Error:   fmt.Errorf("resolving objective: %w", err),
+		}}
+	}
+
+	objective := fmt.Sprintf(`Process the following task for each of %d items in the dataset.
+
+Task objective (example for first item): %s
+
+Use dataset_next to get each item. Process it completely, then call dataset_item_complete with the output.
+Continue until dataset_next returns "exhausted".`, len(items), representativeObjective)
+
+	// Create single supervisor with all items
+	sup, err := agent.NewSupervisor(ctx, agent.SupervisorOptions{
+		Config:            r.cfg,
+		ConfigPath:        r.configPath,
+		WorkflowName:      r.workflow.Name,
+		TaskName:          task.Name,
+		SupervisorModel:   r.workflow.SupervisorModel,
+		AgentNames:        agents,
+		DepSummaries:      depSummaries,
+		DepOutputSchemas:  depOutputSchemas,
+		TaskOutputSchema:  taskOutputSchema,
+		InheritedAgents:   inheritedAgents,
+		SecretInfos:       r.secretInfos,
+		SecretValues:      r.secretValues,
+		IsIteration:       true,
+		IsParallel:        false,
+		DebugFile:         debugFile,
+		SequentialDataset: items, // Pass all items for sequential processing
+	})
+	if err != nil {
+		return []IterationResult{{
+			Index:   0,
+			Success: false,
+			Error:   err,
+		}}
+	}
+
+	// Set up tool callbacks
+	sup.SetToolCallbacks(&agent.SupervisorToolCallbacks{
+		OnAgentStart: func(taskName, agentName string) {
+			streamer.AgentStarted(taskName, agentName)
+			if r.debugLogger != nil {
+				r.debugLogger.LogEvent(EventAgentStarted, map[string]any{
+					"task":  taskName,
+					"agent": agentName,
+				})
+			}
+		},
+		GetAgentHandler: func(taskName, agentName string) streamers.ChatHandler {
+			return streamer.AgentHandler(taskName, agentName)
+		},
+		OnAgentComplete: func(taskName, agentName string) {
+			streamer.AgentCompleted(taskName, agentName)
+			if r.debugLogger != nil {
+				r.debugLogger.LogEvent(EventAgentCompleted, map[string]any{
+					"task":  taskName,
+					"agent": agentName,
+				})
+			}
+		},
+		DatasetStore:   r,
+		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
+		DebugLogger:    r.debugLogger,
+		GetSupervisorForQuery: func(depTaskName string, iterationIndex int) (*agent.Supervisor, error) {
+			return r.getSupervisorForQuery(depTaskName, iterationIndex, task.Name)
+		},
+		ListSupeQuestions: func(taskName string) []string {
+			return r.listSupeQuestions(taskName)
+		},
+		GetSupeAnswer: func(taskName string, index int) (string, error) {
+			return r.getSupeAnswer(taskName, index)
+		},
+		AskSupeWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
+			return r.askSupeWithCache(ctx, targetTask, iterationIndex, task.Name, question)
+		},
+	}, depSummaries)
+
+	// Create streamer adapter for the supervisor
+	seqStreamer := &iterationStreamerAdapter{
+		taskName: task.Name,
+		index:    0, // Use 0 as we're handling all items in one session
+		streamer: streamer,
+	}
+
+	// Execute the task - supervisor handles all items internally
+	_, err = sup.ExecuteTask(ctx, objective, seqStreamer)
+
+	// Get results from the supervisor's dataset cursor
+	results := sup.GetDatasetResults()
+	if results == nil || len(results) == 0 {
+		if err != nil {
+			return []IterationResult{{
+				Index:   0,
 				Success: false,
-				Error:   ctx.Err(),
-			})
-			return iterations
-		default:
+				Error:   err,
+			}}
 		}
-
-		// Run with retries
-		var result IterationResult
-		retryLearnings := prevLearnings // Start with learnings from previous iteration
-		for attempt := 0; attempt <= maxRetries; attempt++ {
-			result = r.runSingleIteration(ctx, task, i, item, prevOutput, retryLearnings, depSummaries, streamer)
-			if result.Success {
-				break
-			}
-
-			// Accumulate learnings from failed attempt for the retry
-			if result.Learnings != nil {
-				retryLearnings = mergeLearnings(retryLearnings, result.Learnings)
-			}
-
-			// If we have retries remaining, log and retry
-			if attempt < maxRetries {
-				streamer.IterationRetrying(task.Name, i, attempt+1, maxRetries, result.Error)
-			}
-		}
-
-		iterations = append(iterations, result)
-
-		if !result.Success {
-			// Fail-fast: stop on first failure (after all retries exhausted)
-			return iterations
-		}
-
-		// Update prevOutput and prevLearnings for next iteration (only on success)
-		prevOutput = result.Output
-		prevLearnings = result.Learnings
+		// No results but no error - something went wrong
+		return []IterationResult{{
+			Index:   0,
+			Success: false,
+			Error:   fmt.Errorf("no results from sequential dataset processing"),
+		}}
 	}
+
+	// Convert DatasetItemResult to IterationResult
+	iterations := make([]IterationResult, len(results))
+	for i, r := range results {
+		itemID := ""
+		if r.Index < len(items) {
+			itemID = getItemID(items[r.Index], r.Index)
+		}
+		iterations[i] = IterationResult{
+			Index:   r.Index,
+			ItemID:  itemID,
+			Summary: r.Summary,
+			Output:  r.Output,
+			Success: r.Success,
+		}
+	}
+
+	// Store the supervisor for ask_supe queries from dependent tasks
+	r.mu.Lock()
+	if r.iterationSupervisors[task.Name] == nil {
+		r.iterationSupervisors[task.Name] = make(map[int]*agent.Supervisor)
+	}
+	// Store as iteration 0 since it's a single supervisor handling all items
+	r.iterationSupervisors[task.Name][0] = sup
+	r.mu.Unlock()
 
 	return iterations
 }

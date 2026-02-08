@@ -4,8 +4,8 @@ plugin "pinger" {
 }
 
 plugin "playwright" {
-  source  = "~/.squad/plugins/playwright"
-  version = "local"
+  source  = "github.com/mlund01/plugin_playwright"
+  version = "v0.0.1"
 
   settings {
     provider     = "local"

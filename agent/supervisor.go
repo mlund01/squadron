@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/zclconf/go-cty/cty"
+
 	"squad/agent/internal/prompts"
 	"squad/aitools"
 	"squad/config"
@@ -62,6 +64,9 @@ type SupervisorOptions struct {
 	IsParallel bool
 	// DebugFile enables debug logging to the specified file (optional)
 	DebugFile string
+	// SequentialDataset contains all items for sequential iteration processing
+	// When set, the supervisor handles all items in a single session using dataset_next/dataset_item_complete tools
+	SequentialDataset []cty.Value
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -232,6 +237,7 @@ type Supervisor struct {
 	queryClones     map[string]*Supervisor // Cached clones for ask_supe queries (keyed by target task name)
 	secretInfos     []SecretInfo           // Secret names and descriptions for agent prompts
 	secretValues    map[string]string      // Actual secret values for tool call injection
+	datasetCursor   *aitools.DatasetCursor // Cursor for sequential dataset iteration (nil if not sequential)
 }
 
 // NewSupervisor creates a new supervisor for a workflow task
@@ -356,6 +362,14 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 	// If there are learnings from previous iteration (sequential iterations), inject them
 	if len(opts.PrevIterationLearnings) > 0 {
 		sup.injectPrevIterationLearnings(opts.PrevIterationLearnings)
+	}
+
+	// If sequential dataset is provided, set up cursor and tools for iterating through items
+	if len(opts.SequentialDataset) > 0 {
+		sup.datasetCursor = aitools.NewDatasetCursor(opts.TaskName, opts.SequentialDataset)
+		sup.tools["dataset_next"] = aitools.NewDatasetNextTool(sup.datasetCursor)
+		sup.tools["dataset_item_complete"] = aitools.NewDatasetItemCompleteTool(sup.datasetCursor)
+		sup.injectSequentialDatasetInstructions(len(opts.SequentialDataset))
 	}
 
 	return sup, nil
@@ -564,6 +578,43 @@ The previous dataset item's processing provided these insights:
 These learnings are from processing a DIFFERENT item, not the one you're handling now.
 Apply general insights (API behaviors, error handling, etc.) but focus on your current item's specific parameters.
 `, string(learningsJSON))
+
+	s.session.AddSystemPrompt(prompt)
+}
+
+// GetDatasetResults returns the collected results from sequential dataset processing
+// Returns nil if this supervisor is not processing a sequential dataset
+func (s *Supervisor) GetDatasetResults() []aitools.DatasetItemResult {
+	if s.datasetCursor == nil {
+		return nil
+	}
+	return s.datasetCursor.GetResults()
+}
+
+// HasSequentialDataset returns true if this supervisor is processing a sequential dataset
+func (s *Supervisor) HasSequentialDataset() bool {
+	return s.datasetCursor != nil
+}
+
+// injectSequentialDatasetInstructions adds instructions for processing a sequential dataset
+func (s *Supervisor) injectSequentialDatasetInstructions(itemCount int) {
+	prompt := fmt.Sprintf(`## Sequential Dataset Processing
+
+You have a dataset of %d items to process sequentially in this single session.
+
+**Tools:**
+- dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
+- dataset_item_complete: Submit output for current item. Required before calling dataset_next again.
+
+**Workflow:**
+1. Call dataset_next to get an item
+2. Process the item (delegate to agent, use tools, etc.)
+3. Call dataset_item_complete with the output for this item
+4. Repeat until dataset_next returns "exhausted"
+5. Produce final ANSWER summarizing the batch
+
+You MUST call dataset_item_complete before dataset_next or you will get an error.
+`, itemCount)
 
 	s.session.AddSystemPrompt(prompt)
 }

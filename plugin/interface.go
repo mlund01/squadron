@@ -1,32 +1,31 @@
 package plugin
 
 import (
-	"context"
 	"encoding/json"
-	"fmt"
 
-	"github.com/hashicorp/go-plugin"
-	"google.golang.org/grpc"
+	goplugin "github.com/hashicorp/go-plugin"
 
 	"squad/aitools"
-	pb "squad/plugin/proto"
+	"github.com/mlund01/squad-sdk"
 )
 
-// Handshake is the handshake config for plugins
-var Handshake = plugin.HandshakeConfig{
-	ProtocolVersion:  1,
-	MagicCookieKey:   "SQUAD_PLUGIN",
-	MagicCookieValue: "squad-tool-plugin-v1",
-}
+// Re-export SDK types for convenience
+var (
+	// Handshake is the handshake config for plugins
+	Handshake = squad.Handshake
 
-// ToolInfo contains metadata about a tool
+	// PluginMap is the map of plugins we can dispense
+	PluginMap = squad.PluginMap
+)
+
+// ToolInfo contains metadata about a tool (with aitools.Schema for internal use)
 type ToolInfo struct {
 	Name        string
 	Description string
 	Schema      aitools.Schema
 }
 
-// ToolProvider is the interface that all tool plugins must implement
+// ToolProvider wraps squad.ToolProvider to convert schema types
 type ToolProvider interface {
 	// Configure passes settings from HCL config to the plugin
 	Configure(settings map[string]string) error
@@ -41,146 +40,74 @@ type ToolProvider interface {
 	ListTools() ([]*ToolInfo, error)
 }
 
-// ToolPluginGRPCPlugin is the plugin.GRPCPlugin implementation
-type ToolPluginGRPCPlugin struct {
-	plugin.Plugin
-	Impl ToolProvider
+// sdkProviderWrapper wraps squad.ToolProvider to implement our ToolProvider
+type sdkProviderWrapper struct {
+	impl squad.ToolProvider
 }
 
-func (p *ToolPluginGRPCPlugin) GRPCServer(broker *plugin.GRPCBroker, s *grpc.Server) error {
-	pb.RegisterToolPluginServer(s, &GRPCServer{Impl: p.Impl})
-	return nil
+func (w *sdkProviderWrapper) Configure(settings map[string]string) error {
+	return w.impl.Configure(settings)
 }
 
-func (p *ToolPluginGRPCPlugin) GRPCClient(ctx context.Context, broker *plugin.GRPCBroker, c *grpc.ClientConn) (interface{}, error) {
-	return &GRPCClient{client: pb.NewToolPluginClient(c)}, nil
+func (w *sdkProviderWrapper) Call(toolName string, payload string) (string, error) {
+	return w.impl.Call(toolName, payload)
 }
 
-// GRPCClient is the gRPC client implementation of ToolProvider
-type GRPCClient struct {
-	client pb.ToolPluginClient
-}
-
-func (c *GRPCClient) Configure(settings map[string]string) error {
-	resp, err := c.client.Configure(context.Background(), &pb.ConfigureRequest{
-		Settings: settings,
-	})
-	if err != nil {
-		return err
-	}
-	if !resp.Success {
-		return fmt.Errorf("configure failed: %s", resp.Error)
-	}
-	return nil
-}
-
-func (c *GRPCClient) Call(toolName string, payload string) (string, error) {
-	resp, err := c.client.Call(context.Background(), &pb.CallRequest{
-		ToolName: toolName,
-		Payload:  payload,
-	})
-	if err != nil {
-		return "", err
-	}
-	return resp.Result, nil
-}
-
-func (c *GRPCClient) GetToolInfo(toolName string) (*ToolInfo, error) {
-	resp, err := c.client.GetToolInfo(context.Background(), &pb.GetToolInfoRequest{
-		ToolName: toolName,
-	})
+func (w *sdkProviderWrapper) GetToolInfo(toolName string) (*ToolInfo, error) {
+	sdkInfo, err := w.impl.GetToolInfo(toolName)
 	if err != nil {
 		return nil, err
 	}
-	return protoToToolInfo(resp.Tool)
+	return sdkToLocalToolInfo(sdkInfo), nil
 }
 
-func (c *GRPCClient) ListTools() ([]*ToolInfo, error) {
-	resp, err := c.client.ListTools(context.Background(), &pb.ListToolsRequest{})
+func (w *sdkProviderWrapper) ListTools() ([]*ToolInfo, error) {
+	sdkTools, err := w.impl.ListTools()
 	if err != nil {
 		return nil, err
 	}
-	tools := make([]*ToolInfo, 0, len(resp.Tools))
-	for _, t := range resp.Tools {
-		info, err := protoToToolInfo(t)
-		if err != nil {
-			return nil, err
-		}
-		tools = append(tools, info)
+	tools := make([]*ToolInfo, len(sdkTools))
+	for i, t := range sdkTools {
+		tools[i] = sdkToLocalToolInfo(t)
 	}
 	return tools, nil
 }
 
-// protoToToolInfo converts a protobuf ToolInfo to our ToolInfo
-func protoToToolInfo(t *pb.ToolInfo) (*ToolInfo, error) {
+// sdkToLocalToolInfo converts squad.ToolInfo to local ToolInfo with aitools.Schema
+func sdkToLocalToolInfo(t *squad.ToolInfo) *ToolInfo {
+	// Convert squad.Schema to aitools.Schema via JSON (same structure)
 	var schema aitools.Schema
-	if t.SchemaJson != "" {
-		if err := json.Unmarshal([]byte(t.SchemaJson), &schema); err != nil {
-			return nil, err
-		}
-	}
+	schemaJSON, _ := json.Marshal(t.Schema)
+	json.Unmarshal(schemaJSON, &schema)
+
 	return &ToolInfo{
 		Name:        t.Name,
 		Description: t.Description,
 		Schema:      schema,
-	}, nil
-}
-
-// GRPCServer is the gRPC server implementation that wraps a ToolProvider
-type GRPCServer struct {
-	pb.UnimplementedToolPluginServer
-	Impl ToolProvider
-}
-
-func (s *GRPCServer) Configure(ctx context.Context, req *pb.ConfigureRequest) (*pb.ConfigureResponse, error) {
-	err := s.Impl.Configure(req.Settings)
-	if err != nil {
-		return &pb.ConfigureResponse{Success: false, Error: err.Error()}, nil
 	}
-	return &pb.ConfigureResponse{Success: true}, nil
 }
 
-func (s *GRPCServer) Call(ctx context.Context, req *pb.CallRequest) (*pb.CallResponse, error) {
-	result, err := s.Impl.Call(req.ToolName, req.Payload)
+// WrapSDKProvider wraps an squad.ToolProvider to implement our ToolProvider interface
+func WrapSDKProvider(impl squad.ToolProvider) ToolProvider {
+	return &sdkProviderWrapper{impl: impl}
+}
+
+// DispenseToolProvider gets a ToolProvider from a plugin client
+func DispenseToolProvider(client *goplugin.Client) (ToolProvider, error) {
+	rpcClient, err := client.Client()
 	if err != nil {
 		return nil, err
 	}
-	return &pb.CallResponse{Result: result}, nil
-}
 
-func (s *GRPCServer) GetToolInfo(ctx context.Context, req *pb.GetToolInfoRequest) (*pb.GetToolInfoResponse, error) {
-	info, err := s.Impl.GetToolInfo(req.ToolName)
+	raw, err := rpcClient.Dispense("tool")
 	if err != nil {
 		return nil, err
 	}
-	return &pb.GetToolInfoResponse{
-		Tool: toolInfoToProto(info),
-	}, nil
-}
 
-func (s *GRPCServer) ListTools(ctx context.Context, req *pb.ListToolsRequest) (*pb.ListToolsResponse, error) {
-	tools, err := s.Impl.ListTools()
-	if err != nil {
+	sdkProvider, ok := raw.(squad.ToolProvider)
+	if !ok {
 		return nil, err
 	}
-	protoTools := make([]*pb.ToolInfo, 0, len(tools))
-	for _, t := range tools {
-		protoTools = append(protoTools, toolInfoToProto(t))
-	}
-	return &pb.ListToolsResponse{Tools: protoTools}, nil
-}
 
-// toolInfoToProto converts our ToolInfo to protobuf ToolInfo
-func toolInfoToProto(t *ToolInfo) *pb.ToolInfo {
-	schemaJSON, _ := json.Marshal(t.Schema)
-	return &pb.ToolInfo{
-		Name:        t.Name,
-		Description: t.Description,
-		SchemaJson:  string(schemaJSON),
-	}
-}
-
-// PluginMap is the map of plugins we can dispense
-var PluginMap = map[string]plugin.Plugin{
-	"tool": &ToolPluginGRPCPlugin{},
+	return WrapSDKProvider(sdkProvider), nil
 }

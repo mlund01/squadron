@@ -293,6 +293,39 @@ func (s *Session) buildCompactionSummary(messages []Message) string {
 	summary.WriteString("<COMPACTED_CONTEXT>\n")
 	summary.WriteString("The following is a summary of earlier conversation history that has been compacted to reduce context size:\n\n")
 
+	// CRITICAL: Preserve the most recent task message so the agent knows its current assignment.
+	// - First user message is the original task (if no later tasks)
+	// - Messages with <NEW_TASK> are follow-up assignments - keep only the LAST one
+	var lastTask string
+	for i, msg := range messages {
+		if msg.Role != RoleUser {
+			continue
+		}
+		content := msg.GetTextContent()
+
+		// Skip tool results (observations)
+		if strings.Contains(content, "<OBSERVATION>") {
+			continue
+		}
+
+		// First user message is the original task
+		if i == 0 {
+			lastTask = content
+			continue
+		}
+
+		// Later <NEW_TASK> messages override as the current task
+		if strings.Contains(content, "<NEW_TASK>") {
+			lastTask = content
+		}
+	}
+
+	if lastTask != "" {
+		summary.WriteString("**Current Task:**\n")
+		summary.WriteString(lastTask)
+		summary.WriteString("\n\n")
+	}
+
 	// Extract key information from the conversation
 	var toolCalls []string
 	var keyFindings []string

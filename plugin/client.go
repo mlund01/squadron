@@ -54,10 +54,11 @@ func GetPluginDir(name, version string) (string, error) {
 }
 
 // LoadPlugin loads a plugin by name and version.
+// If source is provided and plugin not found locally, downloads from GitHub.
 // Plugins are cached globally - if the same plugin was already loaded,
 // the existing instance is returned. This allows browser sessions and
 // other plugin state to persist across workflow tasks.
-func LoadPlugin(name, version string) (*PluginClient, error) {
+func LoadPlugin(name, version, source string) (*PluginClient, error) {
 	key := name + ":" + version
 
 	// Check if plugin is already loaded
@@ -82,9 +83,18 @@ func LoadPlugin(name, version string) (*PluginClient, error) {
 		return nil, err
 	}
 
-	// Check if plugin exists
+	// If plugin doesn't exist locally, try to download
 	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("plugin not found: %s (version %s) at %s", name, version, pluginPath)
+		if source == "" || version == "local" {
+			return nil, fmt.Errorf("plugin not found: %s (version %s) at %s", name, version, pluginPath)
+		}
+
+		// Download from GitHub
+		pluginDir, _ := GetPluginDir(name, version)
+		fmt.Printf("Downloading plugin %s %s from %s...\n", name, version, source)
+		if err := DownloadPlugin(source, version, pluginDir); err != nil {
+			return nil, fmt.Errorf("failed to download plugin: %w", err)
+		}
 	}
 
 	// Create a logger that discards output (or you can configure it)
@@ -103,24 +113,11 @@ func LoadPlugin(name, version string) (*PluginClient, error) {
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 	})
 
-	// Connect via gRPC
-	rpcClient, err := client.Client()
-	if err != nil {
-		client.Kill()
-		return nil, fmt.Errorf("failed to connect to plugin: %w", err)
-	}
-
-	// Request the plugin
-	raw, err := rpcClient.Dispense("tool")
+	// Connect and dispense the tool provider
+	provider, err := DispenseToolProvider(client)
 	if err != nil {
 		client.Kill()
 		return nil, fmt.Errorf("failed to dispense plugin: %w", err)
-	}
-
-	provider, ok := raw.(ToolProvider)
-	if !ok {
-		client.Kill()
-		return nil, fmt.Errorf("plugin does not implement ToolProvider interface")
 	}
 
 	pc := &PluginClient{

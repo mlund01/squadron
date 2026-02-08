@@ -32,8 +32,8 @@ var pluginCallCmd = &cobra.Command{
 
 		version, _ := cmd.Flags().GetString("version")
 
-		// Load the plugin
-		p, err := plugin.LoadPlugin(pluginName, version)
+		// Load the plugin (no source for CLI commands - must be installed locally)
+		p, err := plugin.LoadPlugin(pluginName, version, "")
 		if err != nil {
 			return fmt.Errorf("failed to load plugin: %w", err)
 		}
@@ -59,8 +59,8 @@ var pluginToolsCmd = &cobra.Command{
 		pluginName := args[0]
 		version, _ := cmd.Flags().GetString("version")
 
-		// Load the plugin
-		p, err := plugin.LoadPlugin(pluginName, version)
+		// Load the plugin (no source for CLI commands - must be installed locally)
+		p, err := plugin.LoadPlugin(pluginName, version, "")
 		if err != nil {
 			return fmt.Errorf("failed to load plugin: %w", err)
 		}
@@ -90,8 +90,8 @@ var pluginInfoCmd = &cobra.Command{
 		toolName := args[1]
 		version, _ := cmd.Flags().GetString("version")
 
-		// Load the plugin
-		p, err := plugin.LoadPlugin(pluginName, version)
+		// Load the plugin (no source for CLI commands - must be installed locally)
+		p, err := plugin.LoadPlugin(pluginName, version, "")
 		if err != nil {
 			return fmt.Errorf("failed to load plugin: %w", err)
 		}

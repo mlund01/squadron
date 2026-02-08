@@ -5,42 +5,39 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hashicorp/go-plugin"
-
-	"squad/aitools"
-	squadplugin "squad/plugin"
+	"github.com/mlund01/squad-sdk"
 )
 
 // tools holds the metadata for each tool provided by this plugin
-var tools = map[string]*squadplugin.ToolInfo{
+var tools = map[string]*squad.ToolInfo{
 	"ping": {
 		Name:        "ping",
 		Description: "Returns 'pong' when called",
-		Schema: aitools.Schema{
-			Type:       aitools.TypeObject,
-			Properties: aitools.PropertyMap{},
+		Schema: squad.Schema{
+			Type:       squad.TypeObject,
+			Properties: squad.PropertyMap{},
 		},
 	},
 	"pong": {
 		Name:        "pong",
 		Description: "Returns 'ping' when called",
-		Schema: aitools.Schema{
-			Type:       aitools.TypeObject,
-			Properties: aitools.PropertyMap{},
+		Schema: squad.Schema{
+			Type:       squad.TypeObject,
+			Properties: squad.PropertyMap{},
 		},
 	},
 	"echo": {
 		Name:        "echo",
 		Description: "Echoes back the message provided",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"message": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "The message to echo back",
 				},
 				"all_caps": {
-					Type:        aitools.TypeBoolean,
+					Type:        squad.TypeBoolean,
 					Description: "When true, capitalizes the echoed message",
 				},
 			},
@@ -80,7 +77,7 @@ func (p *PingerPlugin) Call(toolName string, payload string) (string, error) {
 	}
 }
 
-func (p *PingerPlugin) GetToolInfo(toolName string) (*squadplugin.ToolInfo, error) {
+func (p *PingerPlugin) GetToolInfo(toolName string) (*squad.ToolInfo, error) {
 	info, ok := tools[toolName]
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
@@ -88,8 +85,8 @@ func (p *PingerPlugin) GetToolInfo(toolName string) (*squadplugin.ToolInfo, erro
 	return info, nil
 }
 
-func (p *PingerPlugin) ListTools() ([]*squadplugin.ToolInfo, error) {
-	result := make([]*squadplugin.ToolInfo, 0, len(tools))
+func (p *PingerPlugin) ListTools() ([]*squad.ToolInfo, error) {
+	result := make([]*squad.ToolInfo, 0, len(tools))
 	for _, info := range tools {
 		result = append(result, info)
 	}
@@ -97,11 +94,5 @@ func (p *PingerPlugin) ListTools() ([]*squadplugin.ToolInfo, error) {
 }
 
 func main() {
-	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig: squadplugin.Handshake,
-		Plugins: map[string]plugin.Plugin{
-			"tool": &squadplugin.ToolPluginGRPCPlugin{Impl: &PingerPlugin{}},
-		},
-		GRPCServer: plugin.DefaultGRPCServer,
-	})
+	squad.Serve(&PingerPlugin{})
 }

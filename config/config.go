@@ -254,8 +254,8 @@ func loadFromFiles(files []string) (*Config, error) {
 			}
 			allPlugins = append(allPlugins, *p)
 
-			// Try to load the plugin
-			client, err := plugin.LoadPlugin(p.Name, p.Version)
+			// Try to load the plugin (passes source for auto-download if not found locally)
+			client, err := plugin.LoadPlugin(p.Name, p.Version, p.Source)
 			if err != nil {
 				pluginWarnings = append(pluginWarnings, fmt.Sprintf("plugin '%s' (version %s): %v", p.Name, p.Version, err))
 			} else {

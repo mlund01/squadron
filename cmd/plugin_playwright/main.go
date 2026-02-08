@@ -8,11 +8,9 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/hashicorp/go-plugin"
 	"github.com/playwright-community/playwright-go"
 
-	"squad/aitools"
-	squadplugin "squad/plugin"
+	"github.com/mlund01/squad-sdk"
 )
 
 // whitespaceRegex matches multiple consecutive whitespace characters
@@ -22,25 +20,25 @@ var whitespaceRegex = regexp.MustCompile(`[ \t]+`)
 var emptyLineRegex = regexp.MustCompile(`(?m)^\s*$[\r\n]*`)
 
 // sessionIDProperty is added to all tools that need a session
-var sessionIDProperty = aitools.Property{
-	Type:        aitools.TypeString,
+var sessionIDProperty = squad.Property{
+	Type:        squad.TypeString,
 	Description: "Session ID from browser_new_session. Required - sessions must be explicitly created first.",
 }
 
 // tools holds the metadata for each tool provided by this plugin
-var tools = map[string]*squadplugin.ToolInfo{
+var tools = map[string]*squad.ToolInfo{
 	"browser_new_session": {
 		Name:        "browser_new_session",
 		Description: "Create a new browser session. Returns a session_id to use with other browser tools. Provider (local/azure) is configured at the plugin level.",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"headless": {
-					Type:        aitools.TypeBoolean,
+					Type:        squad.TypeBoolean,
 					Description: "Run browser in headless mode. Defaults to plugin setting. Only applies to local provider.",
 				},
 				"browser_type": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "Browser to use: 'chromium', 'firefox', or 'webkit'. Defaults to plugin setting. Only applies to local provider.",
 				},
 			},
@@ -49,24 +47,24 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_list_sessions": {
 		Name:        "browser_list_sessions",
 		Description: "List all active browser sessions",
-		Schema: aitools.Schema{
-			Type:       aitools.TypeObject,
-			Properties: aitools.PropertyMap{},
+		Schema: squad.Schema{
+			Type:       squad.TypeObject,
+			Properties: squad.PropertyMap{},
 		},
 	},
 	"browser_navigate": {
 		Name:        "browser_navigate",
 		Description: "Navigate the browser to a URL",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"url": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "The URL to navigate to",
 				},
 				"wait_until": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "When to consider navigation complete: 'load', 'domcontentloaded', 'networkidle'. Defaults to 'load'",
 				},
 			},
@@ -76,12 +74,12 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_click": {
 		Name:        "browser_click",
 		Description: "Click on an element in the page using a CSS selector",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "CSS selector for the element to click",
 				},
 			},
@@ -91,20 +89,20 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_type": {
 		Name:        "browser_type",
 		Description: "Type text into an input element",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "CSS selector for the input element",
 				},
 				"text": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "Text to type into the element",
 				},
 				"clear": {
-					Type:        aitools.TypeBoolean,
+					Type:        squad.TypeBoolean,
 					Description: "Clear the input before typing. Defaults to false",
 				},
 			},
@@ -114,24 +112,24 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_screenshot": {
 		Name:        "browser_screenshot",
 		Description: "Take a screenshot of the current page. Returns a JPEG image by default (smaller size for faster processing).",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"path": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "File path to save the screenshot. If not provided, returns base64-encoded image",
 				},
 				"full_page": {
-					Type:        aitools.TypeBoolean,
+					Type:        squad.TypeBoolean,
 					Description: "Capture the full scrollable page. Defaults to false",
 				},
 				"selector": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "CSS selector to screenshot a specific element instead of the page",
 				},
 				"quality": {
-					Type:        aitools.TypeInteger,
+					Type:        squad.TypeInteger,
 					Description: "JPEG quality (1-100). Defaults to 80. Lower values produce smaller images.",
 				},
 			},
@@ -141,12 +139,12 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_get_text": {
 		Name:        "browser_get_text",
 		Description: "Get the text content of an element or the entire page",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "CSS selector for the element. If not provided, gets text from body",
 				},
 			},
@@ -156,16 +154,16 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_get_html": {
 		Name:        "browser_get_html",
 		Description: "Get the HTML content of an element or the entire page",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "CSS selector for the element. If not provided, gets HTML from body",
 				},
 				"outer": {
-					Type:        aitools.TypeBoolean,
+					Type:        squad.TypeBoolean,
 					Description: "Get outer HTML (including the element itself). Defaults to false (inner HTML)",
 				},
 			},
@@ -175,12 +173,12 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_evaluate": {
 		Name:        "browser_evaluate",
 		Description: "Execute JavaScript code in the browser and return the result",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"script": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "JavaScript code to execute. Should return a serializable value",
 				},
 			},
@@ -190,20 +188,20 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_wait_for_selector": {
 		Name:        "browser_wait_for_selector",
 		Description: "Wait for an element matching the selector to appear in the page",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "CSS selector to wait for",
 				},
 				"state": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "State to wait for: 'attached', 'detached', 'visible', 'hidden'. Defaults to 'visible'",
 				},
 				"timeout": {
-					Type:        aitools.TypeInteger,
+					Type:        squad.TypeInteger,
 					Description: "Maximum time to wait in milliseconds. Defaults to 30000",
 				},
 			},
@@ -213,11 +211,11 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_close_session": {
 		Name:        "browser_close_session",
 		Description: "Close a specific browser session",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "Session ID to close",
 				},
 			},
@@ -227,20 +225,20 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_close_all": {
 		Name:        "browser_close_all",
 		Description: "Close all browser sessions and cleanup",
-		Schema: aitools.Schema{
-			Type:       aitools.TypeObject,
-			Properties: aitools.PropertyMap{},
+		Schema: squad.Schema{
+			Type:       squad.TypeObject,
+			Properties: squad.PropertyMap{},
 		},
 	},
 	"browser_aria_snapshot": {
 		Name:        "browser_aria_snapshot",
 		Description: "Get an ARIA accessibility tree snapshot of the page. Returns a YAML representation of the accessibility tree, which is more compact and AI-friendly than screenshots for understanding page structure and content.",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"selector": {
-					Type:        aitools.TypeString,
+					Type:        squad.TypeString,
 					Description: "CSS selector to get snapshot of a specific element. If not provided, gets snapshot of the entire page (body)",
 				},
 			},
@@ -250,16 +248,16 @@ var tools = map[string]*squadplugin.ToolInfo{
 	"browser_click_coordinates": {
 		Name:        "browser_click_coordinates",
 		Description: "Click at specific x,y coordinates on the page. Useful when CSS selectors fail or for clicking on canvas/complex UI elements.",
-		Schema: aitools.Schema{
-			Type: aitools.TypeObject,
-			Properties: aitools.PropertyMap{
+		Schema: squad.Schema{
+			Type: squad.TypeObject,
+			Properties: squad.PropertyMap{
 				"session_id": sessionIDProperty,
 				"x": {
-					Type:        aitools.TypeNumber,
+					Type:        squad.TypeNumber,
 					Description: "X coordinate (horizontal position from left edge)",
 				},
 				"y": {
-					Type:        aitools.TypeNumber,
+					Type:        squad.TypeNumber,
 					Description: "Y coordinate (vertical position from top edge)",
 				},
 			},
@@ -937,7 +935,7 @@ func (p *PlaywrightPlugin) clickCoordinates(payload string) (string, error) {
 	return fmt.Sprintf("Clicked at coordinates (%v, %v)", params.X, params.Y), nil
 }
 
-func (p *PlaywrightPlugin) GetToolInfo(toolName string) (*squadplugin.ToolInfo, error) {
+func (p *PlaywrightPlugin) GetToolInfo(toolName string) (*squad.ToolInfo, error) {
 	info, ok := tools[toolName]
 	if !ok {
 		return nil, fmt.Errorf("unknown tool: %s", toolName)
@@ -945,8 +943,8 @@ func (p *PlaywrightPlugin) GetToolInfo(toolName string) (*squadplugin.ToolInfo, 
 	return info, nil
 }
 
-func (p *PlaywrightPlugin) ListTools() ([]*squadplugin.ToolInfo, error) {
-	result := make([]*squadplugin.ToolInfo, 0, len(tools))
+func (p *PlaywrightPlugin) ListTools() ([]*squad.ToolInfo, error) {
+	result := make([]*squad.ToolInfo, 0, len(tools))
 	for _, info := range tools {
 		result = append(result, info)
 	}
@@ -954,11 +952,5 @@ func (p *PlaywrightPlugin) ListTools() ([]*squadplugin.ToolInfo, error) {
 }
 
 func main() {
-	plugin.Serve(&plugin.ServeConfig{
-		HandshakeConfig: squadplugin.Handshake,
-		Plugins: map[string]plugin.Plugin{
-			"tool": &squadplugin.ToolPluginGRPCPlugin{Impl: &PlaywrightPlugin{}},
-		},
-		GRPCServer: plugin.DefaultGRPCServer,
-	})
+	squad.Serve(&PlaywrightPlugin{})
 }

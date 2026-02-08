@@ -10,13 +10,12 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.7.0
 	github.com/hashicorp/hcl/v2 v2.24.0
+	github.com/mlund01/squad-sdk v0.0.1
 	github.com/openai/openai-go v1.12.0
 	github.com/playwright-community/playwright-go v0.5200.1
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.16.3
 	google.golang.org/api v0.259.0
-	google.golang.org/grpc v1.78.0
-	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -89,4 +88,8 @@ require (
 	golang.org/x/tools v0.39.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20251202230838-ff82c1b0f217 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20251222181119-0a764e51fe1b // indirect
+	google.golang.org/grpc v1.78.0 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+// replace github.com/mlund01/squad-sdk => ../plugin

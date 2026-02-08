@@ -10,7 +10,7 @@ import (
 
 	"github.com/playwright-community/playwright-go"
 
-	squadron "github.com/mlund01/squad-sdk"
+	"github.com/mlund01/squadron-sdk"
 )
 
 // whitespaceRegex matches multiple consecutive whitespace characters

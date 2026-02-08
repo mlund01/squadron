@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	squadron "github.com/mlund01/squad-sdk"
+	"github.com/mlund01/squadron-sdk"
 )
 
 // tools holds the metadata for each tool provided by this plugin

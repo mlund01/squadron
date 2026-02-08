@@ -6,7 +6,7 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 
 	"squadron/aitools"
-	squadron "github.com/mlund01/squad-sdk"
+	"github.com/mlund01/squadron-sdk"
 )
 
 // Re-export SDK types for convenience

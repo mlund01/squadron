@@ -1,11 +1,6 @@
-plugin "pinger" {
-  source  = "~/.squadron/plugins/pinger"
-  version = "local"
-}
-
 plugin "playwright" {
   source  = "github.com/mlund01/plugin_playwright"
-  version = "v0.0.1"
+  version = "v0.0.2"
 
   settings {
     provider     = "local"

@@ -2,7 +2,7 @@ agent "assistant" {
   model       = models.openai.gpt_4o
   personality = "Friendly, helpful, and concise. Enjoys solving problems and explaining complex topics in simple terms."
   role        = "A general-purpose assistant that helps users with questions, tasks, and creative projects."
-  tools       = [plugins.bash.bash, plugins.http.get, tools.weather, tools.shout]
+  tools       = [plugins.bash.bash, plugins.http.get, tools.weather]
 }
 
 agent "browser_navigator" {

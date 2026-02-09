@@ -40,21 +40,3 @@ tool "create_todo" {
     userId    = 1
   }
 }
-
-# Custom tool that wraps the pinger plugin's echo tool
-tool "shout" {
-  implements  = plugins.pinger.echo
-  description = "Echo a message in ALL CAPS"
-
-  inputs {
-    field "text" {
-      type        = "string"
-      description = "The text to shout"
-      required    = true
-    }
-  }
-
-  # Map to the plugin's schema
-  message  = inputs.text
-  all_caps = true
-}

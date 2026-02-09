@@ -4,7 +4,7 @@ title: Tools
 
 # Tools
 
-Tools extend agent capabilities. Squad provides built-in tools and supports custom tool definitions.
+Tools extend agent capabilities. Squadron provides built-in tools and supports custom tool definitions.
 
 ## Built-in Tools
 

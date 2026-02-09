@@ -4,7 +4,7 @@ title: Configuration Overview
 
 # Configuration Overview
 
-Squad uses HCL (HashiCorp Configuration Language) for all configuration. This provides a clean, readable syntax with support for variables, expressions, and references.
+Squadron uses HCL (HashiCorp Configuration Language) for all configuration.
 
 ## File Structure
 
@@ -19,11 +19,11 @@ my-config/
 └── workflows.hcl    # Workflow definitions (optional)
 ```
 
-You can also put everything in a single file—Squad reads all `.hcl` files in the directory.
+You can also put everything in a single file—Squadron reads all `.hcl` files in the directory.
 
 ## Loading Order
 
-Squad uses **staged evaluation** to resolve references:
+Squadron uses **staged evaluation** to resolve references:
 
 1. **Variables** - Load `variable` blocks first
 2. **Models** - Load `model` blocks with `vars` context

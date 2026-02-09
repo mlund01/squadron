@@ -163,7 +163,7 @@ Setting an item without `email` will fail validation.
 
 ## Large Result Handling
 
-When tools return large results (>8KB), Squad automatically protects context by:
+When tools return large results (>8KB), Squadron automatically protects context by:
 
 1. Storing the full result outside LLM context
 2. Returning a sample/summary to the LLM

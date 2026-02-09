@@ -4,18 +4,19 @@ title: Plugins
 
 # Plugins
 
-Plugins extend Squad with additional tools and capabilities.
+Plugins extend Squadron with additional tools via gRPC.
 
 ## Loading Plugins
 
 ```hcl
-plugin "pinger" {
-  source  = "~/.squadron/plugins/pinger"
-  version = "local"
-}
+plugin "playwright" {
+  source  = "github.com/mlund01/plugin_playwright"
+  version = "v0.0.2"
 
-plugin "slack" {
-  source = "/path/to/slack-plugin"
+  settings {
+    headless     = false
+    browser_type = "chromium"
+  }
 }
 ```
 
@@ -23,72 +24,77 @@ plugin "slack" {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `source` | string | Path to the plugin binary or directory |
-| `version` | string | Plugin version (e.g., `"local"` for local plugins) |
+| `source` | string | Plugin source (GitHub path or local path) |
+| `version` | string | Version tag or `"local"` for local development |
+| `settings` | block | Plugin-specific configuration (optional) |
 
 ## Using Plugin Tools
 
-Once loaded, plugin tools are available as `plugins.<plugin_name>.<tool_name>`:
+Once loaded, plugin tools are available as `plugins.<name>.<tool>`:
 
 ```hcl
-agent "assistant" {
-  tools = [
-    plugins.pinger.echo,
-    plugins.slack.send_message
-  ]
+agent "browser" {
+  tools = [plugins.playwright.browser_navigate]
+}
+
+# Or use all tools from a plugin
+agent "browser" {
+  tools = [plugins.playwright.all]
 }
 ```
 
-## Plugin Protocol
+## Plugin Paths
 
-Plugins communicate with Squad over stdin/stdout using JSON-RPC. A plugin must implement:
+Plugins are stored in `~/.squadron/plugins/<name>/<version>/plugin`.
 
-### Tool Discovery
+## Built-in Plugins
 
-Return available tools and their schemas.
+Squadron includes these built-in plugins (always available):
 
-### Tool Execution
-
-Execute a tool with given parameters and return results.
-
-## Reserved Namespaces
-
-The following plugin namespaces are reserved for built-in tools:
-
-- `bash` - Shell command execution
-- `http` - HTTP requests
-- `dataset` - Dataset operations (workflow context only)
-
-You cannot create plugins with these names.
+| Plugin | Tools |
+|--------|-------|
+| `bash` | `bash` - Execute shell commands |
+| `http` | `get`, `post`, `put`, `patch`, `delete` |
 
 ## Creating Plugins
 
-Plugins are executables that implement the Squad plugin protocol. Example structure:
+Plugins use [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) over gRPC.
 
+Use the [squadron-sdk](https://github.com/mlund01/squadron-sdk) to build plugins:
+
+```go
+package main
+
+import squadron "github.com/mlund01/squadron-sdk"
+
+type MyPlugin struct{}
+
+func (p *MyPlugin) Configure(settings map[string]string) error {
+    return nil
+}
+
+func (p *MyPlugin) ListTools() ([]*squadron.ToolInfo, error) {
+    return []*squadron.ToolInfo{
+        {
+            Name:        "my_tool",
+            Description: "Does something useful",
+            Schema:      squadron.Schema{Type: squadron.TypeObject},
+        },
+    }, nil
+}
+
+func (p *MyPlugin) Call(toolName, payload string) (string, error) {
+    return "result", nil
+}
+
+func main() {
+    squadron.Serve(&MyPlugin{})
+}
 ```
-my-plugin/
-├── main.go       # Plugin entry point
-└── tools/
-    └── mytool.go # Tool implementation
-```
 
-The plugin must:
-
-1. Accept JSON-RPC requests on stdin
-2. Return JSON-RPC responses on stdout
-3. Implement the `list_tools` and `call_tool` methods
-
-## Validation
-
-Plugin tools are validated during config loading:
+Build and install:
 
 ```bash
-squadron verify ./my-config
-```
-
-Output:
-
-```
-Found 1 plugin(s)
-  - slack (source: ~/.squadron/plugins/slack, version: 1.0.0, loaded)
+mkdir -p ~/.squadron/plugins/myplugin/local
+go build -o ~/.squadron/plugins/myplugin/local/plugin .
 ```

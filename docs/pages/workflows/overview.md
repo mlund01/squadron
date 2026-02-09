@@ -84,7 +84,7 @@ Supervisors have access to special tools:
 
 ## Context Protection
 
-When tools return large results (>8KB), Squad automatically:
+When tools return large results (>8KB), Squadron automatically:
 
 1. Stores the full data outside LLM context
 2. Returns a sample to the LLM

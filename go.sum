@@ -125,8 +125,8 @@ github.com/mitchellh/go-ps v1.0.0 h1:i6ampVEEF4wQFF+bkYfwYgY+F/uYJDktmvLPf7qIgjc
 github.com/mitchellh/go-ps v1.0.0/go.mod h1:J4lOc8z8yJs6vUwklHw2XEIiT4z4C40KtWVN3nvg8Pg=
 github.com/mitchellh/go-wordwrap v1.0.1 h1:TLuKupo69TCn6TQSyGxwI1EblZZEsQ0vMlAFQflz0v0=
 github.com/mitchellh/go-wordwrap v1.0.1/go.mod h1:R62XHJLzvMFRBbcrT7m7WgmE1eOyTSsCt+hzestvNj0=
-github.com/mlund01/squadron-sdk v0.0.2 h1:F9QuXqXF60KAPZ8EjT66UDnm4Yb90cFfivP7nqJ4kHQ=
-github.com/mlund01/squadron-sdk v0.0.2/go.mod h1:TS9rUvTuMNbwFJU+HUnJTuA03TuifRW+TVOY0uWoFug=
+github.com/mlund01/squadron-sdk v0.0.3 h1:SvzuSQpAIagswmmuA6R1sNsiH7anoKnul0/qb4HUj4Y=
+github.com/mlund01/squadron-sdk v0.0.3/go.mod h1:55F49v26SrD8LpuAB6/JKaac9diXPIXxnGvRSvJ66DE=
 github.com/muesli/reflow v0.3.0 h1:IFsN6K9NfGtjeggFP+68I4chLZV2yIKsXJFNZ+eWh6s=
 github.com/muesli/reflow v0.3.0/go.mod h1:pbwTDkVPibjO2kyvBQRBxTWEEGDGq0FlB1BIKtnHY/8=
 github.com/muesli/termenv v0.16.0 h1:S5AlUN9dENB57rsbnkPyfdGuWIlkmzJjbFf0Tf5FWUc=

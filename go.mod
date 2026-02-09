@@ -10,7 +10,7 @@ require (
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.7.0
 	github.com/hashicorp/hcl/v2 v2.24.0
-	github.com/mlund01/squadron-sdk v0.0.2
+	github.com/mlund01/squadron-sdk v0.0.3
 	github.com/openai/openai-go v1.12.0
 	github.com/playwright-community/playwright-go v0.5200.1
 	github.com/spf13/cobra v1.10.2

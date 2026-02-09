@@ -29,17 +29,14 @@ release:
     owner: mlund01
     name: squadron
 
-brews:
+homebrew_casks:
   - name: squadron
     repository:
       owner: mlund01
       name: homebrew-squadron
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Formula
+    directory: Casks
     homepage: "https://github.com/mlund01/squadron"
     description: "CLI for defining and running AI agents and multi-agent workflows"
-    license: "MIT"
-    install: |
-      bin.install "squadron"
-    test: |
-      system "#{bin}/squadron", "--help"
+    binaries:
+      - squadron

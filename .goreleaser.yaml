@@ -40,3 +40,9 @@ homebrew_casks:
     description: "CLI for defining and running AI agents and multi-agent workflows"
     binaries:
       - squadron
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/squadron"]
+          end

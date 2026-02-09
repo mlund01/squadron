@@ -34,7 +34,7 @@ brews:
     repository:
       owner: mlund01
       name: squadron
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/mlund01/squadron"
     description: "CLI for defining and running AI agents and multi-agent workflows"
     license: "MIT"

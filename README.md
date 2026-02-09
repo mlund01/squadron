@@ -70,7 +70,7 @@ workflow "data_pipeline" {
 Run:
 
 ```bash
-squadron run -c ./config data_pipeline
+squadron workflow data_pipeline -c ./config
 ```
 
 ## Providers

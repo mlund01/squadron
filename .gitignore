@@ -1,5 +1,8 @@
 .claude/
 
+# Next.js
+.next/
+
 # Debug
 debug.txt
 debug/

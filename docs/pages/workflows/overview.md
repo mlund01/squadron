@@ -65,13 +65,13 @@ workflow "data_pipeline" {
 ## Running Workflows
 
 ```bash
-squadron run -c ./config data_pipeline
+squadron workflow data_pipeline -c ./config
 ```
 
 With inputs:
 
 ```bash
-squadron run -c ./config data_pipeline --input source=api --input format=json
+squadron workflow data_pipeline -c ./config --input source=api --input format=json
 ```
 
 ## Supervisor Tools

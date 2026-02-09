@@ -1,8 +1,0 @@
-{
-  "/_app": "pages/_app.js",
-  "/_error": "pages/_error.js",
-  "/_document": "pages/_document.js",
-  "/config/tools": "pages/config/tools.js",
-  "/workflows/internal-tools": "pages/workflows/internal-tools.js",
-  "/workflows/overview": "pages/workflows/overview.js"
-}

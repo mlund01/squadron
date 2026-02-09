@@ -15,7 +15,7 @@ const navigation = [
     items: [
       { title: 'verify', href: '/cli/verify' },
       { title: 'chat', href: '/cli/chat' },
-      { title: 'run', href: '/cli/run' },
+      { title: 'workflow', href: '/cli/workflow' },
       { title: 'vars', href: '/cli/vars' },
     ],
   },
@@ -49,7 +49,7 @@ export default function Layout({ children }) {
     <div className="layout">
       <aside className="sidebar">
         <Link href="/" className="sidebar-logo">
-          Squad
+          Squadron
         </Link>
         <nav>
           <ul>

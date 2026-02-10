@@ -38,7 +38,7 @@ Found 2 variable(s)
   - anthropic_api_key (secret, set)
 Found 1 agent(s)
   - assistant (tools: [plugins.bash.bash plugins.http.get])
-Found 1 workflow(s)
+Found 1 mission(s)
   - data_pipeline (supervisor: claude_sonnet_4, agents: [assistant], tasks: 3)
 ```
 
@@ -54,5 +54,5 @@ Error: agent 'assistant': model 'invalid_model' not found
 - Variable references (`vars.name`)
 - Model references (`models.provider.model_key`)
 - Tool references (`plugins.namespace.tool`, `tools.name`)
-- Workflow task dependencies (no cycles)
+- Mission task dependencies (no cycles)
 - Dataset schemas and bindings

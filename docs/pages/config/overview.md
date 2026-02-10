@@ -16,7 +16,7 @@ my-config/
 ├── models.hcl       # LLM provider configurations
 ├── agents.hcl       # Agent definitions
 ├── tools.hcl        # Custom tool definitions (optional)
-└── workflows.hcl    # Workflow definitions (optional)
+└── missions.hcl    # Mission definitions (optional)
 ```
 
 You can also put everything in a single file—Squadron reads all `.hcl` files in the directory.
@@ -28,7 +28,7 @@ Squadron uses **staged evaluation** to resolve references:
 1. **Variables** - Load `variable` blocks first
 2. **Models** - Load `model` blocks with `vars` context
 3. **Agents** - Load `agent` blocks with `vars` and `models` context
-4. **Workflows** - Load `workflow` blocks with full context
+4. **Missions** - Load `mission` blocks with full context
 
 This enables expressions like:
 
@@ -51,7 +51,7 @@ agent "assistant" {
 | `agent` | Define AI agents |
 | `tool` | Create custom tools |
 | `plugin` | Load external plugins |
-| `workflow` | Define multi-task workflows |
+| `mission` | Define multi-task missions |
 
 ## Expressions
 
@@ -81,4 +81,4 @@ This catches errors like:
 - Invalid HCL syntax
 - Missing variable values
 - Invalid model references
-- Circular workflow dependencies
+- Circular mission dependencies

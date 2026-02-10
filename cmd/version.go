@@ -23,14 +23,14 @@ func init() {
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
 	rootCmd.Long = fmt.Sprintf(`Squadron %s
 
-HCL-based CLI for defining and running AI agents and multi-agent workflows.
+HCL-based CLI for defining and running AI agents and multi-agent missions.
 
-Define agents, models, tools, and workflows in HCL configuration files,
+Define agents, models, tools, and missions in HCL configuration files,
 then run them with simple commands.
 
 Get started:
   squadron docs           Extract documentation to a local folder
   squadron verify <path>  Validate your configuration
   squadron chat <agent>   Chat with an agent
-  squadron workflow <name> Run a workflow`, Version)
+  squadron mission <name> Run a mission`, Version)
 }

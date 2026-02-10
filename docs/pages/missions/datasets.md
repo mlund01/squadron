@@ -9,7 +9,7 @@ Datasets are collections of items that tasks can iterate over.
 ## Defining Datasets
 
 ```hcl
-workflow "process_cities" {
+mission "process_cities" {
   dataset "city_list" {
     description = "Cities to process"
 
@@ -67,10 +67,10 @@ schema {
 
 Datasets can be populated in three ways:
 
-### 1. Bind to Workflow Input
+### 1. Bind to Mission Input
 
 ```hcl
-workflow "process" {
+mission "process" {
   input "items" {
     type = "list"
   }
@@ -112,7 +112,7 @@ task "process_cities" {
 
 ## Dataset Tools
 
-When running in a workflow, agents automatically have access to:
+When running in a mission, agents automatically have access to:
 
 - **set_dataset** - Populate a dataset with items
 - **dataset_sample** - Get sample items from a dataset
@@ -228,4 +228,4 @@ After promotion, the data is available via standard dataset tools and can be ite
 
 ## See Also
 
-- [Iteration](/workflows/iteration) - Process datasets in tasks
+- [Iteration](/missions/iteration) - Process datasets in tasks

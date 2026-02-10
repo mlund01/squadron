@@ -418,7 +418,7 @@ func (t *ResultToDatasetTool) Call(params string) string {
 	}
 
 	if t.DatasetStore == nil {
-		return "Error: dataset tools are only available within workflow context"
+		return "Error: dataset tools are only available within mission context"
 	}
 
 	// Get the result from ResultStore

@@ -1,15 +1,15 @@
 ---
-title: workflow
+title: mission
 ---
 
-# squadron workflow
+# squadron mission
 
-Execute a workflow.
+Execute a mission.
 
 ## Usage
 
 ```bash
-squadron workflow <workflow-name> -c <config-path> [--input key=value...]
+squadron mission <mission-name> -c <config-path> [--input key=value...]
 ```
 
 ## Flags
@@ -18,20 +18,20 @@ squadron workflow <workflow-name> -c <config-path> [--input key=value...]
 |------|-------------|
 | `-c, --config` | Path to config directory (default: `.`) |
 | `-d, --debug` | Enable debug mode (captures LLM messages) |
-| `-i, --input` | Workflow input as key=value (repeatable) |
+| `-i, --input` | Mission input as key=value (repeatable) |
 
 ## Example
 
 ```bash
-squadron workflow data_pipeline -c ./my-config
+squadron mission data_pipeline -c ./my-config
 
-squadron workflow weather_report -c ./config --input city=Chicago
+squadron mission weather_report -c ./config --input city=Chicago
 ```
 
 ## Debug Mode
 
 ```bash
-squadron workflow -d -c ./config data_pipeline
+squadron mission -d -c ./config data_pipeline
 ```
 
 Creates a `debug/` folder with:
@@ -41,5 +41,5 @@ Creates a `debug/` folder with:
 
 ## See Also
 
-- [Workflows Overview](/workflows/overview)
-- [Tasks](/workflows/tasks)
+- [Missions Overview](/missions/overview)
+- [Tasks](/missions/tasks)

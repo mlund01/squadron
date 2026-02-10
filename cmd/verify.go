@@ -75,15 +75,15 @@ var verifyCmd = &cobra.Command{
 			}
 			fmt.Printf("  - %s (source: %s, version: %s, %s)\n", p.Name, p.Source, p.Version, loaded)
 		}
-		fmt.Printf("Found %d workflow(s)\n", len(cfg.Workflows))
-		for _, w := range cfg.Workflows {
+		fmt.Printf("Found %d mission(s)\n", len(cfg.Missions))
+		for _, w := range cfg.Missions {
 			fmt.Printf("  - %s (supervisor: %s, agents: %v, tasks: %d)\n", w.Name, w.SupervisorModel, w.Agents, len(w.Tasks))
 			for _, t := range w.Tasks {
 				deps := ""
 				if len(t.DependsOn) > 0 {
 					deps = fmt.Sprintf(" [depends_on: %v]", t.DependsOn)
 				}
-				taskAgents := "inherits workflow agents"
+				taskAgents := "inherits mission agents"
 				if len(t.Agents) > 0 {
 					taskAgents = fmt.Sprintf("%v", t.Agents)
 				}

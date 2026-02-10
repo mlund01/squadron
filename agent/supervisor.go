@@ -34,8 +34,8 @@ type SupervisorOptions struct {
 	Config *config.Config
 	// ConfigPath is the path to the config directory (needed for spawning agents)
 	ConfigPath string
-	// WorkflowName is the name of the workflow
-	WorkflowName string
+	// MissionName is the name of the mission
+	MissionName string
 	// TaskName is the name of the task this supervisor is executing
 	TaskName string
 	// SupervisorModel is the model key for the supervisor (e.g., "claude_sonnet_4")
@@ -85,7 +85,7 @@ type OutputFieldSchema struct {
 	Required    bool
 }
 
-// SupervisorToolCallbacks allows the workflow to provide callbacks for supervisor tools
+// SupervisorToolCallbacks allows the mission to provide callbacks for supervisor tools
 type SupervisorToolCallbacks struct {
 	// OnAgentStart is called when call_agent begins executing an agent
 	OnAgentStart func(taskName, agentName string)
@@ -93,7 +93,7 @@ type SupervisorToolCallbacks struct {
 	GetAgentHandler func(taskName, agentName string) streamers.ChatHandler
 	// OnAgentComplete is called when call_agent finishes executing an agent
 	OnAgentComplete func(taskName, agentName string)
-	// DatasetStore provides access to workflow datasets for agent tools
+	// DatasetStore provides access to mission datasets for agent tools
 	DatasetStore aitools.DatasetStore
 	// KnowledgeStore provides access to completed task outputs for querying
 	KnowledgeStore KnowledgeStore
@@ -119,7 +119,7 @@ type SupervisorToolCallbacks struct {
 	AskSupeWithCache func(targetTask string, iterationIndex int, question string) (string, error)
 }
 
-// DebugLogger is the interface for debug logging during workflow execution
+// DebugLogger is the interface for debug logging during mission execution
 type DebugLogger interface {
 	// GetMessageFile returns a file path for logging LLM messages for a specific entity
 	GetMessageFile(entityType, entityName string) string
@@ -213,7 +213,7 @@ type completedAgent struct {
 	inherited bool // true if this agent was inherited from a dependency task
 }
 
-// Supervisor is an agent specialized for orchestrating other agents in a workflow
+// Supervisor is an agent specialized for orchestrating other agents in a mission
 type Supervisor struct {
 	Name      string
 	TaskName  string
@@ -240,7 +240,7 @@ type Supervisor struct {
 	datasetCursor   *aitools.DatasetCursor // Cursor for sequential dataset iteration (nil if not sequential)
 }
 
-// NewSupervisor creates a new supervisor for a workflow task
+// NewSupervisor creates a new supervisor for a mission task
 func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, error) {
 	// Resolve the supervisor model
 	modelConfig, actualModelName, err := resolveSupervisorModel(opts.Config, opts.SupervisorModel)
@@ -284,10 +284,10 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 	}
 	systemPrompts = append(systemPrompts, prompts.GetSupervisorPrompt(agentInfos, iterationOpts))
 
-	// Add context about workflow and task
+	// Add context about mission and task
 	systemPrompts = append(systemPrompts, fmt.Sprintf(
-		"You are executing task '%s' in workflow '%s'.",
-		opts.TaskName, opts.WorkflowName,
+		"You are executing task '%s' in mission '%s'.",
+		opts.TaskName, opts.MissionName,
 	))
 
 	// Create session
@@ -319,7 +319,7 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 	}
 
 	sup := &Supervisor{
-		Name:            fmt.Sprintf("%s/%s", opts.WorkflowName, opts.TaskName),
+		Name:            fmt.Sprintf("%s/%s", opts.MissionName, opts.TaskName),
 		TaskName:        opts.TaskName,
 		ModelName:       actualModelName,
 		session:         session,
@@ -606,7 +606,7 @@ You have a dataset of %d items to process sequentially in this single session.
 - dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
 - dataset_item_complete: Submit output for current item. Required before calling dataset_next again.
 
-**Workflow:**
+**Mission:**
 1. Call dataset_next to get an item
 2. Process the item (delegate to agent, use tools, etc.)
 3. Call dataset_item_complete with the output for this item
@@ -1315,7 +1315,7 @@ func (t *callAgentTool) Call(input string) string {
 	// Get existing session or create new one
 	a, exists := t.supervisor.agentSessions[params.Name]
 	if !exists {
-		mode := config.ModeWorkflow
+		mode := config.ModeMission
 
 		// Get DatasetStore from callbacks if available
 		var datasetStore aitools.DatasetStore

@@ -18,8 +18,8 @@ const (
 	InputTypeObject = "object"
 )
 
-// WorkflowInput represents an input parameter for a workflow
-type WorkflowInput struct {
+// MissionInput represents an input parameter for a mission
+type MissionInput struct {
 	Name        string     // From HCL label
 	Type        string     // "string", "number", "bool", "list", "object"
 	Description string     // Documentation for the input
@@ -61,30 +61,30 @@ type OutputField struct {
 	Required    bool
 }
 
-// Workflow represents a workflow configuration with multiple tasks
-type Workflow struct {
+// Mission represents a mission configuration with multiple tasks
+type Mission struct {
 	Name            string          `hcl:"name,label"`
 	SupervisorModel string          `hcl:"supervisor_model"`
 	Agents          []string        `hcl:"agents"`
 	Tasks           []Task          `hcl:"task,block"`
-	Inputs          []WorkflowInput // Parsed from input blocks
+	Inputs          []MissionInput // Parsed from input blocks
 	Datasets        []Dataset       // Parsed from dataset blocks
 }
 
-// Task represents a single task within a workflow
+// Task represents a single task within a mission
 type Task struct {
 	Name          string         `hcl:"name,label"`
 	ObjectiveExpr hcl.Expression // Stored for deferred evaluation with inputs
-	Agents        []string       `hcl:"agents,optional"` // Optional - uses workflow-level agents if not specified
+	Agents        []string       `hcl:"agents,optional"` // Optional - uses mission-level agents if not specified
 	DependsOn     []string       `hcl:"depends_on,optional"`
 	Iterator      *TaskIterator  // Optional: iterate over a dataset
 	Output        *OutputSchema  // Optional: structured output schema
 }
 
-// Validate checks that the workflow configuration is valid
-func (w *Workflow) Validate(models []Model, agents []Agent) error {
+// Validate checks that the mission configuration is valid
+func (w *Mission) Validate(models []Model, agents []Agent) error {
 	if w.Name == "" {
-		return fmt.Errorf("workflow name is required")
+		return fmt.Errorf("mission name is required")
 	}
 
 	if w.SupervisorModel == "" {
@@ -97,7 +97,7 @@ func (w *Workflow) Validate(models []Model, agents []Agent) error {
 	}
 
 	if len(w.Tasks) == 0 {
-		return fmt.Errorf("workflow must have at least one task")
+		return fmt.Errorf("mission must have at least one task")
 	}
 
 	// Validate inputs
@@ -150,7 +150,7 @@ func (w *Workflow) Validate(models []Model, agents []Agent) error {
 		agentNames[a.Name] = true
 	}
 
-	// Validate workflow-level agents
+	// Validate mission-level agents
 	for _, agentRef := range w.Agents {
 		if !agentNames[agentRef] {
 			return fmt.Errorf("agent '%s' not found", agentRef)
@@ -173,7 +173,7 @@ func (w *Workflow) Validate(models []Model, agents []Agent) error {
 }
 
 // Validate checks that the input configuration is valid
-func (i *WorkflowInput) Validate() error {
+func (i *MissionInput) Validate() error {
 	if i.Name == "" {
 		return fmt.Errorf("input name is required")
 	}
@@ -266,7 +266,7 @@ func (ti *TaskIterator) Validate() error {
 }
 
 // BuildInputsCtyType returns the cty type for the inputs namespace
-func (w *Workflow) BuildInputsCtyType() cty.Type {
+func (w *Mission) BuildInputsCtyType() cty.Type {
 	if len(w.Inputs) == 0 {
 		return cty.EmptyObject
 	}
@@ -298,7 +298,7 @@ func inputTypeToCtyType(inputType string) cty.Type {
 // ResolveInputValues converts string CLI values to cty.Values, applying defaults.
 // Secret inputs are skipped - they get their value from the 'value' attribute
 // and cannot be interpolated in objectives.
-func (w *Workflow) ResolveInputValues(provided map[string]string) (map[string]cty.Value, error) {
+func (w *Mission) ResolveInputValues(provided map[string]string) (map[string]cty.Value, error) {
 	result := make(map[string]cty.Value)
 
 	for _, input := range w.Inputs {
@@ -396,8 +396,8 @@ func isValidModelRef(modelRef string, models []Model) bool {
 }
 
 // Validate checks that the task configuration is valid
-// workflowAgents are the agents defined at the workflow level
-func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, datasetNames map[string]bool, workflowAgents []string) error {
+// missionAgents are the agents defined at the mission level
+func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, datasetNames map[string]bool, missionAgents []string) error {
 	if t.Name == "" {
 		return fmt.Errorf("task name is required")
 	}
@@ -406,9 +406,9 @@ func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, d
 		return fmt.Errorf("objective is required")
 	}
 
-	// Task must have agents either at task level or workflow level
-	if len(t.Agents) == 0 && len(workflowAgents) == 0 {
-		return fmt.Errorf("no agents specified (neither at task nor workflow level)")
+	// Task must have agents either at task level or mission level
+	if len(t.Agents) == 0 && len(missionAgents) == 0 {
+		return fmt.Errorf("no agents specified (neither at task nor mission level)")
 	}
 
 	// Validate task-level agent references (if specified)
@@ -457,7 +457,7 @@ func (t *Task) ResolvedObjective(vars map[string]cty.Value, inputs map[string]ct
 }
 
 // ValidateDAG checks that the task dependencies form a valid DAG (no cycles)
-func (w *Workflow) ValidateDAG() error {
+func (w *Mission) ValidateDAG() error {
 	// Build adjacency list
 	deps := make(map[string][]string)
 	for _, t := range w.Tasks {
@@ -499,7 +499,7 @@ func (w *Workflow) ValidateDAG() error {
 }
 
 // GetRootTasks returns tasks with no dependencies (can be executed immediately)
-func (w *Workflow) GetRootTasks() []Task {
+func (w *Mission) GetRootTasks() []Task {
 	var roots []Task
 	for _, t := range w.Tasks {
 		if len(t.DependsOn) == 0 {
@@ -510,7 +510,7 @@ func (w *Workflow) GetRootTasks() []Task {
 }
 
 // GetTaskByName returns a task by name
-func (w *Workflow) GetTaskByName(name string) *Task {
+func (w *Mission) GetTaskByName(name string) *Task {
 	for i := range w.Tasks {
 		if w.Tasks[i].Name == name {
 			return &w.Tasks[i]
@@ -520,7 +520,7 @@ func (w *Workflow) GetTaskByName(name string) *Task {
 }
 
 // TopologicalSort returns tasks in execution order (respecting dependencies)
-func (w *Workflow) TopologicalSort() []Task {
+func (w *Mission) TopologicalSort() []Task {
 	// Build in-degree map
 	inDegree := make(map[string]int)
 	for _, t := range w.Tasks {

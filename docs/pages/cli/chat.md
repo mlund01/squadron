@@ -18,8 +18,8 @@ squadron chat -c <config-path> <agent-name>
 |------|-------------|
 | `-c, --config` | Path to the configuration directory (required) |
 | `-d, --debug` | Log full LLM messages to debug.txt |
-| `-w, --workflow` | Run in workflow mode (non-interactive) |
-| `-t, --task` | Task to run in workflow mode (requires `--workflow`) |
+| `-w, --mission` | Run in mission mode (non-interactive) |
+| `-t, --task` | Task to run in mission mode (requires `--mission`) |
 
 ## Arguments
 
@@ -35,15 +35,15 @@ squadron chat -c ./my-config assistant
 
 This opens an interactive REPL where you can send messages to the agent.
 
-## Workflow Mode
+## Mission Mode
 
-Use the `--workflow` flag to run an agent in autonomous task completion mode:
+Use the `--mission` flag to run an agent in autonomous task completion mode:
 
 ```bash
-squadron chat -c ./my-config assistant --workflow --task "Summarize the README file"
+squadron chat -c ./my-config assistant --mission --task "Summarize the README file"
 ```
 
-In workflow mode:
+In mission mode:
 - The agent runs non-interactively
 - It continuously reasons and acts until the task is complete
 - Structured reasoning is always used

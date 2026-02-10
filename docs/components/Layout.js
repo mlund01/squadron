@@ -15,7 +15,7 @@ const navigation = [
     items: [
       { title: 'verify', href: '/cli/verify' },
       { title: 'chat', href: '/cli/chat' },
-      { title: 'workflow', href: '/cli/workflow' },
+      { title: 'mission', href: '/cli/mission' },
       { title: 'vars', href: '/cli/vars' },
     ],
   },
@@ -31,13 +31,13 @@ const navigation = [
     ],
   },
   {
-    title: 'Workflows',
+    title: 'Missions',
     items: [
-      { title: 'Overview', href: '/workflows/overview' },
-      { title: 'Tasks', href: '/workflows/tasks' },
-      { title: 'Datasets', href: '/workflows/datasets' },
-      { title: 'Iteration', href: '/workflows/iteration' },
-      { title: 'Internal Tools', href: '/workflows/internal-tools' },
+      { title: 'Overview', href: '/missions/overview' },
+      { title: 'Tasks', href: '/missions/tasks' },
+      { title: 'Datasets', href: '/missions/datasets' },
+      { title: 'Iteration', href: '/missions/iteration' },
+      { title: 'Internal Tools', href: '/missions/internal-tools' },
     ],
   },
 ];

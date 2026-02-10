@@ -11,9 +11,9 @@ type AgentMode string
 const (
 	// ModeChat is for interactive user chat sessions where reasoning is optional
 	ModeChat AgentMode = "chat"
-	// ModeWorkflow is for automated workflows where the agent continuously reasons
+	// ModeMission is for automated missions where the agent continuously reasons
 	// and acts until the task is complete
-	ModeWorkflow AgentMode = "workflow"
+	ModeMission AgentMode = "mission"
 )
 
 // ReservedPluginNamespaces are plugin names reserved for internal tools

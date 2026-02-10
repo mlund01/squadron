@@ -10,21 +10,21 @@ import (
 
 	"squadron/config"
 	"squadron/streamers/cli"
-	"squadron/workflow"
+	"squadron/mission"
 
 	"github.com/spf13/cobra"
 )
 
 var inputFlags []string
-var workflowDebugMode bool
+var missionDebugMode bool
 
-var workflowCmd = &cobra.Command{
-	Use:   "workflow [workflow_name]",
-	Short: "Run a workflow",
-	Long:  `Execute a workflow by name. The workflow will run all tasks respecting their dependencies, executing independent tasks in parallel. Provide inputs with --input key=value flags.`,
+var missionCmd = &cobra.Command{
+	Use:   "mission [mission_name]",
+	Short: "Run a mission",
+	Long:  `Execute a mission by name. The mission will run all tasks respecting their dependencies, executing independent tasks in parallel. Provide inputs with --input key=value flags.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		workflowName := args[0]
+		missionName := args[0]
 		ctx := context.Background()
 
 		// Load config
@@ -43,10 +43,10 @@ var workflowCmd = &cobra.Command{
 
 		// Create debug logger if debug mode is enabled
 		var debugDir string
-		if workflowDebugMode {
-			debugDir = filepath.Join("debug", fmt.Sprintf("%s_%s", workflowName, time.Now().Format("20060102_150405")))
+		if missionDebugMode {
+			debugDir = filepath.Join("debug", fmt.Sprintf("%s_%s", missionName, time.Now().Format("20060102_150405")))
 		}
-		debugLogger, err := workflow.NewDebugLogger(debugDir)
+		debugLogger, err := mission.NewDebugLogger(debugDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating debug logger: %v\n", err)
 			os.Exit(1)
@@ -57,19 +57,19 @@ var workflowCmd = &cobra.Command{
 			fmt.Printf("Debug mode enabled. Writing to: %s\n", debugLogger.GetDebugDir())
 		}
 
-		// Create workflow runner
-		runner, err := workflow.NewRunner(cfg, configPath, workflowName, inputs, workflow.WithDebugLogger(debugLogger))
+		// Create mission runner
+		runner, err := mission.NewRunner(cfg, configPath, missionName, inputs, mission.WithDebugLogger(debugLogger))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
 
 		// Create handler
-		streamer := cli.NewWorkflowHandler()
+		streamer := cli.NewMissionHandler()
 
-		// Run the workflow
+		// Run the mission
 		if err := runner.Run(ctx, streamer); err != nil {
-			fmt.Fprintf(os.Stderr, "\nWorkflow failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "\nMission failed: %v\n", err)
 			os.Exit(1)
 		}
 	},
@@ -94,8 +94,8 @@ func parseInputFlags(flags []string) (map[string]string, error) {
 }
 
 func init() {
-	rootCmd.AddCommand(workflowCmd)
-	workflowCmd.Flags().StringVarP(&configPath, "config", "c", ".", "Path to config file or directory")
-	workflowCmd.Flags().StringArrayVarP(&inputFlags, "input", "i", nil, "Workflow input in key=value format (can be repeated)")
-	workflowCmd.Flags().BoolVarP(&workflowDebugMode, "debug", "d", false, "Enable debug mode to capture LLM messages and events")
+	rootCmd.AddCommand(missionCmd)
+	missionCmd.Flags().StringVarP(&configPath, "config", "c", ".", "Path to config file or directory")
+	missionCmd.Flags().StringArrayVarP(&inputFlags, "input", "i", nil, "Mission input in key=value format (can be repeated)")
+	missionCmd.Flags().BoolVarP(&missionDebugMode, "debug", "d", false, "Enable debug mode to capture LLM messages and events")
 }

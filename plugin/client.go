@@ -57,7 +57,7 @@ func GetPluginDir(name, version string) (string, error) {
 // If source is provided and plugin not found locally, downloads from GitHub.
 // Plugins are cached globally - if the same plugin was already loaded,
 // the existing instance is returned. This allows browser sessions and
-// other plugin state to persist across workflow tasks.
+// other plugin state to persist across mission tasks.
 func LoadPlugin(name, version, source string) (*PluginClient, error) {
 	key := name + ":" + version
 

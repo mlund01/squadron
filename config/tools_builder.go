@@ -12,8 +12,8 @@ import (
 //   - Plugin tools: plugins.bash.bash, plugins.http.get, plugins.pinger.echo
 //   - Custom tools: tools.weather, tools.shout (defined in HCL)
 //
-// datasetStore is optional and provides access to workflow datasets for dataset tools.
-// When datasetStore is provided (workflow context), dataset tools are automatically injected.
+// datasetStore is optional and provides access to mission datasets for dataset tools.
+// When datasetStore is provided (mission context), dataset tools are automatically injected.
 func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient, datasetStore aitools.DatasetStore) map[string]aitools.Tool {
 	tools := make(map[string]aitools.Tool)
 
@@ -25,7 +25,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 
 	// Add tools from the agent's tools list
 	for _, toolRef := range agentTools {
-		// Skip dataset tools in agent list - they're auto-injected when in workflow context
+		// Skip dataset tools in agent list - they're auto-injected when in mission context
 		if strings.HasPrefix(toolRef, "plugins.dataset.") {
 			continue
 		}
@@ -97,7 +97,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 		}
 	}
 
-	// Auto-inject dataset tools when running in workflow context
+	// Auto-inject dataset tools when running in mission context
 	if datasetStore != nil {
 		tools["set_dataset"] = &aitools.SetDatasetTool{Store: datasetStore}
 		tools["dataset_sample"] = &aitools.DatasetSampleTool{Store: datasetStore}

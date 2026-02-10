@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 go build -o squadron .                     # Build the CLI
 ./squadron verify <path>                   # Validate HCL config
 ./squadron chat -c <path> <agent_name>     # Start chat with an agent
-./squadron workflow -c <path> <workflow>   # Run a workflow
-./squadron workflow -c <path> -d <workflow> # Run with debug logging
+./squadron mission -c <path> <mission>   # Run a mission
+./squadron mission -c <path> -d <mission> # Run with debug logging
 ./squadron vars set <name> <value>         # Set a variable
 ./squadron vars get <name>                 # Get a variable
 ./squadron vars list                       # List all variables
@@ -17,7 +17,7 @@ go build -o squadron .                     # Build the CLI
 
 ## Architecture Overview
 
-Squad is an HCL-based CLI for defining and running AI agents and multi-agent workflows. It uses a config-first approach where agents, models, tools, plugins, and workflows are declared in `.hcl` files.
+Squad is an HCL-based CLI for defining and running AI agents and multi-agent missions. It uses a config-first approach where agents, models, tools, plugins, and missions are declared in `.hcl` files.
 
 ### Key Directories
 
@@ -28,7 +28,7 @@ Squad is an HCL-based CLI for defining and running AI agents and multi-agent wor
 | `config/` | HCL config loading with staged evaluation |
 | `llm/` | LLM provider abstraction (Anthropic, OpenAI, Gemini) |
 | `plugin/` | gRPC plugin system using hashicorp/go-plugin |
-| `workflow/` | Workflow runner, task execution, knowledge store |
+| `mission/` | Mission runner, task execution, knowledge store |
 | `streamers/` | Output streaming interfaces for CLI/TUI |
 | `cmd/` | CLI commands and plugin entry points |
 
@@ -42,7 +42,7 @@ The config loading uses **staged evaluation** to support HCL expression referenc
 2. **Stage 2**: Load `model` blocks with `vars` context → enables `api_key = vars.anthropic_api_key`
 3. **Stage 3**: Load `plugin` blocks with `vars` context
 4. **Stage 4**: Load `agent` blocks with `vars` + `models` + `plugins` context → enables `model = models.anthropic.claude_sonnet_4` and `tools = [plugins.playwright.all]`
-5. **Stage 5**: Load `workflow` blocks with full context
+5. **Stage 5**: Load `mission` blocks with full context
 
 Each stage uses partial structs with `hcl:",remain"` to ignore unknown block types during that pass.
 
@@ -74,8 +74,8 @@ agent "browser_navigator" {
   tools       = [plugins.playwright.all]
 }
 
-# workflows.hcl
-workflow "example" {
+# missions.hcl
+mission "example" {
   supervisor_model = models.anthropic.claude_sonnet_4
   agents           = [agents.browser_navigator]
 
@@ -161,19 +161,19 @@ tools = [plugins.playwright.all]
 
 ### Plugin Registration
 
-Plugins are globally cached (`plugin/client.go:globalRegistry`) so plugin state (like browser sessions) persists across workflow tasks. Use `plugin.CloseAll()` at program exit.
+Plugins are globally cached (`plugin/client.go:globalRegistry`) so plugin state (like browser sessions) persists across mission tasks. Use `plugin.CloseAll()` at program exit.
 
 ---
 
-## Workflow System (workflow/)
+## Mission System (mission/)
 
-Workflows orchestrate multi-agent task execution with dependency management.
+Missions orchestrate multi-agent task execution with dependency management.
 
 ### Core Components
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| `Runner` | `runner.go` | Executes workflows, manages task dependencies |
+| `Runner` | `runner.go` | Executes missions, manages task dependencies |
 | `Supervisor` | `agent/supervisor.go` | Orchestrates agents for a single task |
 | `Agent` | `agent/agent.go` | Executes tool calls with ReAct-style reasoning |
 | `KnowledgeStore` | `knowledge.go` | Stores structured task outputs for querying |
@@ -240,7 +240,7 @@ task "process" {
 ### Agent Modes
 
 - `ModeChat`: Interactive chat mode (default)
-- `ModeWorkflow`: Workflow execution mode (uses `ASK_SUPE` for supervisor queries)
+- `ModeMission`: Mission execution mode (uses `ASK_SUPE` for supervisor queries)
 
 ### ReAct Loop
 
@@ -268,14 +268,14 @@ Large tool results are automatically intercepted (`aitools/interceptor.go`) and 
 
 ---
 
-## Debug Logging (workflow/debug.go)
+## Debug Logging (mission/debug.go)
 
 Enable debug mode with `-d` flag:
 ```bash
-./squadron workflow -c config/ -d my_workflow
+./squadron mission -c config/ -d my_mission
 ```
 
-Creates a debug directory: `debug/<workflow>_<timestamp>/`
+Creates a debug directory: `debug/<mission>_<timestamp>/`
 
 ### Debug Output Files
 
@@ -287,7 +287,7 @@ Creates a debug directory: `debug/<workflow>_<timestamp>/`
 
 ### Event Types
 
-- `workflow_started`, `workflow_completed`
+- `mission_started`, `mission_completed`
 - `task_started`, `task_completed`
 - `iteration_started`, `iteration_completed`
 - `agent_started`, `agent_completed`
@@ -325,7 +325,7 @@ func (t *MyTool) Call(input string) string { ... }
 
 ---
 
-## Testing Workflows
+## Testing Missions
 
 1. Run with debug mode to capture full LLM conversations
 2. Check `events.log` for tool call/result timing

@@ -1,6 +1,6 @@
 # Squadron
 
-HCL-based CLI for defining and running AI agents and multi-agent workflows.
+HCL-based CLI for defining and running AI agents and multi-agent missions.
 
 ## Install
 
@@ -47,12 +47,12 @@ squadron vars set anthropic_api_key sk-ant-...
 squadron chat -c ./config assistant
 ```
 
-## Workflows
+## Missions
 
 Define multi-task pipelines:
 
 ```hcl
-workflow "data_pipeline" {
+mission "data_pipeline" {
   supervisor_model = models.anthropic.claude_sonnet_4
   agents           = [agents.assistant]
 
@@ -70,7 +70,7 @@ workflow "data_pipeline" {
 Run:
 
 ```bash
-squadron workflow data_pipeline -c ./config
+squadron mission data_pipeline -c ./config
 ```
 
 ## Providers

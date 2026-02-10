@@ -57,9 +57,9 @@ type Options struct {
 	Mode *config.AgentMode
 	// DebugFile enables debug logging to the specified file (optional)
 	DebugFile string
-	// DatasetStore provides access to workflow datasets (optional, for workflow context)
+	// DatasetStore provides access to mission datasets (optional, for mission context)
 	DatasetStore aitools.DatasetStore
-	// EventLogger provides structured event logging (optional, workflow context only)
+	// EventLogger provides structured event logging (optional, mission context only)
 	EventLogger EventLogger
 	// TurnLogFile enables per-turn session snapshots to the specified JSONL file (optional)
 	TurnLogFile string
@@ -126,7 +126,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	tools["result_keys"] = &aitools.ResultKeysTool{Store: resultStore}
 	tools["result_chunk"] = &aitools.ResultChunkTool{Store: resultStore}
 
-	// Add bridge tool if DatasetStore is available (workflow context)
+	// Add bridge tool if DatasetStore is available (mission context)
 	if opts.DatasetStore != nil {
 		tools["result_to_dataset"] = &aitools.ResultToDatasetTool{
 			ResultStore:  resultStore,
@@ -157,7 +157,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		fmt.Sprintf("Role: %s", agentCfg.Role),
 	)
 
-	// Add dataset info if running in workflow context
+	// Add dataset info if running in mission context
 	if opts.DatasetStore != nil {
 		if datasetPrompt := formatDatasetInfo(opts.DatasetStore.GetDatasetInfo()); datasetPrompt != "" {
 			systemPrompts = append(systemPrompts, datasetPrompt)

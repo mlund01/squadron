@@ -1,4 +1,4 @@
-workflow "sequential_test" {
+mission "sequential_test" {
   supervisor_model = models.openai.gpt_4o
   agents           = [agents.assistant]
 

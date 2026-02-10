@@ -66,8 +66,8 @@ func formatSecretsSection(secrets []SecretInfo) string {
 // getModeInstructions returns instructions based on agent mode
 func getModeInstructions(mode config.AgentMode) string {
 	switch mode {
-	case config.ModeWorkflow:
-		return `**WORKFLOW MODE:** You are running as part of an automated workflow. You have been given a task to complete.
+	case config.ModeMission:
+		return `**MISSION MODE:** You are running as part of an automated mission. You have been given a task to complete.
 - You MUST use REASONING before every action or answer
 - Continue cycling through REASONING and ACTION until the task is fully complete
 - Only provide an ANSWER when the task is done
@@ -87,7 +87,7 @@ func getModeInstructions(mode config.AgentMode) string {
 func getResponsePatterns(mode config.AgentMode) string {
 	var sb strings.Builder
 
-	if mode == config.ModeWorkflow {
+	if mode == config.ModeMission {
 		sb.WriteString(`### Pattern 1: Reasoning + Tool Call (continue working)
 Use this when you need to perform an action to complete the task.
 **Output ___STOP___ after ACTION_INPUT and wait for the result.**
@@ -200,7 +200,7 @@ I'll help you by using the tool...
 func getRules(mode config.AgentMode) string {
 	var rules []string
 
-	if mode == config.ModeWorkflow {
+	if mode == config.ModeMission {
 		rules = append(rules, "**Always reason first.** Every response MUST start with a REASONING block.")
 		rules = append(rules, "**Complete the task.** Keep working (REASONING → ACTION) until the task is done.")
 		rules = append(rules, "**One action per turn.** After ACTION_INPUT, stop and wait for OBSERVATION.")

@@ -1,15 +1,15 @@
 ---
-title: Workflows Overview
+title: Missions Overview
 ---
 
-# Workflows
+# Missions
 
-Workflows orchestrate multi-task pipelines using supervisors and agents.
+Missions orchestrate multi-task pipelines using supervisors and agents.
 
 ## Basic Structure
 
 ```hcl
-workflow "data_pipeline" {
+mission "data_pipeline" {
   supervisor_model = models.anthropic.claude_sonnet_4
   agents           = [agents.researcher, agents.writer]
 
@@ -36,7 +36,7 @@ workflow "data_pipeline" {
 | `supervisor_model` | string | Model for task supervisors |
 | `agents` | list | Agents available to all tasks |
 
-## How Workflows Execute
+## How Missions Execute
 
 1. **Dependency Resolution** - Tasks are sorted topologically
 2. **Parallel Execution** - Independent tasks run concurrently
@@ -62,16 +62,16 @@ workflow "data_pipeline" {
 └─────────────────┘
 ```
 
-## Running Workflows
+## Running Missions
 
 ```bash
-squadron workflow data_pipeline -c ./config
+squadron mission data_pipeline -c ./config
 ```
 
 With inputs:
 
 ```bash
-squadron workflow data_pipeline -c ./config --input source=api --input format=json
+squadron mission data_pipeline -c ./config --input source=api --input format=json
 ```
 
 ## Supervisor Tools
@@ -92,7 +92,7 @@ When tools return large results (>8KB), Squadron automatically:
 
 This prevents context overflow while preserving full data access. Large arrays can be promoted to datasets using `result_to_dataset` for iteration.
 
-See [Datasets](/workflows/datasets#large-result-handling) for details.
+See [Datasets](/missions/datasets#large-result-handling) for details.
 
 ## Structured Outputs
 
@@ -114,10 +114,10 @@ task "analyze" {
 }
 ```
 
-Downstream tasks can query this data using `query_task_output` with filtering and aggregation. See [Tasks](/workflows/tasks#structured-output) for details.
+Downstream tasks can query this data using `query_task_output` with filtering and aggregation. See [Tasks](/missions/tasks#structured-output) for details.
 
 ## See Also
 
-- [Tasks](/workflows/tasks) - Task configuration
-- [Datasets](/workflows/datasets) - Working with data collections
-- [Iteration](/workflows/iteration) - Processing lists of items
+- [Tasks](/missions/tasks) - Task configuration
+- [Datasets](/missions/datasets) - Working with data collections
+- [Iteration](/missions/iteration) - Processing lists of items

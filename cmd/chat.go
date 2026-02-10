@@ -11,15 +11,15 @@ import (
 	"squadron/agent"
 	"squadron/config"
 	"squadron/streamers/cli"
-	"squadron/workflow"
+	"squadron/mission"
 
 	"github.com/spf13/cobra"
 )
 
 var configPath string
 var debugMode bool
-var workflowMode bool
-var workflowTask string
+var missionMode bool
+var missionTask string
 
 var chatCmd = &cobra.Command{
 	Use:   "chat [agent_name]",
@@ -36,8 +36,8 @@ var chatCmd = &cobra.Command{
 			AgentName:  agentName,
 		}
 
-		if workflowMode {
-			mode := config.ModeWorkflow
+		if missionMode {
+			mode := config.ModeMission
 			opts.Mode = &mode
 		}
 
@@ -46,7 +46,7 @@ var chatCmd = &cobra.Command{
 		if debugMode {
 			debugDir = filepath.Join("debug", fmt.Sprintf("chat_%s_%s", agentName, time.Now().Format("20060102_150405")))
 		}
-		debugLogger, err := workflow.NewDebugLogger(debugDir)
+		debugLogger, err := mission.NewDebugLogger(debugDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error creating debug logger: %v\n", err)
 			os.Exit(1)
@@ -72,11 +72,11 @@ var chatCmd = &cobra.Command{
 		streamer := cli.NewChatHandler()
 		streamer.Welcome(a.Name, a.ModelName)
 
-		// Workflow mode: non-interactive, run task to completion
-		if workflowMode && workflowTask != "" {
-			fmt.Printf("\n📋 Running workflow task: %s\n\n", workflowTask)
-			_, _ = a.Chat(ctx, workflowTask, streamer)
-			fmt.Println("\n✅ Workflow complete")
+		// Mission mode: non-interactive, run task to completion
+		if missionMode && missionTask != "" {
+			fmt.Printf("\n📋 Running mission task: %s\n\n", missionTask)
+			_, _ = a.Chat(ctx, missionTask, streamer)
+			fmt.Println("\n✅ Mission complete")
 			return
 		}
 
@@ -111,6 +111,6 @@ func init() {
 	rootCmd.AddCommand(chatCmd)
 	chatCmd.Flags().StringVarP(&configPath, "config", "c", ".", "Path to config file or directory")
 	chatCmd.Flags().BoolVarP(&debugMode, "debug", "d", false, "Log full LLM messages to debug.txt")
-	chatCmd.Flags().BoolVarP(&workflowMode, "workflow", "w", false, "Run in workflow mode (non-interactive)")
-	chatCmd.Flags().StringVarP(&workflowTask, "task", "t", "", "Task to run in workflow mode (requires --workflow)")
+	chatCmd.Flags().BoolVarP(&missionMode, "mission", "w", false, "Run in mission mode (non-interactive)")
+	chatCmd.Flags().StringVarP(&missionTask, "task", "t", "", "Task to run in mission mode (requires --mission)")
 }

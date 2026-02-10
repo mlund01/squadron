@@ -4,13 +4,13 @@ title: Introduction
 
 # Squadron
 
-Squadron is an HCL-based CLI for defining and running AI agents and multi-agent workflows.
+Squadron is an HCL-based CLI for defining and running AI agents and multi-agent missions.
 
 ## Features
 
 - **Multi-provider support** - OpenAI, Anthropic, Google Gemini
-- **HCL configuration** - Declare agents, tools, and workflows in `.hcl` files
-- **Workflows** - Multi-task pipelines with supervisor orchestration
+- **HCL configuration** - Declare agents, tools, and missions in `.hcl` files
+- **Missions** - Multi-task pipelines with supervisor orchestration
 - **Datasets & Iteration** - Process items in parallel or sequentially
 - **Plugin system** - Extend with custom gRPC plugins
 - **Custom tools** - Wrap plugins with custom schemas

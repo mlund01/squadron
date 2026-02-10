@@ -8,7 +8,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 )
 
-// DatasetStore provides access to workflow datasets at runtime
+// DatasetStore provides access to mission datasets at runtime
 type DatasetStore interface {
 	// SetDataset sets a dataset's values
 	SetDataset(name string, items []cty.Value) error
@@ -98,7 +98,7 @@ func (t *SetDatasetTool) ToolPayloadSchema() Schema {
 
 func (t *SetDatasetTool) Call(params string) string {
 	if t.Store == nil {
-		return "Error: dataset tools are only available within workflow context"
+		return "Error: dataset tools are only available within mission context"
 	}
 
 	var input struct {
@@ -175,7 +175,7 @@ func (t *DatasetSampleTool) ToolPayloadSchema() Schema {
 
 func (t *DatasetSampleTool) Call(params string) string {
 	if t.Store == nil {
-		return "Error: dataset tools are only available within workflow context"
+		return "Error: dataset tools are only available within mission context"
 	}
 
 	var input struct {
@@ -255,7 +255,7 @@ func (t *DatasetCountTool) ToolPayloadSchema() Schema {
 
 func (t *DatasetCountTool) Call(params string) string {
 	if t.Store == nil {
-		return "Error: dataset tools are only available within workflow context"
+		return "Error: dataset tools are only available within mission context"
 	}
 
 	var input struct {

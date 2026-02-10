@@ -37,7 +37,7 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     directory: Casks
     homepage: "https://github.com/mlund01/squadron"
-    description: "CLI for defining and running AI agents and multi-agent workflows"
+    description: "CLI for defining and running AI agents and multi-agent missions"
     binaries:
       - squadron
     hooks:

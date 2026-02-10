@@ -21,7 +21,7 @@ type Config struct {
 	Variables   []Variable   `hcl:"variable,block"`
 	CustomTools []CustomTool `hcl:"tool,block"`
 	Plugins     []Plugin     `hcl:"plugin,block"`
-	Workflows   []Workflow   `hcl:"workflow,block"`
+	Missions   []Mission   `hcl:"mission,block"`
 
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
@@ -136,10 +136,10 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate workflows
-	for _, w := range c.Workflows {
+	// Validate missions
+	for _, w := range c.Missions {
 		if err := w.Validate(c.Models, c.Agents); err != nil {
-			return fmt.Errorf("workflow '%s': %w", w.Name, err)
+			return fmt.Errorf("mission '%s': %w", w.Name, err)
 		}
 	}
 
@@ -174,7 +174,7 @@ type parsedBlocks struct {
 	Agents    []*hcl.Block
 	Tools     []*hcl.Block
 	Plugins   []*hcl.Block
-	Workflows []*hcl.Block
+	Missions []*hcl.Block
 }
 
 // loadFromFiles implements staged loading: variables → models → agents → tools
@@ -197,7 +197,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "agent", LabelNames: []string{"name"}},
 				{Type: "tool", LabelNames: []string{"name"}},
 				{Type: "plugin", LabelNames: []string{"name"}},
-				{Type: "workflow", LabelNames: []string{"name"}},
+				{Type: "mission", LabelNames: []string{"name"}},
 			},
 		})
 		if diags.HasErrors() {
@@ -217,8 +217,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.Tools = append(pb.Tools, block)
 			case "plugin":
 				pb.Plugins = append(pb.Plugins, block)
-			case "workflow":
-				pb.Workflows = append(pb.Workflows, block)
+			case "mission":
+				pb.Missions = append(pb.Missions, block)
 			}
 		}
 		allParsedBlocks = append(allParsedBlocks, pb)
@@ -324,15 +324,15 @@ func loadFromFiles(files []string) (*Config, error) {
 	// Build agents context (add to full context)
 	agentsCtx := buildAgentsContext(fullCtx, allAgents)
 
-	// Stage 5: Load workflows (with vars + models + tools + agents context)
-	var allWorkflows []Workflow
+	// Stage 5: Load missions (with vars + models + tools + agents context)
+	var allMissions []Mission
 	for _, pb := range allParsedBlocks {
-		for _, block := range pb.Workflows {
-			workflow, err := parseWorkflowBlock(block, agentsCtx)
+		for _, block := range pb.Missions {
+			mission, err := parseMissionBlock(block, agentsCtx)
 			if err != nil {
 				return nil, err
 			}
-			allWorkflows = append(allWorkflows, *workflow)
+			allMissions = append(allMissions, *mission)
 		}
 	}
 
@@ -342,7 +342,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		Agents:         allAgents,
 		CustomTools:    allTools,
 		Plugins:        allPlugins,
-		Workflows:      allWorkflows,
+		Missions:      allMissions,
 		LoadedPlugins:  loadedPlugins,
 		PluginWarnings: pluginWarnings,
 		ResolvedVars:   resolvedVars,
@@ -619,20 +619,20 @@ func buildAgentsContext(ctx *hcl.EvalContext, agents []Agent) *hcl.EvalContext {
 	}
 }
 
-// workflowTaskBlock is used for parsing task blocks within a workflow
-type workflowTaskBlock struct {
+// missionTaskBlock is used for parsing task blocks within a mission
+type missionTaskBlock struct {
 	Name      string   `hcl:"name,label"`
 	Objective string   `hcl:"objective"`
 	Agents    []string `hcl:"agents"`
 	DependsOn []string `hcl:"depends_on,optional"`
 }
 
-// parseWorkflowBlock parses a workflow block with its nested task blocks
-func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, error) {
-	workflowName := block.Labels[0]
+// parseMissionBlock parses a mission block with its nested task blocks
+func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error) {
+	missionName := block.Labels[0]
 
-	// Parse the workflow block content
-	workflowContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+	// Parse the mission block content
+	missionContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
 			{Name: "supervisor_model", Required: true},
 			{Name: "agents", Required: true},
@@ -645,49 +645,49 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 		},
 	})
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("workflow '%s': %w", workflowName, diags)
+		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
 	}
 
 	// Get supervisor_model attribute
-	supervisorModelAttr := workflowContent.Attributes["supervisor_model"]
+	supervisorModelAttr := missionContent.Attributes["supervisor_model"]
 	supervisorModelVal, diags := supervisorModelAttr.Expr.Value(ctx)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("workflow '%s': %w", workflowName, diags)
+		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
 	}
 
-	// Get agents attribute (workflow-level agents)
-	agentsAttr := workflowContent.Attributes["agents"]
+	// Get agents attribute (mission-level agents)
+	agentsAttr := missionContent.Attributes["agents"]
 	agentsVal, diags := agentsAttr.Expr.Value(ctx)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("workflow '%s': %w", workflowName, diags)
+		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
 	}
 
-	var workflowAgents []string
+	var missionAgents []string
 	for it := agentsVal.ElementIterator(); it.Next(); {
 		_, v := it.Element()
-		workflowAgents = append(workflowAgents, v.AsString())
+		missionAgents = append(missionAgents, v.AsString())
 	}
 
-	workflow := &Workflow{
-		Name:            workflowName,
+	mission := &Mission{
+		Name:            missionName,
 		SupervisorModel: supervisorModelVal.AsString(),
-		Agents:          workflowAgents,
+		Agents:          missionAgents,
 	}
 
 	// Parse input blocks first
-	for _, inputBlock := range workflowContent.Blocks {
+	for _, inputBlock := range missionContent.Blocks {
 		if inputBlock.Type != "input" {
 			continue
 		}
-		input, err := parseWorkflowInputBlock(inputBlock, ctx)
+		input, err := parseMissionInputBlock(inputBlock, ctx)
 		if err != nil {
-			return nil, fmt.Errorf("workflow '%s': %w", workflowName, err)
+			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
 		}
-		workflow.Inputs = append(workflow.Inputs, *input)
+		mission.Inputs = append(mission.Inputs, *input)
 	}
 
 	// Build inputs context with placeholder values for dataset bind_to validation
-	inputsType := workflow.BuildInputsCtyType()
+	inputsType := mission.BuildInputsCtyType()
 	inputsCtx := &hcl.EvalContext{
 		Variables: make(map[string]cty.Value),
 	}
@@ -697,20 +697,20 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 	inputsCtx.Variables["inputs"] = cty.UnknownVal(inputsType)
 
 	// Parse dataset blocks
-	for _, datasetBlock := range workflowContent.Blocks {
+	for _, datasetBlock := range missionContent.Blocks {
 		if datasetBlock.Type != "dataset" {
 			continue
 		}
 		dataset, err := parseDatasetBlock(datasetBlock, inputsCtx)
 		if err != nil {
-			return nil, fmt.Errorf("workflow '%s': %w", workflowName, err)
+			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
 		}
-		workflow.Datasets = append(workflow.Datasets, *dataset)
+		mission.Datasets = append(mission.Datasets, *dataset)
 	}
 
 	// Build tasks context for depends_on references
 	taskNames := make(map[string]cty.Value)
-	for _, taskBlock := range workflowContent.Blocks {
+	for _, taskBlock := range missionContent.Blocks {
 		if taskBlock.Type == "task" {
 			taskNames[taskBlock.Labels[0]] = cty.StringVal(taskBlock.Labels[0])
 		}
@@ -718,7 +718,7 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 
 	// Build datasets context for iterator references
 	datasetNames := make(map[string]cty.Value)
-	for _, ds := range workflow.Datasets {
+	for _, ds := range mission.Datasets {
 		datasetNames[ds.Name] = cty.StringVal(ds.Name)
 	}
 
@@ -735,23 +735,23 @@ func parseWorkflowBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Workflow, erro
 	taskCtx.Variables["item"] = cty.DynamicVal // Placeholder for iteration item
 
 	// Parse task blocks
-	for _, taskBlock := range workflowContent.Blocks {
+	for _, taskBlock := range missionContent.Blocks {
 		if taskBlock.Type != "task" {
 			continue
 		}
 
 		task, err := parseTaskBlock(taskBlock, taskCtx)
 		if err != nil {
-			return nil, fmt.Errorf("workflow '%s': %w", workflowName, err)
+			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
 		}
-		workflow.Tasks = append(workflow.Tasks, *task)
+		mission.Tasks = append(mission.Tasks, *task)
 	}
 
-	return workflow, nil
+	return mission, nil
 }
 
-// parseWorkflowInputBlock parses an input block within a workflow
-func parseWorkflowInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*WorkflowInput, error) {
+// parseMissionInputBlock parses an input block within a mission
+func parseMissionInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*MissionInput, error) {
 	inputName := block.Labels[0]
 
 	inputContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
@@ -773,7 +773,7 @@ func parseWorkflowInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*WorkflowI
 		return nil, fmt.Errorf("input '%s': %w", inputName, diags)
 	}
 
-	input := &WorkflowInput{
+	input := &MissionInput{
 		Name: inputName,
 		Type: typeVal.AsString(),
 	}
@@ -817,7 +817,7 @@ func parseWorkflowInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*WorkflowI
 	return input, nil
 }
 
-// parseDatasetBlock parses a dataset block within a workflow
+// parseDatasetBlock parses a dataset block within a mission
 func parseDatasetBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Dataset, error) {
 	datasetName := block.Labels[0]
 
@@ -1024,7 +1024,7 @@ func parseIteratorBlock(block *hcl.Block, ctx *hcl.EvalContext) (*TaskIterator, 
 	return iterator, nil
 }
 
-// parseTaskBlock parses a single task block within a workflow
+// parseTaskBlock parses a single task block within a mission
 func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 	taskName := block.Labels[0]
 
@@ -1032,7 +1032,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 	taskContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
 			{Name: "objective", Required: true},
-			{Name: "agents"},    // Optional - uses workflow-level agents if not specified
+			{Name: "agents"},    // Optional - uses mission-level agents if not specified
 			{Name: "depends_on"},
 		},
 		Blocks: []hcl.BlockHeaderSchema{

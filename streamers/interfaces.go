@@ -37,11 +37,11 @@ type ChatHandler interface {
 	FinishAnswer()
 }
 
-// WorkflowHandler defines the interface for handling workflow execution events
-type WorkflowHandler interface {
-	// Workflow lifecycle
-	WorkflowStarted(name string, taskCount int)
-	WorkflowCompleted(name string)
+// MissionHandler defines the interface for handling mission execution events
+type MissionHandler interface {
+	// Mission lifecycle
+	MissionStarted(name string, taskCount int)
+	MissionCompleted(name string)
 
 	// Task lifecycle
 	TaskStarted(taskName string, objective string)

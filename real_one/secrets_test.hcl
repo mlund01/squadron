@@ -1,4 +1,4 @@
-workflow "secrets_test" {
+mission "secrets_test" {
   supervisor_model = models.openai.gpt_4o
   agents           = [agents.assistant]
 

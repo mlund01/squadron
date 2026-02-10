@@ -1,4 +1,4 @@
-package workflow
+package mission
 
 import (
 	"context"
@@ -18,11 +18,11 @@ import (
 	"squadron/streamers"
 )
 
-// Runner executes a workflow by orchestrating supervisors for each task
+// Runner executes a mission by orchestrating supervisors for each task
 type Runner struct {
 	cfg        *config.Config
 	configPath string
-	workflow   *config.Workflow
+	mission   *config.Mission
 
 	// Input values for objective resolution
 	varsValues  map[string]cty.Value
@@ -102,36 +102,36 @@ type IteratedTaskResult struct {
 	AllSuccess     bool
 }
 
-// NewRunner creates a new workflow runner
-func NewRunner(cfg *config.Config, configPath string, workflowName string, inputs map[string]string, opts ...RunnerOption) (*Runner, error) {
-	// Find the workflow
-	var workflow *config.Workflow
-	for i := range cfg.Workflows {
-		if cfg.Workflows[i].Name == workflowName {
-			workflow = &cfg.Workflows[i]
+// NewRunner creates a new mission runner
+func NewRunner(cfg *config.Config, configPath string, missionName string, inputs map[string]string, opts ...RunnerOption) (*Runner, error) {
+	// Find the mission
+	var mission *config.Mission
+	for i := range cfg.Missions {
+		if cfg.Missions[i].Name == missionName {
+			mission = &cfg.Missions[i]
 			break
 		}
 	}
-	if workflow == nil {
-		return nil, fmt.Errorf("workflow '%s' not found", workflowName)
+	if mission == nil {
+		return nil, fmt.Errorf("mission '%s' not found", missionName)
 	}
 
 	// Resolve and validate input values
-	inputValues, err := workflow.ResolveInputValues(inputs)
+	inputValues, err := mission.ResolveInputValues(inputs)
 	if err != nil {
-		return nil, fmt.Errorf("workflow '%s': %w", workflowName, err)
+		return nil, fmt.Errorf("mission '%s': %w", missionName, err)
 	}
 
 	// Resolve datasets
-	resolvedDatasets, err := resolveDatasets(workflow, inputValues)
+	resolvedDatasets, err := resolveDatasets(mission, inputValues)
 	if err != nil {
-		return nil, fmt.Errorf("workflow '%s': %w", workflowName, err)
+		return nil, fmt.Errorf("mission '%s': %w", missionName, err)
 	}
 
 	// Resolve secrets from inputs with secret=true
 	secretValues := make(map[string]string)
 	var secretInfos []agent.SecretInfo
-	for _, input := range workflow.Inputs {
+	for _, input := range mission.Inputs {
 		if !input.Secret {
 			continue
 		}
@@ -147,7 +147,7 @@ func NewRunner(cfg *config.Config, configPath string, workflowName string, input
 	r := &Runner{
 		cfg:                  cfg,
 		configPath:           configPath,
-		workflow:             workflow,
+		mission:             mission,
 		varsValues:           cfg.ResolvedVars,
 		inputValues:          inputValues,
 		secretValues:         secretValues,
@@ -172,10 +172,10 @@ func NewRunner(cfg *config.Config, configPath string, workflowName string, input
 }
 
 // resolveDatasets resolves all datasets to their actual values
-func resolveDatasets(workflow *config.Workflow, inputValues map[string]cty.Value) (map[string][]cty.Value, error) {
+func resolveDatasets(mission *config.Mission, inputValues map[string]cty.Value) (map[string][]cty.Value, error) {
 	resolved := make(map[string][]cty.Value)
 
-	for _, ds := range workflow.Datasets {
+	for _, ds := range mission.Datasets {
 		var items []cty.Value
 
 		// Check if bound to input
@@ -212,20 +212,20 @@ func resolveDatasets(workflow *config.Workflow, inputValues map[string]cty.Value
 	return resolved, nil
 }
 
-// Run executes the workflow
-func (r *Runner) Run(ctx context.Context, streamer streamers.WorkflowHandler) error {
-	streamer.WorkflowStarted(r.workflow.Name, len(r.workflow.Tasks))
+// Run executes the mission
+func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
+	streamer.MissionStarted(r.mission.Name, len(r.mission.Tasks))
 
-	// Log workflow start event
+	// Log mission start event
 	if r.debugLogger != nil {
-		r.debugLogger.LogEvent(EventWorkflowStarted, map[string]any{
-			"workflow":   r.workflow.Name,
-			"task_count": len(r.workflow.Tasks),
+		r.debugLogger.LogEvent(EventMissionStarted, map[string]any{
+			"mission":   r.mission.Name,
+			"task_count": len(r.mission.Tasks),
 		})
 	}
 
 	// Get tasks in topological order
-	sortedTasks := r.workflow.TopologicalSort()
+	sortedTasks := r.mission.TopologicalSort()
 
 	// Track completed tasks and in-flight tasks
 	completed := make(map[string]bool)
@@ -346,12 +346,12 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.WorkflowHandler) er
 	// Cleanup iteration supervisors now that all tasks are complete
 	r.cleanupIterationSupervisors()
 
-	streamer.WorkflowCompleted(r.workflow.Name)
+	streamer.MissionCompleted(r.mission.Name)
 
-	// Log workflow completed event
+	// Log mission completed event
 	if r.debugLogger != nil {
-		r.debugLogger.LogEvent(EventWorkflowCompleted, map[string]any{
-			"workflow": r.workflow.Name,
+		r.debugLogger.LogEvent(EventMissionCompleted, map[string]any{
+			"mission": r.mission.Name,
 		})
 	}
 
@@ -375,7 +375,7 @@ func (r *Runner) cleanupIterationSupervisors() {
 }
 
 // runTask executes a single task with its supervisor
-func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streamers.WorkflowHandler) (*TaskResult, error) {
+func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streamers.MissionHandler) (*TaskResult, error) {
 	// Resolve the objective with vars and inputs
 	objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
 	if err != nil {
@@ -408,10 +408,10 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		})
 	}
 
-	// Get agents for this task (task-level or workflow-level)
+	// Get agents for this task (task-level or mission-level)
 	agents := task.Agents
 	if len(agents) == 0 {
-		agents = r.workflow.Agents
+		agents = r.mission.Agents
 	}
 
 	// Build inherited agents from all dependency tasks in the lineage
@@ -433,9 +433,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 	sup, err := agent.NewSupervisor(ctx, agent.SupervisorOptions{
 		Config:           r.cfg,
 		ConfigPath:       r.configPath,
-		WorkflowName:     r.workflow.Name,
+		MissionName:     r.mission.Name,
 		TaskName:         task.Name,
-		SupervisorModel:  r.workflow.SupervisorModel,
+		SupervisorModel:  r.mission.SupervisorModel,
 		AgentNames:       agents,
 		DepSummaries:     depSummaries,
 		DepOutputSchemas: depOutputSchemas,
@@ -543,7 +543,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 
 // getDependencyChain returns all tasks this task depends on (including transitive dependencies)
 func (r *Runner) getDependencyChain(taskName string) []string {
-	task := r.workflow.GetTaskByName(taskName)
+	task := r.mission.GetTaskByName(taskName)
 	if task == nil {
 		return nil
 	}
@@ -563,7 +563,7 @@ func (r *Runner) getDependencyChain(taskName string) []string {
 		}
 		visited[dep] = true
 
-		depTask := r.workflow.GetTaskByName(dep)
+		depTask := r.mission.GetTaskByName(dep)
 		if depTask != nil {
 			// Add this task's dependencies to the queue
 			queue = append(queue, depTask.DependsOn...)
@@ -614,7 +614,7 @@ func (r *Runner) collectDepOutputSchemas(taskName string) []agent.DependencyOutp
 	var result []agent.DependencyOutputSchema
 
 	for _, depTaskName := range r.getDependencyChain(taskName) {
-		task := r.workflow.GetTaskByName(depTaskName)
+		task := r.mission.GetTaskByName(depTaskName)
 		if task == nil {
 			continue
 		}
@@ -649,10 +649,10 @@ func (r *Runner) collectDepOutputSchemas(taskName string) []agent.DependencyOutp
 	return result
 }
 
-// supervisorStreamerAdapter adapts WorkflowHandler to agent.SupervisorStreamer
+// supervisorStreamerAdapter adapts MissionHandler to agent.SupervisorStreamer
 type supervisorStreamerAdapter struct {
 	taskName string
-	streamer streamers.WorkflowHandler
+	streamer streamers.MissionHandler
 }
 
 func (s *supervisorStreamerAdapter) Reasoning(content string) {
@@ -672,7 +672,7 @@ func (s *supervisorStreamerAdapter) ToolComplete(name string) {
 }
 
 // runIteratedTask executes a task that iterates over a dataset
-func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer streamers.WorkflowHandler) (*TaskResult, error) {
+func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer streamers.MissionHandler) (*TaskResult, error) {
 	datasetName := task.Iterator.Dataset
 	items, ok := r.resolvedDatasets[datasetName]
 	if !ok {
@@ -713,7 +713,7 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 		return nil, fmt.Errorf("querying ancestors: %w", err)
 	}
 
-	// Notify workflow handler about iteration start
+	// Notify mission handler about iteration start
 	streamer.TaskIterationStarted(task.Name, len(items), task.Iterator.Parallel)
 
 	var iterations []IterationResult
@@ -788,11 +788,11 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 }
 
 // runSequentialIterations runs all iterations in a single supervisor session with agent reuse
-func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) []IterationResult {
+func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
 	// Get agents for this task
 	agents := task.Agents
 	if len(agents) == 0 {
-		agents = r.workflow.Agents
+		agents = r.mission.Agents
 	}
 
 	// Build inherited agents from all dependency tasks in the lineage
@@ -832,9 +832,9 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 	sup, err := agent.NewSupervisor(ctx, agent.SupervisorOptions{
 		Config:            r.cfg,
 		ConfigPath:        r.configPath,
-		WorkflowName:      r.workflow.Name,
+		MissionName:      r.mission.Name,
 		TaskName:          task.Name,
-		SupervisorModel:   r.workflow.SupervisorModel,
+		SupervisorModel:   r.mission.SupervisorModel,
 		AgentNames:        agents,
 		DepSummaries:      depSummaries,
 		DepOutputSchemas:  depOutputSchemas,
@@ -952,7 +952,7 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 }
 
 // runParallelIterations runs iterations in parallel with concurrency limit and optional staggered starts
-func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) []IterationResult {
+func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
 	iterations := make([]IterationResult, len(items))
 	maxRetries := 0
 	if task.Iterator != nil {
@@ -1029,7 +1029,7 @@ func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, it
 }
 
 // runParallelIterationsCore is the core parallel execution logic
-func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task, items []cty.Value, indexOffset int, maxRetries int, concurrencyLimit int, startDelay int, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) []IterationResult {
+func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task, items []cty.Value, indexOffset int, maxRetries int, concurrencyLimit int, startDelay int, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
 	iterations := make([]IterationResult, len(items))
 
 	// Semaphore to limit concurrent iterations
@@ -1089,7 +1089,7 @@ func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task
 }
 
 // runSingleIteration executes a single iteration of an iterated task
-func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index int, item cty.Value, prevOutput map[string]any, prevLearnings map[string]any, depSummaries []agent.DependencySummary, streamer streamers.WorkflowHandler) IterationResult {
+func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index int, item cty.Value, prevOutput map[string]any, prevLearnings map[string]any, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) IterationResult {
 	itemID := getItemID(item, index)
 
 	// Resolve the objective with item context
@@ -1119,7 +1119,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 	// Get agents for this task
 	agents := task.Agents
 	if len(agents) == 0 {
-		agents = r.workflow.Agents
+		agents = r.mission.Agents
 	}
 
 	// Build inherited agents from all dependency tasks in the lineage
@@ -1142,9 +1142,9 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 	sup, err := agent.NewSupervisor(ctx, agent.SupervisorOptions{
 		Config:                 r.cfg,
 		ConfigPath:             r.configPath,
-		WorkflowName:           r.workflow.Name,
+		MissionName:           r.mission.Name,
 		TaskName:               iterTaskName,
-		SupervisorModel:        r.workflow.SupervisorModel,
+		SupervisorModel:        r.mission.SupervisorModel,
 		AgentNames:             agents,
 		DepSummaries:           depSummaries,
 		DepOutputSchemas:       depOutputSchemas,
@@ -1415,11 +1415,11 @@ func getItemID(item cty.Value, index int) string {
 	return fmt.Sprintf("item_%d", index)
 }
 
-// iterationStreamerAdapter adapts WorkflowHandler to agent.SupervisorStreamer for iterations
+// iterationStreamerAdapter adapts MissionHandler to agent.SupervisorStreamer for iterations
 type iterationStreamerAdapter struct {
 	taskName string
 	index    int
-	streamer streamers.WorkflowHandler
+	streamer streamers.MissionHandler
 }
 
 func (s *iterationStreamerAdapter) Reasoning(content string) {
@@ -1688,9 +1688,9 @@ func (r *Runner) SetDataset(name string, items []cty.Value) error {
 
 	// Find the dataset definition
 	var ds *config.Dataset
-	for i := range r.workflow.Datasets {
-		if r.workflow.Datasets[i].Name == name {
-			ds = &r.workflow.Datasets[i]
+	for i := range r.mission.Datasets {
+		if r.mission.Datasets[i].Name == name {
+			ds = &r.mission.Datasets[i]
 			break
 		}
 	}
@@ -1748,7 +1748,7 @@ func (r *Runner) GetDatasetInfo() []aitools.DatasetInfo {
 	defer r.mu.RUnlock()
 
 	var info []aitools.DatasetInfo
-	for _, ds := range r.workflow.Datasets {
+	for _, ds := range r.mission.Datasets {
 		dsInfo := aitools.DatasetInfo{
 			Name:        ds.Name,
 			Description: ds.Description,
@@ -1779,7 +1779,7 @@ func (r *Runner) GetKnowledgeStore() KnowledgeStore {
 
 // GetTaskOutputSchema returns the output schema for a task by name
 func (r *Runner) GetTaskOutputSchema(taskName string) *config.OutputSchema {
-	task := r.workflow.GetTaskByName(taskName)
+	task := r.mission.GetTaskByName(taskName)
 	if task == nil {
 		return nil
 	}
@@ -1792,7 +1792,7 @@ func (r *Runner) GetDependencyOutputInfo(taskName string) []DependencyOutputInfo
 	var result []DependencyOutputInfo
 
 	for _, depTaskName := range r.getDependencyChain(taskName) {
-		task := r.workflow.GetTaskByName(depTaskName)
+		task := r.mission.GetTaskByName(depTaskName)
 		if task == nil {
 			continue
 		}
@@ -1844,7 +1844,7 @@ type OutputFieldInfo struct {
 }
 
 // =============================================================================
-// Knowledge Store Adapter - adapts workflow.MemoryKnowledgeStore to agent.KnowledgeStore
+// Knowledge Store Adapter - adapts mission.MemoryKnowledgeStore to agent.KnowledgeStore
 // =============================================================================
 
 // knowledgeStoreAdapter wraps MemoryKnowledgeStore to implement agent.KnowledgeStore

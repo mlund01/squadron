@@ -1,4 +1,4 @@
-workflow "pruning_test" {
+mission "pruning_test" {
   supervisor_model = models.anthropic.claude_sonnet_4
   agents           = [agents.browser_navigator]
 

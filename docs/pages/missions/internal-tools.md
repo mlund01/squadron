@@ -4,9 +4,9 @@ title: Internal Tools
 
 # Internal Tools
 
-Workflows use specialized internal tools that enable communication between supervisors and agents. These tools are automatically available during workflow execution and are managed by the system.
+Missions use specialized internal tools that enable communication between supervisors and agents. These tools are automatically available during mission execution and are managed by the system.
 
-> **Note:** These tools are used internally by the workflow runtime. You do not need to configure or reference them in your workflow definitions—they are automatically available to supervisors and agents as needed.
+> **Note:** These tools are used internally by the mission runtime. You do not need to configure or reference them in your mission definitions—they are automatically available to supervisors and agents as needed.
 
 ## Supervisor Tools
 
@@ -177,6 +177,6 @@ The agent responds from its existing conversation context without making new too
 
 ## Agent Tools
 
-Agents have access to the tools configured in their agent definition, plus any workflow-level tools. See [Tools](/config/tools) for configuring agent tools.
+Agents have access to the tools configured in their agent definition, plus any mission-level tools. See [Tools](/config/tools) for configuring agent tools.
 
-During workflow execution, agents operate autonomously to complete the tasks delegated by supervisors. They use their configured tools (bash, HTTP, custom tools, etc.) to accomplish objectives.
+During mission execution, agents operate autonomously to complete the tasks delegated by supervisors. They use their configured tools (bash, HTTP, custom tools, etc.) to accomplish objectives.

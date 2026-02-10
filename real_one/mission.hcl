@@ -1,4 +1,4 @@
-workflow "midwest_weather" {
+mission "midwest_weather" {
   supervisor_model = models.anthropic.claude_sonnet_4
   agents           = [agents.assistant]
 

@@ -63,4 +63,4 @@ squadron chat -c . assistant
 
 - [Agents](/config/agents) - Configure agent behavior
 - [Tools](/config/tools) - Add custom tools
-- [Workflows](/workflows/overview) - Build multi-step pipelines
+- [Missions](/missions/overview) - Build multi-step pipelines

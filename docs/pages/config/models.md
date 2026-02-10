@@ -71,7 +71,7 @@ agent "assistant" {
   model = models.anthropic.claude_sonnet_4
 }
 
-workflow "pipeline" {
+mission "pipeline" {
   supervisor_model = models.anthropic.claude_sonnet_4
 }
 ```

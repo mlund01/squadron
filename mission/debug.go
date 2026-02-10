@@ -1,4 +1,4 @@
-package workflow
+package mission
 
 import (
 	"encoding/json"
@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// DebugLogger captures workflow execution events and LLM messages for debugging
+// DebugLogger captures mission execution events and LLM messages for debugging
 type DebugLogger struct {
 	dir        string
 	eventsFile *os.File
@@ -215,8 +215,8 @@ func (d *DebugLogger) getOrCreateFile(path string) (*os.File, error) {
 
 // Event type constants
 const (
-	EventWorkflowStarted     = "workflow_started"
-	EventWorkflowCompleted   = "workflow_completed"
+	EventMissionStarted     = "mission_started"
+	EventMissionCompleted   = "mission_completed"
 	EventTaskStarted         = "task_started"
 	EventTaskCompleted       = "task_completed"
 	EventTaskFailed          = "task_failed"

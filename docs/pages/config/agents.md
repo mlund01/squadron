@@ -108,4 +108,4 @@ All agents automatically have access to result tools for handling large data:
 
 When any tool returns a large result (>8KB), it's automatically stored and a sample is shown. The agent can use these tools to access more data without overwhelming context.
 
-In workflow context, `result_to_dataset` is also available to promote arrays to datasets.
+In mission context, `result_to_dataset` is also available to promote arrays to datasets.

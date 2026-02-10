@@ -1,4 +1,4 @@
-# Airtable data entry workflow
+# Airtable data entry mission
 # Uses browser automation to log in and add rows to a table
 #
 # Browser interaction tips:
@@ -6,7 +6,7 @@
 # - If CSS selectors fail/timeout, use browser_click_coordinates as fallback
 # - Take screenshots to visually confirm state when needed
 
-workflow "airtable_entry" {
+mission "airtable_entry" {
   supervisor_model = models.anthropic.claude_sonnet_4
   agents           = [agents.browser_navigator]
 

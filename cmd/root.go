@@ -9,7 +9,7 @@ import (
 
 var rootCmd = &cobra.Command{
 	Use:   "squadron",
-	Short: "CLI for defining and running AI agents and multi-agent workflows",
+	Short: "CLI for defining and running AI agents and multi-agent missions",
 	Run: func(cmd *cobra.Command, args []string) {
 		cmd.Help()
 	},

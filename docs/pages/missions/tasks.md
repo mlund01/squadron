@@ -4,7 +4,7 @@ title: Tasks
 
 # Tasks
 
-Tasks are the building blocks of workflows. Each task has an objective and can depend on other tasks.
+Tasks are the building blocks of missions. Each task has an objective and can depend on other tasks.
 
 ## Basic Task
 
@@ -29,7 +29,7 @@ task "summarize" {
 |-----------|------|-------------|
 | `objective` | string | What the task should accomplish |
 | `depends_on` | list | Tasks that must complete first |
-| `agents` | list | Override workflow-level agents (optional) |
+| `agents` | list | Override mission-level agents (optional) |
 | `output` | block | Structured output schema (optional) |
 
 ## Dependencies
@@ -47,10 +47,10 @@ Dependencies are specified using `tasks.<task_name>`.
 
 ## Task-Level Agents
 
-Override the workflow's agents for specific tasks:
+Override the mission's agents for specific tasks:
 
 ```hcl
-workflow "pipeline" {
+mission "pipeline" {
   agents = [agents.general]
 
   task "code_review" {
@@ -65,7 +65,7 @@ workflow "pipeline" {
 Use variables and inputs in objectives:
 
 ```hcl
-workflow "report" {
+mission "report" {
   input "topic" {
     type = "string"
   }
@@ -134,4 +134,4 @@ task "analyze_sales" {
 | `integer` | Whole number |
 | `boolean` | True/false |
 
-Structured output is automatically captured and stored. Downstream tasks can query it using the `query_task_output` tool (see [Internal Tools](/workflows/internal-tools)).
+Structured output is automatically captured and stored. Downstream tasks can query it using the `query_task_output` tool (see [Internal Tools](/missions/internal-tools)).

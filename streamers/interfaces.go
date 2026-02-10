@@ -63,11 +63,11 @@ type MissionHandler interface {
 	// Summary aggregation events
 	SummaryAggregation(taskName string, summaryCount int)
 
-	// Supervisor events
-	SupervisorReasoning(taskName string, content string)
-	SupervisorAnswer(taskName string, content string)
-	SupervisorCallingTool(taskName string, toolName string, input string)
-	SupervisorToolComplete(taskName string, toolName string)
+	// Commander events
+	CommanderReasoning(taskName string, content string)
+	CommanderAnswer(taskName string, content string)
+	CommanderCallingTool(taskName string, toolName string, input string)
+	CommanderToolComplete(taskName string, toolName string)
 
 	// Agent execution events (for streaming agent output during call_agent)
 	AgentStarted(taskName string, agentName string)

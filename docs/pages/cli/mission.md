@@ -36,7 +36,7 @@ squadron mission -d -c ./config data_pipeline
 
 Creates a `debug/` folder with:
 - `events.log` - Task and tool events
-- `supervisor_*.md` - Full supervisor conversations
+- `commander_*.md` - Full commander conversations
 - `agent_*.md` - Full agent conversations
 
 ## See Also

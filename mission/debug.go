@@ -17,7 +17,7 @@ type DebugLogger struct {
 	mu         sync.Mutex
 	enabled    bool
 
-	// Track message files by entity (supervisor/agent)
+	// Track message files by entity (commander/agent)
 	messageFiles map[string]*os.File
 }
 
@@ -228,10 +228,10 @@ const (
 	EventAgentCompleted      = "agent_completed"
 	EventToolCall            = "tool_call"
 	EventToolResult          = "tool_result"
-	EventSupervisorReasoning = "supervisor_reasoning"
-	EventSupervisorAnswer    = "supervisor_answer"
-	EventSupervisorLLMStart  = "supervisor_llm_start"
-	EventSupervisorLLMEnd    = "supervisor_llm_end"
+	EventCommanderReasoning = "commander_reasoning"
+	EventCommanderAnswer    = "commander_answer"
+	EventCommanderLLMStart  = "commander_llm_start"
+	EventCommanderLLMEnd    = "commander_llm_end"
 	EventAgentLLMStart       = "agent_llm_start"
 	EventAgentLLMEnd         = "agent_llm_end"
 	EventAgentToolCall       = "agent_tool_call"

@@ -28,19 +28,19 @@ type SecretInfo struct {
 	Description string
 }
 
-// SupervisorOptions holds configuration for creating a supervisor
-type SupervisorOptions struct {
+// CommanderOptions holds configuration for creating a commander
+type CommanderOptions struct {
 	// Config is the loaded configuration
 	Config *config.Config
 	// ConfigPath is the path to the config directory (needed for spawning agents)
 	ConfigPath string
 	// MissionName is the name of the mission
 	MissionName string
-	// TaskName is the name of the task this supervisor is executing
+	// TaskName is the name of the task this commander is executing
 	TaskName string
-	// SupervisorModel is the model key for the supervisor (e.g., "claude_sonnet_4")
-	SupervisorModel string
-	// AgentNames is the list of agents available to this supervisor
+	// Commander is the model key for the commander (e.g., "claude_sonnet_4")
+	Commander string
+	// AgentNames is the list of agents available to this commander
 	AgentNames []string
 	// DepSummaries contains summaries from completed dependency tasks
 	DepSummaries []DependencySummary
@@ -58,14 +58,14 @@ type SupervisorOptions struct {
 	SecretInfos []SecretInfo
 	// SecretValues contains actual secret values for tool call injection
 	SecretValues map[string]string
-	// IsIteration indicates whether this supervisor is running an iteration of an iterated task
+	// IsIteration indicates whether this commander is running an iteration of an iterated task
 	IsIteration bool
 	// IsParallel indicates whether the iteration is running in parallel (only relevant if IsIteration is true)
 	IsParallel bool
 	// DebugFile enables debug logging to the specified file (optional)
 	DebugFile string
 	// SequentialDataset contains all items for sequential iteration processing
-	// When set, the supervisor handles all items in a single session using dataset_next/dataset_item_complete tools
+	// When set, the commander handles all items in a single session using dataset_next/dataset_item_complete tools
 	SequentialDataset []cty.Value
 }
 
@@ -85,8 +85,8 @@ type OutputFieldSchema struct {
 	Required    bool
 }
 
-// SupervisorToolCallbacks allows the mission to provide callbacks for supervisor tools
-type SupervisorToolCallbacks struct {
+// CommanderToolCallbacks allows the mission to provide callbacks for commander tools
+type CommanderToolCallbacks struct {
 	// OnAgentStart is called when call_agent begins executing an agent
 	OnAgentStart func(taskName, agentName string)
 	// GetAgentHandler returns a ChatHandler for the agent execution
@@ -99,24 +99,24 @@ type SupervisorToolCallbacks struct {
 	KnowledgeStore KnowledgeStore
 	// DebugLogger provides debug logging capabilities (optional)
 	DebugLogger DebugLogger
-	// GetSupervisorForQuery returns an isolated clone of a completed supervisor for querying.
-	// The returned supervisor can answer questions without modifying the original's state.
-	// The clone is cached per calling supervisor, so follow-up questions build on previous context.
+	// GetCommanderForQuery returns an isolated clone of a completed commander for querying.
+	// The returned commander can answer questions without modifying the original's state.
+	// The clone is cached per calling commander, so follow-up questions build on previous context.
 	// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
-	GetSupervisorForQuery func(taskName string, iterationIndex int) (*Supervisor, error)
+	GetCommanderForQuery func(taskName string, iterationIndex int) (*Commander, error)
 
-	// ListSupeQuestions returns the list of questions already asked to a dependency task.
+	// ListCommanderQuestions returns the list of questions already asked to a dependency task.
 	// Used by iterations to see what questions have been asked by other iterations.
-	ListSupeQuestions func(taskName string) []string
+	ListCommanderQuestions func(taskName string) []string
 
-	// GetSupeAnswer returns the cached answer for a question by index.
+	// GetCommanderAnswer returns the cached answer for a question by index.
 	// Blocks until the answer is ready if another iteration is still querying.
-	GetSupeAnswer func(taskName string, index int) (string, error)
+	GetCommanderAnswer func(taskName string, index int) (string, error)
 
-	// AskSupeWithCache asks a question with deduplication. If the exact question was
+	// AskCommanderWithCache asks a question with deduplication. If the exact question was
 	// already asked, returns the cached answer. Otherwise queries and caches.
 	// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
-	AskSupeWithCache func(targetTask string, iterationIndex int, question string) (string, error)
+	AskCommanderWithCache func(targetTask string, iterationIndex int, question string) (string, error)
 }
 
 // DebugLogger is the interface for debug logging during mission execution
@@ -198,8 +198,8 @@ type AggregateResult struct {
 	Groups map[string]any
 }
 
-// SupervisorStreamer is the interface for streaming supervisor events
-type SupervisorStreamer interface {
+// CommanderStreamer is the interface for streaming commander events
+type CommanderStreamer interface {
 	Reasoning(content string)
 	Answer(content string)
 	CallingTool(name, input string)
@@ -213,8 +213,8 @@ type completedAgent struct {
 	inherited bool // true if this agent was inherited from a dependency task
 }
 
-// Supervisor is an agent specialized for orchestrating other agents in a mission
-type Supervisor struct {
+// Commander is an agent specialized for orchestrating other agents in a mission
+type Commander struct {
 	Name      string
 	TaskName  string
 	ModelName string
@@ -224,7 +224,7 @@ type Supervisor struct {
 	provider        llm.Provider
 	ownsProvider    bool
 	agents          map[string]*config.Agent
-	callbacks       *SupervisorToolCallbacks
+	callbacks       *CommanderToolCallbacks
 	configPath      string
 	cfg             *config.Config
 	resultStore     *aitools.MemoryResultStore
@@ -234,18 +234,18 @@ type Supervisor struct {
 	agentSeq        int
 	debugLogger     DebugLogger
 	turnLogger      *llm.TurnLogger
-	queryClones     map[string]*Supervisor // Cached clones for ask_supe queries (keyed by target task name)
+	queryClones     map[string]*Commander // Cached clones for ask_commander queries (keyed by target task name)
 	secretInfos     []SecretInfo           // Secret names and descriptions for agent prompts
 	secretValues    map[string]string      // Actual secret values for tool call injection
 	datasetCursor   *aitools.DatasetCursor // Cursor for sequential dataset iteration (nil if not sequential)
 }
 
-// NewSupervisor creates a new supervisor for a mission task
-func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, error) {
-	// Resolve the supervisor model
-	modelConfig, actualModelName, err := resolveSupervisorModel(opts.Config, opts.SupervisorModel)
+// NewCommander creates a new commander for a mission task
+func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error) {
+	// Resolve the commander model
+	modelConfig, actualModelName, err := resolveCommander(opts.Config, opts.Commander)
 	if err != nil {
-		return nil, fmt.Errorf("resolving supervisor model: %w", err)
+		return nil, fmt.Errorf("resolving commander model: %w", err)
 	}
 
 	if modelConfig.APIKey == "" {
@@ -253,7 +253,7 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 	}
 
 	// Create provider
-	provider, ownsProvider, err := createSupervisorProvider(ctx, modelConfig)
+	provider, ownsProvider, err := createCommanderProvider(ctx, modelConfig)
 	if err != nil {
 		return nil, fmt.Errorf("creating provider: %w", err)
 	}
@@ -277,12 +277,12 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 	// Build system prompts
 	var systemPrompts []string
 
-	// Main supervisor prompt with iteration context
+	// Main commander prompt with iteration context
 	iterationOpts := prompts.IterationOptions{
 		IsIteration: opts.IsIteration,
 		IsParallel:  opts.IsParallel,
 	}
-	systemPrompts = append(systemPrompts, prompts.GetSupervisorPrompt(agentInfos, iterationOpts))
+	systemPrompts = append(systemPrompts, prompts.GetCommanderPrompt(agentInfos, iterationOpts))
 
 	// Add context about mission and task
 	systemPrompts = append(systemPrompts, fmt.Sprintf(
@@ -318,7 +318,7 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 		}
 	}
 
-	sup := &Supervisor{
+	sup := &Commander{
 		Name:            fmt.Sprintf("%s/%s", opts.MissionName, opts.TaskName),
 		TaskName:        opts.TaskName,
 		ModelName:       actualModelName,
@@ -337,7 +337,7 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 		secretValues:    opts.SecretValues,
 	}
 
-	// Add result tools to supervisor's tool map
+	// Add result tools to commander's tool map
 	sup.tools["result_info"] = &aitools.ResultInfoTool{Store: resultStore}
 	sup.tools["result_items"] = &aitools.ResultItemsTool{Store: resultStore}
 	sup.tools["result_get"] = &aitools.ResultGetTool{Store: resultStore}
@@ -375,15 +375,15 @@ func NewSupervisor(ctx context.Context, opts SupervisorOptions) (*Supervisor, er
 	return sup, nil
 }
 
-// SetToolCallbacks configures the callbacks for supervisor tools
+// SetToolCallbacks configures the callbacks for commander tools
 // This must be called before ExecuteTask to enable call_agent and ask_agent
-func (s *Supervisor) SetToolCallbacks(callbacks *SupervisorToolCallbacks, depSummaries []DependencySummary) {
+func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSummaries []DependencySummary) {
 	s.callbacks = callbacks
 	s.debugLogger = callbacks.DebugLogger
 
-	// Create turn logger for supervisor session snapshots
+	// Create turn logger for commander session snapshots
 	if s.debugLogger != nil {
-		turnLogFile := s.debugLogger.GetTurnLogFile("supervisor", s.TaskName)
+		turnLogFile := s.debugLogger.GetTurnLogFile("commander", s.TaskName)
 		if turnLogFile != "" {
 			if tl, err := llm.NewTurnLogger(turnLogFile); err == nil {
 				s.turnLogger = tl
@@ -393,12 +393,12 @@ func (s *Supervisor) SetToolCallbacks(callbacks *SupervisorToolCallbacks, depSum
 
 	// Build call_agent tool
 	s.tools["call_agent"] = &callAgentTool{
-		supervisor: s,
+		commander: s,
 	}
 
 	// Build ask_agent tool for querying completed agents
 	s.tools["ask_agent"] = &askAgentTool{
-		supervisor: s,
+		commander: s,
 	}
 
 	// Add bridge tool if DatasetStore is available
@@ -416,28 +416,28 @@ func (s *Supervisor) SetToolCallbacks(callbacks *SupervisorToolCallbacks, depSum
 		}
 	}
 
-	// Add ask_supe tool if GetSupervisorForQuery callback is available
-	if callbacks.GetSupervisorForQuery != nil {
-		s.tools["ask_supe"] = &askSupeTool{
-			supervisor: s,
+	// Add ask_commander tool if GetCommanderForQuery callback is available
+	if callbacks.GetCommanderForQuery != nil {
+		s.tools["ask_commander"] = &askCommanderTool{
+			commander: s,
 		}
 	}
 
 	// Add iteration-specific tools if callbacks are available
-	if callbacks.ListSupeQuestions != nil {
-		s.tools["list_supe_questions"] = &listSupeQuestionsTool{
-			supervisor: s,
+	if callbacks.ListCommanderQuestions != nil {
+		s.tools["list_commander_questions"] = &listCommanderQuestionsTool{
+			commander: s,
 		}
 	}
-	if callbacks.GetSupeAnswer != nil {
-		s.tools["get_supe_answer"] = &getSupeAnswerTool{
-			supervisor: s,
+	if callbacks.GetCommanderAnswer != nil {
+		s.tools["get_commander_answer"] = &getCommanderAnswerTool{
+			commander: s,
 		}
 	}
 }
 
 // injectDependencyContext adds a secondary system prompt with dependency summaries and output schemas
-func (s *Supervisor) injectDependencyContext(summaries []DependencySummary, outputSchemas []DependencyOutputSchema) {
+func (s *Commander) injectDependencyContext(summaries []DependencySummary, outputSchemas []DependencyOutputSchema) {
 	var sb strings.Builder
 	sb.WriteString("## Completed Dependency Tasks\n\n")
 
@@ -492,7 +492,7 @@ func (s *Supervisor) injectDependencyContext(summaries []DependencySummary, outp
 }
 
 // injectOutputSchemaInstructions adds instructions for producing structured output
-func (s *Supervisor) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
+func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 	var sb strings.Builder
 	sb.WriteString("## Required Structured Output\n\n")
 	sb.WriteString("This task requires structured output. When you provide your final ANSWER, you MUST also include an OUTPUT block with JSON data matching this schema:\n\n")
@@ -542,7 +542,7 @@ func (s *Supervisor) injectOutputSchemaInstructions(schema []OutputFieldSchema) 
 }
 
 // injectPrevIterationOutput adds context about the previous iteration's output (for sequential iterations)
-func (s *Supervisor) injectPrevIterationOutput(prevOutput map[string]any) {
+func (s *Commander) injectPrevIterationOutput(prevOutput map[string]any) {
 	prevJSON, err := json.MarshalIndent(prevOutput, "", "  ")
 	if err != nil {
 		// Fallback to simple format if marshaling fails
@@ -563,7 +563,7 @@ Your current task is for a NEW item with its own parameters.
 }
 
 // injectPrevIterationLearnings adds insights and recommendations from the previous iteration (for sequential iterations)
-func (s *Supervisor) injectPrevIterationLearnings(learnings map[string]any) {
+func (s *Commander) injectPrevIterationLearnings(learnings map[string]any) {
 	learningsJSON, err := json.MarshalIndent(learnings, "", "  ")
 	if err != nil {
 		// Fallback to simple format if marshaling fails
@@ -583,21 +583,21 @@ Apply general insights (API behaviors, error handling, etc.) but focus on your c
 }
 
 // GetDatasetResults returns the collected results from sequential dataset processing
-// Returns nil if this supervisor is not processing a sequential dataset
-func (s *Supervisor) GetDatasetResults() []aitools.DatasetItemResult {
+// Returns nil if this commander is not processing a sequential dataset
+func (s *Commander) GetDatasetResults() []aitools.DatasetItemResult {
 	if s.datasetCursor == nil {
 		return nil
 	}
 	return s.datasetCursor.GetResults()
 }
 
-// HasSequentialDataset returns true if this supervisor is processing a sequential dataset
-func (s *Supervisor) HasSequentialDataset() bool {
+// HasSequentialDataset returns true if this commander is processing a sequential dataset
+func (s *Commander) HasSequentialDataset() bool {
 	return s.datasetCursor != nil
 }
 
 // injectSequentialDatasetInstructions adds instructions for processing a sequential dataset
-func (s *Supervisor) injectSequentialDatasetInstructions(itemCount int) {
+func (s *Commander) injectSequentialDatasetInstructions(itemCount int) {
 	prompt := fmt.Sprintf(`## Sequential Dataset Processing
 
 You have a dataset of %d items to process sequentially in this single session.
@@ -620,7 +620,7 @@ You MUST call dataset_item_complete before dataset_next or you will get an error
 }
 
 // ExecuteTask runs the task objective to completion
-func (s *Supervisor) ExecuteTask(ctx context.Context, objective string, streamer SupervisorStreamer) (string, error) {
+func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer CommanderStreamer) (string, error) {
 	currentInput := objective
 	var finalAnswer string
 
@@ -632,10 +632,10 @@ func (s *Supervisor) ExecuteTask(ctx context.Context, objective string, streamer
 		}
 
 		// Create parser for this message
-		parser := newSupervisorParser(streamer)
+		parser := newCommanderParser(streamer)
 
 		if s.debugLogger != nil {
-			s.debugLogger.LogEvent("supervisor_llm_start", map[string]any{"task": s.TaskName})
+			s.debugLogger.LogEvent("commander_llm_start", map[string]any{"task": s.TaskName})
 		}
 		llmStart := time.Now()
 
@@ -664,7 +664,7 @@ func (s *Supervisor) ExecuteTask(ctx context.Context, objective string, streamer
 					eventData["cached_tokens"] = resp.Usage.CachedTokens
 				}
 			}
-			s.debugLogger.LogEvent("supervisor_llm_end", eventData)
+			s.debugLogger.LogEvent("commander_llm_end", eventData)
 		}
 
 		parser.Finish()
@@ -737,10 +737,10 @@ func (s *Supervisor) ExecuteTask(ctx context.Context, objective string, streamer
 	return finalAnswer, nil
 }
 
-// AnswerQuestion handles a follow-up question from another supervisor (via ask_supe)
-func (s *Supervisor) AnswerQuestion(ctx context.Context, question string) (string, error) {
+// AnswerQuestion handles a follow-up question from another commander (via ask_commander)
+func (s *Commander) AnswerQuestion(ctx context.Context, question string) (string, error) {
 	prompt := fmt.Sprintf(`<FOLLOWUP_QUESTION>
-Another supervisor is asking for clarification about your completed task.
+Another commander is asking for clarification about your completed task.
 Question: %s
 
 Please provide a concise, factual answer based on what you learned during your task execution.
@@ -754,10 +754,10 @@ Please provide a concise, factual answer based on what you learned during your t
 	return resp.Content, nil
 }
 
-// Close releases resources held by the supervisor
-// Note: Only closes agents created by this supervisor, not inherited ones
-func (s *Supervisor) Close() {
-	// Close any cached query clones (from ask_supe)
+// Close releases resources held by the commander
+// Note: Only closes agents created by this commander, not inherited ones
+func (s *Commander) Close() {
+	// Close any cached query clones (from ask_commander)
 	for _, clone := range s.queryClones {
 		if clone != nil {
 			clone.Close()
@@ -773,7 +773,7 @@ func (s *Supervisor) Close() {
 	}
 	s.agentSessions = nil
 
-	// Only close agents that this supervisor created (not inherited)
+	// Only close agents that this commander created (not inherited)
 	for _, ca := range s.completedAgents {
 		if ca.agent != nil && !ca.inherited {
 			ca.agent.Close()
@@ -792,7 +792,7 @@ func (s *Supervisor) Close() {
 }
 
 // GetCompletedAgents returns all completed agents (for inheritance to dependent tasks)
-func (s *Supervisor) GetCompletedAgents() map[string]*Agent {
+func (s *Commander) GetCompletedAgents() map[string]*Agent {
 	result := make(map[string]*Agent)
 	for id, ca := range s.completedAgents {
 		result[id] = ca.agent
@@ -800,11 +800,11 @@ func (s *Supervisor) GetCompletedAgents() map[string]*Agent {
 	return result
 }
 
-// CloneForQuery creates an isolated copy of this supervisor for answering a question.
+// CloneForQuery creates an isolated copy of this commander for answering a question.
 // The clone has a copy of the session state (conversation history) but operates independently.
 // Multiple clones can be created and queried in parallel without affecting each other.
 // The clone shares the same provider and completed agents (for ask_agent support).
-func (s *Supervisor) CloneForQuery() *Supervisor {
+func (s *Commander) CloneForQuery() *Commander {
 	// Clone the session for isolated query processing
 	clonedSession := s.session.Clone()
 
@@ -822,7 +822,7 @@ func (s *Supervisor) CloneForQuery() *Supervisor {
 	resultStore := aitools.NewMemoryResultStore()
 	interceptor := aitools.NewResultInterceptor(resultStore, aitools.DefaultLargeResultConfig())
 
-	clone := &Supervisor{
+	clone := &Commander{
 		Name:            s.Name + "_clone",
 		TaskName:        s.TaskName,
 		ModelName:       s.ModelName,
@@ -849,17 +849,17 @@ func (s *Supervisor) CloneForQuery() *Supervisor {
 	clone.tools["result_chunk"] = &aitools.ResultChunkTool{Store: resultStore}
 
 	// Add ask_agent tool so the clone can query its agents
-	clone.tools["ask_agent"] = &askAgentTool{supervisor: clone}
+	clone.tools["ask_agent"] = &askAgentTool{commander: clone}
 
 	return clone
 }
 
 // AnswerQueryIsolated answers a follow-up question using an isolated session.
-// This is called on a cloned supervisor and does not affect the original.
+// This is called on a cloned commander and does not affect the original.
 // It runs an execution loop to handle any tool calls (like ask_agent) before returning.
-func (s *Supervisor) AnswerQueryIsolated(ctx context.Context, question string) (string, error) {
+func (s *Commander) AnswerQueryIsolated(ctx context.Context, question string) (string, error) {
 	currentInput := fmt.Sprintf(`<FOLLOWUP_QUESTION>
-Another supervisor is asking for additional information about your completed task.
+Another commander is asking for additional information about your completed task.
 Question: %s
 
 You may use ask_agent to query your agents if you need more details from them.
@@ -902,7 +902,7 @@ Wrap your final answer in <ANSWER> tags.
 }
 
 // parseActionFromContent extracts ACTION and ACTION_INPUT from a response
-func (s *Supervisor) parseActionFromContent(content string) (action, actionInput string) {
+func (s *Commander) parseActionFromContent(content string) (action, actionInput string) {
 	// Find <ACTION>...</ACTION>
 	actionStart := strings.Index(content, "<ACTION>")
 	if actionStart == -1 {
@@ -929,7 +929,7 @@ func (s *Supervisor) parseActionFromContent(content string) (action, actionInput
 }
 
 // extractAnswer extracts the answer content from a response
-func (s *Supervisor) extractAnswer(content string) string {
+func (s *Commander) extractAnswer(content string) string {
 	if idx := strings.Index(content, "<ANSWER>"); idx != -1 {
 		content = content[idx+8:]
 		if endIdx := strings.Index(content, "</ANSWER>"); endIdx != -1 {
@@ -940,7 +940,7 @@ func (s *Supervisor) extractAnswer(content string) string {
 }
 
 // formatObservation formats a tool result as an observation, with optional metadata
-func (s *Supervisor) formatObservation(toolName, result string) string {
+func (s *Commander) formatObservation(toolName, result string) string {
 	if s.interceptor == nil {
 		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result)
 	}
@@ -954,7 +954,7 @@ func (s *Supervisor) formatObservation(toolName, result string) string {
 }
 
 // ExecuteAggregation performs a simple LLM call for summary aggregation (no tools)
-func (s *Supervisor) ExecuteAggregation(ctx context.Context, prompt string) (string, error) {
+func (s *Commander) ExecuteAggregation(ctx context.Context, prompt string) (string, error) {
 	resp, err := s.session.Send(ctx, prompt)
 	if err != nil {
 		return "", err
@@ -962,8 +962,8 @@ func (s *Supervisor) ExecuteAggregation(ctx context.Context, prompt string) (str
 	return resp.Content, nil
 }
 
-// resolveSupervisorModel finds the model config for a model key
-func resolveSupervisorModel(cfg *config.Config, modelKey string) (*config.Model, string, error) {
+// resolveCommander finds the model config for a model key
+func resolveCommander(cfg *config.Config, modelKey string) (*config.Model, string, error) {
 	for i := range cfg.Models {
 		m := &cfg.Models[i]
 		supportedModels, ok := config.SupportedModels[m.Provider]
@@ -985,8 +985,8 @@ func resolveSupervisorModel(cfg *config.Config, modelKey string) (*config.Model,
 	return nil, "", fmt.Errorf("no model config found for model '%s'", modelKey)
 }
 
-// createSupervisorProvider creates the appropriate LLM provider based on config
-func createSupervisorProvider(ctx context.Context, modelConfig *config.Model) (llm.Provider, bool, error) {
+// createCommanderProvider creates the appropriate LLM provider based on config
+func createCommanderProvider(ctx context.Context, modelConfig *config.Model) (llm.Provider, bool, error) {
 	switch modelConfig.Provider {
 	case config.ProviderOpenAI:
 		return llm.NewOpenAIProvider(modelConfig.APIKey), false, nil
@@ -1004,25 +1004,25 @@ func createSupervisorProvider(ctx context.Context, modelConfig *config.Model) (l
 }
 
 // =============================================================================
-// Supervisor Parser - parses ReAct-formatted streaming output
+// Commander Parser - parses ReAct-formatted streaming output
 // =============================================================================
 
-// supervisorParserState represents the current parsing state
-type supervisorParserState int
+// commanderParserState represents the current parsing state
+type commanderParserState int
 
 const (
-	supervisorStateNone supervisorParserState = iota
-	supervisorStateReasoning
-	supervisorStateAction
-	supervisorStateActionInput
-	supervisorStateAnswer
-	supervisorStateOutput
+	commanderStateNone commanderParserState = iota
+	commanderStateReasoning
+	commanderStateAction
+	commanderStateActionInput
+	commanderStateAnswer
+	commanderStateOutput
 )
 
-// supervisorParser parses ReAct-formatted streaming output for supervisors
-type supervisorParser struct {
-	streamer         SupervisorStreamer
-	state            supervisorParserState
+// commanderParser parses ReAct-formatted streaming output for commanders
+type commanderParser struct {
+	streamer         CommanderStreamer
+	state            commanderParserState
 	buffer           strings.Builder
 	reasoningStarted bool
 	answerStarted    bool
@@ -1034,32 +1034,32 @@ type supervisorParser struct {
 	outputText       strings.Builder
 }
 
-// newSupervisorParser creates a new parser with the given streamer
-func newSupervisorParser(streamer SupervisorStreamer) *supervisorParser {
-	return &supervisorParser{
+// newCommanderParser creates a new parser with the given streamer
+func newCommanderParser(streamer CommanderStreamer) *commanderParser {
+	return &commanderParser{
 		streamer: streamer,
-		state:    supervisorStateNone,
+		state:    commanderStateNone,
 	}
 }
 
 // ProcessChunk processes an incoming chunk of streamed content
-func (p *supervisorParser) ProcessChunk(chunk string) {
+func (p *commanderParser) ProcessChunk(chunk string) {
 	p.buffer.WriteString(chunk)
 	p.processBuffer()
 }
 
 // GetAction returns the parsed action name
-func (p *supervisorParser) GetAction() string {
+func (p *commanderParser) GetAction() string {
 	return p.actionName
 }
 
 // GetActionInput returns the parsed action input
-func (p *supervisorParser) GetActionInput() string {
+func (p *commanderParser) GetActionInput() string {
 	return p.actionInput
 }
 
 // GetAnswer returns the parsed answer text, including OUTPUT block if present
-func (p *supervisorParser) GetAnswer() string {
+func (p *commanderParser) GetAnswer() string {
 	answer := p.answerText.String()
 	if p.outputText.Len() > 0 {
 		// Append the OUTPUT block to the answer so parseOutput can extract it
@@ -1069,47 +1069,47 @@ func (p *supervisorParser) GetAnswer() string {
 }
 
 // Finish signals that streaming is complete
-func (p *supervisorParser) Finish() {
+func (p *commanderParser) Finish() {
 	// Nothing special needed
 }
 
-func (p *supervisorParser) processBuffer() {
+func (p *commanderParser) processBuffer() {
 	content := p.buffer.String()
 
 	for {
 		switch p.state {
-		case supervisorStateNone:
+		case commanderStateNone:
 			// Look for opening tags
 			if idx := strings.Index(content, "<REASONING>"); idx != -1 {
-				p.state = supervisorStateReasoning
+				p.state = commanderStateReasoning
 				content = content[idx+11:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
 			}
 			if idx := strings.Index(content, "<ACTION>"); idx != -1 {
-				p.state = supervisorStateAction
+				p.state = commanderStateAction
 				content = content[idx+8:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
 			}
 			if idx := strings.Index(content, "<ACTION_INPUT>"); idx != -1 {
-				p.state = supervisorStateActionInput
+				p.state = commanderStateActionInput
 				content = content[idx+14:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
 			}
 			if idx := strings.Index(content, "<ANSWER>"); idx != -1 {
-				p.state = supervisorStateAnswer
+				p.state = commanderStateAnswer
 				content = content[idx+8:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
 			}
 			if idx := strings.Index(content, "<OUTPUT>"); idx != -1 {
-				p.state = supervisorStateOutput
+				p.state = commanderStateOutput
 				content = content[idx+8:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
@@ -1117,7 +1117,7 @@ func (p *supervisorParser) processBuffer() {
 			}
 			return
 
-		case supervisorStateReasoning:
+		case commanderStateReasoning:
 			if !p.reasoningStarted {
 				content = strings.TrimLeft(content, "\n")
 				p.buffer.Reset()
@@ -1135,7 +1135,7 @@ func (p *supervisorParser) processBuffer() {
 				}
 				p.reasoningText.Reset()
 				p.reasoningStarted = false
-				p.state = supervisorStateNone
+				p.state = commanderStateNone
 				content = content[idx+12:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
@@ -1151,10 +1151,10 @@ func (p *supervisorParser) processBuffer() {
 			}
 			return
 
-		case supervisorStateAction:
+		case commanderStateAction:
 			if idx := strings.Index(content, "</ACTION>"); idx != -1 {
 				p.actionName = strings.TrimSpace(content[:idx])
-				p.state = supervisorStateNone
+				p.state = commanderStateNone
 				content = content[idx+9:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
@@ -1162,10 +1162,10 @@ func (p *supervisorParser) processBuffer() {
 			}
 			return
 
-		case supervisorStateActionInput:
+		case commanderStateActionInput:
 			if idx := strings.Index(content, "</ACTION_INPUT>"); idx != -1 {
 				p.actionInput = strings.TrimSpace(content[:idx])
-				p.state = supervisorStateNone
+				p.state = commanderStateNone
 				content = content[idx+15:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
@@ -1173,7 +1173,7 @@ func (p *supervisorParser) processBuffer() {
 			}
 			return
 
-		case supervisorStateAnswer:
+		case commanderStateAnswer:
 			if !p.answerStarted {
 				content = strings.TrimLeft(content, "\n")
 				p.buffer.Reset()
@@ -1189,7 +1189,7 @@ func (p *supervisorParser) processBuffer() {
 					p.answerText.WriteString(finalContent)
 					p.streamer.Answer(p.answerText.String())
 				}
-				p.state = supervisorStateNone
+				p.state = commanderStateNone
 				content = content[idx+9:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
@@ -1205,7 +1205,7 @@ func (p *supervisorParser) processBuffer() {
 			}
 			return
 
-		case supervisorStateOutput:
+		case commanderStateOutput:
 			if !p.outputStarted {
 				content = strings.TrimLeft(content, "\n")
 				p.buffer.Reset()
@@ -1221,7 +1221,7 @@ func (p *supervisorParser) processBuffer() {
 					p.outputText.WriteString(finalContent)
 				}
 				p.outputStarted = false
-				p.state = supervisorStateNone
+				p.state = commanderStateNone
 				content = content[idx+9:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
@@ -1241,12 +1241,12 @@ func (p *supervisorParser) processBuffer() {
 }
 
 // =============================================================================
-// Supervisor Tools - call_agent and ask_agent
+// Commander Tools - call_agent and ask_agent
 // =============================================================================
 
 // callAgentTool is the tool for delegating work to agents
 type callAgentTool struct {
-	supervisor *Supervisor
+	commander *Commander
 }
 
 func (t *callAgentTool) ToolName() string {
@@ -1257,7 +1257,7 @@ func (t *callAgentTool) ToolDescription() string {
 	return `Call an agent to perform a task or respond to an agent's question.
 
 Use "task" to assign a new task (always starts fresh, ignores any in-flight work).
-Use "response" to answer an agent's ASK_SUPE question (agent continues where it left off).
+Use "response" to answer an agent's ASK_COMMANDER question (agent continues where it left off).
 
 Provide exactly one of "task" or "response", not both.`
 }
@@ -1276,7 +1276,7 @@ func (t *callAgentTool) ToolPayloadSchema() aitools.Schema {
 			},
 			"response": {
 				Type:        aitools.TypeString,
-				Description: "Response to an agent's ASK_SUPE question. Agent continues from where it left off.",
+				Description: "Response to an agent's ASK_COMMANDER question. Agent continues from where it left off.",
 			},
 		},
 		Required: []string{"name"},
@@ -1301,10 +1301,10 @@ func (t *callAgentTool) Call(input string) string {
 		return "<STATUS>error</STATUS>\n<ERROR>Cannot provide both 'task' and 'response'</ERROR>"
 	}
 
-	agentCfg, ok := t.supervisor.agents[params.Name]
+	agentCfg, ok := t.commander.agents[params.Name]
 	if !ok {
 		var available []string
-		for name := range t.supervisor.agents {
+		for name := range t.commander.agents {
 			available = append(available, name)
 		}
 		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Agent '%s' not found. Available agents: %v</ERROR>", params.Name, available)
@@ -1313,38 +1313,38 @@ func (t *callAgentTool) Call(input string) string {
 	ctx := context.Background()
 
 	// Get existing session or create new one
-	a, exists := t.supervisor.agentSessions[params.Name]
+	a, exists := t.commander.agentSessions[params.Name]
 	if !exists {
 		mode := config.ModeMission
 
 		// Get DatasetStore from callbacks if available
 		var datasetStore aitools.DatasetStore
-		if t.supervisor.callbacks != nil {
-			datasetStore = t.supervisor.callbacks.DatasetStore
+		if t.commander.callbacks != nil {
+			datasetStore = t.commander.callbacks.DatasetStore
 		}
 
 		// Get debug file and event logger for agent if debug mode is enabled
 		var debugFile string
 		var turnLogFile string
 		var eventLogger EventLogger
-		if t.supervisor.debugLogger != nil {
-			agentDebugName := fmt.Sprintf("%s_%s_%d", t.supervisor.TaskName, params.Name, t.supervisor.agentSeq+1)
-			debugFile = t.supervisor.debugLogger.GetMessageFile("agent", agentDebugName)
-			turnLogFile = t.supervisor.debugLogger.GetTurnLogFile("agent", agentDebugName)
-			eventLogger = newContextEventLogger(t.supervisor.debugLogger, map[string]any{
-				"task":  t.supervisor.TaskName,
+		if t.commander.debugLogger != nil {
+			agentDebugName := fmt.Sprintf("%s_%s_%d", t.commander.TaskName, params.Name, t.commander.agentSeq+1)
+			debugFile = t.commander.debugLogger.GetMessageFile("agent", agentDebugName)
+			turnLogFile = t.commander.debugLogger.GetTurnLogFile("agent", agentDebugName)
+			eventLogger = newContextEventLogger(t.commander.debugLogger, map[string]any{
+				"task":  t.commander.TaskName,
 				"agent": params.Name,
 			})
 		}
 
 		var err error
 		a, err = New(ctx, Options{
-			ConfigPath:   t.supervisor.configPath,
+			ConfigPath:   t.commander.configPath,
 			AgentName:    agentCfg.Name,
 			Mode:         &mode,
 			DatasetStore: datasetStore,
-			SecretInfos:  t.supervisor.secretInfos,
-			SecretValues: t.supervisor.secretValues,
+			SecretInfos:  t.commander.secretInfos,
+			SecretValues: t.commander.secretValues,
 			DebugFile:    debugFile,
 			TurnLogFile:  turnLogFile,
 			EventLogger:  eventLogger,
@@ -1354,14 +1354,14 @@ func (t *callAgentTool) Call(input string) string {
 		}
 
 		// Store the session for future interactions
-		t.supervisor.agentSessions[params.Name] = a
+		t.commander.agentSessions[params.Name] = a
 	}
 
 	// Format input based on task vs response
 	var agentInput string
 	if params.Response != "" {
 		// Answering the agent's question - continue where it left off
-		agentInput = fmt.Sprintf("<SUPERVISOR_RESPONSE>\n%s\n</SUPERVISOR_RESPONSE>", params.Response)
+		agentInput = fmt.Sprintf("<COMMANDER_RESPONSE>\n%s\n</COMMANDER_RESPONSE>", params.Response)
 	} else if exists {
 		// New task on existing session - agent should ignore any in-flight work
 		agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
@@ -1371,20 +1371,20 @@ func (t *callAgentTool) Call(input string) string {
 	}
 
 	// Notify that agent is starting and get a streamer for it
-	if t.supervisor.callbacks != nil && t.supervisor.callbacks.OnAgentStart != nil {
-		t.supervisor.callbacks.OnAgentStart(t.supervisor.TaskName, params.Name)
+	if t.commander.callbacks != nil && t.commander.callbacks.OnAgentStart != nil {
+		t.commander.callbacks.OnAgentStart(t.commander.TaskName, params.Name)
 	}
 
 	var agentHandler streamers.ChatHandler
-	if t.supervisor.callbacks != nil && t.supervisor.callbacks.GetAgentHandler != nil {
-		agentHandler = t.supervisor.callbacks.GetAgentHandler(t.supervisor.TaskName, params.Name)
+	if t.commander.callbacks != nil && t.commander.callbacks.GetAgentHandler != nil {
+		agentHandler = t.commander.callbacks.GetAgentHandler(t.commander.TaskName, params.Name)
 	}
 
 	result, err := a.Chat(ctx, agentInput, agentHandler)
 
 	// Notify that agent is done
-	if t.supervisor.callbacks != nil && t.supervisor.callbacks.OnAgentComplete != nil {
-		t.supervisor.callbacks.OnAgentComplete(t.supervisor.TaskName, params.Name)
+	if t.commander.callbacks != nil && t.commander.callbacks.OnAgentComplete != nil {
+		t.commander.callbacks.OnAgentComplete(t.commander.TaskName, params.Name)
 	}
 
 	if err != nil {
@@ -1393,22 +1393,22 @@ func (t *callAgentTool) Call(input string) string {
 		return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>%s</ERROR_TYPE>\n<ERROR>%v</ERROR>\n<RETRYABLE>%t</RETRYABLE>", errType, err, retryable)
 	}
 
-	// Check if agent needs more info from supervisor
-	if result.AskSupe != "" {
-		return fmt.Sprintf("<STATUS>needs_input</STATUS>\n<AGENT>%s</AGENT>\n<QUESTION>\n%s\n</QUESTION>", params.Name, result.AskSupe)
+	// Check if agent needs more info from commander
+	if result.AskCommander != "" {
+		return fmt.Sprintf("<STATUS>needs_input</STATUS>\n<AGENT>%s</AGENT>\n<QUESTION>\n%s\n</QUESTION>", params.Name, result.AskCommander)
 	}
 
 	// Check if task is complete with an answer
 	if result.Complete {
 		// Generate agent ID and store the completed agent for follow-up queries
-		t.supervisor.agentSeq++
-		agentID := fmt.Sprintf("agent_%d_%s", t.supervisor.agentSeq, params.Name)
+		t.commander.agentSeq++
+		agentID := fmt.Sprintf("agent_%d_%s", t.commander.agentSeq, params.Name)
 
-		// Store locally - this agent was created by this supervisor
-		t.supervisor.completedAgents[agentID] = &completedAgent{
+		// Store locally - this agent was created by this commander
+		t.commander.completedAgents[agentID] = &completedAgent{
 			agent:     a,
 			agentID:   agentID,
-			inherited: false, // This supervisor created this agent
+			inherited: false, // This commander created this agent
 		}
 
 		return fmt.Sprintf("<STATUS>success</STATUS>\n<AGENT_ID>%s</AGENT_ID>\n<ANSWER>\n%s\n</ANSWER>", agentID, result.Answer)
@@ -1418,7 +1418,7 @@ func (t *callAgentTool) Call(input string) string {
 	return fmt.Sprintf("<STATUS>in_progress</STATUS>\n<AGENT>%s</AGENT>\n<NOTE>Agent is still processing. Call again to continue.</NOTE>", params.Name)
 }
 
-// classifyAgentError categorizes an error for supervisor decision-making
+// classifyAgentError categorizes an error for commander decision-making
 func classifyAgentError(err error) (errorType string, retryable bool) {
 	errStr := err.Error()
 	switch {
@@ -1439,7 +1439,7 @@ func classifyAgentError(err error) (errorType string, retryable bool) {
 
 // askAgentTool is the tool for querying completed agents
 type askAgentTool struct {
-	supervisor *Supervisor
+	commander *Commander
 }
 
 func (t *askAgentTool) ToolName() string {
@@ -1476,12 +1476,12 @@ func (t *askAgentTool) Call(input string) string {
 		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
 	}
 
-	// Look up the completed agent (includes both this supervisor's agents and inherited ones)
-	completed := t.supervisor.completedAgents[params.AgentID]
+	// Look up the completed agent (includes both this commander's agents and inherited ones)
+	completed := t.commander.completedAgents[params.AgentID]
 	if completed == nil {
 		// List available agent IDs
 		var available []string
-		for id := range t.supervisor.completedAgents {
+		for id := range t.commander.completedAgents {
 			available = append(available, id)
 		}
 		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Agent '%s' not found. Available agents: %v</ERROR>", params.AgentID, available)
@@ -1498,29 +1498,29 @@ func (t *askAgentTool) Call(input string) string {
 }
 
 // =============================================================================
-// askSupeTool - queries completed supervisors from dependency tasks
+// askCommanderTool - queries completed commanders from dependency tasks
 // =============================================================================
 
-// askSupeTool is the tool for querying completed supervisors in the dependency lineage
-type askSupeTool struct {
-	supervisor *Supervisor
+// askCommanderTool is the tool for querying completed commanders in the dependency lineage
+type askCommanderTool struct {
+	commander *Commander
 }
 
-func (t *askSupeTool) ToolName() string {
-	return "ask_supe"
+func (t *askCommanderTool) ToolName() string {
+	return "ask_commander"
 }
 
-func (t *askSupeTool) ToolDescription() string {
-	return `Ask a follow-up question to a completed supervisor from a dependency task. Use this when you need more details than what was provided in the task summary.
+func (t *askCommanderTool) ToolDescription() string {
+	return `Ask a follow-up question to a completed commander from a dependency task. Use this when you need more details than what was provided in the task summary.
 
-The queried supervisor will answer from its existing context and can use ask_agent to query its own agents if needed.
+The queried commander will answer from its existing context and can use ask_agent to query its own agents if needed.
 
-**For iterated tasks:** Use the "index" parameter to query a specific iteration's supervisor. Get the index from query_task_output results (each iteration has an "index" field).
+**For iterated tasks:** Use the "index" parameter to query a specific iteration's commander. Get the index from query_task_output results (each iteration has an "index" field).
 
-**Context behavior:** The first query to a supervisor creates a clone from its completed state. Subsequent queries to the same supervisor build on previous questions and answers, enabling natural follow-up conversations.`
+**Context behavior:** The first query to a commander creates a clone from its completed state. Subsequent queries to the same commander build on previous questions and answers, enabling natural follow-up conversations.`
 }
 
-func (t *askSupeTool) ToolPayloadSchema() aitools.Schema {
+func (t *askCommanderTool) ToolPayloadSchema() aitools.Schema {
 	return aitools.Schema{
 		Type: aitools.TypeObject,
 		Properties: aitools.PropertyMap{
@@ -1530,7 +1530,7 @@ func (t *askSupeTool) ToolPayloadSchema() aitools.Schema {
 			},
 			"question": {
 				Type:        aitools.TypeString,
-				Description: "The follow-up question to ask the supervisor",
+				Description: "The follow-up question to ask the commander",
 			},
 			"index": {
 				Type:        aitools.TypeInteger,
@@ -1541,7 +1541,7 @@ func (t *askSupeTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *askSupeTool) Call(input string) string {
+func (t *askCommanderTool) Call(input string) string {
 	var params struct {
 		TaskName string `json:"task_name"`
 		Question string `json:"question"`
@@ -1558,24 +1558,24 @@ func (t *askSupeTool) Call(input string) string {
 	}
 
 	// Use cached query if available (for iteration deduplication)
-	if t.supervisor.callbacks != nil && t.supervisor.callbacks.AskSupeWithCache != nil {
-		answer, err := t.supervisor.callbacks.AskSupeWithCache(params.TaskName, iterIndex, params.Question)
+	if t.commander.callbacks != nil && t.commander.callbacks.AskCommanderWithCache != nil {
+		answer, err := t.commander.callbacks.AskCommanderWithCache(params.TaskName, iterIndex, params.Question)
 		if err != nil {
 			return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
 		}
 		return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, answer)
 	}
 
-	// Fallback to per-supervisor clone logic (for non-iteration contexts)
-	if t.supervisor.callbacks == nil || t.supervisor.callbacks.GetSupervisorForQuery == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>ask_supe is not available in this context</ERROR>"
+	// Fallback to per-commander clone logic (for non-iteration contexts)
+	if t.commander.callbacks == nil || t.commander.callbacks.GetCommanderForQuery == nil {
+		return "<STATUS>error</STATUS>\n<ERROR>ask_commander is not available in this context</ERROR>"
 	}
 
 	// Check if we already have a cached clone for this target task (and iteration)
-	// Each calling supervisor gets one persistent clone per target task/iteration,
+	// Each calling commander gets one persistent clone per target task/iteration,
 	// so follow-up questions build on previous context
-	if t.supervisor.queryClones == nil {
-		t.supervisor.queryClones = make(map[string]*Supervisor)
+	if t.commander.queryClones == nil {
+		t.commander.queryClones = make(map[string]*Commander)
 	}
 
 	// Cache key includes iteration index for iterated tasks
@@ -1584,47 +1584,47 @@ func (t *askSupeTool) Call(input string) string {
 		cacheKey = fmt.Sprintf("%s[%d]", params.TaskName, iterIndex)
 	}
 
-	supClone, exists := t.supervisor.queryClones[cacheKey]
+	supClone, exists := t.commander.queryClones[cacheKey]
 	if !exists {
 		// Create a new clone and cache it
 		var err error
-		supClone, err = t.supervisor.callbacks.GetSupervisorForQuery(params.TaskName, iterIndex)
+		supClone, err = t.commander.callbacks.GetCommanderForQuery(params.TaskName, iterIndex)
 		if err != nil {
 			return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
 		}
-		t.supervisor.queryClones[cacheKey] = supClone
+		t.commander.queryClones[cacheKey] = supClone
 	}
 
-	// Ask the question to the cloned supervisor (clone persists for follow-ups)
+	// Ask the question to the cloned commander (clone persists for follow-ups)
 	ctx := context.Background()
 	answer, err := supClone.AnswerQueryIsolated(ctx, params.Question)
 	if err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Error querying supervisor: %v</ERROR>", err)
+		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Error querying commander: %v</ERROR>", err)
 	}
 
 	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, answer)
 }
 
 // =============================================================================
-// listSupeQuestionsTool - lists questions asked to dependency supervisors
+// listCommanderQuestionsTool - lists questions asked to dependency commanders
 // =============================================================================
 
-// listSupeQuestionsTool shows what questions have been asked to a dependency task by other iterations
-type listSupeQuestionsTool struct {
-	supervisor *Supervisor
+// listCommanderQuestionsTool shows what questions have been asked to a dependency task by other iterations
+type listCommanderQuestionsTool struct {
+	commander *Commander
 }
 
-func (t *listSupeQuestionsTool) ToolName() string {
-	return "list_supe_questions"
+func (t *listCommanderQuestionsTool) ToolName() string {
+	return "list_commander_questions"
 }
 
-func (t *listSupeQuestionsTool) ToolDescription() string {
-	return `List questions that have been asked to a dependency supervisor by other iterations.
+func (t *listCommanderQuestionsTool) ToolDescription() string {
+	return `List questions that have been asked to a dependency commander by other iterations.
 
-Use this to see what information has already been requested, so you can reuse existing answers instead of asking duplicate questions. Use get_supe_answer to retrieve the answer for a specific question by its index.`
+Use this to see what information has already been requested, so you can reuse existing answers instead of asking duplicate questions. Use get_commander_answer to retrieve the answer for a specific question by its index.`
 }
 
-func (t *listSupeQuestionsTool) ToolPayloadSchema() aitools.Schema {
+func (t *listCommanderQuestionsTool) ToolPayloadSchema() aitools.Schema {
 	return aitools.Schema{
 		Type: aitools.TypeObject,
 		Properties: aitools.PropertyMap{
@@ -1637,7 +1637,7 @@ func (t *listSupeQuestionsTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *listSupeQuestionsTool) Call(input string) string {
+func (t *listCommanderQuestionsTool) Call(input string) string {
 	var params struct {
 		TaskName string `json:"task_name"`
 	}
@@ -1645,11 +1645,11 @@ func (t *listSupeQuestionsTool) Call(input string) string {
 		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
 	}
 
-	if t.supervisor.callbacks == nil || t.supervisor.callbacks.ListSupeQuestions == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>list_supe_questions is not available in this context</ERROR>"
+	if t.commander.callbacks == nil || t.commander.callbacks.ListCommanderQuestions == nil {
+		return "<STATUS>error</STATUS>\n<ERROR>list_commander_questions is not available in this context</ERROR>"
 	}
 
-	questions := t.supervisor.callbacks.ListSupeQuestions(params.TaskName)
+	questions := t.commander.callbacks.ListCommanderQuestions(params.TaskName)
 	if len(questions) == 0 {
 		return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<QUESTIONS>No questions have been asked yet.</QUESTIONS>", params.TaskName)
 	}
@@ -1663,25 +1663,25 @@ func (t *listSupeQuestionsTool) Call(input string) string {
 }
 
 // =============================================================================
-// getSupeAnswerTool - gets cached answer by index
+// getCommanderAnswerTool - gets cached answer by index
 // =============================================================================
 
-// getSupeAnswerTool retrieves a cached answer for a question by its index
-type getSupeAnswerTool struct {
-	supervisor *Supervisor
+// getCommanderAnswerTool retrieves a cached answer for a question by its index
+type getCommanderAnswerTool struct {
+	commander *Commander
 }
 
-func (t *getSupeAnswerTool) ToolName() string {
-	return "get_supe_answer"
+func (t *getCommanderAnswerTool) ToolName() string {
+	return "get_commander_answer"
 }
 
-func (t *getSupeAnswerTool) ToolDescription() string {
+func (t *getCommanderAnswerTool) ToolDescription() string {
 	return `Get the answer for a previously asked question by its index.
 
-Use list_supe_questions first to see available questions and their indices. If the answer is still being fetched by another iteration, this will wait until it's ready.`
+Use list_commander_questions first to see available questions and their indices. If the answer is still being fetched by another iteration, this will wait until it's ready.`
 }
 
-func (t *getSupeAnswerTool) ToolPayloadSchema() aitools.Schema {
+func (t *getCommanderAnswerTool) ToolPayloadSchema() aitools.Schema {
 	return aitools.Schema{
 		Type: aitools.TypeObject,
 		Properties: aitools.PropertyMap{
@@ -1691,14 +1691,14 @@ func (t *getSupeAnswerTool) ToolPayloadSchema() aitools.Schema {
 			},
 			"index": {
 				Type:        aitools.TypeInteger,
-				Description: "The index of the question (from list_supe_questions)",
+				Description: "The index of the question (from list_commander_questions)",
 			},
 		},
 		Required: []string{"task_name", "index"},
 	}
 }
 
-func (t *getSupeAnswerTool) Call(input string) string {
+func (t *getCommanderAnswerTool) Call(input string) string {
 	var params struct {
 		TaskName string `json:"task_name"`
 		Index    int    `json:"index"`
@@ -1707,11 +1707,11 @@ func (t *getSupeAnswerTool) Call(input string) string {
 		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
 	}
 
-	if t.supervisor.callbacks == nil || t.supervisor.callbacks.GetSupeAnswer == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>get_supe_answer is not available in this context</ERROR>"
+	if t.commander.callbacks == nil || t.commander.callbacks.GetCommanderAnswer == nil {
+		return "<STATUS>error</STATUS>\n<ERROR>get_commander_answer is not available in this context</ERROR>"
 	}
 
-	answer, err := t.supervisor.callbacks.GetSupeAnswer(params.TaskName, params.Index)
+	answer, err := t.commander.callbacks.GetCommanderAnswer(params.TaskName, params.Index)
 	if err != nil {
 		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
 	}
@@ -1723,7 +1723,7 @@ func (t *getSupeAnswerTool) Call(input string) string {
 // queryTaskOutputTool - queries completed task outputs
 // =============================================================================
 
-// queryTaskOutputTool allows supervisors to query completed dependency task outputs
+// queryTaskOutputTool allows commanders to query completed dependency task outputs
 type queryTaskOutputTool struct {
 	store KnowledgeStore
 }
@@ -1735,7 +1735,7 @@ func (t *queryTaskOutputTool) ToolName() string {
 func (t *queryTaskOutputTool) ToolDescription() string {
 	return `Query structured outputs from completed dependency tasks. Returns only the structured data fields defined in the task's output schema.
 
-**Note:** For narrative summaries or detailed explanations, use ask_supe instead.
+**Note:** For narrative summaries or detailed explanations, use ask_commander instead.
 
 **Query modes:**
 1. Get structured output: {"task": "task_name"}
@@ -1880,7 +1880,7 @@ func (t *queryTaskOutputTool) Call(input string) string {
 
 // formatTaskOutput formats a non-iterated task output
 func formatTaskOutput(output *TaskOutputInfo) string {
-	// Only return structured output - summaries are accessed via ask_supe
+	// Only return structured output - summaries are accessed via ask_commander
 	if len(output.Output) > 0 {
 		outputJSON, _ := json.MarshalIndent(output.Output, "", "  ")
 		return fmt.Sprintf("Task: %s\nStatus: %s\n\nOutput:\n%s", output.TaskName, output.Status, string(outputJSON))

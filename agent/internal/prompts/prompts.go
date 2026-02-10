@@ -12,8 +12,8 @@ import (
 //go:embed agent.md
 var agentPromptTemplate string
 
-//go:embed supervisor.md
-var supervisorPromptTemplate string
+//go:embed commander.md
+var commanderPromptTemplate string
 
 // GetAgentPrompt returns the agent system prompt with tools and mode injected
 func GetAgentPrompt(tools map[string]aitools.Tool, mode config.AgentMode, secrets []SecretInfo) string {
@@ -113,17 +113,17 @@ Summary of what was accomplished and the final result.
 </ANSWER>___STOP___
 ` + "```" + `
 
-### Pattern 3: Ask Supervisor for Clarification
-When you need more information from the supervisor before you can complete your task:
+### Pattern 3: Ask Commander for Clarification
+When you need more information from the commander before you can complete your task:
 **Only ask when truly necessary. Make reasonable assumptions when possible, but ask if critical details are missing.**
 
 ` + "```" + `
 <REASONING>
 I need more information about X to proceed because...
 </REASONING>
-<ASK_SUPE>
-Your question for the supervisor here.
-</ASK_SUPE>___STOP___
+<ASK_COMMANDER>
+Your question for the commander here.
+</ASK_COMMANDER>___STOP___
 ` + "```" + `
 
 ### Pattern 4: Multi-step Reasoning
@@ -140,17 +140,17 @@ Based on that analysis, the next step is...
 <ACTION_INPUT>{"param": "value"}</ACTION_INPUT>___STOP___
 ` + "```" + `
 
-## Supervisor Responses
+## Commander Responses
 
-When you ask the supervisor a question via ASK_SUPE, you may receive one of two responses:
+When you ask the commander a question via ASK_COMMANDER, you may receive one of two responses:
 
-### ` + "`<SUPERVISOR_RESPONSE>`" + ` - Answer to Your Question
+### ` + "`<COMMANDER_RESPONSE>`" + ` - Answer to Your Question
 
-The supervisor is providing the information you requested. Continue your task from where you left off using this new information.
+The commander is providing the information you requested. Continue your task from where you left off using this new information.
 
 ### ` + "`<NEW_TASK>`" + ` - New Assignment
 
-The supervisor has decided to give you a different task instead. **Ignore any in-flight work** and start fresh on this new task. Treat it as a completely new assignment.`)
+The commander has decided to give you a different task instead. **Ignore any in-flight work** and start fresh on this new task. Treat it as a completely new assignment.`)
 	} else {
 		// Chat mode
 		sb.WriteString(`### Pattern 1: Direct Answer
@@ -224,7 +224,7 @@ func getRules(mode config.AgentMode) string {
 	return sb.String()
 }
 
-// AgentInfo represents basic info about an agent for the supervisor prompt
+// AgentInfo represents basic info about an agent for the commander prompt
 type AgentInfo struct {
 	Name        string
 	Description string
@@ -242,9 +242,9 @@ type IterationOptions struct {
 	IsParallel  bool // If iteration, whether running in parallel (vs sequential)
 }
 
-// GetSupervisorPrompt returns the supervisor system prompt with available agents injected
-func GetSupervisorPrompt(agents []AgentInfo, iterOpts IterationOptions) string {
-	prompt := supervisorPromptTemplate
+// GetCommanderPrompt returns the commander system prompt with available agents injected
+func GetCommanderPrompt(agents []AgentInfo, iterOpts IterationOptions) string {
+	prompt := commanderPromptTemplate
 
 	// Inject agents
 	agentsDescription := formatAgents(agents)
@@ -272,14 +272,14 @@ func GetSupervisorPrompt(agents []AgentInfo, iterOpts IterationOptions) string {
 func getParallelIterationContent() string {
 	return `## Reusing Questions from Other Iterations
 
-When running as part of an iterated task, other iterations may have already asked questions to dependency supervisors. You can reuse their answers to avoid redundant queries.
+When running as part of an iterated task, other iterations may have already asked questions to dependency commanders. You can reuse their answers to avoid redundant queries.
 
 ### Listing Asked Questions
 
-Use ` + "`list_supe_questions`" + ` to see what questions have been asked:
+Use ` + "`list_commander_questions`" + ` to see what questions have been asked:
 
 ` + "```" + `
-<ACTION>list_supe_questions</ACTION>
+<ACTION>list_commander_questions</ACTION>
 <ACTION_INPUT>{"task_name": "fetch_data"}</ACTION_INPUT>___STOP___
 ` + "```" + `
 
@@ -293,16 +293,16 @@ Returns a numbered list of questions (without answers):
 
 ### Getting Cached Answers
 
-Use ` + "`get_supe_answer`" + ` with the question index to get the cached answer:
+Use ` + "`get_commander_answer`" + ` with the question index to get the cached answer:
 
 ` + "```" + `
-<ACTION>get_supe_answer</ACTION>
+<ACTION>get_commander_answer</ACTION>
 <ACTION_INPUT>{"task_name": "fetch_data", "index": 0}</ACTION_INPUT>___STOP___
 ` + "```" + `
 
 If the answer is still being fetched by another iteration, this will wait until it's ready.
 
-**Tip:** Check ` + "`list_supe_questions`" + ` first before using ` + "`ask_supe`" + `. If another iteration already asked a similar question, use ` + "`get_supe_answer`" + ` instead to avoid duplicate work.
+**Tip:** Check ` + "`list_commander_questions`" + ` first before using ` + "`ask_commander`" + `. If another iteration already asked a similar question, use ` + "`get_commander_answer`" + ` instead to avoid duplicate work.
 
 `
 }
@@ -311,7 +311,7 @@ If the answer is still being fetched by another iteration, this will wait until 
 func getSequentialIterationContent() string {
 	return `## Learnings for Next Iteration
 
-When supervising a sequential iteration, you may receive learnings from the previous iteration. These contain insights, failure solutions, and recommendations that can help you succeed.
+When commanding a sequential iteration, you may receive learnings from the previous iteration. These contain insights, failure solutions, and recommendations that can help you succeed.
 
 **Applying Learnings:**
 - Review any "Learnings from Previous Iteration" in your context
@@ -356,7 +356,7 @@ func formatAgents(agents []AgentInfo) string {
 	sb.WriteString("{\n")
 	sb.WriteString("  \"name\": \"string (required) - The name of the agent to call\",\n")
 	sb.WriteString("  \"task\": \"string - A new task for the agent. Always treated as a fresh assignment.\",\n")
-	sb.WriteString("  \"response\": \"string - Response to an agent's ASK_SUPE question. Agent continues from where it left off.\"\n")
+	sb.WriteString("  \"response\": \"string - Response to an agent's ASK_COMMANDER question. Agent continues from where it left off.\"\n")
 	sb.WriteString("}\n```\n\n")
 	sb.WriteString("Provide exactly one of `task` or `response`, not both.\n\n")
 	sb.WriteString("**Available agents:**\n\n")

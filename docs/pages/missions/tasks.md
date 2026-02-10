@@ -76,9 +76,9 @@ mission "report" {
 }
 ```
 
-## Supervisor Behavior
+## Commander Behavior
 
-Each task gets a supervisor that:
+Each task gets a commander that:
 
 1. Receives the objective
 2. Reasons about how to accomplish it
@@ -87,7 +87,7 @@ Each task gets a supervisor that:
 
 ## Context from Dependencies
 
-Supervisors receive summaries from completed dependencies:
+Commanders receive summaries from completed dependencies:
 
 ```hcl
 task "step_2" {
@@ -96,11 +96,11 @@ task "step_2" {
 }
 ```
 
-The step_2 supervisor sees step_1's summary and can query structured data using `query_task_output`.
+The step_2 commander sees step_1's summary and can query structured data using `query_task_output`.
 
 ## Structured Output
 
-Tasks can define a structured output schema. When defined, the supervisor must output data matching the schema:
+Tasks can define a structured output schema. When defined, the commander must output data matching the schema:
 
 ```hcl
 task "analyze_sales" {

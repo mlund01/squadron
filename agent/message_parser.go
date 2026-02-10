@@ -15,7 +15,7 @@ const (
 	StateAction
 	StateActionInput
 	StateAnswer
-	StateAskSupe
+	StateAskCommander
 )
 
 // MessageParser parses ReAct-formatted streaming output and dispatches to a ChatHandler
@@ -26,11 +26,11 @@ type MessageParser struct {
 	thinkingDisplayed bool
 	reasoningStarted  bool
 	answerStarted     bool
-	askSupeStarted    bool
+	askCommanderStarted    bool
 	actionName        string
 	actionInput       string
 	answerText        strings.Builder
-	askSupeText       strings.Builder
+	askCommanderText       strings.Builder
 }
 
 // NewMessageParser creates a new parser with the given handler
@@ -65,9 +65,9 @@ func (p *MessageParser) GetAnswer() string {
 	return p.answerText.String()
 }
 
-// GetAskSupe returns the parsed ASK_SUPE text (available after ASK_SUPE tag closes)
-func (p *MessageParser) GetAskSupe() string {
-	return p.askSupeText.String()
+// GetAskCommander returns the parsed ASK_COMMANDER text (available after ASK_COMMANDER tag closes)
+func (p *MessageParser) GetAskCommander() string {
+	return p.askCommanderText.String()
 }
 
 // Finish signals that streaming is complete
@@ -89,11 +89,11 @@ func (p *MessageParser) Reset() {
 	p.thinkingDisplayed = false
 	p.reasoningStarted = false
 	p.answerStarted = false
-	p.askSupeStarted = false
+	p.askCommanderStarted = false
 	p.actionName = ""
 	p.actionInput = ""
 	p.answerText.Reset()
-	p.askSupeText.Reset()
+	p.askCommanderText.Reset()
 }
 
 func (p *MessageParser) processBuffer() {
@@ -132,9 +132,9 @@ func (p *MessageParser) processBuffer() {
 				p.buffer.WriteString(content)
 				continue
 			}
-			if idx := strings.Index(content, "<ASK_SUPE>"); idx != -1 {
-				p.state = StateAskSupe
-				content = content[idx+10:] // len("<ASK_SUPE>") = 10
+			if idx := strings.Index(content, "<ASK_COMMANDER>"); idx != -1 {
+				p.state = StateAskCommander
+				content = content[idx+10:] // len("<ASK_COMMANDER>") = 10
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
@@ -236,24 +236,24 @@ func (p *MessageParser) processBuffer() {
 			}
 			return
 
-		case StateAskSupe:
-			// For ASK_SUPE, we collect the full content (don't stream to user)
+		case StateAskCommander:
+			// For ASK_COMMANDER, we collect the full content (don't stream to user)
 			// Strip leading newlines if this is the start
-			if !p.askSupeStarted {
+			if !p.askCommanderStarted {
 				content = strings.TrimLeft(content, "\n")
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				if len(content) > 0 {
-					p.askSupeStarted = true
+					p.askCommanderStarted = true
 				}
 			}
 
-			if idx := strings.Index(content, "</ASK_SUPE>"); idx != -1 {
+			if idx := strings.Index(content, "</ASK_COMMANDER>"); idx != -1 {
 				// Capture content before closing tag, trimming trailing newlines
 				finalContent := strings.TrimRight(content[:idx], "\n")
-				p.askSupeText.WriteString(finalContent)
+				p.askCommanderText.WriteString(finalContent)
 				p.state = StateNone
-				content = content[idx+11:] // len("</ASK_SUPE>") = 11
+				content = content[idx+11:] // len("</ASK_COMMANDER>") = 11
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
@@ -261,7 +261,7 @@ func (p *MessageParser) processBuffer() {
 			// No closing tag yet - accumulate but keep buffer for split tag detection
 			if len(content) > 11 {
 				safeLen := len(content) - 11 // Keep last 11 chars in buffer
-				p.askSupeText.WriteString(content[:safeLen])
+				p.askCommanderText.WriteString(content[:safeLen])
 				content = content[safeLen:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)

@@ -15,7 +15,7 @@ import (
 // ChatResult represents the outcome of a chat interaction
 type ChatResult struct {
 	Answer   string // Final answer (if complete)
-	AskSupe  string // Question for supervisor (if agent needs input)
+	AskCommander  string // Question for commander (if agent needs input)
 	Complete bool   // True if task is done
 }
 

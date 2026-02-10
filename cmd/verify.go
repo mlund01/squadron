@@ -77,7 +77,7 @@ var verifyCmd = &cobra.Command{
 		}
 		fmt.Printf("Found %d mission(s)\n", len(cfg.Missions))
 		for _, w := range cfg.Missions {
-			fmt.Printf("  - %s (supervisor: %s, agents: %v, tasks: %d)\n", w.Name, w.SupervisorModel, w.Agents, len(w.Tasks))
+			fmt.Printf("  - %s (commander: %s, agents: %v, tasks: %d)\n", w.Name, w.Commander, w.Agents, len(w.Tasks))
 			for _, t := range w.Tasks {
 				deps := ""
 				if len(t.DependsOn) > 0 {

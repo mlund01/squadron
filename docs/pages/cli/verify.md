@@ -39,7 +39,7 @@ Found 2 variable(s)
 Found 1 agent(s)
   - assistant (tools: [plugins.bash.bash plugins.http.get])
 Found 1 mission(s)
-  - data_pipeline (supervisor: claude_sonnet_4, agents: [assistant], tasks: 3)
+  - data_pipeline (commander: claude_sonnet_4, agents: [assistant], tasks: 3)
 ```
 
 On error:

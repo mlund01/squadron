@@ -64,7 +64,7 @@ type OutputField struct {
 // Mission represents a mission configuration with multiple tasks
 type Mission struct {
 	Name            string          `hcl:"name,label"`
-	SupervisorModel string          `hcl:"supervisor_model"`
+	Commander string          `hcl:"commander"`
 	Agents          []string        `hcl:"agents"`
 	Tasks           []Task          `hcl:"task,block"`
 	Inputs          []MissionInput // Parsed from input blocks
@@ -87,13 +87,13 @@ func (w *Mission) Validate(models []Model, agents []Agent) error {
 		return fmt.Errorf("mission name is required")
 	}
 
-	if w.SupervisorModel == "" {
-		return fmt.Errorf("supervisor_model is required")
+	if w.Commander == "" {
+		return fmt.Errorf("commander is required")
 	}
 
-	// Validate supervisor_model references a valid model
-	if !isValidModelRef(w.SupervisorModel, models) {
-		return fmt.Errorf("supervisor_model '%s' not found in models", w.SupervisorModel)
+	// Validate commander references a valid model
+	if !isValidModelRef(w.Commander, models) {
+		return fmt.Errorf("commander '%s' not found in models", w.Commander)
 	}
 
 	if len(w.Tasks) == 0 {

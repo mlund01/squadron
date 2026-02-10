@@ -23,7 +23,7 @@ Squad is an HCL-based CLI for defining and running AI agents and multi-agent mis
 
 | Directory | Purpose |
 |-----------|---------|
-| `agent/` | Agent and Supervisor implementations, orchestration |
+| `agent/` | Agent and Commander implementations, orchestration |
 | `aitools/` | Tool interface, schema definitions, result interception |
 | `config/` | HCL config loading with staged evaluation |
 | `llm/` | LLM provider abstraction (Anthropic, OpenAI, Gemini) |
@@ -76,7 +76,7 @@ agent "browser_navigator" {
 
 # missions.hcl
 mission "example" {
-  supervisor_model = models.anthropic.claude_sonnet_4
+  commander = models.anthropic.claude_sonnet_4
   agents           = [agents.browser_navigator]
 
   task "login" {
@@ -103,7 +103,7 @@ mission "example" {
 - `Provider` interface defines `Chat()` and `ChatStream()` methods
 - `Session` maintains conversation history and system prompts
 - Implementations: `AnthropicProvider`, `OpenAIProvider`, `GeminiProvider`
-- Sessions support cloning for isolated query processing (used in `ask_supe`)
+- Sessions support cloning for isolated query processing (used in `ask_commander`)
 
 Model keys (used in HCL) map to actual API model names in `config/model.go:SupportedModels`. Add new models there before using them in config.
 
@@ -174,7 +174,7 @@ Missions orchestrate multi-agent task execution with dependency management.
 | Component | File | Purpose |
 |-----------|------|---------|
 | `Runner` | `runner.go` | Executes missions, manages task dependencies |
-| `Supervisor` | `agent/supervisor.go` | Orchestrates agents for a single task |
+| `Commander` | `agent/commander.go` | Orchestrates agents for a single task |
 | `Agent` | `agent/agent.go` | Executes tool calls with ReAct-style reasoning |
 | `KnowledgeStore` | `knowledge.go` | Stores structured task outputs for querying |
 | `DebugLogger` | `debug.go` | Logs events and LLM messages for debugging |
@@ -183,18 +183,18 @@ Missions orchestrate multi-agent task execution with dependency management.
 
 1. **Runner** resolves task dependencies (topological sort)
 2. **Tasks** execute in parallel when dependencies are satisfied
-3. **Supervisor** manages each task:
-   - Queries ancestor supervisors for context (`queryAncestorsForContext`)
+3. **Commander** manages each task:
+   - Queries ancestor commanders for context (`queryAncestorsForContext`)
    - Delegates work to agents via `call_agent` tool
    - Produces structured output via `<OUTPUT>` blocks
 4. **Agents** execute ReAct loops:
    - Reason → Act (tool call) → Observe (tool result) → Repeat
-   - Return final answer or ask supervisor for input (`ASK_SUPE`)
+   - Return final answer or ask commander for input (`ASK_COMMANDER`)
 
 ### Task Dependencies & Context Passing
 
 - Tasks declare `depends_on = [tasks.previous_task]`
-- When a task starts, Runner queries each ancestor supervisor with the new task's objective
+- When a task starts, Runner queries each ancestor commander with the new task's objective
 - Ancestors provide targeted context based on what they learned
 - Structured outputs are stored in KnowledgeStore for `query_task_output` queries
 
@@ -222,16 +222,16 @@ task "process" {
 }
 ```
 
-### Supervisor Tools
+### Commander Tools
 
 | Tool | Purpose |
 |------|---------|
 | `call_agent` | Delegate work to an agent (or respond to agent's question) |
 | `ask_agent` | Query a completed agent for follow-up information |
-| `ask_supe` | Query a dependency task's supervisor for more context |
+| `ask_commander` | Query a dependency task's commander for more context |
 | `query_task_output` | Access structured outputs from completed tasks |
-| `list_supe_questions` | See questions asked by other iterations (parallel dedup) |
-| `get_supe_answer` | Get cached answer from shared question store |
+| `list_commander_questions` | See questions asked by other iterations (parallel dedup) |
+| `get_commander_answer` | Get cached answer from shared question store |
 
 ---
 
@@ -240,7 +240,7 @@ task "process" {
 ### Agent Modes
 
 - `ModeChat`: Interactive chat mode (default)
-- `ModeMission`: Mission execution mode (uses `ASK_SUPE` for supervisor queries)
+- `ModeMission`: Mission execution mode (uses `ASK_COMMANDER` for commander queries)
 
 ### ReAct Loop
 
@@ -282,7 +282,7 @@ Creates a debug directory: `debug/<mission>_<timestamp>/`
 | File | Contents |
 |------|----------|
 | `events.log` | JSON-line events (task start/complete, tool calls) |
-| `supervisor_<task>.md` | Full LLM conversation for task's supervisor |
+| `commander_<task>.md` | Full LLM conversation for task's commander |
 | `agent_<task>_<agent>_<seq>.md` | Full LLM conversation for each agent |
 
 ### Event Types
@@ -349,4 +349,4 @@ Use iterated tasks with `parallel = false` to pass context between iterations vi
 
 ### Parallel with Shared Context
 
-Use `list_supe_questions` + `get_supe_answer` to deduplicate queries across parallel iterations.
+Use `list_commander_questions` + `get_commander_answer` to deduplicate queries across parallel iterations.

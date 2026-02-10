@@ -7,7 +7,7 @@
 # - Take screenshots to visually confirm state when needed
 
 mission "airtable_entry" {
-  supervisor_model = models.anthropic.claude_sonnet_4
+  commander = models.anthropic.claude_sonnet_4
   agents           = [agents.browser_navigator]
 
   # Dataset of rows to enter into Airtable

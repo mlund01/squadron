@@ -1,5 +1,5 @@
 mission "secrets_test" {
-  supervisor_model = models.openai.gpt_4o
+  commander = models.openai.gpt_4o
   agents           = [agents.assistant]
 
   # Secret input from a global variable

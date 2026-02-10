@@ -105,7 +105,7 @@ func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools m
 }
 
 // processTurn handles a single conversation turn, including any tool calls
-// Returns a ChatResult with either an answer (complete) or ASK_SUPE question (needs input)
+// Returns a ChatResult with either an answer (complete) or ASK_COMMANDER question (needs input)
 func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResult, error) {
 	currentTextInput := input
 	var currentImageInput *llm.ImageBlock
@@ -187,9 +187,9 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 			o.turnLogger.LogTurn(action, o.getSessionMessages())
 		}
 
-		// Check for ASK_SUPE first (takes priority - agent needs supervisor input)
-		if askSupe := parser.GetAskSupe(); askSupe != "" {
-			return ChatResult{AskSupe: askSupe, Complete: false}, nil
+		// Check for ASK_COMMANDER first (takes priority - agent needs commander input)
+		if askCommander := parser.GetAskCommander(); askCommander != "" {
+			return ChatResult{AskCommander: askCommander, Complete: false}, nil
 		}
 
 		// Capture the answer if one was provided

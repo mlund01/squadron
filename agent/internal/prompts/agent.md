@@ -101,7 +101,7 @@ Pruned results show as `[RESULT PRUNED]` - you cannot retrieve their original co
 
 ## Handling Follow-up Questions
 
-After completing your task, the supervisor may ask you a follow-up question to get specific details.
+After completing your task, the commander may ask you a follow-up question to get specific details.
 When you receive a `<FOLLOWUP_QUESTION>` tag, provide a concise, factual answer based on your previous work.
 This is NOT a new task - just answer the question directly without using tools. Wrap your answer in `<ANSWER>` tags.
 

@@ -18,7 +18,7 @@ import (
 	"squadron/streamers"
 )
 
-// Runner executes a mission by orchestrating supervisors for each task
+// Runner executes a mission by orchestrating commanders for each task
 type Runner struct {
 	cfg        *config.Config
 	configPath string
@@ -38,8 +38,8 @@ type Runner struct {
 	// Task state management
 	mu                   sync.RWMutex
 	taskResults          map[string]*TaskResult                   // Results from completed tasks
-	taskSupervisors      map[string]*agent.Supervisor             // Supervisors for completed tasks (kept for agent inheritance)
-	iterationSupervisors map[string]map[int]*agent.Supervisor     // Supervisors for iterated tasks: taskName -> index -> supervisor
+	taskCommanders      map[string]*agent.Commander             // Commanders for completed tasks (kept for agent inheritance)
+	iterationCommanders map[string]map[int]*agent.Commander     // Commanders for iterated tasks: taskName -> index -> commander
 	taskAgents           map[string]map[string]*agent.Agent       // Agents from each task (for inheritance)
 
 	// Knowledge store for structured task outputs
@@ -48,17 +48,17 @@ type Runner struct {
 	// Debug logging
 	debugLogger *DebugLogger
 
-	// Shared store for ask_supe questions across iterations
-	askSupeStore *askSupeStore
+	// Shared store for ask_commander questions across iterations
+	askCommanderStore *askCommanderStore
 }
 
-// askSupeStore holds questions and answers shared across parallel iterations
-type askSupeStore struct {
+// askCommanderStore holds questions and answers shared across parallel iterations
+type askCommanderStore struct {
 	mu        sync.Mutex
 	questions map[string][]*questionEntry // Map: targetTask -> []questionEntry
 }
 
-// questionEntry represents a question asked to a dependency supervisor
+// questionEntry represents a question asked to a dependency commander
 type questionEntry struct {
 	Question string
 	Answer   string
@@ -154,11 +154,11 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		secretInfos:          secretInfos,
 		resolvedDatasets:     resolvedDatasets,
 		taskResults:          make(map[string]*TaskResult),
-		taskSupervisors:      make(map[string]*agent.Supervisor),
-		iterationSupervisors: make(map[string]map[int]*agent.Supervisor),
+		taskCommanders:      make(map[string]*agent.Commander),
+		iterationCommanders: make(map[string]map[int]*agent.Commander),
 		taskAgents:           make(map[string]map[string]*agent.Agent),
 		knowledgeStore:       NewMemoryKnowledgeStore(),
-		askSupeStore: &askSupeStore{
+		askCommanderStore: &askCommanderStore{
 			questions: make(map[string][]*questionEntry),
 		},
 	}
@@ -343,8 +343,8 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		}
 	}
 
-	// Cleanup iteration supervisors now that all tasks are complete
-	r.cleanupIterationSupervisors()
+	// Cleanup iteration commanders now that all tasks are complete
+	r.cleanupIterationCommanders()
 
 	streamer.MissionCompleted(r.mission.Name)
 
@@ -358,23 +358,23 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	return nil
 }
 
-// cleanupIterationSupervisors closes all stored iteration supervisors
-func (r *Runner) cleanupIterationSupervisors() {
+// cleanupIterationCommanders closes all stored iteration commanders
+func (r *Runner) cleanupIterationCommanders() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for taskName, iterSups := range r.iterationSupervisors {
+	for taskName, iterSups := range r.iterationCommanders {
 		for idx, sup := range iterSups {
 			if sup != nil {
 				sup.Close()
 			}
 			delete(iterSups, idx)
 		}
-		delete(r.iterationSupervisors, taskName)
+		delete(r.iterationCommanders, taskName)
 	}
 }
 
-// runTask executes a single task with its supervisor
+// runTask executes a single task with its commander
 func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streamers.MissionHandler) (*TaskResult, error) {
 	// Resolve the objective with vars and inputs
 	objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
@@ -417,25 +417,25 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 	// Build inherited agents from all dependency tasks in the lineage
 	inheritedAgents := r.collectInheritedAgents(task.Name)
 
-	// Collect dependency output schemas for the supervisor
+	// Collect dependency output schemas for the commander
 	depOutputSchemas := r.collectDepOutputSchemas(task.Name)
 
 	// Get task's own output schema if defined
 	taskOutputSchema := r.getTaskOutputSchema(task)
 
-	// Get debug file for supervisor if debug mode is enabled
+	// Get debug file for commander if debug mode is enabled
 	var debugFile string
 	if r.debugLogger != nil {
-		debugFile = r.debugLogger.GetMessageFile("supervisor", task.Name)
+		debugFile = r.debugLogger.GetMessageFile("commander", task.Name)
 	}
 
-	// Create supervisor for this task (non-iterated)
-	sup, err := agent.NewSupervisor(ctx, agent.SupervisorOptions{
+	// Create commander for this task (non-iterated)
+	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
 		Config:           r.cfg,
 		ConfigPath:       r.configPath,
 		MissionName:     r.mission.Name,
 		TaskName:         task.Name,
-		SupervisorModel:  r.mission.SupervisorModel,
+		Commander:  r.mission.Commander,
 		AgentNames:       agents,
 		DepSummaries:     depSummaries,
 		DepOutputSchemas: depOutputSchemas,
@@ -456,7 +456,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 	}
 
 	// Set up tool callbacks
-	sup.SetToolCallbacks(&agent.SupervisorToolCallbacks{
+	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
 		OnAgentStart: func(taskName, agentName string) {
 			streamer.AgentStarted(taskName, agentName)
 			if r.debugLogger != nil {
@@ -481,23 +481,23 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
-		GetSupervisorForQuery: func(taskName string, iterationIndex int) (*agent.Supervisor, error) {
-			return r.getSupervisorForQuery(taskName, iterationIndex, task.Name)
+		GetCommanderForQuery: func(taskName string, iterationIndex int) (*agent.Commander, error) {
+			return r.getCommanderForQuery(taskName, iterationIndex, task.Name)
 		},
 		// Shared question store callbacks (also available for regular tasks)
-		ListSupeQuestions: func(depTaskName string) []string {
-			return r.listSupeQuestions(depTaskName)
+		ListCommanderQuestions: func(depTaskName string) []string {
+			return r.listCommanderQuestions(depTaskName)
 		},
-		GetSupeAnswer: func(depTaskName string, index int) (string, error) {
-			return r.getSupeAnswer(depTaskName, index)
+		GetCommanderAnswer: func(depTaskName string, index int) (string, error) {
+			return r.getCommanderAnswer(depTaskName, index)
 		},
-		AskSupeWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
-			return r.askSupeWithCache(ctx, targetTask, iterationIndex, task.Name, question)
+		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
+			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
 	}, depSummaries)
 
 	// Create task-specific streamer adapter
-	taskStreamer := &supervisorStreamerAdapter{
+	taskStreamer := &commanderStreamerAdapter{
 		taskName: task.Name,
 		streamer: streamer,
 	}
@@ -514,9 +514,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		}, err
 	}
 
-	// Store supervisor's completed agents for inheritance by dependent tasks
+	// Store commander's completed agents for inheritance by dependent tasks
 	r.mu.Lock()
-	r.taskSupervisors[task.Name] = sup
+	r.taskCommanders[task.Name] = sup
 	r.taskAgents[task.Name] = sup.GetCompletedAgents()
 	r.mu.Unlock()
 
@@ -649,26 +649,26 @@ func (r *Runner) collectDepOutputSchemas(taskName string) []agent.DependencyOutp
 	return result
 }
 
-// supervisorStreamerAdapter adapts MissionHandler to agent.SupervisorStreamer
-type supervisorStreamerAdapter struct {
+// commanderStreamerAdapter adapts MissionHandler to agent.CommanderStreamer
+type commanderStreamerAdapter struct {
 	taskName string
 	streamer streamers.MissionHandler
 }
 
-func (s *supervisorStreamerAdapter) Reasoning(content string) {
-	s.streamer.SupervisorReasoning(s.taskName, content)
+func (s *commanderStreamerAdapter) Reasoning(content string) {
+	s.streamer.CommanderReasoning(s.taskName, content)
 }
 
-func (s *supervisorStreamerAdapter) Answer(content string) {
-	s.streamer.SupervisorAnswer(s.taskName, content)
+func (s *commanderStreamerAdapter) Answer(content string) {
+	s.streamer.CommanderAnswer(s.taskName, content)
 }
 
-func (s *supervisorStreamerAdapter) CallingTool(name, input string) {
-	s.streamer.SupervisorCallingTool(s.taskName, name, input)
+func (s *commanderStreamerAdapter) CallingTool(name, input string) {
+	s.streamer.CommanderCallingTool(s.taskName, name, input)
 }
 
-func (s *supervisorStreamerAdapter) ToolComplete(name string) {
-	s.streamer.SupervisorToolComplete(s.taskName, name)
+func (s *commanderStreamerAdapter) ToolComplete(name string) {
+	s.streamer.CommanderToolComplete(s.taskName, name)
 }
 
 // runIteratedTask executes a task that iterates over a dataset
@@ -787,7 +787,7 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 	}, nil
 }
 
-// runSequentialIterations runs all iterations in a single supervisor session with agent reuse
+// runSequentialIterations runs all iterations in a single commander session with agent reuse
 func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
 	// Get agents for this task
 	agents := task.Agents
@@ -798,16 +798,16 @@ func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, 
 	// Build inherited agents from all dependency tasks in the lineage
 	inheritedAgents := r.collectInheritedAgents(task.Name)
 
-	// Collect dependency output schemas for the supervisor
+	// Collect dependency output schemas for the commander
 	depOutputSchemas := r.collectDepOutputSchemas(task.Name)
 
 	// Get task's own output schema if defined
 	taskOutputSchema := r.getTaskOutputSchema(task)
 
-	// Get debug file for supervisor if debug mode is enabled
+	// Get debug file for commander if debug mode is enabled
 	var debugFile string
 	if r.debugLogger != nil {
-		debugFile = r.debugLogger.GetMessageFile("supervisor", task.Name)
+		debugFile = r.debugLogger.GetMessageFile("commander", task.Name)
 	}
 
 	// Build objective for sequential dataset processing
@@ -828,13 +828,13 @@ Task objective (example for first item): %s
 Use dataset_next to get each item. Process it completely, then call dataset_item_complete with the output.
 Continue until dataset_next returns "exhausted".`, len(items), representativeObjective)
 
-	// Create single supervisor with all items
-	sup, err := agent.NewSupervisor(ctx, agent.SupervisorOptions{
+	// Create single commander with all items
+	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
 		Config:            r.cfg,
 		ConfigPath:        r.configPath,
 		MissionName:      r.mission.Name,
 		TaskName:          task.Name,
-		SupervisorModel:   r.mission.SupervisorModel,
+		Commander:   r.mission.Commander,
 		AgentNames:        agents,
 		DepSummaries:      depSummaries,
 		DepOutputSchemas:  depOutputSchemas,
@@ -856,7 +856,7 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 	}
 
 	// Set up tool callbacks
-	sup.SetToolCallbacks(&agent.SupervisorToolCallbacks{
+	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
 		OnAgentStart: func(taskName, agentName string) {
 			streamer.AgentStarted(taskName, agentName)
 			if r.debugLogger != nil {
@@ -881,31 +881,31 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
-		GetSupervisorForQuery: func(depTaskName string, iterationIndex int) (*agent.Supervisor, error) {
-			return r.getSupervisorForQuery(depTaskName, iterationIndex, task.Name)
+		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
+			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},
-		ListSupeQuestions: func(taskName string) []string {
-			return r.listSupeQuestions(taskName)
+		ListCommanderQuestions: func(taskName string) []string {
+			return r.listCommanderQuestions(taskName)
 		},
-		GetSupeAnswer: func(taskName string, index int) (string, error) {
-			return r.getSupeAnswer(taskName, index)
+		GetCommanderAnswer: func(taskName string, index int) (string, error) {
+			return r.getCommanderAnswer(taskName, index)
 		},
-		AskSupeWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
-			return r.askSupeWithCache(ctx, targetTask, iterationIndex, task.Name, question)
+		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
+			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
 	}, depSummaries)
 
-	// Create streamer adapter for the supervisor
+	// Create streamer adapter for the commander
 	seqStreamer := &iterationStreamerAdapter{
 		taskName: task.Name,
 		index:    0, // Use 0 as we're handling all items in one session
 		streamer: streamer,
 	}
 
-	// Execute the task - supervisor handles all items internally
+	// Execute the task - commander handles all items internally
 	_, err = sup.ExecuteTask(ctx, objective, seqStreamer)
 
-	// Get results from the supervisor's dataset cursor
+	// Get results from the commander's dataset cursor
 	results := sup.GetDatasetResults()
 	if results == nil || len(results) == 0 {
 		if err != nil {
@@ -939,13 +939,13 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		}
 	}
 
-	// Store the supervisor for ask_supe queries from dependent tasks
+	// Store the commander for ask_commander queries from dependent tasks
 	r.mu.Lock()
-	if r.iterationSupervisors[task.Name] == nil {
-		r.iterationSupervisors[task.Name] = make(map[int]*agent.Supervisor)
+	if r.iterationCommanders[task.Name] == nil {
+		r.iterationCommanders[task.Name] = make(map[int]*agent.Commander)
 	}
-	// Store as iteration 0 since it's a single supervisor handling all items
-	r.iterationSupervisors[task.Name][0] = sup
+	// Store as iteration 0 since it's a single commander handling all items
+	r.iterationCommanders[task.Name][0] = sup
 	r.mu.Unlock()
 
 	return iterations
@@ -1125,26 +1125,26 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 	// Build inherited agents from all dependency tasks in the lineage
 	inheritedAgents := r.collectInheritedAgents(task.Name)
 
-	// Collect dependency output schemas for the supervisor
+	// Collect dependency output schemas for the commander
 	depOutputSchemas := r.collectDepOutputSchemas(task.Name)
 
 	// Get task's own output schema if defined
 	taskOutputSchema := r.getTaskOutputSchema(task)
 
-	// Get debug file for supervisor if debug mode is enabled
+	// Get debug file for commander if debug mode is enabled
 	iterTaskName := fmt.Sprintf("%s[%d]", task.Name, index)
 	var debugFile string
 	if r.debugLogger != nil {
-		debugFile = r.debugLogger.GetMessageFile("supervisor", iterTaskName)
+		debugFile = r.debugLogger.GetMessageFile("commander", iterTaskName)
 	}
 
-	// Create supervisor for this iteration
-	sup, err := agent.NewSupervisor(ctx, agent.SupervisorOptions{
+	// Create commander for this iteration
+	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
 		Config:                 r.cfg,
 		ConfigPath:             r.configPath,
 		MissionName:           r.mission.Name,
 		TaskName:               iterTaskName,
-		SupervisorModel:        r.mission.SupervisorModel,
+		Commander:        r.mission.Commander,
 		AgentNames:             agents,
 		DepSummaries:           depSummaries,
 		DepOutputSchemas:       depOutputSchemas,
@@ -1167,11 +1167,11 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 			Error:   err,
 		}
 	}
-	// Note: Don't close sup here - store it for ask_supe queries from dependent tasks
-	// Cleanup happens in cleanupIterationSupervisors() after all dependent tasks complete
+	// Note: Don't close sup here - store it for ask_commander queries from dependent tasks
+	// Cleanup happens in cleanupIterationCommanders() after all dependent tasks complete
 
 	// Set up tool callbacks for iteration
-	sup.SetToolCallbacks(&agent.SupervisorToolCallbacks{
+	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
 		OnAgentStart: func(taskName, agentName string) {
 			streamer.AgentStarted(taskName, agentName)
 			if r.debugLogger != nil {
@@ -1196,19 +1196,19 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
-		GetSupervisorForQuery: func(depTaskName string, iterationIndex int) (*agent.Supervisor, error) {
+		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
 			// Use base task name (without iteration index) for dependency validation
-			return r.getSupervisorForQuery(depTaskName, iterationIndex, task.Name)
+			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},
 		// Iteration-specific callbacks for shared question store
-		ListSupeQuestions: func(taskName string) []string {
-			return r.listSupeQuestions(taskName)
+		ListCommanderQuestions: func(taskName string) []string {
+			return r.listCommanderQuestions(taskName)
 		},
-		GetSupeAnswer: func(taskName string, index int) (string, error) {
-			return r.getSupeAnswer(taskName, index)
+		GetCommanderAnswer: func(taskName string, index int) (string, error) {
+			return r.getCommanderAnswer(taskName, index)
 		},
-		AskSupeWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
-			return r.askSupeWithCache(ctx, targetTask, iterationIndex, task.Name, question)
+		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
+			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
 	}, depSummaries)
 
@@ -1253,12 +1253,12 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		}
 	}
 
-	// Store the iteration supervisor for ask_supe queries from dependent tasks
+	// Store the iteration commander for ask_commander queries from dependent tasks
 	r.mu.Lock()
-	if r.iterationSupervisors[task.Name] == nil {
-		r.iterationSupervisors[task.Name] = make(map[int]*agent.Supervisor)
+	if r.iterationCommanders[task.Name] == nil {
+		r.iterationCommanders[task.Name] = make(map[int]*agent.Commander)
 	}
-	r.iterationSupervisors[task.Name][index] = sup
+	r.iterationCommanders[task.Name][index] = sup
 	r.mu.Unlock()
 
 	streamer.IterationCompleted(task.Name, index, cleanSummary)
@@ -1415,7 +1415,7 @@ func getItemID(item cty.Value, index int) string {
 	return fmt.Sprintf("item_%d", index)
 }
 
-// iterationStreamerAdapter adapts MissionHandler to agent.SupervisorStreamer for iterations
+// iterationStreamerAdapter adapts MissionHandler to agent.CommanderStreamer for iterations
 type iterationStreamerAdapter struct {
 	taskName string
 	index    int
@@ -1431,20 +1431,20 @@ func (s *iterationStreamerAdapter) Answer(content string) {
 }
 
 func (s *iterationStreamerAdapter) CallingTool(name, input string) {
-	s.streamer.SupervisorCallingTool(fmt.Sprintf("%s[%d]", s.taskName, s.index), name, input)
+	s.streamer.CommanderCallingTool(fmt.Sprintf("%s[%d]", s.taskName, s.index), name, input)
 }
 
 func (s *iterationStreamerAdapter) ToolComplete(name string) {
-	s.streamer.SupervisorToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.index), name)
+	s.streamer.CommanderToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.index), name)
 }
 
 // =============================================================================
-// Supervisor Query Support - allows supervisors to query previous supervisors
+// Commander Query Support - allows commanders to query previous commanders
 // =============================================================================
 
-// queryAncestorsForContext queries each non-iterated ancestor supervisor with the task's objective
+// queryAncestorsForContext queries each non-iterated ancestor commander with the task's objective
 // to get targeted context instead of generic summaries.
-// For iterated ancestors, we skip the query (they use ask_supe with specific indices instead).
+// For iterated ancestors, we skip the query (they use ask_commander with specific indices instead).
 // Returns error if any ancestor query fails - this is a critical failure.
 func (r *Runner) queryAncestorsForContext(ctx context.Context, taskName string, objective string) ([]agent.DependencySummary, error) {
 	depChain := r.getDependencyChain(taskName)
@@ -1453,19 +1453,19 @@ func (r *Runner) queryAncestorsForContext(ctx context.Context, taskName string, 
 	for _, depTaskName := range depChain {
 		// Check if this is an iterated task
 		r.mu.RLock()
-		_, isIterated := r.iterationSupervisors[depTaskName]
-		sup, hasRegularSup := r.taskSupervisors[depTaskName]
+		_, isIterated := r.iterationCommanders[depTaskName]
+		sup, hasRegularSup := r.taskCommanders[depTaskName]
 		r.mu.RUnlock()
 
 		if isIterated {
 			// Skip pull query for iterated tasks
 			// Output schema info is injected separately via DepOutputSchemas
-			// Task can use ask_supe with index if it needs specific iteration context
+			// Task can use ask_commander with index if it needs specific iteration context
 			continue
 		}
 
 		if !hasRegularSup {
-			return nil, fmt.Errorf("supervisor for dependency '%s' not found", depTaskName)
+			return nil, fmt.Errorf("commander for dependency '%s' not found", depTaskName)
 		}
 
 		// Create a clone for querying
@@ -1494,11 +1494,11 @@ func (r *Runner) queryAncestorsForContext(ctx context.Context, taskName string, 
 	return depSummaries, nil
 }
 
-// getSupervisorForQuery returns an isolated clone of a completed supervisor for querying.
+// getCommanderForQuery returns an isolated clone of a completed commander for querying.
 // The requestingTask parameter is used to validate that the requested task is in the
 // dependency chain of the requesting task.
 // For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
-func (r *Runner) getSupervisorForQuery(taskName string, iterationIndex int, requestingTask string) (*agent.Supervisor, error) {
+func (r *Runner) getCommanderForQuery(taskName string, iterationIndex int, requestingTask string) (*agent.Commander, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -1516,10 +1516,10 @@ func (r *Runner) getSupervisorForQuery(taskName string, iterationIndex int, requ
 	}
 
 	if iterationIndex >= 0 {
-		// Query specific iteration supervisor
-		iterSups, ok := r.iterationSupervisors[taskName]
+		// Query specific iteration commander
+		iterSups, ok := r.iterationCommanders[taskName]
 		if !ok {
-			return nil, fmt.Errorf("no iteration supervisors found for task '%s'", taskName)
+			return nil, fmt.Errorf("no iteration commanders found for task '%s'", taskName)
 		}
 		sup, ok := iterSups[iterationIndex]
 		if !ok {
@@ -1528,14 +1528,14 @@ func (r *Runner) getSupervisorForQuery(taskName string, iterationIndex int, requ
 		return sup.CloneForQuery(), nil
 	}
 
-	// Query regular task supervisor
-	sup, ok := r.taskSupervisors[taskName]
+	// Query regular task commander
+	sup, ok := r.taskCommanders[taskName]
 	if !ok {
-		// Check if this is an iterated task (has iteration supervisors but no regular supervisor)
-		if _, hasIterations := r.iterationSupervisors[taskName]; hasIterations {
+		// Check if this is an iterated task (has iteration commanders but no regular commander)
+		if _, hasIterations := r.iterationCommanders[taskName]; hasIterations {
 			return nil, fmt.Errorf("task '%s' is an iterated task - you must provide an 'index' parameter to query a specific iteration", taskName)
 		}
-		return nil, fmt.Errorf("supervisor for task '%s' not found (task may not have completed yet)", taskName)
+		return nil, fmt.Errorf("commander for task '%s' not found (task may not have completed yet)", taskName)
 	}
 
 	// Return a cloned copy for isolated querying
@@ -1543,16 +1543,16 @@ func (r *Runner) getSupervisorForQuery(taskName string, iterationIndex int, requ
 }
 
 // =============================================================================
-// Shared Question Store - deduplicates ask_supe queries across iterations
+// Shared Question Store - deduplicates ask_commander queries across iterations
 // =============================================================================
 
-// listSupeQuestions returns the list of questions asked to a dependency task.
-// This allows supervisors to see what questions have already been asked by other iterations.
-func (r *Runner) listSupeQuestions(taskName string) []string {
-	r.askSupeStore.mu.Lock()
-	defer r.askSupeStore.mu.Unlock()
+// listCommanderQuestions returns the list of questions asked to a dependency task.
+// This allows commanders to see what questions have already been asked by other iterations.
+func (r *Runner) listCommanderQuestions(taskName string) []string {
+	r.askCommanderStore.mu.Lock()
+	defer r.askCommanderStore.mu.Unlock()
 
-	entries := r.askSupeStore.questions[taskName]
+	entries := r.askCommanderStore.questions[taskName]
 	questions := make([]string, len(entries))
 	for i, e := range entries {
 		questions[i] = e.Question
@@ -1560,17 +1560,17 @@ func (r *Runner) listSupeQuestions(taskName string) []string {
 	return questions
 }
 
-// getSupeAnswer returns the answer for a question by index.
+// getCommanderAnswer returns the answer for a question by index.
 // If the answer is not ready yet, it blocks until the original asker completes.
-func (r *Runner) getSupeAnswer(taskName string, index int) (string, error) {
-	r.askSupeStore.mu.Lock()
-	entries := r.askSupeStore.questions[taskName]
+func (r *Runner) getCommanderAnswer(taskName string, index int) (string, error) {
+	r.askCommanderStore.mu.Lock()
+	entries := r.askCommanderStore.questions[taskName]
 	if index < 0 || index >= len(entries) {
-		r.askSupeStore.mu.Unlock()
+		r.askCommanderStore.mu.Unlock()
 		return "", fmt.Errorf("question index %d out of range (task '%s' has %d questions)", index, taskName, len(entries))
 	}
 	entry := entries[index]
-	r.askSupeStore.mu.Unlock()
+	r.askCommanderStore.mu.Unlock()
 
 	// Wait for the answer to be ready
 	<-entry.Ready
@@ -1579,11 +1579,11 @@ func (r *Runner) getSupeAnswer(taskName string, index int) (string, error) {
 	return entry.Answer, nil
 }
 
-// askSupeWithCache checks if an exact question already exists in the cache.
+// askCommanderWithCache checks if an exact question already exists in the cache.
 // If yes, it waits for the answer (if pending) and returns it.
-// If no, it registers the question, queries the supervisor, caches the answer, and returns it.
+// If no, it registers the question, queries the commander, caches the answer, and returns it.
 // For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
-func (r *Runner) askSupeWithCache(ctx context.Context, targetTask string, iterationIndex int, requestingTask, question string) (string, error) {
+func (r *Runner) askCommanderWithCache(ctx context.Context, targetTask string, iterationIndex int, requestingTask, question string) (string, error) {
 	// Validate dependency chain first
 	depChain := r.getDependencyChain(requestingTask)
 	found := false
@@ -1603,14 +1603,14 @@ func (r *Runner) askSupeWithCache(ctx context.Context, targetTask string, iterat
 		cacheKey = fmt.Sprintf("%s[%d]", targetTask, iterationIndex)
 	}
 
-	r.askSupeStore.mu.Lock()
+	r.askCommanderStore.mu.Lock()
 
 	// Check if exact question already exists
-	entries := r.askSupeStore.questions[cacheKey]
+	entries := r.askCommanderStore.questions[cacheKey]
 	for _, entry := range entries {
 		if entry.Question == question {
 			// Question exists - unlock and wait for answer
-			r.askSupeStore.mu.Unlock()
+			r.askCommanderStore.mu.Unlock()
 			<-entry.Ready
 			return entry.Answer, nil
 		}
@@ -1622,57 +1622,57 @@ func (r *Runner) askSupeWithCache(ctx context.Context, targetTask string, iterat
 		Answer:   "",
 		Ready:    make(chan struct{}),
 	}
-	r.askSupeStore.questions[cacheKey] = append(r.askSupeStore.questions[cacheKey], entry)
-	r.askSupeStore.mu.Unlock()
+	r.askCommanderStore.questions[cacheKey] = append(r.askCommanderStore.questions[cacheKey], entry)
+	r.askCommanderStore.mu.Unlock()
 
-	// Query the supervisor (outside lock)
-	var sup *agent.Supervisor
+	// Query the commander (outside lock)
+	var sup *agent.Commander
 	var ok bool
 
 	r.mu.RLock()
 	if iterationIndex >= 0 {
-		// Query specific iteration supervisor
-		if iterSups, exists := r.iterationSupervisors[targetTask]; exists {
+		// Query specific iteration commander
+		if iterSups, exists := r.iterationCommanders[targetTask]; exists {
 			sup, ok = iterSups[iterationIndex]
 		}
 	} else {
-		// Query regular task supervisor
-		sup, ok = r.taskSupervisors[targetTask]
+		// Query regular task commander
+		sup, ok = r.taskCommanders[targetTask]
 	}
 	r.mu.RUnlock()
 
 	if !ok {
 		// Mark as failed and close the channel
-		r.askSupeStore.mu.Lock()
-		entry.Answer = "ERROR: supervisor not found"
+		r.askCommanderStore.mu.Lock()
+		entry.Answer = "ERROR: commander not found"
 		close(entry.Ready)
-		r.askSupeStore.mu.Unlock()
+		r.askCommanderStore.mu.Unlock()
 		if iterationIndex >= 0 {
-			return "", fmt.Errorf("supervisor for task '%s' iteration %d not found", targetTask, iterationIndex)
+			return "", fmt.Errorf("commander for task '%s' iteration %d not found", targetTask, iterationIndex)
 		}
-		// Check if this is an iterated task (has iteration supervisors but no regular supervisor)
-		if _, hasIterations := r.iterationSupervisors[targetTask]; hasIterations {
+		// Check if this is an iterated task (has iteration commanders but no regular commander)
+		if _, hasIterations := r.iterationCommanders[targetTask]; hasIterations {
 			return "", fmt.Errorf("task '%s' is an iterated task - you must provide an 'index' parameter to query a specific iteration", targetTask)
 		}
-		return "", fmt.Errorf("supervisor for task '%s' not found", targetTask)
+		return "", fmt.Errorf("commander for task '%s' not found", targetTask)
 	}
 
 	clone := sup.CloneForQuery()
 	answer, err := clone.AnswerQueryIsolated(ctx, question)
 	if err != nil {
 		// Mark as failed and close the channel
-		r.askSupeStore.mu.Lock()
+		r.askCommanderStore.mu.Lock()
 		entry.Answer = fmt.Sprintf("ERROR: %v", err)
 		close(entry.Ready)
-		r.askSupeStore.mu.Unlock()
+		r.askCommanderStore.mu.Unlock()
 		return "", err
 	}
 
 	// Store the answer and signal ready
-	r.askSupeStore.mu.Lock()
+	r.askCommanderStore.mu.Lock()
 	entry.Answer = answer
 	close(entry.Ready)
-	r.askSupeStore.mu.Unlock()
+	r.askCommanderStore.mu.Unlock()
 
 	return answer, nil
 }
@@ -1787,7 +1787,7 @@ func (r *Runner) GetTaskOutputSchema(taskName string) *config.OutputSchema {
 }
 
 // GetDependencyOutputInfo returns info about completed dependency task outputs
-// for injection into supervisor prompts
+// for injection into commander prompts
 func (r *Runner) GetDependencyOutputInfo(taskName string) []DependencyOutputInfo {
 	var result []DependencyOutputInfo
 
@@ -1827,7 +1827,7 @@ func (r *Runner) GetDependencyOutputInfo(taskName string) []DependencyOutputInfo
 	return result
 }
 
-// DependencyOutputInfo describes a completed dependency task's output for the supervisor
+// DependencyOutputInfo describes a completed dependency task's output for the commander
 type DependencyOutputInfo struct {
 	TaskName     string
 	IsIterated   bool

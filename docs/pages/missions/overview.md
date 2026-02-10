@@ -4,13 +4,13 @@ title: Missions Overview
 
 # Missions
 
-Missions orchestrate multi-task pipelines using supervisors and agents.
+Missions orchestrate multi-task pipelines using commanders and agents.
 
 ## Basic Structure
 
 ```hcl
 mission "data_pipeline" {
-  supervisor_model = models.anthropic.claude_sonnet_4
+  commander = models.anthropic.claude_sonnet_4
   agents           = [agents.researcher, agents.writer]
 
   task "fetch_data" {
@@ -33,15 +33,15 @@ mission "data_pipeline" {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `supervisor_model` | string | Model for task supervisors |
+| `commander` | string | Model for task commanders |
 | `agents` | list | Agents available to all tasks |
 
 ## How Missions Execute
 
 1. **Dependency Resolution** - Tasks are sorted topologically
 2. **Parallel Execution** - Independent tasks run concurrently
-3. **Supervisor Creation** - Each task gets a supervisor
-4. **Agent Delegation** - Supervisors delegate to agents via `call_agent`
+3. **Commander Creation** - Each task gets a commander
+4. **Agent Delegation** - Commanders delegate to agents via `call_agent`
 5. **Result Propagation** - Task summaries flow to dependents
 
 ## Execution Flow
@@ -74,9 +74,9 @@ With inputs:
 squadron mission data_pipeline -c ./config --input source=api --input format=json
 ```
 
-## Supervisor Tools
+## Commander Tools
 
-Supervisors have access to special tools:
+Commanders have access to special tools:
 
 - **call_agent** - Delegate work to an agent
 - **ask_agent** - Ask a completed agent follow-up questions

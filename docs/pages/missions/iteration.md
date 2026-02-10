@@ -115,7 +115,7 @@ This enables use cases like:
 
 ### How It Works
 
-When running sequentially, the supervisor receives the previous iteration's `output` in its system prompt:
+When running sequentially, the commander receives the previous iteration's `output` in its system prompt:
 
 ```
 ## Previous Iteration Output
@@ -192,7 +192,7 @@ task "crawl_site" {
 
 ```hcl
 mission "midwest_weather" {
-  supervisor_model = models.anthropic.claude_sonnet_4
+  commander = models.anthropic.claude_sonnet_4
   agents           = [agents.assistant]
 
   dataset "city_list" {
@@ -243,7 +243,7 @@ mission "midwest_weather" {
 When a task has an `output` schema with required fields, each iteration is validated:
 
 - If required output fields are missing, the iteration is marked as failed
-- This enables automatic retry without supervisor intervention
+- This enables automatic retry without commander intervention
 
 ### Retry Behavior
 
@@ -267,9 +267,9 @@ When an iteration fails:
 
 If a dataset is empty, the task completes immediately with a "No items to process" summary.
 
-## Querying Iteration Supervisors
+## Querying Iteration Commanders
 
-Dependent tasks can query specific iteration supervisors using `ask_supe` with the `index` parameter. This enables follow-up questions to the supervisor that processed a particular item.
+Dependent tasks can query specific iteration commanders using `ask_commander` with the `index` parameter. This enables follow-up questions to the commander that processed a particular item.
 
 ### Getting Iteration Results
 
@@ -295,7 +295,7 @@ Use the `index` from the query results to ask follow-up questions:
 }
 ```
 
-The iteration supervisor responds from its completed context—it remembers the full conversation with its agents and can query them for additional details.
+The iteration commander responds from its completed context—it remembers the full conversation with its agents and can query them for additional details.
 
 ### Example: Character Crossover
 
@@ -319,7 +319,7 @@ task "character_crossover" {
   objective = <<-EOT
     1. Use query_task_output to get all backstories
     2. Pick two interesting characters
-    3. For each, use ask_supe with the character's index to ask:
+    3. For each, use ask_commander with the character's index to ask:
        "How would this character react to meeting someone from another world?"
     4. Write a crossover scene using both answers
   EOT

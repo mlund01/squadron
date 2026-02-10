@@ -634,7 +634,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 	// Parse the mission block content
 	missionContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
-			{Name: "supervisor_model", Required: true},
+			{Name: "commander", Required: true},
 			{Name: "agents", Required: true},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
@@ -648,9 +648,9 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
 	}
 
-	// Get supervisor_model attribute
-	supervisorModelAttr := missionContent.Attributes["supervisor_model"]
-	supervisorModelVal, diags := supervisorModelAttr.Expr.Value(ctx)
+	// Get commander attribute
+	commanderModelAttr := missionContent.Attributes["commander"]
+	commanderModelVal, diags := commanderModelAttr.Expr.Value(ctx)
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
 	}
@@ -670,7 +670,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 
 	mission := &Mission{
 		Name:            missionName,
-		SupervisorModel: supervisorModelVal.AsString(),
+		Commander: commanderModelVal.AsString(),
 		Agents:          missionAgents,
 	}
 

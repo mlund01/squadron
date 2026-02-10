@@ -55,25 +55,25 @@ func (s *MissionHandler) TaskFailed(taskName string, err error) {
 	fmt.Printf("\n%s%s[Task '%s' FAILED: %v]%s\n", ColorBold, ColorRed, taskName, err, ColorReset)
 }
 
-func (s *MissionHandler) SupervisorReasoning(taskName string, content string) {
+func (s *MissionHandler) CommanderReasoning(taskName string, content string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("[%s] Thinking: %s\n", taskName, truncate(content, 100))
 }
 
-func (s *MissionHandler) SupervisorAnswer(taskName string, content string) {
+func (s *MissionHandler) CommanderAnswer(taskName string, content string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("[%s] Answer:\n%s\n", taskName, content)
 }
 
-func (s *MissionHandler) SupervisorCallingTool(taskName string, toolName string, input string) {
+func (s *MissionHandler) CommanderCallingTool(taskName string, toolName string, input string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("[%s] Calling: %s\n", taskName, toolName)
 }
 
-func (s *MissionHandler) SupervisorToolComplete(taskName string, toolName string) {
+func (s *MissionHandler) CommanderToolComplete(taskName string, toolName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("[%s] %s complete\n", taskName, toolName)

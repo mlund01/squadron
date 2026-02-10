@@ -117,6 +117,12 @@ type CommanderToolCallbacks struct {
 	// already asked, returns the cached answer. Otherwise queries and caches.
 	// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
 	AskCommanderWithCache func(targetTask string, iterationIndex int, question string) (string, error)
+
+	// SessionLogger provides session persistence (optional). If set, commander and agent
+	// sessions will be tracked with their message history.
+	SessionLogger SessionLogger
+	// TaskID is the store task ID for session creation (required if SessionLogger is set)
+	TaskID string
 }
 
 // DebugLogger is the interface for debug logging during mission execution
@@ -198,6 +204,14 @@ type AggregateResult struct {
 	Groups map[string]any
 }
 
+// SessionLogger provides session tracking for persistence.
+// Implementations should be safe for concurrent use.
+type SessionLogger interface {
+	CreateSession(taskID, role, agentName, model string) (id string, err error)
+	CompleteSession(id string, err error)
+	AppendMessage(sessionID, role, content string) error
+}
+
 // CommanderStreamer is the interface for streaming commander events
 type CommanderStreamer interface {
 	Reasoning(content string)
@@ -237,7 +251,11 @@ type Commander struct {
 	queryClones     map[string]*Commander // Cached clones for ask_commander queries (keyed by target task name)
 	secretInfos     []SecretInfo           // Secret names and descriptions for agent prompts
 	secretValues    map[string]string      // Actual secret values for tool call injection
-	datasetCursor   *aitools.DatasetCursor // Cursor for sequential dataset iteration (nil if not sequential)
+	datasetCursor      *aitools.DatasetCursor // Cursor for sequential dataset iteration (nil if not sequential)
+	sessionLogger      SessionLogger          // Session persistence (nil if not tracking)
+	sessionID          string                 // Store session ID (empty if not tracking)
+	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
+	callbacksTaskID    string                 // Task ID from callbacks (for agent session creation)
 }
 
 // NewCommander creates a new commander for a mission task
@@ -380,6 +398,16 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSummaries []DependencySummary) {
 	s.callbacks = callbacks
 	s.debugLogger = callbacks.DebugLogger
+
+	// Create session record if session logger is available
+	if callbacks.SessionLogger != nil {
+		s.sessionLogger = callbacks.SessionLogger
+		s.callbacksTaskID = callbacks.TaskID
+		s.agentSessionIDs = make(map[string]string)
+		if id, err := callbacks.SessionLogger.CreateSession(callbacks.TaskID, "commander", "", s.ModelName); err == nil {
+			s.sessionID = id
+		}
+	}
 
 	// Create turn logger for commander session snapshots
 	if s.debugLogger != nil {
@@ -631,6 +659,11 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 		default:
 		}
 
+		// Log user message to session store
+		if s.sessionLogger != nil && s.sessionID != "" {
+			s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput)
+		}
+
 		// Create parser for this message
 		parser := newCommanderParser(streamer)
 
@@ -671,6 +704,11 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 
 		if err != nil {
 			return "", err
+		}
+
+		// Log assistant response to session store
+		if s.sessionLogger != nil && s.sessionID != "" && resp != nil {
+			s.sessionLogger.AppendMessage(s.sessionID, "assistant", resp.Content)
 		}
 
 		// Determine action for turn logging
@@ -732,6 +770,11 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 
 	if s.turnLogger != nil {
 		s.turnLogger.Close()
+	}
+
+	// Complete the session record
+	if s.sessionLogger != nil && s.sessionID != "" {
+		s.sessionLogger.CompleteSession(s.sessionID, nil)
 	}
 
 	return finalAnswer, nil
@@ -1355,6 +1398,13 @@ func (t *callAgentTool) Call(input string) string {
 
 		// Store the session for future interactions
 		t.commander.agentSessions[params.Name] = a
+
+		// Create agent session record
+		if t.commander.sessionLogger != nil {
+			if sid, err := t.commander.sessionLogger.CreateSession(t.commander.callbacksTaskID, "agent", params.Name, a.ModelName); err == nil {
+				t.commander.agentSessionIDs[params.Name] = sid
+			}
+		}
 	}
 
 	// Format input based on task vs response
@@ -1380,7 +1430,23 @@ func (t *callAgentTool) Call(input string) string {
 		agentHandler = t.commander.callbacks.GetAgentHandler(t.commander.TaskName, params.Name)
 	}
 
+	// Log agent input to session store
+	if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+		t.commander.sessionLogger.AppendMessage(agentSID, "user", agentInput)
+	}
+
 	result, err := a.Chat(ctx, agentInput, agentHandler)
+
+	// Log agent output to session store
+	if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+		if err != nil {
+			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", fmt.Sprintf("ERROR: %v", err))
+		} else if result.Complete {
+			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", result.Answer)
+		} else if result.AskCommander != "" {
+			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", fmt.Sprintf("ASK_COMMANDER: %s", result.AskCommander))
+		}
+	}
 
 	// Notify that agent is done
 	if t.commander.callbacks != nil && t.commander.callbacks.OnAgentComplete != nil {
@@ -1388,6 +1454,10 @@ func (t *callAgentTool) Call(input string) string {
 	}
 
 	if err != nil {
+		// Complete agent session on error
+		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+			t.commander.sessionLogger.CompleteSession(agentSID, err)
+		}
 		// Classify the error
 		errType, retryable := classifyAgentError(err)
 		return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>%s</ERROR_TYPE>\n<ERROR>%v</ERROR>\n<RETRYABLE>%t</RETRYABLE>", errType, err, retryable)
@@ -1400,6 +1470,11 @@ func (t *callAgentTool) Call(input string) string {
 
 	// Check if task is complete with an answer
 	if result.Complete {
+		// Complete agent session on success
+		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+			t.commander.sessionLogger.CompleteSession(agentSID, nil)
+		}
+
 		// Generate agent ID and store the completed agent for follow-up queries
 		t.commander.agentSeq++
 		agentID := fmt.Sprintf("agent_%d_%s", t.commander.agentSeq, params.Name)

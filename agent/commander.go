@@ -210,6 +210,7 @@ type SessionLogger interface {
 	CreateSession(taskID, role, agentName, model string) (id string, err error)
 	CompleteSession(id string, err error)
 	AppendMessage(sessionID, role, content string) error
+	StoreToolResult(sessionID, toolName, resultType string, size int, rawData string) error
 }
 
 // CommanderStreamer is the interface for streaming commander events
@@ -619,6 +620,19 @@ func (s *Commander) GetDatasetResults() []aitools.DatasetItemResult {
 	return s.datasetCursor.GetResults()
 }
 
+// GetStoredResults returns all tool results stored during this commander's session
+func (s *Commander) GetStoredResults() []*aitools.StoredResult {
+	if s.resultStore == nil {
+		return nil
+	}
+	return s.resultStore.GetAll()
+}
+
+// GetSessionID returns the commander's session ID (for associating tool results)
+func (s *Commander) GetSessionID() string {
+	return s.sessionID
+}
+
 // HasSequentialDataset returns true if this commander is processing a sequential dataset
 func (s *Commander) HasSequentialDataset() bool {
 	return s.datasetCursor != nil
@@ -762,6 +776,11 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 				"result":      result,
 				"duration_ms": time.Since(toolStart).Milliseconds(),
 			})
+		}
+
+		// Persist tool result for auditing
+		if s.sessionLogger != nil && s.sessionID != "" {
+			s.sessionLogger.StoreToolResult(s.sessionID, action, "text", len(result), result)
 		}
 
 		// Intercept large results and format observation
@@ -1399,10 +1418,12 @@ func (t *callAgentTool) Call(input string) string {
 		// Store the session for future interactions
 		t.commander.agentSessions[params.Name] = a
 
-		// Create agent session record
+		// Create agent session record and wire up tool result auditing
 		if t.commander.sessionLogger != nil {
 			if sid, err := t.commander.sessionLogger.CreateSession(t.commander.callbacksTaskID, "agent", params.Name, a.ModelName); err == nil {
 				t.commander.agentSessionIDs[params.Name] = sid
+				a.sessionLogger = t.commander.sessionLogger
+				a.sessionID = sid
 			}
 		}
 	}

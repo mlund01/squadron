@@ -81,6 +81,10 @@ func (s *MemoryMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 	return tasks, nil
 }
 
+func (s *MemoryMissionStore) StoreTaskOutput(taskID string, isIterated bool, outputJSON, iterationsJSON *string) error {
+	return nil // no-op for memory store
+}
+
 // =============================================================================
 // MemorySessionStore
 // =============================================================================
@@ -170,6 +174,10 @@ func (s *MemorySessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 		}
 	}
 	return sessions, nil
+}
+
+func (s *MemorySessionStore) StoreToolResult(sessionID, toolName, resultType string, size int, rawData string) error {
+	return nil // no-op for memory store
 }
 
 // =============================================================================

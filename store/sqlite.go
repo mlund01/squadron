@@ -220,6 +220,18 @@ func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 	return tasks, nil
 }
 
+func (s *SQLiteMissionStore) StoreTaskOutput(taskID string, isIterated bool, outputJSON, iterationsJSON *string) error {
+	isIteratedInt := 0
+	if isIterated {
+		isIteratedInt = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT OR REPLACE INTO task_outputs (task_id, is_iterated, output_json, iterations_json) VALUES (?, ?, ?, ?)`,
+		taskID, isIteratedInt, outputJSON, iterationsJSON,
+	)
+	return err
+}
+
 // =============================================================================
 // SQLiteSessionStore
 // =============================================================================
@@ -303,6 +315,15 @@ func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 		sessions = append(sessions, si)
 	}
 	return sessions, nil
+}
+
+func (s *SQLiteSessionStore) StoreToolResult(sessionID, toolName, resultType string, size int, rawData string) error {
+	id := generateID()
+	_, err := s.db.Exec(
+		`INSERT INTO tool_results (id, session_id, tool_name, type, size, raw_data) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, sessionID, toolName, resultType, size, rawData,
+	)
+	return err
 }
 
 // =============================================================================

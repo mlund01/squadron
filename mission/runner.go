@@ -229,7 +229,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 
 	// Create mission record in store
 	inputsJSON, _ := json.Marshal(r.inputValues)
-	configJSON, _ := json.Marshal(r.mission)
+	configJSON, _ := json.Marshal(r.missionSnapshot())
 	missionID, err := r.stores.Missions.CreateMission(r.mission.Name, string(inputsJSON), string(configJSON))
 	if err != nil {
 		return fmt.Errorf("create mission record: %w", err)
@@ -402,8 +402,19 @@ func (r *Runner) cleanupIterationCommanders() {
 
 // runTask executes a single task with its commander
 func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string, streamer streamers.MissionHandler) (*TaskResult, error) {
-	// Create task record in store
-	taskConfigJSON, _ := json.Marshal(task)
+	// Resolve the objective with vars and inputs
+	objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
+	if err != nil {
+		streamer.TaskFailed(task.Name, err)
+		return &TaskResult{
+			TaskName: task.Name,
+			Success:  false,
+			Error:    err,
+		}, err
+	}
+
+	// Create task record in store with resolved objective
+	taskConfigJSON, _ := json.Marshal(taskSnapshot(task, objective))
 	taskID, _ := r.stores.Missions.CreateTask(missionID, task.Name, string(taskConfigJSON))
 	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil)
 
@@ -414,19 +425,6 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		} else {
 			r.stores.Missions.UpdateTaskStatus(taskID, "failed", nil, errMsg)
 		}
-	}
-
-	// Resolve the objective with vars and inputs
-	objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
-	if err != nil {
-		errStr := err.Error()
-		updateTaskDone(false, nil, &errStr)
-		streamer.TaskFailed(task.Name, err)
-		return &TaskResult{
-			TaskName: task.Name,
-			Success:  false,
-			Error:    err,
-		}, err
 	}
 
 	// Query ancestors for targeted context based on our objective
@@ -588,6 +586,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	outputStr := string(outputJSON)
 	updateTaskDone(true, &outputStr, nil)
 
+	// Persist task output to store
+	r.stores.Missions.StoreTaskOutput(taskID, false, &outputStr, nil)
+
 	streamer.TaskCompleted(task.Name, cleanSummary)
 	return &TaskResult{
 		TaskName: task.Name,
@@ -726,10 +727,88 @@ func (s *commanderStreamerAdapter) ToolComplete(name string) {
 	s.streamer.CommanderToolComplete(s.taskName, name)
 }
 
+// missionSnapshot returns a JSON-friendly representation of the mission config.
+func (r *Runner) missionSnapshot() map[string]any {
+	snap := map[string]any{
+		"name":      r.mission.Name,
+		"commander": r.mission.Commander,
+		"agents":    r.mission.Agents,
+	}
+
+	if len(r.mission.Inputs) > 0 {
+		var inputs []map[string]any
+		for _, input := range r.mission.Inputs {
+			m := map[string]any{
+				"name": input.Name,
+				"type": input.Type,
+			}
+			if input.Description != "" {
+				m["description"] = input.Description
+			}
+			if input.Secret {
+				m["secret"] = true
+			}
+			inputs = append(inputs, m)
+		}
+		snap["inputs"] = inputs
+	}
+
+	if len(r.mission.Datasets) > 0 {
+		var datasets []map[string]any
+		for _, ds := range r.mission.Datasets {
+			m := map[string]any{
+				"name": ds.Name,
+			}
+			if ds.Description != "" {
+				m["description"] = ds.Description
+			}
+			if ds.BindTo != "" {
+				m["bindTo"] = ds.BindTo
+			}
+			if ds.Schema != nil {
+				m["schema"] = ds.Schema
+			}
+			datasets = append(datasets, m)
+		}
+		snap["datasets"] = datasets
+	}
+
+	var tasks []map[string]any
+	for _, task := range r.mission.Tasks {
+		objective, _ := task.ResolvedObjective(r.varsValues, r.inputValues)
+		tasks = append(tasks, taskSnapshot(task, objective))
+	}
+	snap["tasks"] = tasks
+
+	return snap
+}
+
+// taskSnapshot returns a JSON-friendly representation of a task config with the resolved objective.
+func taskSnapshot(task config.Task, resolvedObjective string) map[string]any {
+	snap := map[string]any{
+		"name":      task.Name,
+		"objective": resolvedObjective,
+	}
+	if len(task.Agents) > 0 {
+		snap["agents"] = task.Agents
+	}
+	if len(task.DependsOn) > 0 {
+		snap["dependsOn"] = task.DependsOn
+	}
+	if task.Iterator != nil {
+		snap["iterator"] = task.Iterator
+	}
+	if task.Output != nil {
+		snap["output"] = task.Output
+	}
+	return snap
+}
+
 // runIteratedTask executes a task that iterates over a dataset
 func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionID string, streamer streamers.MissionHandler) (*TaskResult, error) {
-	// Create task record in store
-	taskConfigJSON, _ := json.Marshal(task)
+	// Create task record in store with representative objective
+	representativeObj, _ := r.resolveIterationObjective(task, r.resolvedDatasets[task.Iterator.Dataset][0])
+	taskConfigJSON, _ := json.Marshal(taskSnapshot(task, representativeObj))
 	taskID, _ := r.stores.Missions.CreateTask(missionID, task.Name, string(taskConfigJSON))
 	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil)
 
@@ -858,6 +937,11 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	outputJSON, _ := json.Marshal(iterOutputs)
 	outputStr := string(outputJSON)
 	updateTaskDone(true, &outputStr, nil)
+
+	// Persist task output to store
+	iterJSON, _ := json.Marshal(iterOutputs)
+	iterStr := string(iterJSON)
+	r.stores.Missions.StoreTaskOutput(taskID, true, &outputStr, &iterStr)
 
 	streamer.TaskIterationCompleted(task.Name, len(iterations), summary)
 	streamer.TaskCompleted(task.Name, summary)

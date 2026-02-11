@@ -33,19 +33,20 @@ type MissionStore interface {
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
 	UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error
 	GetTasksByMission(missionID string) ([]MissionTask, error)
+	StoreTaskOutput(taskID string, isIterated bool, outputJSON, iterationsJSON *string) error
 }
 
 // MissionTask represents a task within a mission run
 type MissionTask struct {
-	ID         string
-	MissionID  string
-	TaskName   string
-	Status     string // pending, running, completed, failed
-	ConfigJSON string
-	StartedAt  *time.Time
-	FinishedAt *time.Time
-	OutputJSON *string
-	Error      *string
+	ID         string     `json:"id"`
+	MissionID  string     `json:"missionId"`
+	TaskName   string     `json:"taskName"`
+	Status     string     `json:"status"`
+	ConfigJSON string     `json:"configJson"`
+	StartedAt  *time.Time `json:"startedAt,omitempty"`
+	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	OutputJSON *string    `json:"outputJson,omitempty"`
+	Error      *string    `json:"error,omitempty"`
 }
 
 // SessionStore tracks agent/commander sessions and their message history
@@ -55,32 +56,33 @@ type SessionStore interface {
 	AppendMessage(sessionID, role, content string) error
 	GetMessages(sessionID string) ([]SessionMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)
+	StoreToolResult(sessionID, toolName, resultType string, size int, rawData string) error
 }
 
 // SessionInfo describes a session
 type SessionInfo struct {
-	ID        string
-	TaskID    string
-	Role      string // "commander" or "agent"
-	AgentName string
-	Model     string
-	Status    string
-	StartedAt time.Time
+	ID        string    `json:"id"`
+	TaskID    string    `json:"taskId"`
+	Role      string    `json:"role"`
+	AgentName string    `json:"agentName,omitempty"`
+	Model     string    `json:"model,omitempty"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"startedAt"`
 }
 
 // SessionMessage represents a single message in a session
 type SessionMessage struct {
-	ID        int
-	Role      string // "system", "user", "assistant", "tool_use", "tool_result"
-	Content   string
-	CreatedAt time.Time
+	ID        int       `json:"id"`
+	Role      string    `json:"role"`
+	Content   string    `json:"content"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // DatasetInfo describes a dataset (defined here to avoid import cycles with aitools)
 type DatasetInfo struct {
-	Name        string
-	Description string
-	ItemCount   int
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	ItemCount   int    `json:"itemCount"`
 }
 
 // DatasetStore manages datasets and their items
@@ -105,7 +107,7 @@ type QuestionStore interface {
 
 // QuestionInfo describes a stored question
 type QuestionInfo struct {
-	ID        string
-	Question  string
-	HasAnswer bool
+	ID        string `json:"id"`
+	Question  string `json:"question"`
+	HasAnswer bool   `json:"hasAnswer"`
 }

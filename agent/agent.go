@@ -37,6 +37,8 @@ type Agent struct {
 	turnLogger     *llm.TurnLogger   // Persists across Chat() calls for consistent turn numbering
 	secretInfos    []SecretInfo      // Secret names and descriptions (for prompts)
 	secretValues   map[string]string // Actual secret values (for tool call injection)
+	sessionLogger  SessionLogger    // Optional session logger for tool result auditing
+	sessionID      string           // Session ID for tool result auditing
 }
 
 // CompactionConfig holds settings for context compaction
@@ -240,8 +242,10 @@ func (a *Agent) Close() {
 // The streamer receives real-time updates during processing
 func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatHandler) (ChatResult, error) {
 	sessionAdapter := llm.NewSessionAdapter(a.session)
-	orchestrator := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
-	return orchestrator.processTurn(ctx, input)
+	orch := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
+	orch.sessionLogger = a.sessionLogger
+	orch.sessionID = a.sessionID
+	return orch.processTurn(ctx, input)
 }
 
 // AnswerFollowUp handles a follow-up question using the agent's existing conversation context.

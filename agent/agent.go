@@ -39,6 +39,7 @@ type Agent struct {
 	secretValues   map[string]string // Actual secret values (for tool call injection)
 	sessionLogger  SessionLogger    // Optional session logger for tool result auditing
 	sessionID      string           // Session ID for tool result auditing
+	taskID         string           // Task ID for tool result auditing
 }
 
 // CompactionConfig holds settings for context compaction
@@ -245,6 +246,7 @@ func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatH
 	orch := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
 	orch.sessionLogger = a.sessionLogger
 	orch.sessionID = a.sessionID
+	orch.taskID = a.taskID
 	return orch.processTurn(ctx, input)
 }
 

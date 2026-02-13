@@ -12,10 +12,9 @@ import (
 // NewMemoryBundle creates a Bundle backed entirely by in-memory stores
 func NewMemoryBundle() *Bundle {
 	return &Bundle{
-		Questions: &MemoryQuestionStore{questions: make(map[string][]*memQuestionEntry)},
-		Missions:  &MemoryMissionStore{tasks: make(map[string]*MissionTask)},
-		Datasets:  &MemoryDatasetStore{datasets: make(map[string]*memDataset)},
-		Sessions:  &MemorySessionStore{sessions: make(map[string]*memSession)},
+		Missions: &MemoryMissionStore{tasks: make(map[string]*MissionTask)},
+		Datasets: &MemoryDatasetStore{datasets: make(map[string]*memDataset)},
+		Sessions: &MemorySessionStore{sessions: make(map[string]*memSession)},
 	}
 }
 
@@ -81,7 +80,7 @@ func (s *MemoryMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 	return tasks, nil
 }
 
-func (s *MemoryMissionStore) StoreTaskOutput(taskID string, isIterated bool, outputJSON, iterationsJSON *string) error {
+func (s *MemoryMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, outputJSON string) error {
 	return nil // no-op for memory store
 }
 
@@ -176,7 +175,7 @@ func (s *MemorySessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 	return sessions, nil
 }
 
-func (s *MemorySessionStore) StoreToolResult(sessionID, toolName, resultType string, size int, rawData string) error {
+func (s *MemorySessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error {
 	return nil // no-op for memory store
 }
 
@@ -193,10 +192,7 @@ type memDataset struct {
 }
 
 type memDatasetItem struct {
-	item      cty.Value
-	status    string
-	outputJSON *string
-	error      *string
+	item cty.Value
 }
 
 type MemoryDatasetStore struct {
@@ -228,10 +224,23 @@ func (s *MemoryDatasetStore) AddItems(datasetID string, items []cty.Value) error
 	}
 
 	for _, item := range items {
-		ds.items = append(ds.items, memDatasetItem{
-			item:   item,
-			status: "pending",
-		})
+		ds.items = append(ds.items, memDatasetItem{item: item})
+	}
+	return nil
+}
+
+func (s *MemoryDatasetStore) SetItems(datasetID string, items []cty.Value) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ds, ok := s.datasets[datasetID]
+	if !ok {
+		return fmt.Errorf("dataset %s not found", datasetID)
+	}
+
+	ds.items = make([]memDatasetItem, len(items))
+	for i, item := range items {
+		ds.items[i] = memDatasetItem{item: item}
 	}
 	return nil
 }
@@ -321,104 +330,6 @@ func (s *MemoryDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, erro
 				Name:        ds.name,
 				Description: ds.description,
 				ItemCount:   len(ds.items),
-			})
-		}
-	}
-	return infos, nil
-}
-
-func (s *MemoryDatasetStore) UpdateItemStatus(datasetID string, index int, status string, outputJSON, errMsg *string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	ds, ok := s.datasets[datasetID]
-	if !ok {
-		return fmt.Errorf("dataset %s not found", datasetID)
-	}
-	if index < 0 || index >= len(ds.items) {
-		return fmt.Errorf("item index %d out of range", index)
-	}
-
-	ds.items[index].status = status
-	ds.items[index].outputJSON = outputJSON
-	ds.items[index].error = errMsg
-	return nil
-}
-
-// =============================================================================
-// MemoryQuestionStore
-// =============================================================================
-
-type memQuestionEntry struct {
-	id           string
-	taskID       string
-	iterationKey string
-	question     string
-	answer       string
-	ready        bool
-}
-
-type MemoryQuestionStore struct {
-	mu        sync.Mutex
-	questions map[string][]*memQuestionEntry // keyed by taskID
-}
-
-func (s *MemoryQuestionStore) StoreQuestion(taskID, iterationKey, question string) (string, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	id := generateID()
-	entry := &memQuestionEntry{
-		id:           id,
-		taskID:       taskID,
-		iterationKey: iterationKey,
-		question:     question,
-	}
-	s.questions[taskID] = append(s.questions[taskID], entry)
-	return id, nil
-}
-
-func (s *MemoryQuestionStore) SetAnswer(id, answer string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, entries := range s.questions {
-		for _, e := range entries {
-			if e.id == id {
-				e.answer = answer
-				e.ready = true
-				return nil
-			}
-		}
-	}
-	return fmt.Errorf("question %s not found", id)
-}
-
-func (s *MemoryQuestionStore) GetAnswer(id string) (string, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, entries := range s.questions {
-		for _, e := range entries {
-			if e.id == id {
-				return e.answer, e.ready, nil
-			}
-		}
-	}
-	return "", false, fmt.Errorf("question %s not found", id)
-}
-
-func (s *MemoryQuestionStore) ListQuestions(taskID, excludeIterationKey string) ([]QuestionInfo, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	var infos []QuestionInfo
-	for _, e := range s.questions[taskID] {
-		if e.iterationKey != excludeIterationKey {
-			infos = append(infos, QuestionInfo{
-				ID:        e.id,
-				Question:  e.question,
-				HasAnswer: e.ready,
 			})
 		}
 	}

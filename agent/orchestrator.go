@@ -89,6 +89,7 @@ type orchestrator struct {
 	compaction     *CompactionConfig
 	sessionLogger  SessionLogger
 	sessionID      string
+	taskID         string
 }
 
 // newOrchestrator creates a new chat orchestrator
@@ -245,7 +246,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 
 		// Persist tool result for auditing
 		if o.sessionLogger != nil && o.sessionID != "" {
-			o.sessionLogger.StoreToolResult(o.sessionID, action, "text", len(result), result)
+			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, action, cleanInput, result)
 		}
 
 		o.streamer.ToolComplete(action)

@@ -35,6 +35,8 @@ type Runner struct {
 
 	// Resolved datasets for iteration
 	resolvedDatasets map[string][]cty.Value
+	datasetIDs       map[string]string // dataset name → store ID
+	missionID        string
 
 	// Task state management
 	mu                   sync.RWMutex
@@ -163,6 +165,7 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		secretValues:         secretValues,
 		secretInfos:          secretInfos,
 		resolvedDatasets:     resolvedDatasets,
+		datasetIDs:           make(map[string]string),
 		taskResults:          make(map[string]*TaskResult),
 		taskCommanders:      make(map[string]*agent.Commander),
 		iterationCommanders: make(map[string]map[int]*agent.Commander),
@@ -233,6 +236,23 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	missionID, err := r.stores.Missions.CreateMission(r.mission.Name, string(inputsJSON), string(configJSON))
 	if err != nil {
 		return fmt.Errorf("create mission record: %w", err)
+	}
+	r.missionID = missionID
+
+	// Persist datasets to store
+	for _, ds := range r.mission.Datasets {
+		dsID, err := r.stores.Datasets.CreateDataset(missionID, ds.Name, ds.Description)
+		if err != nil {
+			return fmt.Errorf("create dataset '%s': %w", ds.Name, err)
+		}
+		r.datasetIDs[ds.Name] = dsID
+
+		// Persist any pre-populated items (inline or bound-to-input)
+		if items, ok := r.resolvedDatasets[ds.Name]; ok && len(items) > 0 {
+			if err := r.stores.Datasets.AddItems(dsID, items); err != nil {
+				return fmt.Errorf("add items to dataset '%s': %w", ds.Name, err)
+			}
+		}
 	}
 
 	streamer.MissionStarted(r.mission.Name, len(r.mission.Tasks))
@@ -587,7 +607,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	updateTaskDone(true, &outputStr, nil)
 
 	// Persist task output to store
-	r.stores.Missions.StoreTaskOutput(taskID, false, &outputStr, nil)
+	r.stores.Missions.StoreTaskOutput(taskID, nil, nil, outputStr)
 
 	streamer.TaskCompleted(task.Name, cleanSummary)
 	return &TaskResult{
@@ -938,10 +958,12 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	outputStr := string(outputJSON)
 	updateTaskDone(true, &outputStr, nil)
 
-	// Persist task output to store
-	iterJSON, _ := json.Marshal(iterOutputs)
-	iterStr := string(iterJSON)
-	r.stores.Missions.StoreTaskOutput(taskID, true, &outputStr, &iterStr)
+	// Persist individual iteration outputs to store
+	for _, iterOut := range iterOutputs {
+		iterOutJSON, _ := json.Marshal(iterOut.Output)
+		idx := iterOut.Index
+		r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &idx, string(iterOutJSON))
+	}
 
 	streamer.TaskIterationCompleted(task.Name, len(iterations), summary)
 	streamer.TaskCompleted(task.Name, summary)
@@ -1876,6 +1898,14 @@ func (r *Runner) SetDataset(name string, items []cty.Value) error {
 	}
 
 	r.resolvedDatasets[name] = items
+
+	// Write through to persistent store
+	if dsID, ok := r.datasetIDs[name]; ok {
+		if err := r.stores.Datasets.SetItems(dsID, items); err != nil {
+			return fmt.Errorf("persist dataset '%s': %w", name, err)
+		}
+	}
+
 	return nil
 }
 

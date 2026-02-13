@@ -55,18 +55,21 @@ CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(sess
 
 CREATE TABLE IF NOT EXISTS tool_results (
     id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
     session_id TEXT NOT NULL REFERENCES sessions(id),
-    tool_name TEXT,
-    type TEXT,
-    size INTEGER,
-    raw_data TEXT
+    tool_name TEXT NOT NULL,
+    input_params TEXT,
+    raw_data TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS task_outputs (
-    task_id TEXT PRIMARY KEY REFERENCES mission_tasks(id),
-    is_iterated INTEGER,
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
+    dataset_name TEXT,
+    dataset_index INTEGER,
     output_json TEXT,
-    iterations_json TEXT
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS datasets (
@@ -83,20 +86,9 @@ CREATE TABLE IF NOT EXISTS dataset_items (
     dataset_id TEXT NOT NULL REFERENCES datasets(id),
     item_index INTEGER NOT NULL,
     item_json TEXT NOT NULL,
-    status TEXT DEFAULT 'pending',
-    output_json TEXT,
-    error TEXT,
     PRIMARY KEY (dataset_id, item_index)
 );
 
-CREATE TABLE IF NOT EXISTS questions (
-    id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
-    iteration_key TEXT,
-    question TEXT NOT NULL,
-    answer TEXT,
-    ready INTEGER DEFAULT 0
-);
 `
 
 // NewSQLiteBundle creates a Bundle backed by SQLite at the given path
@@ -112,11 +104,10 @@ func NewSQLiteBundle(dbPath string) (*Bundle, error) {
 	}
 
 	return &Bundle{
-		Questions: &SQLiteQuestionStore{db: db},
-		Missions:  &SQLiteMissionStore{db: db},
-		Datasets:  &SQLiteDatasetStore{db: db},
-		Sessions:  &SQLiteSessionStore{db: db},
-		closer:    db.Close,
+		Missions: &SQLiteMissionStore{db: db},
+		Datasets: &SQLiteDatasetStore{db: db},
+		Sessions: &SQLiteSessionStore{db: db},
+		closer:   db.Close,
 	}, nil
 }
 
@@ -220,14 +211,11 @@ func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 	return tasks, nil
 }
 
-func (s *SQLiteMissionStore) StoreTaskOutput(taskID string, isIterated bool, outputJSON, iterationsJSON *string) error {
-	isIteratedInt := 0
-	if isIterated {
-		isIteratedInt = 1
-	}
+func (s *SQLiteMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, outputJSON string) error {
+	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT OR REPLACE INTO task_outputs (task_id, is_iterated, output_json, iterations_json) VALUES (?, ?, ?, ?)`,
-		taskID, isIteratedInt, outputJSON, iterationsJSON,
+		`INSERT INTO task_outputs (id, task_id, dataset_name, dataset_index, output_json) VALUES (?, ?, ?, ?, ?)`,
+		id, taskID, datasetName, datasetIndex, outputJSON,
 	)
 	return err
 }
@@ -317,11 +305,11 @@ func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 	return sessions, nil
 }
 
-func (s *SQLiteSessionStore) StoreToolResult(sessionID, toolName, resultType string, size int, rawData string) error {
+func (s *SQLiteSessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO tool_results (id, session_id, tool_name, type, size, raw_data) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, sessionID, toolName, resultType, size, rawData,
+		`INSERT INTO tool_results (id, task_id, session_id, tool_name, input_params, raw_data) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, taskID, sessionID, toolName, inputParams, rawData,
 	)
 	return err
 }
@@ -377,6 +365,40 @@ func (s *SQLiteDatasetStore) AddItems(datasetID string, items []cty.Value) error
 	// Update item count
 	tx.Exec(`UPDATE datasets SET item_count = (SELECT COUNT(*) FROM dataset_items WHERE dataset_id = ?) WHERE id = ?`,
 		datasetID, datasetID)
+
+	return tx.Commit()
+}
+
+func (s *SQLiteDatasetStore) SetItems(datasetID string, items []cty.Value) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Delete existing items
+	if _, err := tx.Exec(`DELETE FROM dataset_items WHERE dataset_id = ?`, datasetID); err != nil {
+		return fmt.Errorf("clear items: %w", err)
+	}
+
+	stmt, err := tx.Prepare(`INSERT INTO dataset_items (dataset_id, item_index, item_json) VALUES (?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for i, item := range items {
+		itemJSON, err := json.Marshal(ctyValueToGo(item))
+		if err != nil {
+			return fmt.Errorf("marshal item %d: %w", i, err)
+		}
+		if _, err := stmt.Exec(datasetID, i, string(itemJSON)); err != nil {
+			return fmt.Errorf("insert item %d: %w", i, err)
+		}
+	}
+
+	// Update item count
+	tx.Exec(`UPDATE datasets SET item_count = ? WHERE id = ?`, len(items), datasetID)
 
 	return tx.Commit()
 }
@@ -461,78 +483,6 @@ func (s *SQLiteDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, erro
 		if desc.Valid {
 			info.Description = desc.String
 		}
-		infos = append(infos, info)
-	}
-	return infos, nil
-}
-
-func (s *SQLiteDatasetStore) UpdateItemStatus(datasetID string, index int, status string, outputJSON, errMsg *string) error {
-	_, err := s.db.Exec(
-		`UPDATE dataset_items SET status = ?, output_json = ?, error = ? WHERE dataset_id = ? AND item_index = ?`,
-		status, outputJSON, errMsg, datasetID, index,
-	)
-	return err
-}
-
-// =============================================================================
-// SQLiteQuestionStore
-// =============================================================================
-
-type SQLiteQuestionStore struct {
-	db *sql.DB
-}
-
-func (s *SQLiteQuestionStore) StoreQuestion(taskID, iterationKey, question string) (string, error) {
-	id := generateID()
-	_, err := s.db.Exec(
-		`INSERT INTO questions (id, task_id, iteration_key, question) VALUES (?, ?, ?, ?)`,
-		id, taskID, iterationKey, question,
-	)
-	if err != nil {
-		return "", fmt.Errorf("store question: %w", err)
-	}
-	return id, nil
-}
-
-func (s *SQLiteQuestionStore) SetAnswer(id, answer string) error {
-	_, err := s.db.Exec(
-		`UPDATE questions SET answer = ?, ready = 1 WHERE id = ?`,
-		answer, id,
-	)
-	return err
-}
-
-func (s *SQLiteQuestionStore) GetAnswer(id string) (string, bool, error) {
-	var answer sql.NullString
-	var ready int
-	err := s.db.QueryRow(`SELECT answer, ready FROM questions WHERE id = ?`, id).Scan(&answer, &ready)
-	if err != nil {
-		return "", false, err
-	}
-	if answer.Valid {
-		return answer.String, ready != 0, nil
-	}
-	return "", false, nil
-}
-
-func (s *SQLiteQuestionStore) ListQuestions(taskID, excludeIterationKey string) ([]QuestionInfo, error) {
-	rows, err := s.db.Query(
-		`SELECT id, question, ready FROM questions WHERE task_id = ? AND iteration_key != ?`,
-		taskID, excludeIterationKey,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var infos []QuestionInfo
-	for rows.Next() {
-		var info QuestionInfo
-		var ready int
-		if err := rows.Scan(&info.ID, &info.Question, &ready); err != nil {
-			return nil, err
-		}
-		info.HasAnswer = ready != 0
 		infos = append(infos, info)
 	}
 	return infos, nil

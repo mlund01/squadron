@@ -11,11 +11,10 @@ import (
 // (aitools and mission) to avoid import cycles. They continue to be used
 // directly by the runner and can be backed by SQLite separately.
 type Bundle struct {
-	Questions QuestionStore
-	Missions  MissionStore
-	Datasets  DatasetStore
-	Sessions  SessionStore
-	closer    func() error
+	Missions MissionStore
+	Datasets DatasetStore
+	Sessions SessionStore
+	closer   func() error
 }
 
 // Close cleans up the bundle resources
@@ -33,7 +32,7 @@ type MissionStore interface {
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
 	UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error
 	GetTasksByMission(missionID string) ([]MissionTask, error)
-	StoreTaskOutput(taskID string, isIterated bool, outputJSON, iterationsJSON *string) error
+	StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, outputJSON string) error
 }
 
 // MissionTask represents a task within a mission run
@@ -56,7 +55,7 @@ type SessionStore interface {
 	AppendMessage(sessionID, role, content string) error
 	GetMessages(sessionID string) ([]SessionMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)
-	StoreToolResult(sessionID, toolName, resultType string, size int, rawData string) error
+	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error
 }
 
 // SessionInfo describes a session
@@ -89,25 +88,11 @@ type DatasetInfo struct {
 type DatasetStore interface {
 	CreateDataset(missionID, name, description string) (id string, err error)
 	AddItems(datasetID string, items []cty.Value) error
+	SetItems(datasetID string, items []cty.Value) error // Replace all items
 	GetItems(datasetID string, offset, limit int) ([]cty.Value, error)
 	GetItemCount(datasetID string) (int, error)
 	GetSample(datasetID string, count int) ([]cty.Value, error)
 	GetDatasetByName(missionID, name string) (id string, err error)
 	ListDatasets(missionID string) ([]DatasetInfo, error)
-	UpdateItemStatus(datasetID string, index int, status string, outputJSON, errMsg *string) error
 }
 
-// QuestionStore handles commander question deduplication across iterations
-type QuestionStore interface {
-	StoreQuestion(taskID, iterationKey, question string) (id string, err error)
-	SetAnswer(id, answer string) error
-	GetAnswer(id string) (answer string, ready bool, err error)
-	ListQuestions(taskID, excludeIterationKey string) ([]QuestionInfo, error)
-}
-
-// QuestionInfo describes a stored question
-type QuestionInfo struct {
-	ID        string `json:"id"`
-	Question  string `json:"question"`
-	HasAnswer bool   `json:"hasAnswer"`
-}

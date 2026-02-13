@@ -210,7 +210,7 @@ type SessionLogger interface {
 	CreateSession(taskID, role, agentName, model string) (id string, err error)
 	CompleteSession(id string, err error)
 	AppendMessage(sessionID, role, content string) error
-	StoreToolResult(sessionID, toolName, resultType string, size int, rawData string) error
+	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error
 }
 
 // CommanderStreamer is the interface for streaming commander events
@@ -780,7 +780,7 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 
 		// Persist tool result for auditing
 		if s.sessionLogger != nil && s.sessionID != "" {
-			s.sessionLogger.StoreToolResult(s.sessionID, action, "text", len(result), result)
+			s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result)
 		}
 
 		// Intercept large results and format observation
@@ -1352,15 +1352,15 @@ func (t *callAgentTool) Call(input string) string {
 		Response string `json:"response"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	// Validate: must have either task or response, not both
 	if params.Task == "" && params.Response == "" {
-		return "<STATUS>error</STATUS>\n<ERROR>Must provide either 'task' or 'response'</ERROR>"
+		return "Error: Must provide either 'task' or 'response'"
 	}
 	if params.Task != "" && params.Response != "" {
-		return "<STATUS>error</STATUS>\n<ERROR>Cannot provide both 'task' and 'response'</ERROR>"
+		return "Error: Cannot provide both 'task' and 'response'"
 	}
 
 	agentCfg, ok := t.commander.agents[params.Name]
@@ -1369,7 +1369,7 @@ func (t *callAgentTool) Call(input string) string {
 		for name := range t.commander.agents {
 			available = append(available, name)
 		}
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Agent '%s' not found. Available agents: %v</ERROR>", params.Name, available)
+		return fmt.Sprintf("Error: Agent '%s' not found. Available agents: %v", params.Name, available)
 	}
 
 	ctx := context.Background()
@@ -1412,7 +1412,7 @@ func (t *callAgentTool) Call(input string) string {
 			EventLogger:  eventLogger,
 		})
 		if err != nil {
-			return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>creation_error</ERROR_TYPE>\n<ERROR>Error creating agent '%s': %v</ERROR>\n<RETRYABLE>false</RETRYABLE>", params.Name, err)
+			return fmt.Sprintf("Error creating agent '%s': %v", params.Name, err)
 		}
 
 		// Store the session for future interactions
@@ -1424,6 +1424,7 @@ func (t *callAgentTool) Call(input string) string {
 				t.commander.agentSessionIDs[params.Name] = sid
 				a.sessionLogger = t.commander.sessionLogger
 				a.sessionID = sid
+				a.taskID = t.commander.callbacksTaskID
 			}
 		}
 	}
@@ -1479,14 +1480,12 @@ func (t *callAgentTool) Call(input string) string {
 		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
 			t.commander.sessionLogger.CompleteSession(agentSID, err)
 		}
-		// Classify the error
-		errType, retryable := classifyAgentError(err)
-		return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>%s</ERROR_TYPE>\n<ERROR>%v</ERROR>\n<RETRYABLE>%t</RETRYABLE>", errType, err, retryable)
+		return fmt.Sprintf("Error: %v", err)
 	}
 
 	// Check if agent needs more info from commander
 	if result.AskCommander != "" {
-		return fmt.Sprintf("<STATUS>needs_input</STATUS>\n<AGENT>%s</AGENT>\n<QUESTION>\n%s\n</QUESTION>", params.Name, result.AskCommander)
+		return result.AskCommander
 	}
 
 	// Check if task is complete with an answer
@@ -1496,41 +1495,20 @@ func (t *callAgentTool) Call(input string) string {
 			t.commander.sessionLogger.CompleteSession(agentSID, nil)
 		}
 
-		// Generate agent ID and store the completed agent for follow-up queries
+		// Store the completed agent for follow-up queries
 		t.commander.agentSeq++
 		agentID := fmt.Sprintf("agent_%d_%s", t.commander.agentSeq, params.Name)
-
-		// Store locally - this agent was created by this commander
 		t.commander.completedAgents[agentID] = &completedAgent{
 			agent:     a,
 			agentID:   agentID,
-			inherited: false, // This commander created this agent
+			inherited: false,
 		}
 
-		return fmt.Sprintf("<STATUS>success</STATUS>\n<AGENT_ID>%s</AGENT_ID>\n<ANSWER>\n%s\n</ANSWER>", agentID, result.Answer)
+		return result.Answer
 	}
 
 	// Agent didn't complete or ask for input - unusual state
-	return fmt.Sprintf("<STATUS>in_progress</STATUS>\n<AGENT>%s</AGENT>\n<NOTE>Agent is still processing. Call again to continue.</NOTE>", params.Name)
-}
-
-// classifyAgentError categorizes an error for commander decision-making
-func classifyAgentError(err error) (errorType string, retryable bool) {
-	errStr := err.Error()
-	switch {
-	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline"):
-		return "timeout", true
-	case strings.Contains(errStr, "HTTP") || strings.Contains(errStr, "connection") || strings.Contains(errStr, "network"):
-		return "tool_error", true
-	case strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "429"):
-		return "rate_limit", true
-	case strings.Contains(errStr, "not found") || strings.Contains(errStr, "404"):
-		return "not_found", false
-	case strings.Contains(errStr, "unauthorized") || strings.Contains(errStr, "401") || strings.Contains(errStr, "403"):
-		return "auth_error", false
-	default:
-		return "unknown", false
-	}
+	return "Agent did not produce a result. Call again to continue."
 }
 
 // askAgentTool is the tool for querying completed agents
@@ -1569,28 +1547,26 @@ func (t *askAgentTool) Call(input string) string {
 		Question string `json:"question"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	// Look up the completed agent (includes both this commander's agents and inherited ones)
 	completed := t.commander.completedAgents[params.AgentID]
 	if completed == nil {
-		// List available agent IDs
 		var available []string
 		for id := range t.commander.completedAgents {
 			available = append(available, id)
 		}
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Agent '%s' not found. Available agents: %v</ERROR>", params.AgentID, available)
+		return fmt.Sprintf("Error: Agent '%s' not found. Available agents: %v", params.AgentID, available)
 	}
 
-	// Ask the agent the follow-up question
 	ctx := context.Background()
 	answer, err := completed.agent.AnswerFollowUp(ctx, params.Question)
 	if err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Error asking agent: %v</ERROR>", err)
+		return fmt.Sprintf("Error: %v", err)
 	}
 
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<ANSWER>\n%s\n</ANSWER>", answer)
+	return answer
 }
 
 // =============================================================================
@@ -1644,7 +1620,7 @@ func (t *askCommanderTool) Call(input string) string {
 		Index    *int   `json:"index"` // nil for regular tasks, 0+ for iterated tasks
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	// Determine iteration index (-1 for regular tasks)
@@ -1657,24 +1633,20 @@ func (t *askCommanderTool) Call(input string) string {
 	if t.commander.callbacks != nil && t.commander.callbacks.AskCommanderWithCache != nil {
 		answer, err := t.commander.callbacks.AskCommanderWithCache(params.TaskName, iterIndex, params.Question)
 		if err != nil {
-			return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+			return fmt.Sprintf("Error: %v", err)
 		}
-		return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, answer)
+		return answer
 	}
 
 	// Fallback to per-commander clone logic (for non-iteration contexts)
 	if t.commander.callbacks == nil || t.commander.callbacks.GetCommanderForQuery == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>ask_commander is not available in this context</ERROR>"
+		return "Error: ask_commander is not available in this context"
 	}
 
-	// Check if we already have a cached clone for this target task (and iteration)
-	// Each calling commander gets one persistent clone per target task/iteration,
-	// so follow-up questions build on previous context
 	if t.commander.queryClones == nil {
 		t.commander.queryClones = make(map[string]*Commander)
 	}
 
-	// Cache key includes iteration index for iterated tasks
 	cacheKey := params.TaskName
 	if iterIndex >= 0 {
 		cacheKey = fmt.Sprintf("%s[%d]", params.TaskName, iterIndex)
@@ -1682,23 +1654,21 @@ func (t *askCommanderTool) Call(input string) string {
 
 	supClone, exists := t.commander.queryClones[cacheKey]
 	if !exists {
-		// Create a new clone and cache it
 		var err error
 		supClone, err = t.commander.callbacks.GetCommanderForQuery(params.TaskName, iterIndex)
 		if err != nil {
-			return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+			return fmt.Sprintf("Error: %v", err)
 		}
 		t.commander.queryClones[cacheKey] = supClone
 	}
 
-	// Ask the question to the cloned commander (clone persists for follow-ups)
 	ctx := context.Background()
 	answer, err := supClone.AnswerQueryIsolated(ctx, params.Question)
 	if err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Error querying commander: %v</ERROR>", err)
+		return fmt.Sprintf("Error: %v", err)
 	}
 
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, answer)
+	return answer
 }
 
 // =============================================================================
@@ -1738,24 +1708,23 @@ func (t *listCommanderQuestionsTool) Call(input string) string {
 		TaskName string `json:"task_name"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	if t.commander.callbacks == nil || t.commander.callbacks.ListCommanderQuestions == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>list_commander_questions is not available in this context</ERROR>"
+		return "Error: list_commander_questions is not available in this context"
 	}
 
 	questions := t.commander.callbacks.ListCommanderQuestions(params.TaskName)
 	if len(questions) == 0 {
-		return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<QUESTIONS>No questions have been asked yet.</QUESTIONS>", params.TaskName)
+		return "No questions have been asked yet."
 	}
 
 	var sb strings.Builder
 	for i, q := range questions {
 		sb.WriteString(fmt.Sprintf("%d: %q\n", i, q))
 	}
-
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<QUESTIONS>\n%s</QUESTIONS>", params.TaskName, sb.String())
+	return sb.String()
 }
 
 // =============================================================================
@@ -1800,19 +1769,19 @@ func (t *getCommanderAnswerTool) Call(input string) string {
 		Index    int    `json:"index"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	if t.commander.callbacks == nil || t.commander.callbacks.GetCommanderAnswer == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>get_commander_answer is not available in this context</ERROR>"
+		return "Error: get_commander_answer is not available in this context"
 	}
 
 	answer, err := t.commander.callbacks.GetCommanderAnswer(params.TaskName, params.Index)
 	if err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+		return fmt.Sprintf("Error: %v", err)
 	}
 
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<INDEX>%d</INDEX>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, params.Index, answer)
+	return answer
 }
 
 // =============================================================================

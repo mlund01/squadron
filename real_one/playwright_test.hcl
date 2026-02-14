@@ -2,42 +2,42 @@ mission "simple_test" {
   commander = models.anthropic.claude_sonnet_4
   agents    = [agents.assistant]
 
-  dataset "files" {
-    description = "Files in the current directory"
+  dataset "words" {
+    description = "Words to write stories about"
     schema {
-      field "name" {
+      field "word" {
         type     = "string"
         required = true
       }
     }
   }
 
-  task "list_files" {
-    objective = "List all files in the current directory and add each one to the 'files' dataset. Only include regular files, not directories."
+  task "generate_words" {
+    objective = "Pick 3 random, interesting words and add each one to the 'words' dataset."
 
     output {
-      field "file_count" {
+      field "word_count" {
         type        = "number"
-        description = "Total number of files found"
+        description = "Total number of words generated"
         required    = true
       }
     }
   }
 
-  task "review_file" {
-    objective  = "Read the name of file '${item.name}' and make up what you think it might contain"
-    depends_on = [tasks.list_files]
+  task "write_story" {
+    objective  = "Write a story of 25 words or less inspired by the word '${item.word}'. Save the story to a file called 'stories/${item.word}.txt'."
+    depends_on = [tasks.generate_words]
 
     iterator {
-      dataset           = datasets.files
+      dataset           = datasets.words
       parallel          = true
       concurrency_limit = 3
     }
 
     output {
-      field "summary" {
+      field "filename" {
         type        = "string"
-        description = "A short summary of the file contents"
+        description = "The filename where the story was saved"
         required    = true
       }
     }

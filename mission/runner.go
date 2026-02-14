@@ -558,6 +558,10 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
+		OnSubmitOutput: func(index int, output map[string]any, summary string) {
+			outputJSON, _ := json.Marshal(output)
+			r.stores.Missions.StoreTaskOutput(taskID, nil, nil, string(outputJSON))
+		},
 		SessionLogger: r.stores.Sessions,
 		TaskID:        taskID,
 	}, depSummaries)
@@ -588,14 +592,17 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	r.taskAgents[task.Name] = sup.GetCompletedAgents()
 	r.mu.Unlock()
 
-	// Parse OUTPUT block if present
-	output, cleanSummary := parseOutput(summary)
+	// Get output from submit_output tool
+	var output map[string]any
+	if results := sup.GetSubmitResults(); len(results) > 0 {
+		output = results[0].Output
+	}
 
 	// Store in knowledge store
 	r.knowledgeStore.StoreTaskOutput(TaskOutput{
 		TaskName:   task.Name,
 		Status:     "success",
-		Summary:    cleanSummary,
+		Summary:    summary,
 		Timestamp:  time.Now(),
 		Output:     output,
 		IsIterated: false,
@@ -606,13 +613,10 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	outputStr := string(outputJSON)
 	updateTaskDone(true, &outputStr, nil)
 
-	// Persist task output to store
-	r.stores.Missions.StoreTaskOutput(taskID, nil, nil, outputStr)
-
-	streamer.TaskCompleted(task.Name, cleanSummary)
+	streamer.TaskCompleted(task.Name, summary)
 	return &TaskResult{
 		TaskName: task.Name,
-		Summary:  cleanSummary,
+		Summary:  summary,
 		Success:  true,
 	}, nil
 }
@@ -958,13 +962,6 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	outputStr := string(outputJSON)
 	updateTaskDone(true, &outputStr, nil)
 
-	// Persist individual iteration outputs to store
-	for _, iterOut := range iterOutputs {
-		iterOutJSON, _ := json.Marshal(iterOut.Output)
-		idx := iterOut.Index
-		r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &idx, string(iterOutJSON))
-	}
-
 	streamer.TaskIterationCompleted(task.Name, len(iterations), summary)
 	streamer.TaskCompleted(task.Name, summary)
 
@@ -1013,7 +1010,7 @@ func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, 
 
 Task objective (example for first item): %s
 
-Use dataset_next to get each item. Process it completely, then call dataset_item_complete with the output.
+Use dataset_next to get each item. Process it completely, then call submit_output with the output.
 Continue until dataset_next returns "exhausted".`, len(items), representativeObjective)
 
 	// Create single commander with all items
@@ -1081,6 +1078,11 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
+		OnSubmitOutput: func(index int, output map[string]any, summary string) {
+			datasetName := task.Iterator.Dataset
+			outputJSON, _ := json.Marshal(output)
+			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &index, string(outputJSON))
+		},
 		SessionLogger: r.stores.Sessions,
 		TaskID:        taskID,
 	}, depSummaries)
@@ -1095,9 +1097,9 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 	// Execute the task - commander handles all items internally
 	_, err = sup.ExecuteTask(ctx, objective, seqStreamer)
 
-	// Get results from the commander's dataset cursor
-	results := sup.GetDatasetResults()
-	if results == nil || len(results) == 0 {
+	// Get results from submit_output tool
+	results := sup.GetSubmitResults()
+	if len(results) == 0 {
 		if err != nil {
 			return []IterationResult{{
 				Index:   0,
@@ -1113,19 +1115,19 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		}}
 	}
 
-	// Convert DatasetItemResult to IterationResult
+	// Convert SubmitResult to IterationResult
 	iterations := make([]IterationResult, len(results))
 	for i, r := range results {
 		itemID := ""
-		if r.Index < len(items) {
-			itemID = getItemID(items[r.Index], r.Index)
+		if i < len(items) {
+			itemID = getItemID(items[i], i)
 		}
 		iterations[i] = IterationResult{
-			Index:   r.Index,
+			Index:   i,
 			ItemID:  itemID,
 			Summary: r.Summary,
 			Output:  r.Output,
-			Success: r.Success,
+			Success: true,
 		}
 	}
 
@@ -1400,6 +1402,12 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
+		OnSubmitOutput: func(idx int, output map[string]any, summary string) {
+			datasetName := task.Iterator.Dataset
+			outputJSON, _ := json.Marshal(output)
+			actualIdx := index
+			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &actualIdx, string(outputJSON))
+		},
 		SessionLogger: r.stores.Sessions,
 		TaskID:        taskID,
 	}, depSummaries)
@@ -1424,26 +1432,14 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		}
 	}
 
-	// Parse OUTPUT block if present
-	output, cleanSummary := parseOutput(summary)
+	// Get output from submit_output tool
+	var output map[string]any
+	if results := sup.GetSubmitResults(); len(results) > 0 {
+		output = results[0].Output
+	}
 
 	// Parse LEARNINGS block if present
-	learnings, cleanSummary := parseLearnings(cleanSummary)
-
-	// Validate output against schema - if required fields are missing, iteration failed
-	if err := validateOutput(output, task.Output); err != nil {
-		sup.Close() // Close on failure
-		streamer.IterationFailed(task.Name, index, err)
-		return IterationResult{
-			Index:     index,
-			ItemID:    itemID,
-			Summary:   cleanSummary,
-			Output:    output,
-			Learnings: learnings,
-			Success:   false,
-			Error:     err,
-		}
-	}
+	learnings, cleanSummary := parseLearnings(summary)
 
 	// Store the iteration commander for ask_commander queries from dependent tasks
 	r.mu.Lock()
@@ -1478,57 +1474,6 @@ func (r *Runner) resolveIterationObjective(task config.Task, item cty.Value) (st
 		return "", fmt.Errorf("evaluating objective: %s", diags.Error())
 	}
 	return val.AsString(), nil
-}
-
-// parseOutput extracts structured output from an answer containing an OUTPUT block
-// Returns the parsed output map and the answer with the OUTPUT block removed
-func parseOutput(answer string) (map[string]any, string) {
-	// Match <OUTPUT>...</OUTPUT> block
-	re := regexp.MustCompile(`(?s)<OUTPUT>\s*(.*?)\s*</OUTPUT>`)
-	match := re.FindStringSubmatch(answer)
-
-	if match == nil {
-		return nil, answer
-	}
-
-	// Parse the JSON content
-	var output map[string]any
-	if err := json.Unmarshal([]byte(match[1]), &output); err != nil {
-		// If parsing fails, return nil output but still strip the block
-		return nil, re.ReplaceAllString(answer, "")
-	}
-
-	// Remove the OUTPUT block from the answer
-	cleanAnswer := strings.TrimSpace(re.ReplaceAllString(answer, ""))
-	return output, cleanAnswer
-}
-
-// validateOutput checks if output satisfies the task's required output schema fields.
-// Returns nil if valid, or an error describing which required fields are missing.
-func validateOutput(output map[string]any, schema *config.OutputSchema) error {
-	if schema == nil {
-		// No schema defined - any output (or none) is valid
-		return nil
-	}
-
-	// Check each required field
-	var missingFields []string
-	for _, field := range schema.Fields {
-		if !field.Required {
-			continue
-		}
-
-		val, exists := output[field.Name]
-		if !exists || val == nil {
-			missingFields = append(missingFields, field.Name)
-		}
-	}
-
-	if len(missingFields) > 0 {
-		return fmt.Errorf("missing required output fields: %v", missingFields)
-	}
-
-	return nil
 }
 
 // parseLearnings extracts learnings from an answer containing a LEARNINGS block
@@ -1797,18 +1742,7 @@ func (r *Runner) askCommanderWithCache(ctx context.Context, targetTask string, i
 
 	r.askCommanderStore.mu.Lock()
 
-	// Check if exact question already exists
-	entries := r.askCommanderStore.questions[cacheKey]
-	for _, entry := range entries {
-		if entry.Question == question {
-			// Question exists - unlock and wait for answer
-			r.askCommanderStore.mu.Unlock()
-			<-entry.Ready
-			return entry.Answer, nil
-		}
-	}
-
-	// Question doesn't exist - register it with a pending answer
+	// Register the question (no dedup — LLM uses list_commander_questions to check existing answers)
 	entry := &questionEntry{
 		Question: question,
 		Answer:   "",

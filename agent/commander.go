@@ -65,7 +65,7 @@ type CommanderOptions struct {
 	// DebugFile enables debug logging to the specified file (optional)
 	DebugFile string
 	// SequentialDataset contains all items for sequential iteration processing
-	// When set, the commander handles all items in a single session using dataset_next/dataset_item_complete tools
+	// When set, the commander handles all items in a single session using dataset_next/submit_output tools
 	SequentialDataset []cty.Value
 }
 
@@ -117,6 +117,10 @@ type CommanderToolCallbacks struct {
 	// already asked, returns the cached answer. Otherwise queries and caches.
 	// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
 	AskCommanderWithCache func(targetTask string, iterationIndex int, question string) (string, error)
+
+	// OnSubmitOutput is called each time the LLM submits output via submit_output tool.
+	// Used to persist task outputs incrementally.
+	OnSubmitOutput aitools.SubmitOutputCallback
 
 	// SessionLogger provides session persistence (optional). If set, commander and agent
 	// sessions will be tracked with their message history.
@@ -252,8 +256,9 @@ type Commander struct {
 	queryClones     map[string]*Commander // Cached clones for ask_commander queries (keyed by target task name)
 	secretInfos     []SecretInfo           // Secret names and descriptions for agent prompts
 	secretValues    map[string]string      // Actual secret values for tool call injection
-	datasetCursor      *aitools.DatasetCursor // Cursor for sequential dataset iteration (nil if not sequential)
-	sessionLogger      SessionLogger          // Session persistence (nil if not tracking)
+	datasetCursor      *aitools.DatasetCursor      // Cursor for sequential dataset iteration (nil if not sequential)
+	submitOutput       *aitools.SubmitOutputTool   // Universal output submission tool
+	sessionLogger      SessionLogger               // Session persistence (nil if not tracking)
 	sessionID          string                 // Store session ID (empty if not tracking)
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
 	callbacksTaskID    string                 // Task ID from callbacks (for agent session creation)
@@ -368,6 +373,18 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		sup.injectDependencyContext(opts.DepSummaries, opts.DepOutputSchemas)
 	}
 
+	// Create submit_output tool — convert OutputFieldSchema to aitools.OutputField
+	var outputFields []aitools.OutputField
+	for _, f := range opts.TaskOutputSchema {
+		outputFields = append(outputFields, aitools.OutputField{
+			Name:     f.Name,
+			Type:     f.Type,
+			Required: f.Required,
+		})
+	}
+	sup.submitOutput = aitools.NewSubmitOutputTool(outputFields)
+	sup.tools["submit_output"] = sup.submitOutput
+
 	// If task has an output schema, inject instructions for structured output
 	if len(opts.TaskOutputSchema) > 0 {
 		sup.injectOutputSchemaInstructions(opts.TaskOutputSchema)
@@ -383,11 +400,12 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		sup.injectPrevIterationLearnings(opts.PrevIterationLearnings)
 	}
 
-	// If sequential dataset is provided, set up cursor and tools for iterating through items
+	// If sequential dataset is provided, set up cursor and dataset_next tool
 	if len(opts.SequentialDataset) > 0 {
 		sup.datasetCursor = aitools.NewDatasetCursor(opts.TaskName, opts.SequentialDataset)
-		sup.tools["dataset_next"] = aitools.NewDatasetNextTool(sup.datasetCursor)
-		sup.tools["dataset_item_complete"] = aitools.NewDatasetItemCompleteTool(sup.datasetCursor)
+		nextTool := aitools.NewDatasetNextTool(sup.datasetCursor)
+		nextTool.OutputCounter = sup.submitOutput.ResultCount
+		sup.tools["dataset_next"] = nextTool
 		sup.injectSequentialDatasetInstructions(len(opts.SequentialDataset))
 	}
 
@@ -443,6 +461,11 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		s.tools["query_task_output"] = &queryTaskOutputTool{
 			store: callbacks.KnowledgeStore,
 		}
+	}
+
+	// Wire OnSubmitOutput callback to submit_output tool if set
+	if callbacks.OnSubmitOutput != nil && s.submitOutput != nil {
+		s.submitOutput.OnSubmit = callbacks.OnSubmitOutput
 	}
 
 	// Add ask_commander tool if GetCommanderForQuery callback is available
@@ -520,11 +543,11 @@ func (s *Commander) injectDependencyContext(summaries []DependencySummary, outpu
 	s.session.AddSystemPrompt(sb.String())
 }
 
-// injectOutputSchemaInstructions adds instructions for producing structured output
+// injectOutputSchemaInstructions adds instructions for producing structured output via submit_output tool
 func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 	var sb strings.Builder
 	sb.WriteString("## Required Structured Output\n\n")
-	sb.WriteString("This task requires structured output. When you provide your final ANSWER, you MUST also include an OUTPUT block with JSON data matching this schema:\n\n")
+	sb.WriteString("This task requires structured output. You MUST call the `submit_output` tool to deliver your results.\n\n")
 
 	sb.WriteString("**Output fields:**\n")
 	for _, field := range schema {
@@ -539,13 +562,9 @@ func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 		sb.WriteString(fmt.Sprintf("- `%s` (%s%s)%s\n", field.Name, field.Type, req, desc))
 	}
 
-	sb.WriteString("\n**Format:**\n")
-	sb.WriteString("```\n")
-	sb.WriteString("<ANSWER>\n")
-	sb.WriteString("Your prose summary of what was accomplished...\n")
-	sb.WriteString("</ANSWER>\n")
-	sb.WriteString("<OUTPUT>\n")
-	sb.WriteString("{")
+	sb.WriteString("\n**Example submit_output call:**\n")
+	sb.WriteString("```json\n")
+	sb.WriteString("{\"output\": {")
 
 	// Build example JSON
 	for i, field := range schema {
@@ -562,10 +581,9 @@ func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 		}
 	}
 
-	sb.WriteString("}\n")
-	sb.WriteString("</OUTPUT>\n")
+	sb.WriteString("}, \"summary\": \"Brief description of what was done\"}\n")
 	sb.WriteString("```\n\n")
-	sb.WriteString("The OUTPUT block must contain valid JSON with the fields listed above.\n")
+	sb.WriteString("Call `submit_output` with the output object containing the fields above, then provide your final ANSWER.\n")
 
 	s.session.AddSystemPrompt(sb.String())
 }
@@ -611,13 +629,12 @@ Apply general insights (API behaviors, error handling, etc.) but focus on your c
 	s.session.AddSystemPrompt(prompt)
 }
 
-// GetDatasetResults returns the collected results from sequential dataset processing
-// Returns nil if this commander is not processing a sequential dataset
-func (s *Commander) GetDatasetResults() []aitools.DatasetItemResult {
-	if s.datasetCursor == nil {
+// GetSubmitResults returns all outputs submitted via the submit_output tool
+func (s *Commander) GetSubmitResults() []aitools.SubmitResult {
+	if s.submitOutput == nil {
 		return nil
 	}
-	return s.datasetCursor.GetResults()
+	return s.submitOutput.GetResults()
 }
 
 // GetStoredResults returns all tool results stored during this commander's session
@@ -646,16 +663,16 @@ You have a dataset of %d items to process sequentially in this single session.
 
 **Tools:**
 - dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
-- dataset_item_complete: Submit output for current item. Required before calling dataset_next again.
+- submit_output: Submit output for current item. Required before calling dataset_next again.
 
-**Mission:**
+**Workflow:**
 1. Call dataset_next to get an item
 2. Process the item (delegate to agent, use tools, etc.)
-3. Call dataset_item_complete with the output for this item
+3. Call submit_output with the output for this item
 4. Repeat until dataset_next returns "exhausted"
 5. Produce final ANSWER summarizing the batch
 
-You MUST call dataset_item_complete before dataset_next or you will get an error.
+You MUST call submit_output before dataset_next or you will get an error.
 `, itemCount)
 
 	s.session.AddSystemPrompt(prompt)

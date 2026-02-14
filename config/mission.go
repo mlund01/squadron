@@ -20,45 +20,45 @@ const (
 
 // MissionInput represents an input parameter for a mission
 type MissionInput struct {
-	Name        string     // From HCL label
-	Type        string     // "string", "number", "bool", "list", "object"
-	Description string     // Documentation for the input
-	Default     *cty.Value // Optional default value (nil means required for non-secrets)
-	Secret      bool       // If true, value is opaque to LLM and uses ${secrets.name} in tool calls
-	Value       *cty.Value // For secrets: the actual value (from vars.* or literal). Nil for regular inputs.
+	Name        string     `json:"name"`
+	Type        string     `json:"type"`
+	Description string     `json:"description,omitempty"`
+	Default     *cty.Value `json:"-"`
+	Secret      bool       `json:"secret,omitempty"`
+	Value       *cty.Value `json:"-"`
 }
 
 // Dataset represents a collection of items for task iteration
 type Dataset struct {
-	Name        string          // From HCL label
-	Description string          // Documentation for the dataset
-	BindTo      string          // Optional: input name to bind to (e.g., "cities" for inputs.cities)
-	Schema      *InputsSchema   // Optional: schema for validating items
-	Items       []cty.Value     // Optional: inline list of items
-	BindToExpr  hcl.Expression  // Stored for deferred evaluation
+	Name        string         `json:"name"`
+	Description string         `json:"description,omitempty"`
+	BindTo      string         `json:"bindTo,omitempty"`
+	Schema      *InputsSchema  `json:"schema,omitempty"`
+	Items       []cty.Value    `json:"-"`
+	BindToExpr  hcl.Expression `json:"-"`
 }
 
 // TaskIterator configures iteration over a dataset
 type TaskIterator struct {
-	Dataset          string // Dataset name (e.g., "city_list")
-	Parallel         bool   // Default: false (sequential execution)
-	MaxRetries       int    // Default: 0 (no retries). Max retry attempts per iteration on failure.
-	ConcurrencyLimit int    // Default: 5. Max concurrent iterations when parallel=true.
-	StartDelay       int    // Default: 0. Milliseconds delay between starts in first concurrent batch.
-	Smoketest        bool   // Default: false. If true, run first iteration completely before starting others.
+	Dataset          string `json:"dataset"`                    // Dataset name (e.g., "city_list")
+	Parallel         bool   `json:"parallel"`                   // Default: false (sequential execution)
+	MaxRetries       int    `json:"maxRetries,omitempty"`       // Default: 0 (no retries). Max retry attempts per iteration on failure.
+	ConcurrencyLimit int    `json:"concurrencyLimit,omitempty"` // Default: 5. Max concurrent iterations when parallel=true.
+	StartDelay       int    `json:"startDelay,omitempty"`       // Default: 0. Milliseconds delay between starts in first concurrent batch.
+	Smoketest        bool   `json:"smoketest,omitempty"`        // Default: false. If true, run first iteration completely before starting others.
 }
 
 // OutputSchema defines the structured output for a task
 type OutputSchema struct {
-	Fields []OutputField
+	Fields []OutputField `json:"fields"`
 }
 
 // OutputField represents a single output field definition
 type OutputField struct {
-	Name        string
-	Type        string // string, number, integer, boolean
-	Description string
-	Required    bool
+	Name        string `json:"name"`
+	Type        string `json:"type"`                  // string, number, integer, boolean
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
 }
 
 // Mission represents a mission configuration with multiple tasks
@@ -73,12 +73,12 @@ type Mission struct {
 
 // Task represents a single task within a mission
 type Task struct {
-	Name          string         `hcl:"name,label"`
-	ObjectiveExpr hcl.Expression // Stored for deferred evaluation with inputs
-	Agents        []string       `hcl:"agents,optional"` // Optional - uses mission-level agents if not specified
-	DependsOn     []string       `hcl:"depends_on,optional"`
-	Iterator      *TaskIterator  // Optional: iterate over a dataset
-	Output        *OutputSchema  // Optional: structured output schema
+	Name          string         `hcl:"name,label" json:"name"`
+	ObjectiveExpr hcl.Expression `json:"-"`
+	Agents        []string       `hcl:"agents,optional" json:"agents,omitempty"`
+	DependsOn     []string       `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
+	Iterator      *TaskIterator  `json:"iterator,omitempty"`
+	Output        *OutputSchema  `json:"output,omitempty"`
 }
 
 // Validate checks that the mission configuration is valid

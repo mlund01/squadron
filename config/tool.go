@@ -23,15 +23,15 @@ type CustomTool struct {
 
 // InputsSchema defines the custom inputs for the tool using attribute-based syntax
 type InputsSchema struct {
-	Fields []InputField
+	Fields []InputField `json:"fields"`
 }
 
 // InputField represents a single input field definition
 type InputField struct {
-	Name        string
-	Type        string
-	Description string
-	Required    bool
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required,omitempty"`
 }
 
 // ToAIToolsSchema converts InputsSchema to aitools.Schema

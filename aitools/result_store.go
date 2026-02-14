@@ -18,12 +18,13 @@ const (
 
 // StoredResult holds a large result with metadata
 type StoredResult struct {
-	ID      string
-	Type    ResultType
-	Size    int            // Item count for arrays, byte length for text/objects
-	RawData string         // Original string data
-	Array   []any          // Parsed array (if Type == array)
-	Object  map[string]any // Parsed object (if Type == object)
+	ID       string
+	ToolName string
+	Type     ResultType
+	Size     int            // Item count for arrays, byte length for text/objects
+	RawData  string         // Original string data
+	Array    []any          // Parsed array (if Type == array)
+	Object   map[string]any // Parsed object (if Type == object)
 }
 
 // ResultStore stores large tool results for later retrieval
@@ -67,6 +68,7 @@ func (s *MemoryResultStore) Store(toolName string, result StoredResult) string {
 	seq := atomic.AddInt64(&s.seqNum, 1)
 	id := fmt.Sprintf("_result_%s_%d", sanitizeName(toolName), seq)
 	result.ID = id
+	result.ToolName = toolName
 	s.results[id] = &result
 	return id
 }
@@ -93,6 +95,18 @@ func (s *MemoryResultStore) GetInfo() []ResultInfo {
 		})
 	}
 	return infos
+}
+
+// GetAll returns all stored results
+func (s *MemoryResultStore) GetAll() []*StoredResult {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	results := make([]*StoredResult, 0, len(s.results))
+	for _, r := range s.results {
+		results = append(results, r)
+	}
+	return results
 }
 
 // sanitizeName replaces characters that shouldn't appear in result IDs

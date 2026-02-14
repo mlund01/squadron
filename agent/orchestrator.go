@@ -87,6 +87,9 @@ type orchestrator struct {
 	turnLogger     *llm.TurnLogger
 	secretInjector *secretInjector
 	compaction     *CompactionConfig
+	sessionLogger  SessionLogger
+	sessionID      string
+	taskID         string
 }
 
 // newOrchestrator creates a new chat orchestrator
@@ -239,6 +242,11 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 				"tool":        action,
 				"duration_ms": time.Since(toolStart).Milliseconds(),
 			})
+		}
+
+		// Persist tool result for auditing
+		if o.sessionLogger != nil && o.sessionID != "" {
+			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, action, cleanInput, result)
 		}
 
 		o.streamer.ToolComplete(action)

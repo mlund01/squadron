@@ -23,6 +23,9 @@ type Config struct {
 	Plugins     []Plugin     `hcl:"plugin,block"`
 	Missions   []Mission   `hcl:"mission,block"`
 
+	// Storage configuration (optional, defaults to memory backend)
+	Storage *StorageConfig `hcl:"-"`
+
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
 	// PluginWarnings holds warnings for plugins that could not be loaded
@@ -174,7 +177,8 @@ type parsedBlocks struct {
 	Agents    []*hcl.Block
 	Tools     []*hcl.Block
 	Plugins   []*hcl.Block
-	Missions []*hcl.Block
+	Missions  []*hcl.Block
+	Storage   []*hcl.Block
 }
 
 // loadFromFiles implements staged loading: variables → models → agents → tools
@@ -198,6 +202,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "tool", LabelNames: []string{"name"}},
 				{Type: "plugin", LabelNames: []string{"name"}},
 				{Type: "mission", LabelNames: []string{"name"}},
+				{Type: "storage"},
 			},
 		})
 		if diags.HasErrors() {
@@ -219,6 +224,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.Plugins = append(pb.Plugins, block)
 			case "mission":
 				pb.Missions = append(pb.Missions, block)
+			case "storage":
+				pb.Storage = append(pb.Storage, block)
 			}
 		}
 		allParsedBlocks = append(allParsedBlocks, pb)
@@ -240,6 +247,18 @@ func loadFromFiles(files []string) (*Config, error) {
 
 	// Build vars context
 	varsCtx, resolvedVars := buildVarsContext(allVars)
+
+	// Parse storage block (singleton, no dependencies)
+	var storageConfig StorageConfig
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.Storage {
+			diags := gohcl.DecodeBody(block.Body, varsCtx, &storageConfig)
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("storage: %w", diags)
+			}
+		}
+	}
+	storageConfig.Defaults()
 
 	// Stage 1.5: Load plugins (with vars context - plugins are simple, load early so tools can reference them)
 	var allPlugins []Plugin
@@ -343,6 +362,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		CustomTools:    allTools,
 		Plugins:        allPlugins,
 		Missions:      allMissions,
+		Storage:        &storageConfig,
 		LoadedPlugins:  loadedPlugins,
 		PluginWarnings: pluginWarnings,
 		ResolvedVars:   resolvedVars,

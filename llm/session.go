@@ -75,6 +75,12 @@ func (s *Session) GetHistory() []Message {
 	return s.messages
 }
 
+// LoadMessages replaces the session's message history with the provided messages.
+// Used for restoring a session from persisted state (e.g., mission resume).
+func (s *Session) LoadMessages(msgs []Message) {
+	s.messages = msgs
+}
+
 // GetSystemPrompts returns the session's system prompts
 func (s *Session) GetSystemPrompts() []string {
 	return s.systemPrompts
@@ -241,6 +247,72 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: content})
 
 	return resp, nil
+}
+
+// ContinueStream resumes from the current session state without adding a new user message.
+// Unlike SendStream, it sends the existing history as-is and only appends the assistant
+// response. Used when resuming an interrupted session where a pending user message is
+// already in the history.
+func (s *Session) ContinueStream(ctx context.Context, onChunk func(StreamChunk)) (*ChatResponse, error) {
+	s.logMessage("Continue", "(resuming from existing state)")
+
+	req := &ChatRequest{
+		Model:         s.model,
+		Messages:      s.buildCurrentMessages(),
+		StopSequences: s.stopSequences,
+	}
+
+	stream, err := s.provider.ChatStream(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	var contentBuilder strings.Builder
+	var lastChunk StreamChunk
+
+	for chunk := range stream {
+		if chunk.Error != nil {
+			return nil, chunk.Error
+		}
+
+		contentBuilder.WriteString(chunk.Content)
+
+		if onChunk != nil {
+			onChunk(chunk)
+		}
+
+		lastChunk = chunk
+	}
+
+	content := contentBuilder.String()
+
+	s.logMessage("LLM Response", content)
+
+	// Build the final response
+	resp := &ChatResponse{
+		ID:      uuid.New().String(),
+		Content: content,
+	}
+
+	// Capture usage from the final chunk if provider included it
+	if lastChunk.Usage != nil {
+		resp.Usage = *lastChunk.Usage
+	}
+
+	// Append ONLY the assistant response (no user message — it's already in history)
+	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: content})
+
+	return resp, nil
+}
+
+// buildCurrentMessages builds system prompts + existing history, no new user message.
+func (s *Session) buildCurrentMessages() []Message {
+	var msgs []Message
+	for _, sp := range s.systemPrompts {
+		msgs = append(msgs, Message{Role: RoleSystem, Content: sp})
+	}
+	msgs = append(msgs, s.messages...)
+	return msgs
 }
 
 // CompactSettings contains settings for context compaction

@@ -12,7 +12,11 @@ import (
 // NewMemoryBundle creates a Bundle backed entirely by in-memory stores
 func NewMemoryBundle() *Bundle {
 	return &Bundle{
-		Missions: &MemoryMissionStore{tasks: make(map[string]*MissionTask)},
+		Missions: &MemoryMissionStore{
+			missions:    make(map[string]*MissionRecord),
+			tasks:       make(map[string]*MissionTask),
+			taskOutputs: make(map[string][]TaskOutputRow),
+		},
 		Datasets: &MemoryDatasetStore{datasets: make(map[string]*memDataset)},
 		Sessions: &MemorySessionStore{sessions: make(map[string]*memSession)},
 	}
@@ -23,15 +27,39 @@ func NewMemoryBundle() *Bundle {
 // =============================================================================
 
 type MemoryMissionStore struct {
-	mu    sync.Mutex
-	tasks map[string]*MissionTask
+	mu          sync.Mutex
+	missions    map[string]*MissionRecord
+	tasks       map[string]*MissionTask
+	taskOutputs map[string][]TaskOutputRow // taskID -> outputs
 }
 
 func (s *MemoryMissionStore) CreateMission(name string, inputsJSON, configJSON string) (string, error) {
-	return generateID(), nil
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id := generateID()
+	s.missions[id] = &MissionRecord{
+		ID:              id,
+		MissionName:     name,
+		Status:          "running",
+		InputValuesJSON: inputsJSON,
+		ConfigJSON:      configJSON,
+		StartedAt:       time.Now(),
+	}
+	return id, nil
 }
 
 func (s *MemoryMissionStore) UpdateMissionStatus(id, status string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if m, ok := s.missions[id]; ok {
+		m.Status = status
+		if status == "completed" || status == "failed" {
+			now := time.Now()
+			m.FinishedAt = &now
+		}
+	}
 	return nil
 }
 
@@ -51,12 +79,13 @@ func (s *MemoryMissionStore) CreateTask(missionID, taskName, configJSON string) 
 	return id, nil
 }
 
-func (s *MemoryMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error {
+func (s *MemoryMissionStore) UpdateTaskStatus(id, status string, summary, outputJSON, errMsg *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if task, ok := s.tasks[id]; ok {
 		task.Status = status
+		task.Summary = summary
 		task.OutputJSON = outputJSON
 		task.Error = errMsg
 		if status == "completed" || status == "failed" {
@@ -80,8 +109,63 @@ func (s *MemoryMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 	return tasks, nil
 }
 
-func (s *MemoryMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, outputJSON string) error {
-	return nil // no-op for memory store
+func (s *MemoryMissionStore) GetTaskByName(missionID, taskName string) (*MissionTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, t := range s.tasks {
+		if t.MissionID == missionID && t.TaskName == taskName {
+			cp := *t
+			return &cp, nil
+		}
+	}
+	return nil, fmt.Errorf("task '%s' not found", taskName)
+}
+
+func (s *MemoryMissionStore) GetMission(id string) (*MissionRecord, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	m, ok := s.missions[id]
+	if !ok {
+		return nil, fmt.Errorf("mission not found: %s", id)
+	}
+	cp := *m
+	return &cp, nil
+}
+
+func (s *MemoryMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON, summary string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	row := TaskOutputRow{
+		ID:         generateID(),
+		TaskID:     taskID,
+		OutputJSON: outputJSON,
+		Summary:    summary,
+		CreatedAt:  time.Now(),
+	}
+	if datasetName != nil {
+		row.DatasetName = datasetName
+	}
+	if datasetIndex != nil {
+		row.DatasetIndex = datasetIndex
+	}
+	if itemID != nil {
+		row.ItemID = itemID
+	}
+	s.taskOutputs[taskID] = append(s.taskOutputs[taskID], row)
+	return nil
+}
+
+func (s *MemoryMissionStore) GetTaskOutputs(taskID string) ([]TaskOutputRow, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	outputs := s.taskOutputs[taskID]
+	result := make([]TaskOutputRow, len(outputs))
+	copy(result, outputs)
+	return result, nil
 }
 
 // =============================================================================
@@ -98,20 +182,21 @@ type MemorySessionStore struct {
 	sessions map[string]*memSession
 }
 
-func (s *MemorySessionStore) CreateSession(taskID, role, agentName, model string) (string, error) {
+func (s *MemorySessionStore) CreateSession(taskID, role, agentName, model string, iterationIndex *int) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	id := generateID()
 	s.sessions[id] = &memSession{
 		info: SessionInfo{
-			ID:        id,
-			TaskID:    taskID,
-			Role:      role,
-			AgentName: agentName,
-			Model:     model,
-			Status:    "running",
-			StartedAt: time.Now(),
+			ID:             id,
+			TaskID:         taskID,
+			Role:           role,
+			AgentName:      agentName,
+			Model:          model,
+			Status:         "running",
+			StartedAt:      time.Now(),
+			IterationIndex: iterationIndex,
 		},
 	}
 	return id, nil

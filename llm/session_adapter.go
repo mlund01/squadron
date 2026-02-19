@@ -28,6 +28,13 @@ func (a *SessionAdapter) SendMessageStream(ctx context.Context, msg Message, onC
 	})
 }
 
+// ContinueStream resumes from existing session state without adding a new user message
+func (a *SessionAdapter) ContinueStream(ctx context.Context, onChunk func(content string)) (*ChatResponse, error) {
+	return a.session.ContinueStream(ctx, func(chunk StreamChunk) {
+		onChunk(chunk.Content)
+	})
+}
+
 // GetSession returns the underlying session (needed for pruning integration)
 func (a *SessionAdapter) GetSession() *Session {
 	return a.session

@@ -40,7 +40,7 @@ type ChatHandler interface {
 // MissionHandler defines the interface for handling mission execution events
 type MissionHandler interface {
 	// Mission lifecycle
-	MissionStarted(name string, taskCount int)
+	MissionStarted(name string, missionID string, taskCount int)
 	MissionCompleted(name string)
 
 	// Task lifecycle

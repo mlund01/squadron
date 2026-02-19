@@ -48,8 +48,6 @@ type CommanderOptions struct {
 	DepOutputSchemas []DependencyOutputSchema
 	// TaskOutputSchema is the output schema for this task (if defined)
 	TaskOutputSchema []OutputFieldSchema
-	// InheritedAgents contains completed agents from dependency tasks (for ask_agent)
-	InheritedAgents map[string]*Agent
 	// PrevIterationOutput contains the structured output from the previous iteration (sequential only)
 	PrevIterationOutput map[string]any
 	// PrevIterationLearnings contains insights and recommendations from the previous iteration (sequential only)
@@ -127,6 +125,12 @@ type CommanderToolCallbacks struct {
 	SessionLogger SessionLogger
 	// TaskID is the store task ID for session creation (required if SessionLogger is set)
 	TaskID string
+	// IterationIndex identifies this specific iteration's session (nil for non-iterated tasks).
+	IterationIndex *int
+	// ExistingSessionID, if set, reuses this session instead of creating a new one.
+	// Used when resuming from stored state — the runner finds the existing session
+	// and passes its ID so messages continue appending to the same session.
+	ExistingSessionID string
 }
 
 // DebugLogger is the interface for debug logging during mission execution
@@ -211,7 +215,7 @@ type AggregateResult struct {
 // SessionLogger provides session tracking for persistence.
 // Implementations should be safe for concurrent use.
 type SessionLogger interface {
-	CreateSession(taskID, role, agentName, model string) (id string, err error)
+	CreateSession(taskID, role, agentName, model string, iterationIndex *int) (id string, err error)
 	CompleteSession(id string, err error)
 	AppendMessage(sessionID, role, content string) error
 	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error
@@ -227,9 +231,8 @@ type CommanderStreamer interface {
 
 // completedAgent stores a completed agent instance for follow-up queries
 type completedAgent struct {
-	agent     *Agent
-	agentID   string
-	inherited bool // true if this agent was inherited from a dependency task
+	agent   *Agent
+	agentID string
 }
 
 // Commander is an agent specialized for orchestrating other agents in a mission
@@ -250,7 +253,6 @@ type Commander struct {
 	interceptor     *aitools.ResultInterceptor
 	completedAgents map[string]*completedAgent
 	agentSessions   map[string]*Agent // Persistent agent sessions by name (for multi-turn interaction)
-	agentSeq        int
 	debugLogger     DebugLogger
 	turnLogger      *llm.TurnLogger
 	queryClones     map[string]*Commander // Cached clones for ask_commander queries (keyed by target task name)
@@ -262,6 +264,7 @@ type Commander struct {
 	sessionID          string                 // Store session ID (empty if not tracking)
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
 	callbacksTaskID    string                 // Task ID from callbacks (for agent session creation)
+	iterationIndex     *int                   // Iteration index (nil for non-iterated tasks)
 }
 
 // NewCommander creates a new commander for a mission task
@@ -330,18 +333,6 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	resultStore := aitools.NewMemoryResultStore()
 	interceptor := aitools.NewResultInterceptor(resultStore, aitools.DefaultLargeResultConfig())
 
-	// Initialize completedAgents with inherited agents from dependency tasks
-	completedAgents := make(map[string]*completedAgent)
-	if opts.InheritedAgents != nil {
-		for id, a := range opts.InheritedAgents {
-			completedAgents[id] = &completedAgent{
-				agent:     a,
-				agentID:   id,
-				inherited: true, // Mark as inherited so we don't close it
-			}
-		}
-	}
-
 	sup := &Commander{
 		Name:            fmt.Sprintf("%s/%s", opts.MissionName, opts.TaskName),
 		TaskName:        opts.TaskName,
@@ -355,7 +346,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		cfg:             opts.Config,
 		resultStore:     resultStore,
 		interceptor:     interceptor,
-		completedAgents: completedAgents,
+		completedAgents: make(map[string]*completedAgent),
 		agentSessions:   make(map[string]*Agent),
 		secretInfos:     opts.SecretInfos,
 		secretValues:    opts.SecretValues,
@@ -417,14 +408,21 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSummaries []DependencySummary) {
 	s.callbacks = callbacks
 	s.debugLogger = callbacks.DebugLogger
+	s.iterationIndex = callbacks.IterationIndex
 
-	// Create session record if session logger is available
+	// Create or reuse session record if session logger is available
 	if callbacks.SessionLogger != nil {
 		s.sessionLogger = callbacks.SessionLogger
 		s.callbacksTaskID = callbacks.TaskID
 		s.agentSessionIDs = make(map[string]string)
-		if id, err := callbacks.SessionLogger.CreateSession(callbacks.TaskID, "commander", "", s.ModelName); err == nil {
-			s.sessionID = id
+		if callbacks.ExistingSessionID != "" {
+			// Reuse existing session (resume — found by runner from stored state)
+			s.sessionID = callbacks.ExistingSessionID
+		} else {
+			// Create new session
+			if id, err := callbacks.SessionLogger.CreateSession(callbacks.TaskID, "commander", "", s.ModelName, callbacks.IterationIndex); err == nil {
+				s.sessionID = id
+			}
 		}
 	}
 
@@ -680,7 +678,136 @@ You MUST call submit_output before dataset_next or you will get an error.
 
 // ExecuteTask runs the task objective to completion
 func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer CommanderStreamer) (string, error) {
-	currentInput := objective
+	return s.runLoop(ctx, objective, false, streamer)
+}
+
+// ExecuteOrResume checks if the session has stored messages (loaded via LoadSessionMessages).
+// If so, it resumes from where the prior run left off. Otherwise, it starts fresh.
+func (s *Commander) ExecuteOrResume(ctx context.Context, objective string, streamer CommanderStreamer) (string, error) {
+	if len(s.session.GetHistory()) > 0 {
+		return s.ResumeTask(ctx, streamer)
+	}
+	return s.ExecuteTask(ctx, objective, streamer)
+}
+
+// ResumeTask resumes an interrupted task from stored session messages.
+// It analyzes the last stored message to determine where to pick up:
+// - Last message is user: LLM was interrupted mid-response — use ContinueStream
+// - Last message is assistant with call_agent ACTION: re-execute (agent resumes from its own session)
+// - Last message is assistant with other ACTION: inject placeholder observation
+// - Last message is assistant with ANSWER: task was already complete
+func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) (string, error) {
+	msgs := s.session.GetHistory()
+	if len(msgs) == 0 {
+		return "", fmt.Errorf("no messages to resume from")
+	}
+	last := msgs[len(msgs)-1]
+
+	if last.Role == llm.RoleUser {
+		// LLM was interrupted mid-response.
+		// Session already has the pending user message — use ContinueStream.
+		return s.runLoop(ctx, "", true, streamer)
+	}
+
+	// Last message is assistant
+	parser := newCommanderParser(streamer)
+	parser.ProcessChunk(last.Content)
+	parser.Finish()
+
+	if answer := parser.GetAnswer(); answer != "" {
+		// Task was already complete
+		if s.turnLogger != nil {
+			s.turnLogger.Close()
+		}
+		if s.sessionLogger != nil && s.sessionID != "" {
+			s.sessionLogger.CompleteSession(s.sessionID, nil)
+		}
+		return answer, nil
+	}
+
+	action := parser.GetAction()
+	if action == "" {
+		// No action, no answer — consider done
+		if s.turnLogger != nil {
+			s.turnLogger.Close()
+		}
+		if s.sessionLogger != nil && s.sessionID != "" {
+			s.sessionLogger.CompleteSession(s.sessionID, nil)
+		}
+		return "", nil
+	}
+
+	// Tool call was in-flight — handle based on tool type
+	actionInput := parser.GetActionInput()
+	var currentInput string
+
+	if action == "call_agent" {
+		// EXCEPTION: re-execute call_agent — agent resumes from its own stored session
+		tool := s.tools[action]
+		if tool == nil {
+			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found.\n</OBSERVATION>", action)
+		} else {
+			streamer.CallingTool(action, actionInput)
+			result := tool.Call(actionInput)
+			streamer.ToolComplete(action)
+
+			if s.sessionLogger != nil && s.sessionID != "" {
+				s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result)
+			}
+
+			currentInput = s.formatObservation(action, result)
+		}
+	} else {
+		// DEFAULT: result was lost, tell the LLM
+		currentInput = fmt.Sprintf(
+			"<OBSERVATION>\nThe result of this %s call was lost due to an interruption. "+
+				"You may need to run it again or attempt to verify whether the call was successful.\n</OBSERVATION>",
+			action,
+		)
+	}
+
+	// Continue the loop with the observation (normal send, not resume)
+	return s.runLoop(ctx, currentInput, false, streamer)
+}
+
+// LoadSessionMessages loads persisted messages into the commander's session.
+// Used when resaturating a commander from stored state (e.g., mission resume).
+func (s *Commander) LoadSessionMessages(msgs []llm.Message) {
+	s.session.LoadMessages(msgs)
+}
+
+// AddRestoredAgent adds a restored agent to the commander's completed agents map.
+// Used during mission resume to reconstruct agent state from stored sessions.
+func (s *Commander) AddRestoredAgent(agentName string, a *Agent) {
+	if s.completedAgents == nil {
+		s.completedAgents = make(map[string]*completedAgent)
+	}
+	s.completedAgents[agentName] = &completedAgent{
+		agent:   a,
+		agentID: agentName,
+	}
+}
+
+// AddRestoredActiveAgent adds a restored agent to the commander's active agent sessions.
+// Unlike AddRestoredAgent (which adds to completedAgents for ask_agent queries), this
+// adds to agentSessions so that call_agent finds and reuses the agent instead of creating
+// a fresh one. Used when resuming interrupted tasks where the agent was mid-execution.
+func (s *Commander) AddRestoredActiveAgent(agentName string, a *Agent, sessionID string) {
+	s.agentSessions[agentName] = a
+	if s.agentSessionIDs == nil {
+		s.agentSessionIDs = make(map[string]string)
+	}
+	s.agentSessionIDs[agentName] = sessionID
+	// Wire up session logging so the agent continues appending to the same session
+	a.sessionLogger = s.sessionLogger
+	a.sessionID = sessionID
+	a.taskID = s.callbacksTaskID
+}
+
+// runLoop is the core execution loop shared by ExecuteTask and ResumeTask.
+// When resume=true, the first LLM call uses ContinueStream (no new user message,
+// no store logging) because the session already has a pending user message.
+func (s *Commander) runLoop(ctx context.Context, currentInput string, resume bool, streamer CommanderStreamer) (string, error) {
 	var finalAnswer string
 
 	for {
@@ -688,11 +815,6 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 		case <-ctx.Done():
 			return "", ctx.Err()
 		default:
-		}
-
-		// Log user message to session store
-		if s.sessionLogger != nil && s.sessionID != "" {
-			s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput)
 		}
 
 		// Create parser for this message
@@ -703,11 +825,29 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 		}
 		llmStart := time.Now()
 
-		resp, err := s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
-			if chunk.Content != "" {
-				parser.ProcessChunk(chunk.Content)
+		var resp *llm.ChatResponse
+		var err error
+
+		if resume {
+			// First turn of resume — LLM responds to existing state.
+			// Don't log to session store (the pending message is already stored).
+			resp, err = s.session.ContinueStream(ctx, func(chunk llm.StreamChunk) {
+				if chunk.Content != "" {
+					parser.ProcessChunk(chunk.Content)
+				}
+			})
+			resume = false
+		} else {
+			// Normal turn — log user message, then send
+			if s.sessionLogger != nil && s.sessionID != "" {
+				s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput)
 			}
-		})
+			resp, err = s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
+				if chunk.Content != "" {
+					parser.ProcessChunk(chunk.Content)
+				}
+			})
+		}
 
 		if s.debugLogger != nil {
 			eventData := map[string]any{
@@ -834,7 +974,6 @@ Please provide a concise, factual answer based on what you learned during your t
 }
 
 // Close releases resources held by the commander
-// Note: Only closes agents created by this commander, not inherited ones
 func (s *Commander) Close() {
 	// Close any cached query clones (from ask_commander)
 	for _, clone := range s.queryClones {
@@ -852,9 +991,8 @@ func (s *Commander) Close() {
 	}
 	s.agentSessions = nil
 
-	// Only close agents that this commander created (not inherited)
 	for _, ca := range s.completedAgents {
-		if ca.agent != nil && !ca.inherited {
+		if ca.agent != nil {
 			ca.agent.Close()
 		}
 	}
@@ -870,15 +1008,6 @@ func (s *Commander) Close() {
 	}
 }
 
-// GetCompletedAgents returns all completed agents (for inheritance to dependent tasks)
-func (s *Commander) GetCompletedAgents() map[string]*Agent {
-	result := make(map[string]*Agent)
-	for id, ca := range s.completedAgents {
-		result[id] = ca.agent
-	}
-	return result
-}
-
 // CloneForQuery creates an isolated copy of this commander for answering a question.
 // The clone has a copy of the session state (conversation history) but operates independently.
 // Multiple clones can be created and queried in parallel without affecting each other.
@@ -891,9 +1020,8 @@ func (s *Commander) CloneForQuery() *Commander {
 	completedAgentsCopy := make(map[string]*completedAgent)
 	for id, ca := range s.completedAgents {
 		completedAgentsCopy[id] = &completedAgent{
-			agent:     ca.agent,
-			agentID:   ca.agentID,
-			inherited: true, // Mark as inherited so clone doesn't close them
+			agent:   ca.agent,
+			agentID: ca.agentID,
 		}
 	}
 
@@ -916,7 +1044,6 @@ func (s *Commander) CloneForQuery() *Commander {
 		resultStore:     resultStore,
 		interceptor:     interceptor,
 		completedAgents: completedAgentsCopy,
-		agentSeq:        s.agentSeq,
 		debugLogger:     nil, // No debug logging for query clones
 	}
 
@@ -1402,20 +1529,6 @@ func (t *callAgentTool) Call(input string) string {
 			datasetStore = t.commander.callbacks.DatasetStore
 		}
 
-		// Get debug file and event logger for agent if debug mode is enabled
-		var debugFile string
-		var turnLogFile string
-		var eventLogger EventLogger
-		if t.commander.debugLogger != nil {
-			agentDebugName := fmt.Sprintf("%s_%s_%d", t.commander.TaskName, params.Name, t.commander.agentSeq+1)
-			debugFile = t.commander.debugLogger.GetMessageFile("agent", agentDebugName)
-			turnLogFile = t.commander.debugLogger.GetTurnLogFile("agent", agentDebugName)
-			eventLogger = newContextEventLogger(t.commander.debugLogger, map[string]any{
-				"task":  t.commander.TaskName,
-				"agent": params.Name,
-			})
-		}
-
 		var err error
 		a, err = New(ctx, Options{
 			ConfigPath:   t.commander.configPath,
@@ -1424,9 +1537,6 @@ func (t *callAgentTool) Call(input string) string {
 			DatasetStore: datasetStore,
 			SecretInfos:  t.commander.secretInfos,
 			SecretValues: t.commander.secretValues,
-			DebugFile:    debugFile,
-			TurnLogFile:  turnLogFile,
-			EventLogger:  eventLogger,
 		})
 		if err != nil {
 			return fmt.Sprintf("Error creating agent '%s': %v", params.Name, err)
@@ -1437,7 +1547,7 @@ func (t *callAgentTool) Call(input string) string {
 
 		// Create agent session record and wire up tool result auditing
 		if t.commander.sessionLogger != nil {
-			if sid, err := t.commander.sessionLogger.CreateSession(t.commander.callbacksTaskID, "agent", params.Name, a.ModelName); err == nil {
+			if sid, err := t.commander.sessionLogger.CreateSession(t.commander.callbacksTaskID, "agent", params.Name, a.ModelName, t.commander.iterationIndex); err == nil {
 				t.commander.agentSessionIDs[params.Name] = sid
 				a.sessionLogger = t.commander.sessionLogger
 				a.sessionID = sid
@@ -1446,17 +1556,17 @@ func (t *callAgentTool) Call(input string) string {
 		}
 	}
 
-	// Format input based on task vs response
-	var agentInput string
-	if params.Response != "" {
-		// Answering the agent's question - continue where it left off
-		agentInput = fmt.Sprintf("<COMMANDER_RESPONSE>\n%s\n</COMMANDER_RESPONSE>", params.Response)
-	} else if exists {
-		// New task on existing session - agent should ignore any in-flight work
-		agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
-	} else {
-		// Fresh agent, first task - no wrapper needed
-		agentInput = params.Task
+	// Set up debug logging once per agent (covers both fresh and restored agents)
+	if a.eventLogger == nil && t.commander.debugLogger != nil {
+		agentDebugName := fmt.Sprintf("%s_%s", t.commander.TaskName, params.Name)
+		a.EnableDebug(
+			t.commander.debugLogger.GetMessageFile("agent", agentDebugName),
+			t.commander.debugLogger.GetTurnLogFile("agent", agentDebugName),
+			newContextEventLogger(t.commander.debugLogger, map[string]any{
+				"task":  t.commander.TaskName,
+				"agent": params.Name,
+			}),
+		)
 	}
 
 	// Notify that agent is starting and get a streamer for it
@@ -1469,12 +1579,31 @@ func (t *callAgentTool) Call(input string) string {
 		agentHandler = t.commander.callbacks.GetAgentHandler(t.commander.TaskName, params.Name)
 	}
 
-	// Log agent input to session store
-	if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
-		t.commander.sessionLogger.AppendMessage(agentSID, "user", agentInput)
-	}
+	var result ChatResult
+	var err error
 
-	result, err := a.Chat(ctx, agentInput, agentHandler)
+	if exists && a.NeedsResume() {
+		// Agent was interrupted — let it continue from its healed session state.
+		// Don't add a new user message or log one — the pending input is already stored.
+		result, err = a.Resume(ctx, agentHandler)
+	} else {
+		// Normal path: format input and Chat
+		var agentInput string
+		if params.Response != "" {
+			agentInput = fmt.Sprintf("<COMMANDER_RESPONSE>\n%s\n</COMMANDER_RESPONSE>", params.Response)
+		} else if exists {
+			agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
+		} else {
+			agentInput = params.Task
+		}
+
+		// Log agent input to session store
+		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+			t.commander.sessionLogger.AppendMessage(agentSID, "user", agentInput)
+		}
+
+		result, err = a.Chat(ctx, agentInput, agentHandler)
+	}
 
 	// Log agent output to session store
 	if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
@@ -1512,13 +1641,10 @@ func (t *callAgentTool) Call(input string) string {
 			t.commander.sessionLogger.CompleteSession(agentSID, nil)
 		}
 
-		// Store the completed agent for follow-up queries
-		t.commander.agentSeq++
-		agentID := fmt.Sprintf("agent_%d_%s", t.commander.agentSeq, params.Name)
-		t.commander.completedAgents[agentID] = &completedAgent{
-			agent:     a,
-			agentID:   agentID,
-			inherited: false,
+		// Register in completedAgents for follow-up queries via ask_agent
+		t.commander.completedAgents[params.Name] = &completedAgent{
+			agent:   a,
+			agentID: params.Name,
 		}
 
 		return result.Answer
@@ -1567,7 +1693,7 @@ func (t *askAgentTool) Call(input string) string {
 		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
-	// Look up the completed agent (includes both this commander's agents and inherited ones)
+	// Look up the completed agent
 	completed := t.commander.completedAgents[params.AgentID]
 	if completed == nil {
 		var available []string

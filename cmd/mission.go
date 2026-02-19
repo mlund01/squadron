@@ -17,6 +17,7 @@ import (
 
 var inputFlags []string
 var missionDebugMode bool
+var resumeMissionID string
 
 var missionCmd = &cobra.Command{
 	Use:   "mission [mission_name]",
@@ -57,8 +58,15 @@ var missionCmd = &cobra.Command{
 			fmt.Printf("Debug mode enabled. Writing to: %s\n", debugLogger.GetDebugDir())
 		}
 
+		// Build runner options
+		var runnerOpts []mission.RunnerOption
+		runnerOpts = append(runnerOpts, mission.WithDebugLogger(debugLogger))
+		if resumeMissionID != "" {
+			runnerOpts = append(runnerOpts, mission.WithResume(resumeMissionID))
+		}
+
 		// Create mission runner
-		runner, err := mission.NewRunner(cfg, configPath, missionName, inputs, mission.WithDebugLogger(debugLogger))
+		runner, err := mission.NewRunner(cfg, configPath, missionName, inputs, runnerOpts...)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -98,4 +106,5 @@ func init() {
 	missionCmd.Flags().StringVarP(&configPath, "config", "c", ".", "Path to config file or directory")
 	missionCmd.Flags().StringArrayVarP(&inputFlags, "input", "i", nil, "Mission input in key=value format (can be repeated)")
 	missionCmd.Flags().BoolVarP(&missionDebugMode, "debug", "d", false, "Enable debug mode to capture LLM messages and events")
+	missionCmd.Flags().StringVar(&resumeMissionID, "resume", "", "Resume a previously failed mission by its ID")
 }

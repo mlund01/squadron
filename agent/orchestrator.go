@@ -57,6 +57,8 @@ type llmSession interface {
 	SendStream(ctx context.Context, userMessage string, onChunk func(content string)) (*llm.ChatResponse, error)
 	// SendMessageStream sends a multimodal message and streams the response
 	SendMessageStream(ctx context.Context, msg llm.Message, onChunk func(content string)) (*llm.ChatResponse, error)
+	// ContinueStream resumes from existing session state without adding a new user message
+	ContinueStream(ctx context.Context, onChunk func(content string)) (*llm.ChatResponse, error)
 }
 
 // pruneToolExclusions are internal helper tools whose results should never be pruned
@@ -107,9 +109,11 @@ func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools m
 	}
 }
 
-// processTurn handles a single conversation turn, including any tool calls
+// processTurn handles a single conversation turn, including any tool calls.
+// When resume=true, the first LLM call uses ContinueStream (no new user message)
+// because the session already has a pending user message from healing or interruption.
 // Returns a ChatResult with either an answer (complete) or ASK_COMMANDER question (needs input)
-func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResult, error) {
+func (o *orchestrator) processTurn(ctx context.Context, input string, resume bool) (ChatResult, error) {
 	currentTextInput := input
 	var currentImageInput *llm.ImageBlock
 	var finalAnswer string
@@ -125,7 +129,17 @@ func (o *orchestrator) processTurn(ctx context.Context, input string) (ChatResul
 
 		var resp *llm.ChatResponse
 		var err error
-		if currentImageInput != nil {
+
+		if resume {
+			// First turn of resume — LLM responds to existing state.
+			// Don't add a new user message (the pending one is already in the session).
+			resp, err = o.session.ContinueStream(ctx, func(content string) {
+				if content != "" {
+					parser.ProcessChunk(content)
+				}
+			})
+			resume = false
+		} else if currentImageInput != nil {
 			// Send image directly (not wrapped in OBSERVATION)
 			msg := llm.NewImageMessage(llm.RoleUser, currentImageInput)
 			resp, err = o.session.SendMessageStream(ctx, msg, func(content string) {

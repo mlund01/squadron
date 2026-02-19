@@ -30,9 +30,12 @@ type MissionStore interface {
 	CreateMission(name string, inputsJSON, configJSON string) (id string, err error)
 	UpdateMissionStatus(id, status string) error
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
-	UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error
+	UpdateTaskStatus(id, status string, summary, outputJSON, errMsg *string) error
 	GetTasksByMission(missionID string) ([]MissionTask, error)
-	StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, outputJSON string) error
+	GetTaskByName(missionID, taskName string) (*MissionTask, error)
+	GetMission(id string) (*MissionRecord, error)
+	StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON, summary string) error
+	GetTaskOutputs(taskID string) ([]TaskOutputRow, error)
 }
 
 // MissionTask represents a task within a mission run
@@ -44,13 +47,37 @@ type MissionTask struct {
 	ConfigJSON string     `json:"configJson"`
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
+	Summary    *string    `json:"summary,omitempty"`
 	OutputJSON *string    `json:"outputJson,omitempty"`
 	Error      *string    `json:"error,omitempty"`
 }
 
+// MissionRecord represents a mission row
+type MissionRecord struct {
+	ID              string     `json:"id"`
+	MissionName     string     `json:"missionName"`
+	Status          string     `json:"status"`
+	InputValuesJSON string     `json:"inputValuesJson"`
+	ConfigJSON      string     `json:"configJson"`
+	StartedAt       time.Time  `json:"startedAt"`
+	FinishedAt      *time.Time `json:"finishedAt,omitempty"`
+}
+
+// TaskOutputRow represents a single row from the task_outputs table
+type TaskOutputRow struct {
+	ID           string    `json:"id"`
+	TaskID       string    `json:"taskId"`
+	DatasetName  *string   `json:"datasetName,omitempty"`
+	DatasetIndex *int      `json:"datasetIndex,omitempty"`
+	ItemID       *string   `json:"itemId,omitempty"`
+	OutputJSON   string    `json:"outputJson"`
+	Summary      string    `json:"summary"`
+	CreatedAt    time.Time `json:"createdAt"`
+}
+
 // SessionStore tracks agent/commander sessions and their message history
 type SessionStore interface {
-	CreateSession(taskID, role, agentName, model string) (id string, err error)
+	CreateSession(taskID, role, agentName, model string, iterationIndex *int) (id string, err error)
 	CompleteSession(id string, err error)
 	AppendMessage(sessionID, role, content string) error
 	GetMessages(sessionID string) ([]SessionMessage, error)
@@ -60,13 +87,14 @@ type SessionStore interface {
 
 // SessionInfo describes a session
 type SessionInfo struct {
-	ID        string    `json:"id"`
-	TaskID    string    `json:"taskId"`
-	Role      string    `json:"role"`
-	AgentName string    `json:"agentName,omitempty"`
-	Model     string    `json:"model,omitempty"`
-	Status    string    `json:"status"`
-	StartedAt time.Time `json:"startedAt"`
+	ID             string    `json:"id"`
+	TaskID         string    `json:"taskId"`
+	Role           string    `json:"role"`
+	AgentName      string    `json:"agentName,omitempty"`
+	Model          string    `json:"model,omitempty"`
+	Status         string    `json:"status"`
+	StartedAt      time.Time `json:"startedAt"`
+	IterationIndex *int      `json:"iterationIndex,omitempty"`
 }
 
 // SessionMessage represents a single message in a session

@@ -224,6 +224,59 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	}, nil
 }
 
+// RestoreAgent creates a new agent and loads persisted session messages into it.
+// Used when resaturating the mission tree from stored state (e.g., mission resume).
+func RestoreAgent(ctx context.Context, opts Options, msgs []llm.Message) (*Agent, error) {
+	a, err := New(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	a.session.LoadMessages(msgs)
+	return a, nil
+}
+
+// LoadSessionMessages loads persisted messages into the agent's session.
+func (a *Agent) LoadSessionMessages(msgs []llm.Message) {
+	a.session.LoadMessages(msgs)
+}
+
+// NeedsResume returns true if the agent has pending input the LLM hasn't responded to.
+// This happens when the agent was interrupted mid-response or when healing injected
+// a placeholder observation after an interrupted tool call.
+func (a *Agent) NeedsResume() bool {
+	msgs := a.session.GetHistory()
+	return len(msgs) > 0 && msgs[len(msgs)-1].Role == llm.RoleUser
+}
+
+// Resume continues the agent from its current session state without adding a new user message.
+// Used when a restored agent needs to pick up where it left off.
+func (a *Agent) Resume(ctx context.Context, streamer streamers.ChatHandler) (ChatResult, error) {
+	sessionAdapter := llm.NewSessionAdapter(a.session)
+	orch := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
+	orch.sessionLogger = a.sessionLogger
+	orch.sessionID = a.sessionID
+	orch.taskID = a.taskID
+	return orch.processTurn(ctx, "", true)
+}
+
+// EnableDebug sets up debug logging on the agent.
+// Used for restored agents that were created without debug options.
+func (a *Agent) EnableDebug(debugFile, turnLogFile string, eventLogger EventLogger) {
+	if debugFile != "" {
+		if err := a.session.EnableDebug(debugFile); err != nil {
+			fmt.Printf("Warning: could not enable debug logging: %v\n", err)
+		}
+	}
+	if turnLogFile != "" {
+		if tl, err := llm.NewTurnLogger(turnLogFile); err == nil {
+			a.turnLogger = tl
+		}
+	}
+	if eventLogger != nil {
+		a.eventLogger = eventLogger
+	}
+}
+
 // Close releases resources held by the agent
 func (a *Agent) Close() {
 	if a.session != nil {
@@ -247,7 +300,7 @@ func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatH
 	orch.sessionLogger = a.sessionLogger
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID
-	return orch.processTurn(ctx, input)
+	return orch.processTurn(ctx, input, false)
 }
 
 // AnswerFollowUp handles a follow-up question using the agent's existing conversation context.

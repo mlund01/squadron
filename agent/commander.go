@@ -48,8 +48,6 @@ type CommanderOptions struct {
 	DepOutputSchemas []DependencyOutputSchema
 	// TaskOutputSchema is the output schema for this task (if defined)
 	TaskOutputSchema []OutputFieldSchema
-	// InheritedAgents contains completed agents from dependency tasks (for ask_agent)
-	InheritedAgents map[string]*Agent
 	// PrevIterationOutput contains the structured output from the previous iteration (sequential only)
 	PrevIterationOutput map[string]any
 	// PrevIterationLearnings contains insights and recommendations from the previous iteration (sequential only)
@@ -65,7 +63,7 @@ type CommanderOptions struct {
 	// DebugFile enables debug logging to the specified file (optional)
 	DebugFile string
 	// SequentialDataset contains all items for sequential iteration processing
-	// When set, the commander handles all items in a single session using dataset_next/dataset_item_complete tools
+	// When set, the commander handles all items in a single session using dataset_next/submit_output tools
 	SequentialDataset []cty.Value
 }
 
@@ -117,6 +115,22 @@ type CommanderToolCallbacks struct {
 	// already asked, returns the cached answer. Otherwise queries and caches.
 	// For iterated tasks, pass the iteration index (0+). For regular tasks, pass -1.
 	AskCommanderWithCache func(targetTask string, iterationIndex int, question string) (string, error)
+
+	// OnSubmitOutput is called each time the LLM submits output via submit_output tool.
+	// Used to persist task outputs incrementally.
+	OnSubmitOutput aitools.SubmitOutputCallback
+
+	// SessionLogger provides session persistence (optional). If set, commander and agent
+	// sessions will be tracked with their message history.
+	SessionLogger SessionLogger
+	// TaskID is the store task ID for session creation (required if SessionLogger is set)
+	TaskID string
+	// IterationIndex identifies this specific iteration's session (nil for non-iterated tasks).
+	IterationIndex *int
+	// ExistingSessionID, if set, reuses this session instead of creating a new one.
+	// Used when resuming from stored state — the runner finds the existing session
+	// and passes its ID so messages continue appending to the same session.
+	ExistingSessionID string
 }
 
 // DebugLogger is the interface for debug logging during mission execution
@@ -198,6 +212,15 @@ type AggregateResult struct {
 	Groups map[string]any
 }
 
+// SessionLogger provides session tracking for persistence.
+// Implementations should be safe for concurrent use.
+type SessionLogger interface {
+	CreateSession(taskID, role, agentName, model string, iterationIndex *int) (id string, err error)
+	CompleteSession(id string, err error)
+	AppendMessage(sessionID, role, content string) error
+	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error
+}
+
 // CommanderStreamer is the interface for streaming commander events
 type CommanderStreamer interface {
 	Reasoning(content string)
@@ -208,9 +231,8 @@ type CommanderStreamer interface {
 
 // completedAgent stores a completed agent instance for follow-up queries
 type completedAgent struct {
-	agent     *Agent
-	agentID   string
-	inherited bool // true if this agent was inherited from a dependency task
+	agent   *Agent
+	agentID string
 }
 
 // Commander is an agent specialized for orchestrating other agents in a mission
@@ -231,13 +253,18 @@ type Commander struct {
 	interceptor     *aitools.ResultInterceptor
 	completedAgents map[string]*completedAgent
 	agentSessions   map[string]*Agent // Persistent agent sessions by name (for multi-turn interaction)
-	agentSeq        int
 	debugLogger     DebugLogger
 	turnLogger      *llm.TurnLogger
 	queryClones     map[string]*Commander // Cached clones for ask_commander queries (keyed by target task name)
 	secretInfos     []SecretInfo           // Secret names and descriptions for agent prompts
 	secretValues    map[string]string      // Actual secret values for tool call injection
-	datasetCursor   *aitools.DatasetCursor // Cursor for sequential dataset iteration (nil if not sequential)
+	datasetCursor      *aitools.DatasetCursor      // Cursor for sequential dataset iteration (nil if not sequential)
+	submitOutput       *aitools.SubmitOutputTool   // Universal output submission tool
+	sessionLogger      SessionLogger               // Session persistence (nil if not tracking)
+	sessionID          string                 // Store session ID (empty if not tracking)
+	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
+	callbacksTaskID    string                 // Task ID from callbacks (for agent session creation)
+	iterationIndex     *int                   // Iteration index (nil for non-iterated tasks)
 }
 
 // NewCommander creates a new commander for a mission task
@@ -306,18 +333,6 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	resultStore := aitools.NewMemoryResultStore()
 	interceptor := aitools.NewResultInterceptor(resultStore, aitools.DefaultLargeResultConfig())
 
-	// Initialize completedAgents with inherited agents from dependency tasks
-	completedAgents := make(map[string]*completedAgent)
-	if opts.InheritedAgents != nil {
-		for id, a := range opts.InheritedAgents {
-			completedAgents[id] = &completedAgent{
-				agent:     a,
-				agentID:   id,
-				inherited: true, // Mark as inherited so we don't close it
-			}
-		}
-	}
-
 	sup := &Commander{
 		Name:            fmt.Sprintf("%s/%s", opts.MissionName, opts.TaskName),
 		TaskName:        opts.TaskName,
@@ -331,7 +346,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		cfg:             opts.Config,
 		resultStore:     resultStore,
 		interceptor:     interceptor,
-		completedAgents: completedAgents,
+		completedAgents: make(map[string]*completedAgent),
 		agentSessions:   make(map[string]*Agent),
 		secretInfos:     opts.SecretInfos,
 		secretValues:    opts.SecretValues,
@@ -349,6 +364,18 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		sup.injectDependencyContext(opts.DepSummaries, opts.DepOutputSchemas)
 	}
 
+	// Create submit_output tool — convert OutputFieldSchema to aitools.OutputField
+	var outputFields []aitools.OutputField
+	for _, f := range opts.TaskOutputSchema {
+		outputFields = append(outputFields, aitools.OutputField{
+			Name:     f.Name,
+			Type:     f.Type,
+			Required: f.Required,
+		})
+	}
+	sup.submitOutput = aitools.NewSubmitOutputTool(outputFields)
+	sup.tools["submit_output"] = sup.submitOutput
+
 	// If task has an output schema, inject instructions for structured output
 	if len(opts.TaskOutputSchema) > 0 {
 		sup.injectOutputSchemaInstructions(opts.TaskOutputSchema)
@@ -364,11 +391,12 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		sup.injectPrevIterationLearnings(opts.PrevIterationLearnings)
 	}
 
-	// If sequential dataset is provided, set up cursor and tools for iterating through items
+	// If sequential dataset is provided, set up cursor and dataset_next tool
 	if len(opts.SequentialDataset) > 0 {
 		sup.datasetCursor = aitools.NewDatasetCursor(opts.TaskName, opts.SequentialDataset)
-		sup.tools["dataset_next"] = aitools.NewDatasetNextTool(sup.datasetCursor)
-		sup.tools["dataset_item_complete"] = aitools.NewDatasetItemCompleteTool(sup.datasetCursor)
+		nextTool := aitools.NewDatasetNextTool(sup.datasetCursor)
+		nextTool.OutputCounter = sup.submitOutput.ResultCount
+		sup.tools["dataset_next"] = nextTool
 		sup.injectSequentialDatasetInstructions(len(opts.SequentialDataset))
 	}
 
@@ -380,6 +408,23 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSummaries []DependencySummary) {
 	s.callbacks = callbacks
 	s.debugLogger = callbacks.DebugLogger
+	s.iterationIndex = callbacks.IterationIndex
+
+	// Create or reuse session record if session logger is available
+	if callbacks.SessionLogger != nil {
+		s.sessionLogger = callbacks.SessionLogger
+		s.callbacksTaskID = callbacks.TaskID
+		s.agentSessionIDs = make(map[string]string)
+		if callbacks.ExistingSessionID != "" {
+			// Reuse existing session (resume — found by runner from stored state)
+			s.sessionID = callbacks.ExistingSessionID
+		} else {
+			// Create new session
+			if id, err := callbacks.SessionLogger.CreateSession(callbacks.TaskID, "commander", "", s.ModelName, callbacks.IterationIndex); err == nil {
+				s.sessionID = id
+			}
+		}
+	}
 
 	// Create turn logger for commander session snapshots
 	if s.debugLogger != nil {
@@ -414,6 +459,11 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		s.tools["query_task_output"] = &queryTaskOutputTool{
 			store: callbacks.KnowledgeStore,
 		}
+	}
+
+	// Wire OnSubmitOutput callback to submit_output tool if set
+	if callbacks.OnSubmitOutput != nil && s.submitOutput != nil {
+		s.submitOutput.OnSubmit = callbacks.OnSubmitOutput
 	}
 
 	// Add ask_commander tool if GetCommanderForQuery callback is available
@@ -491,11 +541,11 @@ func (s *Commander) injectDependencyContext(summaries []DependencySummary, outpu
 	s.session.AddSystemPrompt(sb.String())
 }
 
-// injectOutputSchemaInstructions adds instructions for producing structured output
+// injectOutputSchemaInstructions adds instructions for producing structured output via submit_output tool
 func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 	var sb strings.Builder
 	sb.WriteString("## Required Structured Output\n\n")
-	sb.WriteString("This task requires structured output. When you provide your final ANSWER, you MUST also include an OUTPUT block with JSON data matching this schema:\n\n")
+	sb.WriteString("This task requires structured output. You MUST call the `submit_output` tool to deliver your results.\n\n")
 
 	sb.WriteString("**Output fields:**\n")
 	for _, field := range schema {
@@ -510,13 +560,9 @@ func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 		sb.WriteString(fmt.Sprintf("- `%s` (%s%s)%s\n", field.Name, field.Type, req, desc))
 	}
 
-	sb.WriteString("\n**Format:**\n")
-	sb.WriteString("```\n")
-	sb.WriteString("<ANSWER>\n")
-	sb.WriteString("Your prose summary of what was accomplished...\n")
-	sb.WriteString("</ANSWER>\n")
-	sb.WriteString("<OUTPUT>\n")
-	sb.WriteString("{")
+	sb.WriteString("\n**Example submit_output call:**\n")
+	sb.WriteString("```json\n")
+	sb.WriteString("{\"output\": {")
 
 	// Build example JSON
 	for i, field := range schema {
@@ -533,10 +579,9 @@ func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 		}
 	}
 
-	sb.WriteString("}\n")
-	sb.WriteString("</OUTPUT>\n")
+	sb.WriteString("}, \"summary\": \"Brief description of what was done\"}\n")
 	sb.WriteString("```\n\n")
-	sb.WriteString("The OUTPUT block must contain valid JSON with the fields listed above.\n")
+	sb.WriteString("Call `submit_output` with the output object containing the fields above, then provide your final ANSWER.\n")
 
 	s.session.AddSystemPrompt(sb.String())
 }
@@ -582,13 +627,25 @@ Apply general insights (API behaviors, error handling, etc.) but focus on your c
 	s.session.AddSystemPrompt(prompt)
 }
 
-// GetDatasetResults returns the collected results from sequential dataset processing
-// Returns nil if this commander is not processing a sequential dataset
-func (s *Commander) GetDatasetResults() []aitools.DatasetItemResult {
-	if s.datasetCursor == nil {
+// GetSubmitResults returns all outputs submitted via the submit_output tool
+func (s *Commander) GetSubmitResults() []aitools.SubmitResult {
+	if s.submitOutput == nil {
 		return nil
 	}
-	return s.datasetCursor.GetResults()
+	return s.submitOutput.GetResults()
+}
+
+// GetStoredResults returns all tool results stored during this commander's session
+func (s *Commander) GetStoredResults() []*aitools.StoredResult {
+	if s.resultStore == nil {
+		return nil
+	}
+	return s.resultStore.GetAll()
+}
+
+// GetSessionID returns the commander's session ID (for associating tool results)
+func (s *Commander) GetSessionID() string {
+	return s.sessionID
 }
 
 // HasSequentialDataset returns true if this commander is processing a sequential dataset
@@ -604,16 +661,16 @@ You have a dataset of %d items to process sequentially in this single session.
 
 **Tools:**
 - dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
-- dataset_item_complete: Submit output for current item. Required before calling dataset_next again.
+- submit_output: Submit output for current item. Required before calling dataset_next again.
 
-**Mission:**
+**Workflow:**
 1. Call dataset_next to get an item
 2. Process the item (delegate to agent, use tools, etc.)
-3. Call dataset_item_complete with the output for this item
+3. Call submit_output with the output for this item
 4. Repeat until dataset_next returns "exhausted"
 5. Produce final ANSWER summarizing the batch
 
-You MUST call dataset_item_complete before dataset_next or you will get an error.
+You MUST call submit_output before dataset_next or you will get an error.
 `, itemCount)
 
 	s.session.AddSystemPrompt(prompt)
@@ -621,7 +678,136 @@ You MUST call dataset_item_complete before dataset_next or you will get an error
 
 // ExecuteTask runs the task objective to completion
 func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer CommanderStreamer) (string, error) {
-	currentInput := objective
+	return s.runLoop(ctx, objective, false, streamer)
+}
+
+// ExecuteOrResume checks if the session has stored messages (loaded via LoadSessionMessages).
+// If so, it resumes from where the prior run left off. Otherwise, it starts fresh.
+func (s *Commander) ExecuteOrResume(ctx context.Context, objective string, streamer CommanderStreamer) (string, error) {
+	if len(s.session.GetHistory()) > 0 {
+		return s.ResumeTask(ctx, streamer)
+	}
+	return s.ExecuteTask(ctx, objective, streamer)
+}
+
+// ResumeTask resumes an interrupted task from stored session messages.
+// It analyzes the last stored message to determine where to pick up:
+// - Last message is user: LLM was interrupted mid-response — use ContinueStream
+// - Last message is assistant with call_agent ACTION: re-execute (agent resumes from its own session)
+// - Last message is assistant with other ACTION: inject placeholder observation
+// - Last message is assistant with ANSWER: task was already complete
+func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) (string, error) {
+	msgs := s.session.GetHistory()
+	if len(msgs) == 0 {
+		return "", fmt.Errorf("no messages to resume from")
+	}
+	last := msgs[len(msgs)-1]
+
+	if last.Role == llm.RoleUser {
+		// LLM was interrupted mid-response.
+		// Session already has the pending user message — use ContinueStream.
+		return s.runLoop(ctx, "", true, streamer)
+	}
+
+	// Last message is assistant
+	parser := newCommanderParser(streamer)
+	parser.ProcessChunk(last.Content)
+	parser.Finish()
+
+	if answer := parser.GetAnswer(); answer != "" {
+		// Task was already complete
+		if s.turnLogger != nil {
+			s.turnLogger.Close()
+		}
+		if s.sessionLogger != nil && s.sessionID != "" {
+			s.sessionLogger.CompleteSession(s.sessionID, nil)
+		}
+		return answer, nil
+	}
+
+	action := parser.GetAction()
+	if action == "" {
+		// No action, no answer — consider done
+		if s.turnLogger != nil {
+			s.turnLogger.Close()
+		}
+		if s.sessionLogger != nil && s.sessionID != "" {
+			s.sessionLogger.CompleteSession(s.sessionID, nil)
+		}
+		return "", nil
+	}
+
+	// Tool call was in-flight — handle based on tool type
+	actionInput := parser.GetActionInput()
+	var currentInput string
+
+	if action == "call_agent" {
+		// EXCEPTION: re-execute call_agent — agent resumes from its own stored session
+		tool := s.tools[action]
+		if tool == nil {
+			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found.\n</OBSERVATION>", action)
+		} else {
+			streamer.CallingTool(action, actionInput)
+			result := tool.Call(actionInput)
+			streamer.ToolComplete(action)
+
+			if s.sessionLogger != nil && s.sessionID != "" {
+				s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result)
+			}
+
+			currentInput = s.formatObservation(action, result)
+		}
+	} else {
+		// DEFAULT: result was lost, tell the LLM
+		currentInput = fmt.Sprintf(
+			"<OBSERVATION>\nThe result of this %s call was lost due to an interruption. "+
+				"You may need to run it again or attempt to verify whether the call was successful.\n</OBSERVATION>",
+			action,
+		)
+	}
+
+	// Continue the loop with the observation (normal send, not resume)
+	return s.runLoop(ctx, currentInput, false, streamer)
+}
+
+// LoadSessionMessages loads persisted messages into the commander's session.
+// Used when resaturating a commander from stored state (e.g., mission resume).
+func (s *Commander) LoadSessionMessages(msgs []llm.Message) {
+	s.session.LoadMessages(msgs)
+}
+
+// AddRestoredAgent adds a restored agent to the commander's completed agents map.
+// Used during mission resume to reconstruct agent state from stored sessions.
+func (s *Commander) AddRestoredAgent(agentName string, a *Agent) {
+	if s.completedAgents == nil {
+		s.completedAgents = make(map[string]*completedAgent)
+	}
+	s.completedAgents[agentName] = &completedAgent{
+		agent:   a,
+		agentID: agentName,
+	}
+}
+
+// AddRestoredActiveAgent adds a restored agent to the commander's active agent sessions.
+// Unlike AddRestoredAgent (which adds to completedAgents for ask_agent queries), this
+// adds to agentSessions so that call_agent finds and reuses the agent instead of creating
+// a fresh one. Used when resuming interrupted tasks where the agent was mid-execution.
+func (s *Commander) AddRestoredActiveAgent(agentName string, a *Agent, sessionID string) {
+	s.agentSessions[agentName] = a
+	if s.agentSessionIDs == nil {
+		s.agentSessionIDs = make(map[string]string)
+	}
+	s.agentSessionIDs[agentName] = sessionID
+	// Wire up session logging so the agent continues appending to the same session
+	a.sessionLogger = s.sessionLogger
+	a.sessionID = sessionID
+	a.taskID = s.callbacksTaskID
+}
+
+// runLoop is the core execution loop shared by ExecuteTask and ResumeTask.
+// When resume=true, the first LLM call uses ContinueStream (no new user message,
+// no store logging) because the session already has a pending user message.
+func (s *Commander) runLoop(ctx context.Context, currentInput string, resume bool, streamer CommanderStreamer) (string, error) {
 	var finalAnswer string
 
 	for {
@@ -639,11 +825,29 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 		}
 		llmStart := time.Now()
 
-		resp, err := s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
-			if chunk.Content != "" {
-				parser.ProcessChunk(chunk.Content)
+		var resp *llm.ChatResponse
+		var err error
+
+		if resume {
+			// First turn of resume — LLM responds to existing state.
+			// Don't log to session store (the pending message is already stored).
+			resp, err = s.session.ContinueStream(ctx, func(chunk llm.StreamChunk) {
+				if chunk.Content != "" {
+					parser.ProcessChunk(chunk.Content)
+				}
+			})
+			resume = false
+		} else {
+			// Normal turn — log user message, then send
+			if s.sessionLogger != nil && s.sessionID != "" {
+				s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput)
 			}
-		})
+			resp, err = s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
+				if chunk.Content != "" {
+					parser.ProcessChunk(chunk.Content)
+				}
+			})
+		}
 
 		if s.debugLogger != nil {
 			eventData := map[string]any{
@@ -671,6 +875,11 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 
 		if err != nil {
 			return "", err
+		}
+
+		// Log assistant response to session store
+		if s.sessionLogger != nil && s.sessionID != "" && resp != nil {
+			s.sessionLogger.AppendMessage(s.sessionID, "assistant", resp.Content)
 		}
 
 		// Determine action for turn logging
@@ -726,12 +935,22 @@ func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer 
 			})
 		}
 
+		// Persist tool result for auditing
+		if s.sessionLogger != nil && s.sessionID != "" {
+			s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result)
+		}
+
 		// Intercept large results and format observation
 		currentInput = s.formatObservation(action, result)
 	}
 
 	if s.turnLogger != nil {
 		s.turnLogger.Close()
+	}
+
+	// Complete the session record
+	if s.sessionLogger != nil && s.sessionID != "" {
+		s.sessionLogger.CompleteSession(s.sessionID, nil)
 	}
 
 	return finalAnswer, nil
@@ -755,7 +974,6 @@ Please provide a concise, factual answer based on what you learned during your t
 }
 
 // Close releases resources held by the commander
-// Note: Only closes agents created by this commander, not inherited ones
 func (s *Commander) Close() {
 	// Close any cached query clones (from ask_commander)
 	for _, clone := range s.queryClones {
@@ -773,9 +991,8 @@ func (s *Commander) Close() {
 	}
 	s.agentSessions = nil
 
-	// Only close agents that this commander created (not inherited)
 	for _, ca := range s.completedAgents {
-		if ca.agent != nil && !ca.inherited {
+		if ca.agent != nil {
 			ca.agent.Close()
 		}
 	}
@@ -791,15 +1008,6 @@ func (s *Commander) Close() {
 	}
 }
 
-// GetCompletedAgents returns all completed agents (for inheritance to dependent tasks)
-func (s *Commander) GetCompletedAgents() map[string]*Agent {
-	result := make(map[string]*Agent)
-	for id, ca := range s.completedAgents {
-		result[id] = ca.agent
-	}
-	return result
-}
-
 // CloneForQuery creates an isolated copy of this commander for answering a question.
 // The clone has a copy of the session state (conversation history) but operates independently.
 // Multiple clones can be created and queried in parallel without affecting each other.
@@ -812,9 +1020,8 @@ func (s *Commander) CloneForQuery() *Commander {
 	completedAgentsCopy := make(map[string]*completedAgent)
 	for id, ca := range s.completedAgents {
 		completedAgentsCopy[id] = &completedAgent{
-			agent:     ca.agent,
-			agentID:   ca.agentID,
-			inherited: true, // Mark as inherited so clone doesn't close them
+			agent:   ca.agent,
+			agentID: ca.agentID,
 		}
 	}
 
@@ -837,7 +1044,6 @@ func (s *Commander) CloneForQuery() *Commander {
 		resultStore:     resultStore,
 		interceptor:     interceptor,
 		completedAgents: completedAgentsCopy,
-		agentSeq:        s.agentSeq,
 		debugLogger:     nil, // No debug logging for query clones
 	}
 
@@ -1290,15 +1496,15 @@ func (t *callAgentTool) Call(input string) string {
 		Response string `json:"response"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	// Validate: must have either task or response, not both
 	if params.Task == "" && params.Response == "" {
-		return "<STATUS>error</STATUS>\n<ERROR>Must provide either 'task' or 'response'</ERROR>"
+		return "Error: Must provide either 'task' or 'response'"
 	}
 	if params.Task != "" && params.Response != "" {
-		return "<STATUS>error</STATUS>\n<ERROR>Cannot provide both 'task' and 'response'</ERROR>"
+		return "Error: Cannot provide both 'task' and 'response'"
 	}
 
 	agentCfg, ok := t.commander.agents[params.Name]
@@ -1307,7 +1513,7 @@ func (t *callAgentTool) Call(input string) string {
 		for name := range t.commander.agents {
 			available = append(available, name)
 		}
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Agent '%s' not found. Available agents: %v</ERROR>", params.Name, available)
+		return fmt.Sprintf("Error: Agent '%s' not found. Available agents: %v", params.Name, available)
 	}
 
 	ctx := context.Background()
@@ -1323,20 +1529,6 @@ func (t *callAgentTool) Call(input string) string {
 			datasetStore = t.commander.callbacks.DatasetStore
 		}
 
-		// Get debug file and event logger for agent if debug mode is enabled
-		var debugFile string
-		var turnLogFile string
-		var eventLogger EventLogger
-		if t.commander.debugLogger != nil {
-			agentDebugName := fmt.Sprintf("%s_%s_%d", t.commander.TaskName, params.Name, t.commander.agentSeq+1)
-			debugFile = t.commander.debugLogger.GetMessageFile("agent", agentDebugName)
-			turnLogFile = t.commander.debugLogger.GetTurnLogFile("agent", agentDebugName)
-			eventLogger = newContextEventLogger(t.commander.debugLogger, map[string]any{
-				"task":  t.commander.TaskName,
-				"agent": params.Name,
-			})
-		}
-
 		var err error
 		a, err = New(ctx, Options{
 			ConfigPath:   t.commander.configPath,
@@ -1345,29 +1537,36 @@ func (t *callAgentTool) Call(input string) string {
 			DatasetStore: datasetStore,
 			SecretInfos:  t.commander.secretInfos,
 			SecretValues: t.commander.secretValues,
-			DebugFile:    debugFile,
-			TurnLogFile:  turnLogFile,
-			EventLogger:  eventLogger,
 		})
 		if err != nil {
-			return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>creation_error</ERROR_TYPE>\n<ERROR>Error creating agent '%s': %v</ERROR>\n<RETRYABLE>false</RETRYABLE>", params.Name, err)
+			return fmt.Sprintf("Error creating agent '%s': %v", params.Name, err)
 		}
 
 		// Store the session for future interactions
 		t.commander.agentSessions[params.Name] = a
+
+		// Create agent session record and wire up tool result auditing
+		if t.commander.sessionLogger != nil {
+			if sid, err := t.commander.sessionLogger.CreateSession(t.commander.callbacksTaskID, "agent", params.Name, a.ModelName, t.commander.iterationIndex); err == nil {
+				t.commander.agentSessionIDs[params.Name] = sid
+				a.sessionLogger = t.commander.sessionLogger
+				a.sessionID = sid
+				a.taskID = t.commander.callbacksTaskID
+			}
+		}
 	}
 
-	// Format input based on task vs response
-	var agentInput string
-	if params.Response != "" {
-		// Answering the agent's question - continue where it left off
-		agentInput = fmt.Sprintf("<COMMANDER_RESPONSE>\n%s\n</COMMANDER_RESPONSE>", params.Response)
-	} else if exists {
-		// New task on existing session - agent should ignore any in-flight work
-		agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
-	} else {
-		// Fresh agent, first task - no wrapper needed
-		agentInput = params.Task
+	// Set up debug logging once per agent (covers both fresh and restored agents)
+	if a.eventLogger == nil && t.commander.debugLogger != nil {
+		agentDebugName := fmt.Sprintf("%s_%s", t.commander.TaskName, params.Name)
+		a.EnableDebug(
+			t.commander.debugLogger.GetMessageFile("agent", agentDebugName),
+			t.commander.debugLogger.GetTurnLogFile("agent", agentDebugName),
+			newContextEventLogger(t.commander.debugLogger, map[string]any{
+				"task":  t.commander.TaskName,
+				"agent": params.Name,
+			}),
+		)
 	}
 
 	// Notify that agent is starting and get a streamer for it
@@ -1380,7 +1579,42 @@ func (t *callAgentTool) Call(input string) string {
 		agentHandler = t.commander.callbacks.GetAgentHandler(t.commander.TaskName, params.Name)
 	}
 
-	result, err := a.Chat(ctx, agentInput, agentHandler)
+	var result ChatResult
+	var err error
+
+	if exists && a.NeedsResume() {
+		// Agent was interrupted — let it continue from its healed session state.
+		// Don't add a new user message or log one — the pending input is already stored.
+		result, err = a.Resume(ctx, agentHandler)
+	} else {
+		// Normal path: format input and Chat
+		var agentInput string
+		if params.Response != "" {
+			agentInput = fmt.Sprintf("<COMMANDER_RESPONSE>\n%s\n</COMMANDER_RESPONSE>", params.Response)
+		} else if exists {
+			agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
+		} else {
+			agentInput = params.Task
+		}
+
+		// Log agent input to session store
+		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+			t.commander.sessionLogger.AppendMessage(agentSID, "user", agentInput)
+		}
+
+		result, err = a.Chat(ctx, agentInput, agentHandler)
+	}
+
+	// Log agent output to session store
+	if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+		if err != nil {
+			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", fmt.Sprintf("ERROR: %v", err))
+		} else if result.Complete {
+			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", result.Answer)
+		} else if result.AskCommander != "" {
+			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", fmt.Sprintf("ASK_COMMANDER: %s", result.AskCommander))
+		}
+	}
 
 	// Notify that agent is done
 	if t.commander.callbacks != nil && t.commander.callbacks.OnAgentComplete != nil {
@@ -1388,53 +1622,36 @@ func (t *callAgentTool) Call(input string) string {
 	}
 
 	if err != nil {
-		// Classify the error
-		errType, retryable := classifyAgentError(err)
-		return fmt.Sprintf("<STATUS>failed</STATUS>\n<ERROR_TYPE>%s</ERROR_TYPE>\n<ERROR>%v</ERROR>\n<RETRYABLE>%t</RETRYABLE>", errType, err, retryable)
+		// Complete agent session on error
+		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+			t.commander.sessionLogger.CompleteSession(agentSID, err)
+		}
+		return fmt.Sprintf("Error: %v", err)
 	}
 
 	// Check if agent needs more info from commander
 	if result.AskCommander != "" {
-		return fmt.Sprintf("<STATUS>needs_input</STATUS>\n<AGENT>%s</AGENT>\n<QUESTION>\n%s\n</QUESTION>", params.Name, result.AskCommander)
+		return result.AskCommander
 	}
 
 	// Check if task is complete with an answer
 	if result.Complete {
-		// Generate agent ID and store the completed agent for follow-up queries
-		t.commander.agentSeq++
-		agentID := fmt.Sprintf("agent_%d_%s", t.commander.agentSeq, params.Name)
-
-		// Store locally - this agent was created by this commander
-		t.commander.completedAgents[agentID] = &completedAgent{
-			agent:     a,
-			agentID:   agentID,
-			inherited: false, // This commander created this agent
+		// Complete agent session on success
+		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+			t.commander.sessionLogger.CompleteSession(agentSID, nil)
 		}
 
-		return fmt.Sprintf("<STATUS>success</STATUS>\n<AGENT_ID>%s</AGENT_ID>\n<ANSWER>\n%s\n</ANSWER>", agentID, result.Answer)
+		// Register in completedAgents for follow-up queries via ask_agent
+		t.commander.completedAgents[params.Name] = &completedAgent{
+			agent:   a,
+			agentID: params.Name,
+		}
+
+		return result.Answer
 	}
 
 	// Agent didn't complete or ask for input - unusual state
-	return fmt.Sprintf("<STATUS>in_progress</STATUS>\n<AGENT>%s</AGENT>\n<NOTE>Agent is still processing. Call again to continue.</NOTE>", params.Name)
-}
-
-// classifyAgentError categorizes an error for commander decision-making
-func classifyAgentError(err error) (errorType string, retryable bool) {
-	errStr := err.Error()
-	switch {
-	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline"):
-		return "timeout", true
-	case strings.Contains(errStr, "HTTP") || strings.Contains(errStr, "connection") || strings.Contains(errStr, "network"):
-		return "tool_error", true
-	case strings.Contains(errStr, "rate limit") || strings.Contains(errStr, "429"):
-		return "rate_limit", true
-	case strings.Contains(errStr, "not found") || strings.Contains(errStr, "404"):
-		return "not_found", false
-	case strings.Contains(errStr, "unauthorized") || strings.Contains(errStr, "401") || strings.Contains(errStr, "403"):
-		return "auth_error", false
-	default:
-		return "unknown", false
-	}
+	return "Agent did not produce a result. Call again to continue."
 }
 
 // askAgentTool is the tool for querying completed agents
@@ -1473,28 +1690,26 @@ func (t *askAgentTool) Call(input string) string {
 		Question string `json:"question"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
-	// Look up the completed agent (includes both this commander's agents and inherited ones)
+	// Look up the completed agent
 	completed := t.commander.completedAgents[params.AgentID]
 	if completed == nil {
-		// List available agent IDs
 		var available []string
 		for id := range t.commander.completedAgents {
 			available = append(available, id)
 		}
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Agent '%s' not found. Available agents: %v</ERROR>", params.AgentID, available)
+		return fmt.Sprintf("Error: Agent '%s' not found. Available agents: %v", params.AgentID, available)
 	}
 
-	// Ask the agent the follow-up question
 	ctx := context.Background()
 	answer, err := completed.agent.AnswerFollowUp(ctx, params.Question)
 	if err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Error asking agent: %v</ERROR>", err)
+		return fmt.Sprintf("Error: %v", err)
 	}
 
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<ANSWER>\n%s\n</ANSWER>", answer)
+	return answer
 }
 
 // =============================================================================
@@ -1548,7 +1763,7 @@ func (t *askCommanderTool) Call(input string) string {
 		Index    *int   `json:"index"` // nil for regular tasks, 0+ for iterated tasks
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	// Determine iteration index (-1 for regular tasks)
@@ -1561,24 +1776,20 @@ func (t *askCommanderTool) Call(input string) string {
 	if t.commander.callbacks != nil && t.commander.callbacks.AskCommanderWithCache != nil {
 		answer, err := t.commander.callbacks.AskCommanderWithCache(params.TaskName, iterIndex, params.Question)
 		if err != nil {
-			return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+			return fmt.Sprintf("Error: %v", err)
 		}
-		return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, answer)
+		return answer
 	}
 
 	// Fallback to per-commander clone logic (for non-iteration contexts)
 	if t.commander.callbacks == nil || t.commander.callbacks.GetCommanderForQuery == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>ask_commander is not available in this context</ERROR>"
+		return "Error: ask_commander is not available in this context"
 	}
 
-	// Check if we already have a cached clone for this target task (and iteration)
-	// Each calling commander gets one persistent clone per target task/iteration,
-	// so follow-up questions build on previous context
 	if t.commander.queryClones == nil {
 		t.commander.queryClones = make(map[string]*Commander)
 	}
 
-	// Cache key includes iteration index for iterated tasks
 	cacheKey := params.TaskName
 	if iterIndex >= 0 {
 		cacheKey = fmt.Sprintf("%s[%d]", params.TaskName, iterIndex)
@@ -1586,23 +1797,21 @@ func (t *askCommanderTool) Call(input string) string {
 
 	supClone, exists := t.commander.queryClones[cacheKey]
 	if !exists {
-		// Create a new clone and cache it
 		var err error
 		supClone, err = t.commander.callbacks.GetCommanderForQuery(params.TaskName, iterIndex)
 		if err != nil {
-			return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+			return fmt.Sprintf("Error: %v", err)
 		}
 		t.commander.queryClones[cacheKey] = supClone
 	}
 
-	// Ask the question to the cloned commander (clone persists for follow-ups)
 	ctx := context.Background()
 	answer, err := supClone.AnswerQueryIsolated(ctx, params.Question)
 	if err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Error querying commander: %v</ERROR>", err)
+		return fmt.Sprintf("Error: %v", err)
 	}
 
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, answer)
+	return answer
 }
 
 // =============================================================================
@@ -1642,24 +1851,23 @@ func (t *listCommanderQuestionsTool) Call(input string) string {
 		TaskName string `json:"task_name"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	if t.commander.callbacks == nil || t.commander.callbacks.ListCommanderQuestions == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>list_commander_questions is not available in this context</ERROR>"
+		return "Error: list_commander_questions is not available in this context"
 	}
 
 	questions := t.commander.callbacks.ListCommanderQuestions(params.TaskName)
 	if len(questions) == 0 {
-		return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<QUESTIONS>No questions have been asked yet.</QUESTIONS>", params.TaskName)
+		return "No questions have been asked yet."
 	}
 
 	var sb strings.Builder
 	for i, q := range questions {
 		sb.WriteString(fmt.Sprintf("%d: %q\n", i, q))
 	}
-
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<QUESTIONS>\n%s</QUESTIONS>", params.TaskName, sb.String())
+	return sb.String()
 }
 
 // =============================================================================
@@ -1704,19 +1912,19 @@ func (t *getCommanderAnswerTool) Call(input string) string {
 		Index    int    `json:"index"`
 	}
 	if err := json.Unmarshal([]byte(input), &params); err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>Invalid input: %v</ERROR>", err)
+		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
 	if t.commander.callbacks == nil || t.commander.callbacks.GetCommanderAnswer == nil {
-		return "<STATUS>error</STATUS>\n<ERROR>get_commander_answer is not available in this context</ERROR>"
+		return "Error: get_commander_answer is not available in this context"
 	}
 
 	answer, err := t.commander.callbacks.GetCommanderAnswer(params.TaskName, params.Index)
 	if err != nil {
-		return fmt.Sprintf("<STATUS>error</STATUS>\n<ERROR>%v</ERROR>", err)
+		return fmt.Sprintf("Error: %v", err)
 	}
 
-	return fmt.Sprintf("<STATUS>success</STATUS>\n<TASK>%s</TASK>\n<INDEX>%d</INDEX>\n<ANSWER>\n%s\n</ANSWER>", params.TaskName, params.Index, answer)
+	return answer
 }
 
 // =============================================================================

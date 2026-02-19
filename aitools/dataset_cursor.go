@@ -14,17 +14,6 @@ type DatasetCursor struct {
 	index    int
 	taskName string
 	mu       sync.Mutex
-
-	// Results collected via dataset_item_complete
-	results []DatasetItemResult
-}
-
-// DatasetItemResult holds the output from one dataset item
-type DatasetItemResult struct {
-	Index   int
-	Output  map[string]any
-	Summary string
-	Success bool
 }
 
 // NewDatasetCursor creates a new cursor for the given items
@@ -33,15 +22,7 @@ func NewDatasetCursor(taskName string, items []cty.Value) *DatasetCursor {
 		items:    items,
 		index:    0,
 		taskName: taskName,
-		results:  make([]DatasetItemResult, 0, len(items)),
 	}
-}
-
-// GetResults returns all collected results
-func (c *DatasetCursor) GetResults() []DatasetItemResult {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.results
 }
 
 // Total returns the total number of items
@@ -55,6 +36,9 @@ func (c *DatasetCursor) Total() int {
 
 type DatasetNextTool struct {
 	cursor *DatasetCursor
+	// OutputCounter returns the number of outputs submitted so far.
+	// Used to gate advancement: must submit output before getting next item.
+	OutputCounter func() int
 }
 
 func NewDatasetNextTool(cursor *DatasetCursor) *DatasetNextTool {
@@ -72,7 +56,7 @@ Returns:
 - {"status": "ok", "index": N, "total": M, "item": {...}} - The next item to process
 - {"status": "exhausted", "message": "..."} - No more items in dataset
 
-You MUST call dataset_item_complete after processing each item before calling dataset_next again.`
+You MUST call submit_output after processing each item before calling dataset_next again.`
 }
 
 func (t *DatasetNextTool) ToolPayloadSchema() Schema {
@@ -86,17 +70,20 @@ func (t *DatasetNextTool) Call(params string) string {
 	t.cursor.mu.Lock()
 	defer t.cursor.mu.Unlock()
 
-	// Validate that previous item was completed (if any)
-	if t.cursor.index > 0 {
-		expectedResults := t.cursor.index
-		if len(t.cursor.results) < expectedResults {
-			return `{"status": "error", "message": "must call dataset_item_complete for current item before getting next item"}`
+	// Validate that previous item's output was submitted (if any)
+	if t.cursor.index > 0 && t.OutputCounter != nil {
+		if t.OutputCounter() < t.cursor.index {
+			return `{"status": "error", "message": "must call submit_output for current item before getting next item"}`
 		}
 	}
 
 	// Check if exhausted
 	if t.cursor.index >= len(t.cursor.items) {
-		return fmt.Sprintf(`{"status": "exhausted", "message": "No more items in dataset", "completed": %d}`, len(t.cursor.results))
+		submitted := 0
+		if t.OutputCounter != nil {
+			submitted = t.OutputCounter()
+		}
+		return fmt.Sprintf(`{"status": "exhausted", "message": "No more items in dataset", "completed": %d}`, submitted)
 	}
 
 	// Get current item and advance
@@ -113,81 +100,4 @@ func (t *DatasetNextTool) Call(params string) string {
 
 	return fmt.Sprintf(`{"status": "ok", "index": %d, "total": %d, "item": %s}`,
 		currentIndex, len(t.cursor.items), string(itemJSON))
-}
-
-// =============================================================================
-// DatasetItemCompleteTool - records output for the current item
-// =============================================================================
-
-type DatasetItemCompleteTool struct {
-	cursor *DatasetCursor
-}
-
-func NewDatasetItemCompleteTool(cursor *DatasetCursor) *DatasetItemCompleteTool {
-	return &DatasetItemCompleteTool{cursor: cursor}
-}
-
-func (t *DatasetItemCompleteTool) ToolName() string {
-	return "dataset_item_complete"
-}
-
-func (t *DatasetItemCompleteTool) ToolDescription() string {
-	return `Submit the output for the current dataset item. This MUST be called after processing each item and before calling dataset_next for the next item.
-
-The output should contain the structured result of processing this item.`
-}
-
-func (t *DatasetItemCompleteTool) ToolPayloadSchema() Schema {
-	return Schema{
-		Type: TypeObject,
-		Properties: PropertyMap{
-			"output": {
-				Type:        TypeObject,
-				Description: "The structured output for this item (should match task output schema if defined)",
-			},
-			"summary": {
-				Type:        TypeString,
-				Description: "Brief summary of what was accomplished for this item",
-			},
-		},
-		Required: []string{"output"},
-	}
-}
-
-func (t *DatasetItemCompleteTool) Call(params string) string {
-	var input struct {
-		Output  map[string]any `json:"output"`
-		Summary string         `json:"summary"`
-	}
-	if err := json.Unmarshal([]byte(params), &input); err != nil {
-		return fmt.Sprintf(`{"status": "error", "message": "invalid input: %v"}`, err)
-	}
-
-	t.cursor.mu.Lock()
-	defer t.cursor.mu.Unlock()
-
-	// Current item index is cursor.index - 1 (since dataset_next increments before returning)
-	currentIndex := t.cursor.index - 1
-	if currentIndex < 0 {
-		return `{"status": "error", "message": "no current item - call dataset_next first"}`
-	}
-
-	// Check if this item was already completed
-	for _, r := range t.cursor.results {
-		if r.Index == currentIndex {
-			return fmt.Sprintf(`{"status": "error", "message": "item %d already completed"}`, currentIndex)
-		}
-	}
-
-	// Record the result
-	result := DatasetItemResult{
-		Index:   currentIndex,
-		Output:  input.Output,
-		Summary: input.Summary,
-		Success: true,
-	}
-	t.cursor.results = append(t.cursor.results, result)
-
-	remaining := len(t.cursor.items) - t.cursor.index
-	return fmt.Sprintf(`{"status": "ok", "recorded_index": %d, "items_remaining": %d}`, currentIndex, remaining)
 }

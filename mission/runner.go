@@ -15,6 +15,8 @@ import (
 	"squadron/agent"
 	"squadron/aitools"
 	"squadron/config"
+	"squadron/llm"
+	"squadron/store"
 	"squadron/streamers"
 )
 
@@ -34,22 +36,29 @@ type Runner struct {
 
 	// Resolved datasets for iteration
 	resolvedDatasets map[string][]cty.Value
+	datasetIDs       map[string]string // dataset name → store ID
+	missionID        string
 
 	// Task state management
 	mu                   sync.RWMutex
-	taskResults          map[string]*TaskResult                   // Results from completed tasks
-	taskCommanders      map[string]*agent.Commander             // Commanders for completed tasks (kept for agent inheritance)
+	taskCommanders      map[string]*agent.Commander             // Commanders for completed tasks (for ask_commander queries)
 	iterationCommanders map[string]map[int]*agent.Commander     // Commanders for iterated tasks: taskName -> index -> commander
-	taskAgents           map[string]map[string]*agent.Agent       // Agents from each task (for inheritance)
 
-	// Knowledge store for structured task outputs
-	knowledgeStore *MemoryKnowledgeStore
+	// Knowledge store for structured task outputs (reads from MissionStore)
+	knowledgeStore KnowledgeStore
+
+	// Persistent store bundle (missions, sessions, datasets, questions)
+	stores *store.Bundle
 
 	// Debug logging
 	debugLogger *DebugLogger
 
 	// Shared store for ask_commander questions across iterations
 	askCommanderStore *askCommanderStore
+
+	// Resume support
+	resumeMissionID string            // Non-empty when resuming a prior mission
+	rawInputs       map[string]string // Raw input strings for persistence/resume
 }
 
 // askCommanderStore holds questions and answers shared across parallel iterations
@@ -72,6 +81,13 @@ type RunnerOption func(*Runner)
 func WithDebugLogger(logger *DebugLogger) RunnerOption {
 	return func(r *Runner) {
 		r.debugLogger = logger
+	}
+}
+
+// WithResume configures the runner to resume a previously failed mission
+func WithResume(missionID string) RunnerOption {
+	return func(r *Runner) {
+		r.resumeMissionID = missionID
 	}
 }
 
@@ -116,32 +132,10 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		return nil, fmt.Errorf("mission '%s' not found", missionName)
 	}
 
-	// Resolve and validate input values
-	inputValues, err := mission.ResolveInputValues(inputs)
+	// Create store bundle
+	stores, err := store.NewBundle(cfg.Storage)
 	if err != nil {
-		return nil, fmt.Errorf("mission '%s': %w", missionName, err)
-	}
-
-	// Resolve datasets
-	resolvedDatasets, err := resolveDatasets(mission, inputValues)
-	if err != nil {
-		return nil, fmt.Errorf("mission '%s': %w", missionName, err)
-	}
-
-	// Resolve secrets from inputs with secret=true
-	secretValues := make(map[string]string)
-	var secretInfos []agent.SecretInfo
-	for _, input := range mission.Inputs {
-		if !input.Secret {
-			continue
-		}
-		if input.Value != nil && input.Value.Type() == cty.String {
-			secretValues[input.Name] = input.Value.AsString()
-		}
-		secretInfos = append(secretInfos, agent.SecretInfo{
-			Name:        input.Name,
-			Description: input.Description,
-		})
+		return nil, fmt.Errorf("mission '%s': init stores: %w", missionName, err)
 	}
 
 	r := &Runner{
@@ -149,23 +143,54 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		configPath:           configPath,
 		mission:             mission,
 		varsValues:           cfg.ResolvedVars,
-		inputValues:          inputValues,
-		secretValues:         secretValues,
-		secretInfos:          secretInfos,
-		resolvedDatasets:     resolvedDatasets,
-		taskResults:          make(map[string]*TaskResult),
+		rawInputs:            inputs,
+		datasetIDs:           make(map[string]string),
 		taskCommanders:      make(map[string]*agent.Commander),
 		iterationCommanders: make(map[string]map[int]*agent.Commander),
-		taskAgents:           make(map[string]map[string]*agent.Agent),
-		knowledgeStore:       NewMemoryKnowledgeStore(),
+		stores:               stores,
 		askCommanderStore: &askCommanderStore{
 			questions: make(map[string][]*questionEntry),
 		},
 	}
 
-	// Apply options
+	// Apply options (must happen before input/dataset resolution so resumeMissionID is set)
 	for _, opt := range opts {
 		opt(r)
+	}
+
+	// When resuming, skip input/dataset resolution — they'll be loaded from the store in Run()
+	if r.resumeMissionID == "" {
+		// Resolve and validate input values
+		inputValues, err := mission.ResolveInputValues(inputs)
+		if err != nil {
+			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
+		}
+		r.inputValues = inputValues
+
+		// Resolve datasets
+		resolvedDatasets, err := resolveDatasets(mission, inputValues)
+		if err != nil {
+			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
+		}
+		r.resolvedDatasets = resolvedDatasets
+
+		// Resolve secrets from inputs with secret=true
+		secretValues := make(map[string]string)
+		var secretInfos []agent.SecretInfo
+		for _, input := range mission.Inputs {
+			if !input.Secret {
+				continue
+			}
+			if input.Value != nil && input.Value.Type() == cty.String {
+				secretValues[input.Name] = input.Value.AsString()
+			}
+			secretInfos = append(secretInfos, agent.SecretInfo{
+				Name:        input.Name,
+				Description: input.Description,
+			})
+		}
+		r.secretValues = secretValues
+		r.secretInfos = secretInfos
 	}
 
 	return r, nil
@@ -214,21 +239,144 @@ func resolveDatasets(mission *config.Mission, inputValues map[string]cty.Value) 
 
 // Run executes the mission
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
-	streamer.MissionStarted(r.mission.Name, len(r.mission.Tasks))
+	defer r.stores.Close()
+
+	var missionID string
+
+	// Track completed tasks (pre-populated on resume)
+	completed := make(map[string]bool)
+	// Track existing task IDs from prior run (for resume)
+	existingTaskIDs := make(map[string]string) // taskName → taskID
+
+	if r.resumeMissionID != "" {
+		// === RESUME PATH ===
+		missionID = r.resumeMissionID
+		r.missionID = missionID
+
+		// Validate mission exists and matches
+		record, err := r.stores.Missions.GetMission(missionID)
+		if err != nil {
+			return fmt.Errorf("resume: mission '%s' not found in store: %w", missionID, err)
+		}
+		if record.MissionName != r.mission.Name {
+			return fmt.Errorf("resume: mission name mismatch: store has '%s', config has '%s'", record.MissionName, r.mission.Name)
+		}
+		if record.Status == "completed" {
+			return fmt.Errorf("resume: mission '%s' is already completed", missionID)
+		}
+
+		// Load raw inputs from store and re-resolve
+		var rawInputs map[string]string
+		if err := json.Unmarshal([]byte(record.InputValuesJSON), &rawInputs); err != nil {
+			return fmt.Errorf("resume: parsing stored inputs: %w", err)
+		}
+		inputValues, err := r.mission.ResolveInputValues(rawInputs)
+		if err != nil {
+			return fmt.Errorf("resume: resolving inputs: %w", err)
+		}
+		r.inputValues = inputValues
+
+		// Re-resolve secrets
+		r.secretValues = make(map[string]string)
+		for _, input := range r.mission.Inputs {
+			if !input.Secret {
+				continue
+			}
+			if input.Value != nil && input.Value.Type() == cty.String {
+				r.secretValues[input.Name] = input.Value.AsString()
+			}
+			r.secretInfos = append(r.secretInfos, agent.SecretInfo{
+				Name:        input.Name,
+				Description: input.Description,
+			})
+		}
+
+		// Initialize store-backed knowledge store
+		r.knowledgeStore = &PersistentKnowledgeStore{MissionID: missionID, Store: r.stores.Missions}
+
+		// Load dataset IDs from store
+		for _, ds := range r.mission.Datasets {
+			dsID, err := r.stores.Datasets.GetDatasetByName(missionID, ds.Name)
+			if err != nil {
+				return fmt.Errorf("resume: dataset '%s' not found in store: %w", ds.Name, err)
+			}
+			r.datasetIDs[ds.Name] = dsID
+		}
+
+		// Identify completed and interrupted tasks
+		tasks, err := r.stores.Missions.GetTasksByMission(missionID)
+		if err != nil {
+			return fmt.Errorf("resume: loading tasks: %w", err)
+		}
+		for _, t := range tasks {
+			existingTaskIDs[t.TaskName] = t.ID
+			if t.Status == "completed" {
+				completed[t.TaskName] = true
+			}
+		}
+
+		// Resaturate commanders for completed tasks (topological order)
+		sortedTasks := r.mission.TopologicalSort()
+		var completedNames []string
+		for _, t := range sortedTasks {
+			if completed[t.Name] {
+				completedNames = append(completedNames, t.Name)
+			}
+		}
+		if err := r.resaturateCommanders(ctx, completedNames); err != nil {
+			return fmt.Errorf("resume: resaturating commanders: %w", err)
+		}
+
+		r.stores.Missions.UpdateMissionStatus(missionID, "running")
+	} else {
+		// === FRESH PATH ===
+		rawInputsJSON, _ := json.Marshal(r.rawInputs)
+		configJSON, _ := json.Marshal(r.missionSnapshot())
+		var err error
+		missionID, err = r.stores.Missions.CreateMission(r.mission.Name, string(rawInputsJSON), string(configJSON))
+		if err != nil {
+			return fmt.Errorf("create mission record: %w", err)
+		}
+		r.missionID = missionID
+
+		// Initialize store-backed knowledge store
+		r.knowledgeStore = &PersistentKnowledgeStore{MissionID: missionID, Store: r.stores.Missions}
+
+		// Persist datasets to store
+		for _, ds := range r.mission.Datasets {
+			dsID, err := r.stores.Datasets.CreateDataset(missionID, ds.Name, ds.Description)
+			if err != nil {
+				return fmt.Errorf("create dataset '%s': %w", ds.Name, err)
+			}
+			r.datasetIDs[ds.Name] = dsID
+
+			// Persist any pre-populated items (inline or bound-to-input)
+			if items, ok := r.resolvedDatasets[ds.Name]; ok && len(items) > 0 {
+				if err := r.stores.Datasets.AddItems(dsID, items); err != nil {
+					return fmt.Errorf("add items to dataset '%s': %w", ds.Name, err)
+				}
+			}
+		}
+
+		// Free in-memory datasets — the store is now the source of truth
+		r.resolvedDatasets = nil
+	}
+
+	streamer.MissionStarted(r.mission.Name, missionID, len(r.mission.Tasks))
 
 	// Log mission start event
 	if r.debugLogger != nil {
 		r.debugLogger.LogEvent(EventMissionStarted, map[string]any{
-			"mission":   r.mission.Name,
+			"mission":    r.mission.Name,
+			"mission_id": missionID,
 			"task_count": len(r.mission.Tasks),
+			"resumed":    r.resumeMissionID != "",
 		})
 	}
 
 	// Get tasks in topological order
 	sortedTasks := r.mission.TopologicalSort()
 
-	// Track completed tasks and in-flight tasks
-	completed := make(map[string]bool)
 	var inFlightMu sync.Mutex
 	inFlight := make(map[string]bool)
 
@@ -242,6 +390,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	for len(completed) < len(sortedTasks) {
 		select {
 		case <-ctx.Done():
+			r.stores.Missions.UpdateMissionStatus(missionID, "failed")
 			return ctx.Err()
 		default:
 		}
@@ -280,9 +429,11 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 			select {
 			case err := <-errChan:
 				if err != nil {
+					r.stores.Missions.UpdateMissionStatus(missionID, "failed")
 					return err
 				}
 			case <-ctx.Done():
+				r.stores.Missions.UpdateMissionStatus(missionID, "failed")
 				return ctx.Err()
 			}
 			continue
@@ -305,10 +456,11 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 				var result *TaskResult
 				var err error
 
+				existingTaskID := existingTaskIDs[task.Name]
 				if task.Iterator != nil {
-					result, err = r.runIteratedTask(ctx, task, streamer)
+					result, err = r.runIteratedTask(ctx, task, missionID, existingTaskID, streamer)
 				} else {
-					result, err = r.runTask(ctx, task, streamer)
+					result, err = r.runTask(ctx, task, missionID, existingTaskID, streamer)
 				}
 
 				if err != nil {
@@ -316,10 +468,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 					return
 				}
 
-				// Store result
-				r.mu.Lock()
-				r.taskResults[task.Name] = result
-				r.mu.Unlock()
+				_ = result // task status already persisted via UpdateTaskStatus
 
 				// Mark as completed
 				inFlightMu.Lock()
@@ -339,6 +488,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	close(errChan)
 	for err := range errChan {
 		if err != nil {
+			r.stores.Missions.UpdateMissionStatus(missionID, "failed")
 			return err
 		}
 	}
@@ -346,6 +496,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	// Cleanup iteration commanders now that all tasks are complete
 	r.cleanupIterationCommanders()
 
+	r.stores.Missions.UpdateMissionStatus(missionID, "completed")
 	streamer.MissionCompleted(r.mission.Name)
 
 	// Log mission completed event
@@ -374,8 +525,244 @@ func (r *Runner) cleanupIterationCommanders() {
 	}
 }
 
+// resaturateCommanders rebuilds live commanders from stored session messages for completed tasks.
+// This allows resumed missions to have fully functional commanders that can answer queries
+// from dependent tasks via ask_commander, CloneForQuery, and agent inheritance.
+func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []string) error {
+	for _, taskName := range completedTaskNames {
+		task := r.mission.GetTaskByName(taskName)
+		if task == nil {
+			continue
+		}
+
+		taskRecord, err := r.stores.Missions.GetTaskByName(r.missionID, taskName)
+		if err != nil {
+			return fmt.Errorf("loading task record for '%s': %w", taskName, err)
+		}
+
+		// Find sessions for this task
+		sessions, err := r.stores.Sessions.GetSessionsByTask(taskRecord.ID)
+		if err != nil {
+			return fmt.Errorf("loading sessions for task '%s': %w", taskName, err)
+		}
+
+		// Collect agent sessions for reconstruction
+		agentSessions := map[string]*store.SessionInfo{} // agentName → session
+		hasCommander := false
+		for i, s := range sessions {
+			if s.Role == "commander" {
+				hasCommander = true
+			} else if s.Role == "agent" {
+				agentSessions[s.AgentName] = &sessions[i]
+			}
+		}
+
+		if !hasCommander {
+			continue // No session stored — can't resaturate
+		}
+
+		// Resolve objective for depSummaries
+		objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
+		if err != nil {
+			return fmt.Errorf("resolving objective for '%s': %w", taskName, err)
+		}
+
+		// Query already-resaturated ancestors for context
+		depSummaries, err := r.queryAncestorsForContext(ctx, taskName, objective)
+		if err != nil {
+			// Fallback: use stored summary if ancestor query fails
+			depSummaries = nil
+		}
+
+		depOutputSchemas := r.collectDepOutputSchemas(taskName)
+		taskOutputSchema := r.getTaskOutputSchema(*task)
+
+		agents := task.Agents
+		if len(agents) == 0 {
+			agents = r.mission.Agents
+		}
+
+		// Determine if this was an iterated task
+		isIterated := task.Iterator != nil
+
+		// Create commander with same config (gets correct system prompts, tools, provider)
+		sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
+			Config:           r.cfg,
+			ConfigPath:       r.configPath,
+			MissionName:     r.mission.Name,
+			TaskName:         taskName,
+			Commander:  r.mission.Commander,
+			AgentNames:       agents,
+			DepSummaries:     depSummaries,
+			DepOutputSchemas: depOutputSchemas,
+			TaskOutputSchema: taskOutputSchema,
+			SecretInfos:      r.secretInfos,
+			SecretValues:     r.secretValues,
+			IsIteration:      isIterated,
+		})
+		if err != nil {
+			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
+		}
+
+		// Load stored session messages into the commander
+		existingSessionID := r.findAndLoadExistingSession(sup, taskRecord.ID, nil)
+
+		// Set up minimal callbacks (needed for ask_agent, ask_commander on the resaturated commander)
+		sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
+			DatasetStore:   r,
+			KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
+			GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
+				return r.getCommanderForQuery(depTaskName, iterationIndex, taskName)
+			},
+			ListCommanderQuestions: func(depTaskName string) []string {
+				return r.listCommanderQuestions(depTaskName)
+			},
+			GetCommanderAnswer: func(depTaskName string, index int) (string, error) {
+				return r.getCommanderAnswer(depTaskName, index)
+			},
+			AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
+				return r.askCommanderWithCache(ctx, targetTask, iterationIndex, taskName, question)
+			},
+			SessionLogger:     r.stores.Sessions,
+			TaskID:            taskRecord.ID,
+			ExistingSessionID: existingSessionID,
+		}, depSummaries)
+
+		// Reconstruct completed agents from stored sessions
+		for agentName, agentSess := range agentSessions {
+			agentMsgs, err := r.stores.Sessions.GetMessages(agentSess.ID)
+			if err != nil {
+				continue // Non-fatal: skip agent if messages can't be loaded
+			}
+			var agentLLMMsgs []llm.Message
+			for _, m := range agentMsgs {
+				agentLLMMsgs = append(agentLLMMsgs, llm.Message{
+					Role:    llm.Role(m.Role),
+					Content: m.Content,
+				})
+			}
+			restoredAgent, err := agent.RestoreAgent(ctx, agent.Options{
+				ConfigPath: r.configPath,
+				Config:     r.cfg,
+				AgentName:  agentName,
+				SecretInfos: r.secretInfos,
+				SecretValues: r.secretValues,
+			}, agentLLMMsgs)
+			if err != nil {
+				continue // Non-fatal: skip agent if it can't be restored
+			}
+			sup.AddRestoredAgent(agentName, restoredAgent)
+		}
+
+		// Store in runner maps
+		r.mu.Lock()
+		if isIterated {
+			if r.iterationCommanders[taskName] == nil {
+				r.iterationCommanders[taskName] = make(map[int]*agent.Commander)
+			}
+			r.iterationCommanders[taskName][0] = sup
+		} else {
+			r.taskCommanders[taskName] = sup
+		}
+		r.mu.Unlock()
+	}
+
+	return nil
+}
+
+// findAndLoadExistingSession checks the store for a prior commander session matching
+// the given taskID and iterationIndex. If found, loads the stored messages into the
+// commander's LLM session and returns the session ID for reuse.
+// Returns "" if no existing session is found.
+func (r *Runner) findAndLoadExistingSession(sup *agent.Commander, taskID string, iterationIndex *int) string {
+	sessions, err := r.stores.Sessions.GetSessionsByTask(taskID)
+	if err != nil || len(sessions) == 0 {
+		return ""
+	}
+	for _, s := range sessions {
+		if s.Role == "commander" && intPtrEqual(s.IterationIndex, iterationIndex) {
+			msgs, err := r.stores.Sessions.GetMessages(s.ID)
+			if err != nil || len(msgs) == 0 {
+				return ""
+			}
+			var llmMsgs []llm.Message
+			for _, m := range msgs {
+				llmMsgs = append(llmMsgs, llm.Message{
+					Role:    llm.Role(m.Role),
+					Content: m.Content,
+				})
+			}
+			sup.LoadSessionMessages(llmMsgs)
+			return s.ID
+		}
+	}
+	return ""
+}
+
+// restoreAgentSessions finds stored agent sessions for the given taskID and restores
+// them into the commander. Completed agents go into completedAgents (for ask_agent),
+// running/interrupted agents go into agentSessions (for call_agent to reuse).
+// iterationIndex filters to a specific iteration (nil matches sessions with no iteration).
+// Must be called AFTER SetToolCallbacks (needs sessionLogger to be wired up).
+func (r *Runner) restoreAgentSessions(ctx context.Context, sup *agent.Commander, taskID string, iterationIndex *int) {
+	sessions, err := r.stores.Sessions.GetSessionsByTask(taskID)
+	if err != nil {
+		return
+	}
+	for _, s := range sessions {
+		if s.Role != "agent" || s.AgentName == "" {
+			continue
+		}
+		if !intPtrEqual(s.IterationIndex, iterationIndex) {
+			continue
+		}
+		msgs, err := r.stores.Sessions.GetMessages(s.ID)
+		if err != nil || len(msgs) == 0 {
+			continue
+		}
+		var llmMsgs []llm.Message
+		for _, m := range msgs {
+			llmMsgs = append(llmMsgs, llm.Message{
+				Role:    llm.Role(m.Role),
+				Content: m.Content,
+			})
+		}
+		// Heal agent messages before loading: if last message is assistant with ACTION,
+		// the tool call was interrupted — inject a placeholder observation.
+		llmMsgs = agent.HealSessionMessages(llmMsgs)
+		mode := config.ModeMission
+		restoredAgent, err := agent.RestoreAgent(ctx, agent.Options{
+			ConfigPath:   r.configPath,
+			Config:       r.cfg,
+			AgentName:    s.AgentName,
+			Mode:         &mode,
+			SecretInfos:  r.secretInfos,
+			SecretValues: r.secretValues,
+		}, llmMsgs)
+		if err != nil {
+			continue
+		}
+		if s.Status == "completed" {
+			sup.AddRestoredAgent(s.AgentName, restoredAgent)
+		} else {
+			// Running or interrupted — add as active so call_agent reuses it
+			sup.AddRestoredActiveAgent(s.AgentName, restoredAgent, s.ID)
+		}
+	}
+}
+
+func intPtrEqual(a, b *int) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
 // runTask executes a single task with its commander
-func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streamers.MissionHandler) (*TaskResult, error) {
+func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string, existingTaskID string, streamer streamers.MissionHandler) (*TaskResult, error) {
 	// Resolve the objective with vars and inputs
 	objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
 	if err != nil {
@@ -387,9 +774,31 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		}, err
 	}
 
+	// Create or reuse task record in store
+	var taskID string
+	if existingTaskID != "" {
+		// Resume: reuse existing task record
+		taskID = existingTaskID
+	} else {
+		taskConfigJSON, _ := json.Marshal(taskSnapshot(task, objective))
+		taskID, _ = r.stores.Missions.CreateTask(missionID, task.Name, string(taskConfigJSON))
+	}
+	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil, nil)
+
+	// Helper to update task status on completion/failure
+	updateTaskDone := func(success bool, summary, outputJSON, errMsg *string) {
+		if success {
+			r.stores.Missions.UpdateTaskStatus(taskID, "completed", summary, outputJSON, nil)
+		} else {
+			r.stores.Missions.UpdateTaskStatus(taskID, "failed", nil, nil, errMsg)
+		}
+	}
+
 	// Query ancestors for targeted context based on our objective
 	depSummaries, err := r.queryAncestorsForContext(ctx, task.Name, objective)
 	if err != nil {
+		errStr := err.Error()
+		updateTaskDone(false, nil, nil, &errStr)
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
 			TaskName: task.Name,
@@ -414,9 +823,6 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		agents = r.mission.Agents
 	}
 
-	// Build inherited agents from all dependency tasks in the lineage
-	inheritedAgents := r.collectInheritedAgents(task.Name)
-
 	// Collect dependency output schemas for the commander
 	depOutputSchemas := r.collectDepOutputSchemas(task.Name)
 
@@ -440,13 +846,14 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		DepSummaries:     depSummaries,
 		DepOutputSchemas: depOutputSchemas,
 		TaskOutputSchema: taskOutputSchema,
-		InheritedAgents:  inheritedAgents,
 		SecretInfos:      r.secretInfos,
 		SecretValues:     r.secretValues,
 		IsIteration:      false, // Not an iterated task
 		DebugFile:        debugFile,
 	})
 	if err != nil {
+		errStr := err.Error()
+		updateTaskDone(false, nil, nil, &errStr)
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
 			TaskName: task.Name,
@@ -454,6 +861,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 			Error:    err,
 		}, err
 	}
+
+	// Check for existing session state (finds stored session from prior run if any)
+	existingSessionID := r.findAndLoadExistingSession(sup, taskID, nil)
 
 	// Set up tool callbacks
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
@@ -494,7 +904,17 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
+		OnSubmitOutput: func(index int, output map[string]any, summary string) {
+			outputJSON, _ := json.Marshal(output)
+			r.stores.Missions.StoreTaskOutput(taskID, nil, nil, nil, string(outputJSON), summary)
+		},
+		SessionLogger:     r.stores.Sessions,
+		TaskID:            taskID,
+		ExistingSessionID: existingSessionID,
 	}, depSummaries)
+
+	// Restore any agent sessions from the store (so call_agent reuses them)
+	r.restoreAgentSessions(ctx, sup, taskID, nil)
 
 	// Create task-specific streamer adapter
 	taskStreamer := &commanderStreamerAdapter{
@@ -502,9 +922,11 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		streamer: streamer,
 	}
 
-	// Execute the task
-	summary, err := sup.ExecuteTask(ctx, objective, taskStreamer)
+	// Execute (or resume if stored messages were loaded)
+	summary, err := sup.ExecuteOrResume(ctx, objective, taskStreamer)
 	if err != nil {
+		errStr := err.Error()
+		updateTaskDone(false, nil, nil, &errStr)
 		sup.Close()
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
@@ -514,29 +936,26 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, streamer streame
 		}, err
 	}
 
-	// Store commander's completed agents for inheritance by dependent tasks
+	// Store commander for ask_commander queries from dependent tasks
 	r.mu.Lock()
 	r.taskCommanders[task.Name] = sup
-	r.taskAgents[task.Name] = sup.GetCompletedAgents()
 	r.mu.Unlock()
 
-	// Parse OUTPUT block if present
-	output, cleanSummary := parseOutput(summary)
+	// Get output from submit_output tool
+	var output map[string]any
+	if results := sup.GetSubmitResults(); len(results) > 0 {
+		output = results[0].Output
+	}
 
-	// Store in knowledge store
-	r.knowledgeStore.StoreTaskOutput(TaskOutput{
-		TaskName:   task.Name,
-		Status:     "success",
-		Summary:    cleanSummary,
-		Timestamp:  time.Now(),
-		Output:     output,
-		IsIterated: false,
-	})
+	// Update task status to completed (output already persisted via OnSubmitOutput)
+	outputJSON, _ := json.Marshal(output)
+	outputStr := string(outputJSON)
+	updateTaskDone(true, &summary, &outputStr, nil)
 
-	streamer.TaskCompleted(task.Name, cleanSummary)
+	streamer.TaskCompleted(task.Name, summary)
 	return &TaskResult{
 		TaskName: task.Name,
-		Summary:  cleanSummary,
+		Summary:  summary,
 		Success:  true,
 	}, nil
 }
@@ -572,22 +991,6 @@ func (r *Runner) getDependencyChain(taskName string) []string {
 		result = append(result, dep)
 	}
 
-	return result
-}
-
-// collectInheritedAgents gathers all completed agents from dependency tasks in the lineage
-func (r *Runner) collectInheritedAgents(taskName string) map[string]*agent.Agent {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	result := make(map[string]*agent.Agent)
-	for _, depTaskName := range r.getDependencyChain(taskName) {
-		if agents, ok := r.taskAgents[depTaskName]; ok {
-			for id, a := range agents {
-				result[id] = a
-			}
-		}
-	}
 	return result
 }
 
@@ -671,12 +1074,117 @@ func (s *commanderStreamerAdapter) ToolComplete(name string) {
 	s.streamer.CommanderToolComplete(s.taskName, name)
 }
 
+// missionSnapshot returns a JSON-friendly representation of the mission config.
+func (r *Runner) missionSnapshot() map[string]any {
+	snap := map[string]any{
+		"name":      r.mission.Name,
+		"commander": r.mission.Commander,
+		"agents":    r.mission.Agents,
+	}
+
+	if len(r.mission.Inputs) > 0 {
+		var inputs []map[string]any
+		for _, input := range r.mission.Inputs {
+			m := map[string]any{
+				"name": input.Name,
+				"type": input.Type,
+			}
+			if input.Description != "" {
+				m["description"] = input.Description
+			}
+			if input.Secret {
+				m["secret"] = true
+			}
+			inputs = append(inputs, m)
+		}
+		snap["inputs"] = inputs
+	}
+
+	if len(r.mission.Datasets) > 0 {
+		var datasets []map[string]any
+		for _, ds := range r.mission.Datasets {
+			m := map[string]any{
+				"name": ds.Name,
+			}
+			if ds.Description != "" {
+				m["description"] = ds.Description
+			}
+			if ds.BindTo != "" {
+				m["bindTo"] = ds.BindTo
+			}
+			if ds.Schema != nil {
+				m["schema"] = ds.Schema
+			}
+			datasets = append(datasets, m)
+		}
+		snap["datasets"] = datasets
+	}
+
+	var tasks []map[string]any
+	for _, task := range r.mission.Tasks {
+		objective, _ := task.ResolvedObjective(r.varsValues, r.inputValues)
+		tasks = append(tasks, taskSnapshot(task, objective))
+	}
+	snap["tasks"] = tasks
+
+	return snap
+}
+
+// taskSnapshot returns a JSON-friendly representation of a task config with the resolved objective.
+func taskSnapshot(task config.Task, resolvedObjective string) map[string]any {
+	snap := map[string]any{
+		"name":      task.Name,
+		"objective": resolvedObjective,
+	}
+	if len(task.Agents) > 0 {
+		snap["agents"] = task.Agents
+	}
+	if len(task.DependsOn) > 0 {
+		snap["dependsOn"] = task.DependsOn
+	}
+	if task.Iterator != nil {
+		snap["iterator"] = task.Iterator
+	}
+	if task.Output != nil {
+		snap["output"] = task.Output
+	}
+	return snap
+}
+
 // runIteratedTask executes a task that iterates over a dataset
-func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer streamers.MissionHandler) (*TaskResult, error) {
+func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionID string, existingTaskID string, streamer streamers.MissionHandler) (*TaskResult, error) {
+	// Load dataset items from store
 	datasetName := task.Iterator.Dataset
-	items, ok := r.resolvedDatasets[datasetName]
+	dsID, ok := r.datasetIDs[datasetName]
 	if !ok {
 		return nil, fmt.Errorf("dataset '%s' not found", datasetName)
+	}
+	itemCount, _ := r.stores.Datasets.GetItemCount(dsID)
+	items, err := r.stores.Datasets.GetItems(dsID, 0, itemCount)
+	if err != nil {
+		return nil, fmt.Errorf("load dataset '%s': %w", datasetName, err)
+	}
+
+	// Create or reuse task record in store
+	var taskID string
+	if existingTaskID != "" {
+		taskID = existingTaskID
+	} else {
+		var representativeObj string
+		if len(items) > 0 {
+			representativeObj, _ = r.resolveIterationObjective(task, items[0])
+		}
+		taskConfigJSON, _ := json.Marshal(taskSnapshot(task, representativeObj))
+		taskID, _ = r.stores.Missions.CreateTask(missionID, task.Name, string(taskConfigJSON))
+	}
+	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil, nil)
+
+	updateTaskDone := func(success bool, summary, outputJSON, errMsg *string) {
+		if success {
+			r.stores.Missions.UpdateTaskStatus(taskID, "completed", summary, outputJSON, nil)
+		} else {
+			r.stores.Missions.UpdateTaskStatus(taskID, "failed", nil, nil, errMsg)
+		}
 	}
 
 	if len(items) == 0 {
@@ -684,17 +1192,8 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 		streamer.TaskStarted(task.Name, fmt.Sprintf("(0 iterations over %s)", datasetName))
 		streamer.TaskCompleted(task.Name, "No items to process")
 
-		// Store empty task output
-		r.knowledgeStore.StoreTaskOutput(TaskOutput{
-			TaskName:        task.Name,
-			Status:          "success",
-			Summary:         "No items to process",
-			Timestamp:       time.Now(),
-			IsIterated:      true,
-			TotalIterations: 0,
-			Iterations:      nil,
-		})
-
+		emptySummary := "No items to process"
+		updateTaskDone(true, &emptySummary, nil, nil)
 		return &TaskResult{
 			TaskName: task.Name,
 			Summary:  "No items to process",
@@ -706,10 +1205,14 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 	var depSummaries []agent.DependencySummary
 	representativeObjective, err := r.resolveIterationObjective(task, items[0])
 	if err != nil {
+		errStr := err.Error()
+		updateTaskDone(false, nil, nil, &errStr)
 		return nil, fmt.Errorf("resolving representative objective: %w", err)
 	}
 	depSummaries, err = r.queryAncestorsForContext(ctx, task.Name, representativeObjective)
 	if err != nil {
+		errStr := err.Error()
+		updateTaskDone(false, nil, nil, &errStr)
 		return nil, fmt.Errorf("querying ancestors: %w", err)
 	}
 
@@ -719,11 +1222,57 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 	var iterations []IterationResult
 
 	if task.Iterator.Parallel {
-		// Parallel execution with fail-fast
-		iterations = r.runParallelIterations(ctx, task, items, depSummaries, streamer)
+		if existingTaskID != "" {
+			// Resume: check which iterations already completed
+			existingOutputs, _ := r.stores.Missions.GetTaskOutputs(taskID)
+			completedIndices := make(map[int]bool)
+			for _, o := range existingOutputs {
+				if o.DatasetIndex != nil {
+					completedIndices[*o.DatasetIndex] = true
+				}
+			}
+
+			// Build list of remaining items and their original indices
+			var remainingItems []cty.Value
+			var remainingIndices []int
+			for i, item := range items {
+				if !completedIndices[i] {
+					remainingItems = append(remainingItems, item)
+					remainingIndices = append(remainingIndices, i)
+				}
+			}
+
+			if len(remainingItems) == 0 {
+				// All iterations already completed
+				iterations = make([]IterationResult, len(items))
+				for i := range items {
+					iterations[i] = IterationResult{Index: i, Success: true}
+				}
+			} else {
+				// Run only remaining iterations
+				partialResults := r.runParallelIterationsWithIndices(ctx, task, remainingItems, remainingIndices, taskID, depSummaries, streamer)
+				// Merge with completed
+				iterations = make([]IterationResult, len(items))
+				for i := range items {
+					if completedIndices[i] {
+						iterations[i] = IterationResult{Index: i, Success: true, Summary: "(completed in prior run)"}
+					}
+				}
+				for _, result := range partialResults {
+					iterations[result.Index] = result
+				}
+			}
+		} else {
+			// Fresh: parallel execution with fail-fast
+			iterations = r.runParallelIterations(ctx, task, items, taskID, depSummaries, streamer)
+		}
 	} else {
-		// Sequential execution (no more rolling aggregation)
-		iterations = r.runSequentialIterations(ctx, task, items, depSummaries, streamer)
+		// Sequential execution
+		if existingTaskID != "" {
+			iterations = r.runSequentialIterationsResume(ctx, task, items, taskID, depSummaries, streamer)
+		} else {
+			iterations = r.runSequentialIterations(ctx, task, items, taskID, depSummaries, streamer)
+		}
 	}
 
 	// Check for failures
@@ -742,6 +1291,8 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 	}
 
 	if !allSuccess {
+		errStr := firstError.Error()
+		updateTaskDone(false, nil, nil, &errStr)
 		streamer.TaskFailed(task.Name, firstError)
 		return &TaskResult{
 			TaskName: task.Name,
@@ -750,32 +1301,12 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 		}, firstError
 	}
 
-	// Convert IterationResults to IterationOutputs for storage
-	iterOutputs := make([]IterationOutput, len(iterations))
-	for i, iter := range iterations {
-		iterOutputs[i] = IterationOutput{
-			Index:     iter.Index,
-			ItemID:    iter.ItemID,
-			Status:    "success",
-			Summary:   iter.Summary,
-			Output:    iter.Output,
-			Timestamp: time.Now(),
-		}
-	}
-
 	// Create a simple summary (no LLM aggregation)
+	// Individual iteration outputs already persisted via OnSubmitOutput callbacks
 	summary := fmt.Sprintf("Completed %d iterations over %s", len(iterations), datasetName)
 
-	// Store in knowledge store
-	r.knowledgeStore.StoreTaskOutput(TaskOutput{
-		TaskName:        task.Name,
-		Status:          "success",
-		Summary:         summary,
-		Timestamp:       time.Now(),
-		IsIterated:      true,
-		TotalIterations: len(iterations),
-		Iterations:      iterOutputs,
-	})
+	// Update task status to completed
+	updateTaskDone(true, &summary, nil, nil)
 
 	streamer.TaskIterationCompleted(task.Name, len(iterations), summary)
 	streamer.TaskCompleted(task.Name, summary)
@@ -788,15 +1319,12 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, streamer
 }
 
 // runSequentialIterations runs all iterations in a single commander session with agent reuse
-func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
+func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, items []cty.Value, taskID string, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
 	// Get agents for this task
 	agents := task.Agents
 	if len(agents) == 0 {
 		agents = r.mission.Agents
 	}
-
-	// Build inherited agents from all dependency tasks in the lineage
-	inheritedAgents := r.collectInheritedAgents(task.Name)
 
 	// Collect dependency output schemas for the commander
 	depOutputSchemas := r.collectDepOutputSchemas(task.Name)
@@ -825,7 +1353,7 @@ func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, 
 
 Task objective (example for first item): %s
 
-Use dataset_next to get each item. Process it completely, then call dataset_item_complete with the output.
+Use dataset_next to get each item. Process it completely, then call submit_output with the output.
 Continue until dataset_next returns "exhausted".`, len(items), representativeObjective)
 
 	// Create single commander with all items
@@ -839,7 +1367,6 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		DepSummaries:      depSummaries,
 		DepOutputSchemas:  depOutputSchemas,
 		TaskOutputSchema:  taskOutputSchema,
-		InheritedAgents:   inheritedAgents,
 		SecretInfos:       r.secretInfos,
 		SecretValues:      r.secretValues,
 		IsIteration:       true,
@@ -893,6 +1420,17 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
+		OnSubmitOutput: func(index int, output map[string]any, summary string) {
+			datasetName := task.Iterator.Dataset
+			itemID := ""
+			if index < len(items) {
+				itemID = getItemID(items[index], index)
+			}
+			outputJSON, _ := json.Marshal(output)
+			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &index, &itemID, string(outputJSON), summary)
+		},
+		SessionLogger: r.stores.Sessions,
+		TaskID:        taskID,
 	}, depSummaries)
 
 	// Create streamer adapter for the commander
@@ -905,9 +1443,9 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 	// Execute the task - commander handles all items internally
 	_, err = sup.ExecuteTask(ctx, objective, seqStreamer)
 
-	// Get results from the commander's dataset cursor
-	results := sup.GetDatasetResults()
-	if results == nil || len(results) == 0 {
+	// Get results from submit_output tool
+	results := sup.GetSubmitResults()
+	if len(results) == 0 {
 		if err != nil {
 			return []IterationResult{{
 				Index:   0,
@@ -923,19 +1461,19 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		}}
 	}
 
-	// Convert DatasetItemResult to IterationResult
+	// Convert SubmitResult to IterationResult
 	iterations := make([]IterationResult, len(results))
 	for i, r := range results {
 		itemID := ""
-		if r.Index < len(items) {
-			itemID = getItemID(items[r.Index], r.Index)
+		if i < len(items) {
+			itemID = getItemID(items[i], i)
 		}
 		iterations[i] = IterationResult{
-			Index:   r.Index,
+			Index:   i,
 			ItemID:  itemID,
 			Summary: r.Summary,
 			Output:  r.Output,
-			Success: r.Success,
+			Success: true,
 		}
 	}
 
@@ -952,7 +1490,7 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 }
 
 // runParallelIterations runs iterations in parallel with concurrency limit and optional staggered starts
-func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, items []cty.Value, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
+func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, items []cty.Value, taskID string, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
 	iterations := make([]IterationResult, len(items))
 	maxRetries := 0
 	if task.Iterator != nil {
@@ -993,7 +1531,7 @@ func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, it
 			default:
 			}
 
-			firstResult = r.runSingleIteration(ctx, task, 0, items[0], nil, nil, depSummaries, streamer)
+			firstResult = r.runSingleIteration(ctx, task, 0, items[0], nil, nil, taskID, depSummaries, streamer)
 			if firstResult.Success {
 				break
 			}
@@ -1017,7 +1555,7 @@ func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, it
 		}
 
 		// Run remaining iterations in parallel
-		remainingIterations := r.runParallelIterationsCore(ctx, task, items, 1, maxRetries, concurrencyLimit, startDelay, depSummaries, streamer)
+		remainingIterations := r.runParallelIterationsCore(ctx, task, items, 1, maxRetries, concurrencyLimit, startDelay, taskID, depSummaries, streamer)
 		for i, result := range remainingIterations {
 			iterations[i+1] = result
 		}
@@ -1025,11 +1563,11 @@ func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, it
 	}
 
 	// No smoketest - run all iterations in parallel
-	return r.runParallelIterationsCore(ctx, task, items, 0, maxRetries, concurrencyLimit, startDelay, depSummaries, streamer)
+	return r.runParallelIterationsCore(ctx, task, items, 0, maxRetries, concurrencyLimit, startDelay, taskID, depSummaries, streamer)
 }
 
 // runParallelIterationsCore is the core parallel execution logic
-func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task, items []cty.Value, indexOffset int, maxRetries int, concurrencyLimit int, startDelay int, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
+func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task, items []cty.Value, indexOffset int, maxRetries int, concurrencyLimit int, startDelay int, taskID string, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
 	iterations := make([]IterationResult, len(items))
 
 	// Semaphore to limit concurrent iterations
@@ -1069,7 +1607,7 @@ func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task
 				}
 
 				// Pass nil for prevOutput and prevLearnings in parallel iterations (no meaningful ordering)
-				result = r.runSingleIteration(ctx, task, actualIndex, item, nil, nil, depSummaries, streamer)
+				result = r.runSingleIteration(ctx, task, actualIndex, item, nil, nil, taskID, depSummaries, streamer)
 				if result.Success {
 					break
 				}
@@ -1088,8 +1626,238 @@ func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task
 	return iterations
 }
 
-// runSingleIteration executes a single iteration of an iterated task
-func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index int, item cty.Value, prevOutput map[string]any, prevLearnings map[string]any, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) IterationResult {
+// runParallelIterationsWithIndices runs specific iterations (by index) in parallel.
+// Used on resume to only run iterations that didn't complete in the prior run.
+func (r *Runner) runParallelIterationsWithIndices(ctx context.Context, task config.Task, items []cty.Value, indices []int, taskID string, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
+	maxRetries := 0
+	if task.Iterator != nil {
+		maxRetries = task.Iterator.MaxRetries
+	}
+	concurrencyLimit := 5
+	if task.Iterator != nil && task.Iterator.ConcurrencyLimit > 0 {
+		concurrencyLimit = task.Iterator.ConcurrencyLimit
+	}
+
+	results := make([]IterationResult, len(items))
+	sem := make(chan struct{}, concurrencyLimit)
+	var wg sync.WaitGroup
+
+	for i, item := range items {
+		i, item := i, item
+		actualIndex := indices[i]
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			var result IterationResult
+			for attempt := 0; attempt <= maxRetries; attempt++ {
+				select {
+				case <-ctx.Done():
+					results[i] = IterationResult{
+						Index:   actualIndex,
+						ItemID:  getItemID(item, actualIndex),
+						Success: false,
+						Error:   ctx.Err(),
+					}
+					return
+				default:
+				}
+
+				result = r.runSingleIteration(ctx, task, actualIndex, item, nil, nil, taskID, depSummaries, streamer)
+				if result.Success {
+					break
+				}
+				if attempt < maxRetries {
+					streamer.IterationRetrying(task.Name, actualIndex, attempt+1, maxRetries, result.Error)
+				}
+			}
+			results[i] = result
+		}()
+	}
+
+	wg.Wait()
+	return results
+}
+
+// runSequentialIterationsResume resumes sequential iterations from where they left off.
+// It counts completed outputs in the store and skips those iterations.
+func (r *Runner) runSequentialIterationsResume(ctx context.Context, task config.Task, items []cty.Value, taskID string, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) []IterationResult {
+	// Count completed outputs from prior run
+	existingOutputs, _ := r.stores.Missions.GetTaskOutputs(taskID)
+	completedCount := len(existingOutputs)
+
+	if completedCount >= len(items) {
+		// All iterations already completed
+		iterations := make([]IterationResult, len(items))
+		for i := range items {
+			iterations[i] = IterationResult{Index: i, Success: true}
+		}
+		return iterations
+	}
+
+	// Build iterations: completed ones from store + run remaining
+	iterations := make([]IterationResult, 0, len(items))
+	for i := 0; i < completedCount; i++ {
+		iterations = append(iterations, IterationResult{Index: i, Success: true, Summary: "(completed in prior run)"})
+	}
+
+	// Run the remaining items with a sequential commander
+	remainingItems := items[completedCount:]
+
+	// Get agents for this task
+	agents := task.Agents
+	if len(agents) == 0 {
+		agents = r.mission.Agents
+	}
+	depOutputSchemas := r.collectDepOutputSchemas(task.Name)
+	taskOutputSchema := r.getTaskOutputSchema(task)
+
+	var debugFile string
+	if r.debugLogger != nil {
+		debugFile = r.debugLogger.GetMessageFile("commander", task.Name)
+	}
+
+	representativeObjective, err := r.resolveIterationObjective(task, remainingItems[0])
+	if err != nil {
+		return append(iterations, IterationResult{
+			Index:   completedCount,
+			Success: false,
+			Error:   fmt.Errorf("resolving objective: %w", err),
+		})
+	}
+
+	objective := fmt.Sprintf(`Process the following task for each of %d items in the dataset.
+
+Task objective (example for first item): %s
+
+Use dataset_next to get each item. Process it completely, then call submit_output with the output.
+Continue until dataset_next returns "exhausted".`, len(remainingItems), representativeObjective)
+
+	// Create commander for remaining items
+	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
+		Config:            r.cfg,
+		ConfigPath:        r.configPath,
+		MissionName:      r.mission.Name,
+		TaskName:          task.Name,
+		Commander:   r.mission.Commander,
+		AgentNames:        agents,
+		DepSummaries:      depSummaries,
+		DepOutputSchemas:  depOutputSchemas,
+		TaskOutputSchema:  taskOutputSchema,
+		SecretInfos:       r.secretInfos,
+		SecretValues:      r.secretValues,
+		IsIteration:       true,
+		IsParallel:        false,
+		DebugFile:         debugFile,
+		SequentialDataset: remainingItems,
+	})
+	if err != nil {
+		return append(iterations, IterationResult{
+			Index:   completedCount,
+			Success: false,
+			Error:   err,
+		})
+	}
+
+	// Check for existing session state
+	existingSessionID := r.findAndLoadExistingSession(sup, taskID, nil)
+
+	// Set up tool callbacks
+	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
+		OnAgentStart: func(taskName, agentName string) {
+			streamer.AgentStarted(taskName, agentName)
+		},
+		GetAgentHandler: func(taskName, agentName string) streamers.ChatHandler {
+			return streamer.AgentHandler(taskName, agentName)
+		},
+		OnAgentComplete: func(taskName, agentName string) {
+			streamer.AgentCompleted(taskName, agentName)
+		},
+		DatasetStore:   r,
+		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
+		DebugLogger:    r.debugLogger,
+		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
+			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
+		},
+		ListCommanderQuestions: func(taskName string) []string {
+			return r.listCommanderQuestions(taskName)
+		},
+		GetCommanderAnswer: func(taskName string, index int) (string, error) {
+			return r.getCommanderAnswer(taskName, index)
+		},
+		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
+			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
+		},
+		OnSubmitOutput: func(index int, output map[string]any, summary string) {
+			// Adjust index to account for already-completed items
+			actualIndex := index + completedCount
+			datasetName := task.Iterator.Dataset
+			itemID := ""
+			if actualIndex < len(items) {
+				itemID = getItemID(items[actualIndex], actualIndex)
+			}
+			outputJSON, _ := json.Marshal(output)
+			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &actualIndex, &itemID, string(outputJSON), summary)
+		},
+		SessionLogger:     r.stores.Sessions,
+		TaskID:            taskID,
+		ExistingSessionID: existingSessionID,
+	}, depSummaries)
+
+	// Restore any agent sessions from the store
+	r.restoreAgentSessions(ctx, sup, taskID, nil)
+
+	seqStreamer := &iterationStreamerAdapter{
+		taskName: task.Name,
+		index:    completedCount,
+		streamer: streamer,
+	}
+
+	// Execute (or resume if stored messages were loaded)
+	_, err = sup.ExecuteOrResume(ctx, objective, seqStreamer)
+
+	// Get results
+	results := sup.GetSubmitResults()
+	for i, res := range results {
+		actualIndex := i + completedCount
+		itemID := ""
+		if actualIndex < len(items) {
+			itemID = getItemID(items[actualIndex], actualIndex)
+		}
+		iterations = append(iterations, IterationResult{
+			Index:   actualIndex,
+			ItemID:  itemID,
+			Summary: res.Summary,
+			Output:  res.Output,
+			Success: true,
+		})
+	}
+
+	if len(results) == 0 && err != nil {
+		iterations = append(iterations, IterationResult{
+			Index:   completedCount,
+			Success: false,
+			Error:   err,
+		})
+	}
+
+	// Store commander for queries
+	r.mu.Lock()
+	if r.iterationCommanders[task.Name] == nil {
+		r.iterationCommanders[task.Name] = make(map[int]*agent.Commander)
+	}
+	r.iterationCommanders[task.Name][0] = sup
+	r.mu.Unlock()
+
+	return iterations
+}
+
+// runSingleIteration executes a single iteration of an iterated task.
+// It checks the store for existing session state and resumes automatically if found.
+func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index int, item cty.Value, prevOutput map[string]any, prevLearnings map[string]any, taskID string, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) IterationResult {
 	itemID := getItemID(item, index)
 
 	// Resolve the objective with item context
@@ -1122,9 +1890,6 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		agents = r.mission.Agents
 	}
 
-	// Build inherited agents from all dependency tasks in the lineage
-	inheritedAgents := r.collectInheritedAgents(task.Name)
-
 	// Collect dependency output schemas for the commander
 	depOutputSchemas := r.collectDepOutputSchemas(task.Name)
 
@@ -1149,7 +1914,6 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		DepSummaries:           depSummaries,
 		DepOutputSchemas:       depOutputSchemas,
 		TaskOutputSchema:       taskOutputSchema,
-		InheritedAgents:        inheritedAgents,
 		PrevIterationOutput:    prevOutput,
 		PrevIterationLearnings: prevLearnings,
 		SecretInfos:            r.secretInfos,
@@ -1169,6 +1933,10 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 	}
 	// Note: Don't close sup here - store it for ask_commander queries from dependent tasks
 	// Cleanup happens in cleanupIterationCommanders() after all dependent tasks complete
+
+	// Check for existing session state (finds stored session from prior run if any)
+	iterIdx := index
+	existingSessionID := r.findAndLoadExistingSession(sup, taskID, &iterIdx)
 
 	// Set up tool callbacks for iteration
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
@@ -1197,10 +1965,8 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
 		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
-			// Use base task name (without iteration index) for dependency validation
 			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},
-		// Iteration-specific callbacks for shared question store
 		ListCommanderQuestions: func(taskName string) []string {
 			return r.listCommanderQuestions(taskName)
 		},
@@ -1210,7 +1976,20 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
+		OnSubmitOutput: func(idx int, output map[string]any, summary string) {
+			datasetName := task.Iterator.Dataset
+			outputJSON, _ := json.Marshal(output)
+			actualIdx := index
+			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &actualIdx, &itemID, string(outputJSON), summary)
+		},
+		SessionLogger:     r.stores.Sessions,
+		TaskID:            taskID,
+		IterationIndex:    &iterIdx,
+		ExistingSessionID: existingSessionID,
 	}, depSummaries)
+
+	// Restore any agent sessions from the store
+	r.restoreAgentSessions(ctx, sup, taskID, &iterIdx)
 
 	// Create iteration-specific streamer adapter
 	iterStreamer := &iterationStreamerAdapter{
@@ -1219,8 +1998,8 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		streamer: streamer,
 	}
 
-	// Execute the iteration
-	summary, err := sup.ExecuteTask(ctx, objective, iterStreamer)
+	// Execute (or resume if stored messages were loaded)
+	summary, err := sup.ExecuteOrResume(ctx, objective, iterStreamer)
 	if err != nil {
 		sup.Close() // Close on failure
 		streamer.IterationFailed(task.Name, index, err)
@@ -1232,26 +2011,14 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		}
 	}
 
-	// Parse OUTPUT block if present
-	output, cleanSummary := parseOutput(summary)
+	// Get output from submit_output tool
+	var output map[string]any
+	if results := sup.GetSubmitResults(); len(results) > 0 {
+		output = results[0].Output
+	}
 
 	// Parse LEARNINGS block if present
-	learnings, cleanSummary := parseLearnings(cleanSummary)
-
-	// Validate output against schema - if required fields are missing, iteration failed
-	if err := validateOutput(output, task.Output); err != nil {
-		sup.Close() // Close on failure
-		streamer.IterationFailed(task.Name, index, err)
-		return IterationResult{
-			Index:     index,
-			ItemID:    itemID,
-			Summary:   cleanSummary,
-			Output:    output,
-			Learnings: learnings,
-			Success:   false,
-			Error:     err,
-		}
-	}
+	learnings, cleanSummary := parseLearnings(summary)
 
 	// Store the iteration commander for ask_commander queries from dependent tasks
 	r.mu.Lock()
@@ -1286,57 +2053,6 @@ func (r *Runner) resolveIterationObjective(task config.Task, item cty.Value) (st
 		return "", fmt.Errorf("evaluating objective: %s", diags.Error())
 	}
 	return val.AsString(), nil
-}
-
-// parseOutput extracts structured output from an answer containing an OUTPUT block
-// Returns the parsed output map and the answer with the OUTPUT block removed
-func parseOutput(answer string) (map[string]any, string) {
-	// Match <OUTPUT>...</OUTPUT> block
-	re := regexp.MustCompile(`(?s)<OUTPUT>\s*(.*?)\s*</OUTPUT>`)
-	match := re.FindStringSubmatch(answer)
-
-	if match == nil {
-		return nil, answer
-	}
-
-	// Parse the JSON content
-	var output map[string]any
-	if err := json.Unmarshal([]byte(match[1]), &output); err != nil {
-		// If parsing fails, return nil output but still strip the block
-		return nil, re.ReplaceAllString(answer, "")
-	}
-
-	// Remove the OUTPUT block from the answer
-	cleanAnswer := strings.TrimSpace(re.ReplaceAllString(answer, ""))
-	return output, cleanAnswer
-}
-
-// validateOutput checks if output satisfies the task's required output schema fields.
-// Returns nil if valid, or an error describing which required fields are missing.
-func validateOutput(output map[string]any, schema *config.OutputSchema) error {
-	if schema == nil {
-		// No schema defined - any output (or none) is valid
-		return nil
-	}
-
-	// Check each required field
-	var missingFields []string
-	for _, field := range schema.Fields {
-		if !field.Required {
-			continue
-		}
-
-		val, exists := output[field.Name]
-		if !exists || val == nil {
-			missingFields = append(missingFields, field.Name)
-		}
-	}
-
-	if len(missingFields) > 0 {
-		return fmt.Errorf("missing required output fields: %v", missingFields)
-	}
-
-	return nil
 }
 
 // parseLearnings extracts learnings from an answer containing a LEARNINGS block
@@ -1605,18 +2321,7 @@ func (r *Runner) askCommanderWithCache(ctx context.Context, targetTask string, i
 
 	r.askCommanderStore.mu.Lock()
 
-	// Check if exact question already exists
-	entries := r.askCommanderStore.questions[cacheKey]
-	for _, entry := range entries {
-		if entry.Question == question {
-			// Question exists - unlock and wait for answer
-			r.askCommanderStore.mu.Unlock()
-			<-entry.Ready
-			return entry.Answer, nil
-		}
-	}
-
-	// Question doesn't exist - register it with a pending answer
+	// Register the question (no dedup — LLM uses list_commander_questions to check existing answers)
 	entry := &questionEntry{
 		Question: question,
 		Answer:   "",
@@ -1705,7 +2410,15 @@ func (r *Runner) SetDataset(name string, items []cty.Value) error {
 		}
 	}
 
-	r.resolvedDatasets[name] = items
+	// Write to persistent store
+	dsID, ok := r.datasetIDs[name]
+	if !ok {
+		return fmt.Errorf("dataset '%s' not initialized", name)
+	}
+	if err := r.stores.Datasets.SetItems(dsID, items); err != nil {
+		return fmt.Errorf("persist dataset '%s': %w", name, err)
+	}
+
 	return nil
 }
 
@@ -1714,7 +2427,7 @@ func (r *Runner) GetDatasetSample(name string, count int) ([]cty.Value, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	items, ok := r.resolvedDatasets[name]
+	dsID, ok := r.datasetIDs[name]
 	if !ok {
 		return nil, fmt.Errorf("dataset '%s' not found", name)
 	}
@@ -1722,11 +2435,8 @@ func (r *Runner) GetDatasetSample(name string, count int) ([]cty.Value, error) {
 	if count <= 0 {
 		count = 5
 	}
-	if count > len(items) {
-		count = len(items)
-	}
 
-	return items[:count], nil
+	return r.stores.Datasets.GetSample(dsID, count)
 }
 
 // GetDatasetCount returns the number of items in a dataset
@@ -1734,12 +2444,12 @@ func (r *Runner) GetDatasetCount(name string) (int, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	items, ok := r.resolvedDatasets[name]
+	dsID, ok := r.datasetIDs[name]
 	if !ok {
 		return 0, fmt.Errorf("dataset '%s' not found", name)
 	}
 
-	return len(items), nil
+	return r.stores.Datasets.GetItemCount(dsID)
 }
 
 // GetDatasetInfo returns information about all available datasets
@@ -1752,7 +2462,9 @@ func (r *Runner) GetDatasetInfo() []aitools.DatasetInfo {
 		dsInfo := aitools.DatasetInfo{
 			Name:        ds.Name,
 			Description: ds.Description,
-			ItemCount:   len(r.resolvedDatasets[ds.Name]),
+		}
+		if dsID, ok := r.datasetIDs[ds.Name]; ok {
+			dsInfo.ItemCount, _ = r.stores.Datasets.GetItemCount(dsID)
 		}
 
 		// Convert schema if present
@@ -1844,12 +2556,12 @@ type OutputFieldInfo struct {
 }
 
 // =============================================================================
-// Knowledge Store Adapter - adapts mission.MemoryKnowledgeStore to agent.KnowledgeStore
+// Knowledge Store Adapter - adapts mission.KnowledgeStore to agent.KnowledgeStore
 // =============================================================================
 
-// knowledgeStoreAdapter wraps MemoryKnowledgeStore to implement agent.KnowledgeStore
+// knowledgeStoreAdapter wraps KnowledgeStore to implement agent.KnowledgeStore
 type knowledgeStoreAdapter struct {
-	store *MemoryKnowledgeStore
+	store KnowledgeStore
 }
 
 // GetTaskOutput implements agent.KnowledgeStore

@@ -1,9 +1,12 @@
 package mission
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
-	"sync"
+	"time"
+
+	"squadron/store"
 )
 
 // FilterOp represents a filter operation
@@ -71,16 +74,10 @@ type AggregateResult struct {
 	Groups map[string]any     `json:"groups,omitempty"` // For group_by
 }
 
-// KnowledgeStore provides storage and querying of task outputs
+// KnowledgeStore provides querying of task outputs
 type KnowledgeStore interface {
-	// StoreTaskOutput stores a task's output
-	StoreTaskOutput(output TaskOutput)
-
 	// GetTaskOutput returns a task's output by name
 	GetTaskOutput(taskName string) (*TaskOutput, bool)
-
-	// GetByItemIDs returns iterations matching the given item IDs
-	GetByItemIDs(taskName string, itemIDs []string) []IterationOutput
 
 	// Query returns iterations matching the query
 	Query(taskName string, query Query) QueryResult
@@ -89,64 +86,76 @@ type KnowledgeStore interface {
 	Aggregate(taskName string, query AggregateQuery) AggregateResult
 }
 
-// MemoryKnowledgeStore is an in-memory implementation of KnowledgeStore
-type MemoryKnowledgeStore struct {
-	mu      sync.RWMutex
-	outputs map[string]*TaskOutput
+// PersistentKnowledgeStore reads task outputs from the MissionStore.
+// It works with any MissionStore backend (SQLite, Memory, Postgres, etc).
+type PersistentKnowledgeStore struct {
+	MissionID string
+	Store     store.MissionStore
 }
 
-// NewMemoryKnowledgeStore creates a new in-memory knowledge store
-func NewMemoryKnowledgeStore() *MemoryKnowledgeStore {
-	return &MemoryKnowledgeStore{
-		outputs: make(map[string]*TaskOutput),
-	}
-}
-
-// StoreTaskOutput stores a task's output
-func (s *MemoryKnowledgeStore) StoreTaskOutput(output TaskOutput) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.outputs[output.TaskName] = &output
-}
-
-// GetTaskOutput returns a task's output by name
-func (s *MemoryKnowledgeStore) GetTaskOutput(taskName string) (*TaskOutput, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	output, ok := s.outputs[taskName]
-	return output, ok
-}
-
-// GetByItemIDs returns iterations matching the given item IDs
-func (s *MemoryKnowledgeStore) GetByItemIDs(taskName string, itemIDs []string) []IterationOutput {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	output, ok := s.outputs[taskName]
-	if !ok || !output.IsIterated {
-		return nil
+// GetTaskOutput loads a task's output from the store by task name
+func (s *PersistentKnowledgeStore) GetTaskOutput(taskName string) (*TaskOutput, bool) {
+	task, err := s.Store.GetTaskByName(s.MissionID, taskName)
+	if err != nil || task.Status != "completed" {
+		return nil, false
 	}
 
-	idSet := make(map[string]bool)
-	for _, id := range itemIDs {
-		idSet[id] = true
+	outputs, err := s.Store.GetTaskOutputs(task.ID)
+	if err != nil {
+		return nil, false
 	}
 
-	var results []IterationOutput
-	for _, iter := range output.Iterations {
-		if idSet[iter.ItemID] {
-			results = append(results, iter)
+	to := &TaskOutput{
+		TaskName:  taskName,
+		Status:    "success",
+		Timestamp: time.Now(),
+	}
+	if task.Summary != nil {
+		to.Summary = *task.Summary
+	}
+
+	if len(outputs) == 0 {
+		return to, true
+	}
+
+	// Check if iterated (dataset_name is set on outputs)
+	if outputs[0].DatasetName != nil {
+		to.IsIterated = true
+		to.TotalIterations = len(outputs)
+		for _, row := range outputs {
+			var outputMap map[string]any
+			if row.OutputJSON != "" {
+				json.Unmarshal([]byte(row.OutputJSON), &outputMap)
+			}
+			iter := IterationOutput{
+				Status:    "success",
+				Summary:   row.Summary,
+				Output:    outputMap,
+				Timestamp: row.CreatedAt,
+			}
+			if row.DatasetIndex != nil {
+				iter.Index = *row.DatasetIndex
+			}
+			if row.ItemID != nil {
+				iter.ItemID = *row.ItemID
+			}
+			to.Iterations = append(to.Iterations, iter)
 		}
+	} else {
+		// Non-iterated: single output
+		var outputMap map[string]any
+		if outputs[0].OutputJSON != "" {
+			json.Unmarshal([]byte(outputs[0].OutputJSON), &outputMap)
+		}
+		to.Output = outputMap
 	}
-	return results
+
+	return to, true
 }
 
-// Query returns iterations matching the query
-func (s *MemoryKnowledgeStore) Query(taskName string, query Query) QueryResult {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	output, ok := s.outputs[taskName]
+// Query returns iterations matching the query, loaded from the store
+func (s *PersistentKnowledgeStore) Query(taskName string, query Query) QueryResult {
+	output, ok := s.GetTaskOutput(taskName)
 	if !ok || !output.IsIterated {
 		return QueryResult{}
 	}
@@ -184,12 +193,9 @@ func (s *MemoryKnowledgeStore) Query(taskName string, query Query) QueryResult {
 	}
 }
 
-// Aggregate performs an aggregate operation on iterations
-func (s *MemoryKnowledgeStore) Aggregate(taskName string, query AggregateQuery) AggregateResult {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	output, ok := s.outputs[taskName]
+// Aggregate performs an aggregate operation on iterations, loaded from the store
+func (s *PersistentKnowledgeStore) Aggregate(taskName string, query AggregateQuery) AggregateResult {
+	output, ok := s.GetTaskOutput(taskName)
 	if !ok || !output.IsIterated {
 		return AggregateResult{}
 	}

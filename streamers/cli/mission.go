@@ -18,10 +18,11 @@ func NewMissionHandler() *MissionHandler {
 	return &MissionHandler{}
 }
 
-func (s *MissionHandler) MissionStarted(name string, taskCount int) {
+func (s *MissionHandler) MissionStarted(name string, missionID string, taskCount int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("\n%s%s=== Mission: %s ===%s\n", ColorBold, ColorCyan, name, ColorReset)
+	fmt.Printf("%sMission ID: %s%s\n", ColorGray, missionID, ColorReset)
 	fmt.Printf("%sTasks: %d%s\n\n", ColorGray, taskCount, ColorReset)
 }
 

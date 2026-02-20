@@ -73,6 +73,12 @@ Run:
 squadron mission data_pipeline -c ./config
 ```
 
+Resume a failed mission:
+
+```bash
+squadron mission data_pipeline -c ./config --resume <mission-id>
+```
+
 ## Providers
 
 - Anthropic (Claude)

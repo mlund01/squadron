@@ -19,6 +19,7 @@ squadron mission <mission-name> -c <config-path> [--input key=value...]
 | `-c, --config` | Path to config directory (default: `.`) |
 | `-d, --debug` | Enable debug mode (captures LLM messages) |
 | `-i, --input` | Mission input as key=value (repeatable) |
+| `--resume` | Resume a previously failed mission by its ID |
 
 ## Example
 
@@ -27,6 +28,16 @@ squadron mission data_pipeline -c ./my-config
 
 squadron mission weather_report -c ./config --input city=Chicago
 ```
+
+## Resume
+
+If a mission fails or is interrupted, you can resume it using the mission ID displayed when it started:
+
+```bash
+squadron mission data_pipeline -c ./config --resume abc123def456
+```
+
+Resume rebuilds the exact state from stored sessions — completed tasks are skipped, and interrupted tasks pick up where they left off. Mission state is persisted to `.squadron/store.db`.
 
 ## Debug Mode
 

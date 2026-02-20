@@ -5,11 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run Commands
 
 ```bash
-go build -o squadron .                     # Build the CLI
+go build -o squadron ./cmd/cli              # Build the CLI
 ./squadron verify <path>                   # Validate HCL config
 ./squadron chat -c <path> <agent_name>     # Start chat with an agent
-./squadron mission -c <path> <mission>   # Run a mission
-./squadron mission -c <path> -d <mission> # Run with debug logging
+./squadron mission -c <path> <mission>     # Run a mission
+./squadron mission -c <path> -d <mission>  # Run with debug logging
+./squadron mission --resume <id> -c <path> <mission> # Resume a failed mission
 ./squadron vars set <name> <value>         # Set a variable
 ./squadron vars get <name>                 # Get a variable
 ./squadron vars list                       # List all variables
@@ -29,6 +30,7 @@ Squad is an HCL-based CLI for defining and running AI agents and multi-agent mis
 | `llm/` | LLM provider abstraction (Anthropic, OpenAI, Gemini) |
 | `plugin/` | gRPC plugin system using hashicorp/go-plugin |
 | `mission/` | Mission runner, task execution, knowledge store |
+| `store/` | Persistence interfaces and SQLite implementation |
 | `streamers/` | Output streaming interfaces for CLI/TUI |
 | `cmd/` | CLI commands and plugin entry points |
 
@@ -104,6 +106,8 @@ mission "example" {
 - `Session` maintains conversation history and system prompts
 - Implementations: `AnthropicProvider`, `OpenAIProvider`, `GeminiProvider`
 - Sessions support cloning for isolated query processing (used in `ask_commander`)
+- `ContinueStream()` resumes from existing state without adding a new user message (used for mission resume)
+- `LoadMessages()` restores session from persisted state
 
 Model keys (used in HCL) map to actual API model names in `config/model.go:SupportedModels`. Add new models there before using them in config.
 
@@ -283,7 +287,7 @@ Creates a debug directory: `debug/<mission>_<timestamp>/`
 |------|----------|
 | `events.log` | JSON-line events (task start/complete, tool calls) |
 | `commander_<task>.md` | Full LLM conversation for task's commander |
-| `agent_<task>_<agent>_<seq>.md` | Full LLM conversation for each agent |
+| `agent_<task>_<agent>.md` | Full LLM conversation for each agent |
 
 ### Event Types
 
@@ -292,6 +296,36 @@ Creates a debug directory: `debug/<mission>_<timestamp>/`
 - `iteration_started`, `iteration_completed`
 - `agent_started`, `agent_completed`
 - `tool_call`, `tool_result`
+
+---
+
+## Persistence & Resume (store/)
+
+Mission state is persisted to SQLite (`.squadron/store.db`) during execution:
+
+- **Missions**: ID, status, config, inputs
+- **Tasks**: Status, output JSON, summaries
+- **Sessions**: Commander and agent LLM conversation histories
+- **Datasets**: Items stored for resume
+
+### Resume Flow
+
+When `--resume <missionID>` is used:
+
+1. Runner loads the stored mission record and identifies completed/pending tasks
+2. Completed tasks are "resaturated" — their commanders are rebuilt from stored sessions so downstream tasks can query them via `ask_commander`
+3. Pending/failed tasks resume from stored session state using `ContinueStream` (if LLM was interrupted) or by re-executing the interrupted tool call
+4. Agent sessions are healed via `HealSessionMessages()` — if the last message was an in-flight tool call, a placeholder observation is injected
+
+### Key Types
+
+| Type | File | Purpose |
+|------|------|---------|
+| `MissionStore` | `store/store.go` | Mission/task CRUD |
+| `SessionStore` | `store/store.go` | Session/message persistence |
+| `DatasetStore` | `store/store.go` | Dataset item persistence |
+| `SQLiteStore` | `store/sqlite.go` | SQLite implementation of all stores |
+| `MemoryBundle` | `store/memory.go` | In-memory implementation (testing) |
 
 ---
 

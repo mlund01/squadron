@@ -163,14 +163,14 @@ Query an agent that was used by a dependency task. Use this to get additional in
 
 ```json
 {
-  "agent_id": "agent_1_assistant",
+  "agent_id": "assistant",
   "question": "What API endpoints did you use?"
 }
 ```
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `agent_id` | string | ID of the agent (from call_agent results) (required) |
+| `agent_id` | string | Name of the agent (matches the name used in `call_agent`) (required) |
 | `question` | string | Question to ask the agent (required) |
 
 The agent responds from its existing conversation context without making new tool calls.

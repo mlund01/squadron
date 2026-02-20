@@ -116,6 +116,18 @@ task "analyze" {
 
 Downstream tasks can query this data using `query_task_output` with filtering and aggregation. See [Tasks](/missions/tasks#structured-output) for details.
 
+## Persistence & Resume
+
+Mission state is automatically persisted to SQLite during execution. If a mission fails or is interrupted, you can resume it:
+
+```bash
+squadron mission data_pipeline -c ./config --resume <mission-id>
+```
+
+Resume skips completed tasks and picks up interrupted tasks from where they left off — including restoring LLM conversation state for commanders and agents.
+
+See [squadron mission](/cli/mission#resume) for details.
+
 ## See Also
 
 - [Tasks](/missions/tasks) - Task configuration

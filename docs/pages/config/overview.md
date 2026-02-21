@@ -25,10 +25,12 @@ You can also put everything in a single file—Squadron reads all `.hcl` files i
 
 Squadron uses **staged evaluation** to resolve references:
 
-1. **Variables** - Load `variable` blocks first
-2. **Models** - Load `model` blocks with `vars` context
-3. **Agents** - Load `agent` blocks with `vars` and `models` context
-4. **Missions** - Load `mission` blocks with full context
+1. **Variables** - Load `variable` blocks (no context needed)
+2. **Plugins** - Load `plugin` blocks with `vars` context
+3. **Models** - Load `model` blocks with `vars` + `plugins` context
+4. **Tools** - Load custom `tool` blocks with `vars` + `models` + `plugins` context
+5. **Agents** - Load `agent` blocks with `vars` + `models` + `tools` + `plugins` context
+6. **Missions** - Load `mission` blocks with full context
 
 This enables expressions like:
 
@@ -39,6 +41,7 @@ model "anthropic" {
 
 agent "assistant" {
   model = models.anthropic.claude_sonnet_4  # Reference a model
+  tools = [plugins.bash.bash, tools.weather]  # Reference plugins and tools
 }
 ```
 

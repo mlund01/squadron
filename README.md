@@ -9,6 +9,12 @@ brew tap mlund01/squadron
 brew install --cask mlund01/squadron/squadron
 ```
 
+Upgrade to the latest version:
+
+```bash
+squadron upgrade
+```
+
 Or build from source:
 
 ```bash

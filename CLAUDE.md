@@ -14,6 +14,14 @@ go build -o squadron ./cmd/cli              # Build the CLI
 ./squadron vars set <name> <value>         # Set a variable
 ./squadron vars get <name>                 # Get a variable
 ./squadron vars list                       # List all variables
+./squadron upgrade                         # Upgrade to latest release
+./squadron upgrade --version v0.0.13       # Upgrade to specific version
+./squadron version                         # Print current version
+./squadron docs [output-dir]               # Extract docs to local folder
+./squadron plugin tools <path>             # List plugin tools
+./squadron plugin call <path> <tool> <json># Call a plugin tool
+./squadron plugin info <path> <tool>       # Get plugin tool info
+./squadron plugin build <source>           # Build a plugin from source
 ```
 
 ## Architecture Overview
@@ -41,10 +49,11 @@ Squad is an HCL-based CLI for defining and running AI agents and multi-agent mis
 The config loading uses **staged evaluation** to support HCL expression references:
 
 1. **Stage 1**: Load `variable` blocks (no context needed)
-2. **Stage 2**: Load `model` blocks with `vars` context → enables `api_key = vars.anthropic_api_key`
-3. **Stage 3**: Load `plugin` blocks with `vars` context
-4. **Stage 4**: Load `agent` blocks with `vars` + `models` + `plugins` context → enables `model = models.anthropic.claude_sonnet_4` and `tools = [plugins.playwright.all]`
-5. **Stage 5**: Load `mission` blocks with full context
+2. **Stage 1.5**: Load `plugin` blocks with `vars` context
+3. **Stage 2**: Load `model` blocks with `vars` + `plugins` context → enables `api_key = vars.anthropic_api_key`
+4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `plugins` context → enables `implements = plugins.http.get`
+5. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` context → enables `model = models.anthropic.claude_sonnet_4` and `tools = [plugins.playwright.all, tools.weather]`
+6. **Stage 5**: Load `mission` blocks with full context
 
 Each stage uses partial structs with `hcl:",remain"` to ignore unknown block types during that pass.
 

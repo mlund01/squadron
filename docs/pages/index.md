@@ -12,8 +12,10 @@ Squadron is an HCL-based CLI for defining and running AI agents and multi-agent 
 - **HCL configuration** - Declare agents, tools, and missions in `.hcl` files
 - **Missions** - Multi-task pipelines with commander orchestration
 - **Datasets & Iteration** - Process items in parallel or sequentially
+- **Persistence & Resume** - Mission state saved to SQLite; resume interrupted missions
 - **Plugin system** - Extend with custom gRPC plugins
 - **Custom tools** - Wrap plugins with custom schemas
+- **Self-upgrade** - Update to the latest release with `squadron upgrade`
 
 ## Quick Example
 

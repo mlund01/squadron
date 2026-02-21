@@ -103,27 +103,6 @@ Query structured data from completed dependency tasks.
 }
 ```
 
-### populate_dataset
-
-Add items to a dataset for iteration.
-
-```json
-{
-  "dataset": "city_list",
-  "items": [
-    {"name": "Chicago", "state": "IL"},
-    {"name": "Detroit", "state": "MI"}
-  ]
-}
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `dataset` | string | Name of the dataset to populate (required) |
-| `items` | array | Array of items to add (required) |
-
-Items must match the dataset's schema if one is defined.
-
 ### ask_commander
 
 Ask a follow-up question to a completed commander from a dependency task. Use this when you need more details than what was provided in the task summary.
@@ -175,8 +154,50 @@ Query an agent that was used by a dependency task. Use this to get additional in
 
 The agent responds from its existing conversation context without making new tool calls.
 
+### list_commander_questions
+
+List questions that have already been asked to a dependency task's commander. Useful in parallel iterations to avoid asking duplicate questions.
+
+```json
+{
+  "task_name": "fetch_sales"
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `task_name` | string | Name of the dependency task (required) |
+
+Returns a list of previously asked questions with their indices.
+
+### get_commander_answer
+
+Get a cached answer for a previously asked question by its index. Use with `list_commander_questions` to reuse answers from other iterations.
+
+```json
+{
+  "task_name": "fetch_sales",
+  "index": 0
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `task_name` | string | Name of the dependency task (required) |
+| `index` | integer | Index of the question from `list_commander_questions` (required) |
+
 ## Agent Tools
 
-Agents have access to the tools configured in their agent definition, plus any mission-level tools. See [Tools](/config/tools) for configuring agent tools.
+Agents have access to the tools configured in their agent definition, plus mission-level dataset tools when running in mission context. See [Tools](/config/tools) for configuring agent tools.
 
-During mission execution, agents operate autonomously to complete the tasks delegated by commanders. They use their configured tools (bash, HTTP, custom tools, etc.) to accomplish objectives.
+### Dataset Tools
+
+When running inside a mission, agents automatically get these dataset tools:
+
+| Tool | Description |
+|------|-------------|
+| `set_dataset` | Populate a dataset with items |
+| `dataset_sample` | Get sample items from a dataset |
+| `dataset_count` | Get the number of items in a dataset |
+
+See [Datasets](/missions/datasets) for details and examples.

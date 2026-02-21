@@ -11,9 +11,21 @@ brew tap mlund01/squadron
 brew install --cask mlund01/squadron/squadron
 ```
 
+## Upgrade
+
+```bash
+squadron upgrade
+```
+
+Or install a specific version:
+
+```bash
+squadron upgrade --version v0.0.13
+```
+
 ## Build from Source
 
-Requires Go 1.21+.
+Requires Go 1.25+.
 
 ```bash
 git clone https://github.com/mlund01/squadron.git

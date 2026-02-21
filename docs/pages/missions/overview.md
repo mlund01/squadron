@@ -81,6 +81,11 @@ Commanders have access to special tools:
 - **call_agent** - Delegate work to an agent
 - **ask_agent** - Ask a completed agent follow-up questions
 - **query_task_output** - Query structured data from completed dependency tasks
+- **ask_commander** - Query a dependency task's commander for more context
+- **list_commander_questions** - See questions already asked by other iterations (parallel dedup)
+- **get_commander_answer** - Get a cached answer from the shared question store
+
+See [Internal Tools](/missions/internal-tools) for full details.
 
 ## Context Protection
 

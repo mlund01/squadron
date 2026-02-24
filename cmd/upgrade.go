@@ -46,7 +46,27 @@ type githubAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
+// isBrewInstall checks if the current binary is managed by Homebrew
+func isBrewInstall() bool {
+	execPath, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	resolved, err := filepath.EvalSymlinks(execPath)
+	if err != nil {
+		return false
+	}
+	// Homebrew installs to /opt/homebrew/Caskroom/..., /usr/local/Caskroom/...,
+	// or /opt/homebrew/Cellar/..., /usr/local/Cellar/...
+	return strings.Contains(resolved, "/Caskroom/") || strings.Contains(resolved, "/Cellar/")
+}
+
 func runUpgrade(cmd *cobra.Command, args []string) error {
+	// 0. Block upgrade if installed via Homebrew
+	if isBrewInstall() {
+		return fmt.Errorf("squadron was installed via Homebrew. Use 'brew upgrade mlund01/squadron/squadron' instead")
+	}
+
 	// 1. Determine target version
 	var release githubRelease
 	var err error

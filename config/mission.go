@@ -63,18 +63,20 @@ type OutputField struct {
 
 // Mission represents a mission configuration with multiple tasks
 type Mission struct {
-	Name            string          `hcl:"name,label"`
-	Commander string          `hcl:"commander"`
-	Agents          []string        `hcl:"agents"`
-	Tasks           []Task          `hcl:"task,block"`
-	Inputs          []MissionInput // Parsed from input blocks
-	Datasets        []Dataset       // Parsed from dataset blocks
+	Name      string   `hcl:"name,label"`
+	Directive string   `hcl:"directive,optional"`
+	Commander string   `hcl:"commander"`
+	Agents    []string `hcl:"agents"`
+	Tasks     []Task   `hcl:"task,block"`
+	Inputs    []MissionInput // Parsed from input blocks
+	Datasets  []Dataset      // Parsed from dataset blocks
 }
 
 // Task represents a single task within a mission
 type Task struct {
 	Name          string         `hcl:"name,label" json:"name"`
 	ObjectiveExpr hcl.Expression `json:"-"`
+	RawObjective  string         `json:"rawObjective,omitempty"` // Raw objective text from HCL source (with ${...} placeholders intact)
 	Agents        []string       `hcl:"agents,optional" json:"agents,omitempty"`
 	DependsOn     []string       `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
 	Iterator      *TaskIterator  `json:"iterator,omitempty"`

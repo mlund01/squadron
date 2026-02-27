@@ -19,6 +19,7 @@ func NewMemoryBundle() *Bundle {
 		},
 		Datasets: &MemoryDatasetStore{datasets: make(map[string]*memDataset)},
 		Sessions: &MemorySessionStore{sessions: make(map[string]*memSession)},
+		Events:   &MemoryEventStore{},
 	}
 }
 
@@ -200,6 +201,59 @@ func (s *MemorySessionStore) CreateSession(taskID, role, agentName, model string
 		},
 	}
 	return id, nil
+}
+
+func (s *MemorySessionStore) CreateChatSession(agentName, model string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	id := generateID()
+	s.sessions[id] = &memSession{
+		info: SessionInfo{
+			ID:        id,
+			Role:      "chat",
+			AgentName: agentName,
+			Model:     model,
+			Status:    "running",
+			StartedAt: time.Now(),
+		},
+	}
+	return id, nil
+}
+
+func (s *MemorySessionStore) ListChatSessions(agentName string, limit, offset int) ([]SessionInfo, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var all []SessionInfo
+	for _, sess := range s.sessions {
+		if sess.info.Role != "chat" || sess.info.Status == "completed" {
+			continue
+		}
+		if agentName != "" && sess.info.AgentName != agentName {
+			continue
+		}
+		all = append(all, sess.info)
+	}
+
+	// Sort by StartedAt descending
+	for i := 0; i < len(all); i++ {
+		for j := i + 1; j < len(all); j++ {
+			if all[j].StartedAt.After(all[i].StartedAt) {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
+	}
+
+	total := len(all)
+	if offset >= total {
+		return nil, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return all[offset:end], total, nil
 }
 
 func (s *MemorySessionStore) CompleteSession(id string, err error) {
@@ -419,6 +473,92 @@ func (s *MemoryDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, erro
 		}
 	}
 	return infos, nil
+}
+
+// =============================================================================
+// MemoryMissionStore.ListMissions
+// =============================================================================
+
+func (s *MemoryMissionStore) ListMissions(limit, offset int) ([]MissionRecord, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Collect all missions sorted by started_at descending
+	all := make([]MissionRecord, 0, len(s.missions))
+	for _, m := range s.missions {
+		all = append(all, *m)
+	}
+	// Sort by StartedAt descending
+	for i := 0; i < len(all); i++ {
+		for j := i + 1; j < len(all); j++ {
+			if all[j].StartedAt.After(all[i].StartedAt) {
+				all[i], all[j] = all[j], all[i]
+			}
+		}
+	}
+
+	total := len(all)
+	if offset >= total {
+		return nil, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return all[offset:end], total, nil
+}
+
+// =============================================================================
+// MemoryEventStore
+// =============================================================================
+
+type MemoryEventStore struct {
+	mu     sync.Mutex
+	events []MissionEvent
+}
+
+func (s *MemoryEventStore) StoreEvent(event MissionEvent) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, event)
+	return nil
+}
+
+func (s *MemoryEventStore) GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var filtered []MissionEvent
+	for _, e := range s.events {
+		if e.MissionID == missionID {
+			filtered = append(filtered, e)
+		}
+	}
+	return paginate(filtered, limit, offset), nil
+}
+
+func (s *MemoryEventStore) GetEventsByTask(taskID string, limit, offset int) ([]MissionEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var filtered []MissionEvent
+	for _, e := range s.events {
+		if e.TaskID != nil && *e.TaskID == taskID {
+			filtered = append(filtered, e)
+		}
+	}
+	return paginate(filtered, limit, offset), nil
+}
+
+func paginate(events []MissionEvent, limit, offset int) []MissionEvent {
+	if offset >= len(events) {
+		return nil
+	}
+	end := offset + limit
+	if end > len(events) {
+		end = len(events)
+	}
+	return events[offset:end]
 }
 
 // =============================================================================

@@ -7,16 +7,22 @@ require (
 	github.com/charmbracelet/glamour v0.10.0
 	github.com/google/generative-ai-go v0.20.1
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.7.0
 	github.com/hashicorp/hcl/v2 v2.24.0
-	github.com/mlund01/squadron-sdk v0.0.3
+	github.com/mattn/go-sqlite3 v1.14.34
+	github.com/mlund01/squadron-sdk v0.0.4
+	github.com/onsi/ginkgo/v2 v2.28.1
+	github.com/onsi/gomega v1.39.1
 	github.com/openai/openai-go v1.12.0
 	github.com/playwright-community/playwright-go v0.5200.1
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.16.3
 	google.golang.org/api v0.259.0
 )
+
+replace github.com/mlund01/squadron-sdk => ../squadron-sdk
 
 require (
 	cloud.google.com/go v0.115.0 // indirect
@@ -59,14 +65,11 @@ require (
 	github.com/mattn/go-colorable v0.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-runewidth v0.0.16 // indirect
-	github.com/mattn/go-sqlite3 v1.14.34 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
 	github.com/muesli/reflow v0.3.0 // indirect
 	github.com/muesli/termenv v0.16.0 // indirect
 	github.com/oklog/run v1.1.0 // indirect
-	github.com/onsi/ginkgo/v2 v2.28.1 // indirect
-	github.com/onsi/gomega v1.39.1 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/tidwall/gjson v1.18.0 // indirect

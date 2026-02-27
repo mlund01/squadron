@@ -237,6 +237,11 @@ func resolveDatasets(mission *config.Mission, inputValues map[string]cty.Value) 
 	return resolved, nil
 }
 
+// EventStore returns the runner's event store for use by decorators like StoringMissionHandler.
+func (r *Runner) EventStore() store.EventStore {
+	return r.stores.Events
+}
+
 // Run executes the mission
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
 	defer r.stores.Close()

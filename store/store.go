@@ -14,6 +14,7 @@ type Bundle struct {
 	Missions MissionStore
 	Datasets DatasetStore
 	Sessions SessionStore
+	Events   EventStore
 	closer   func() error
 }
 
@@ -34,6 +35,7 @@ type MissionStore interface {
 	GetTasksByMission(missionID string) ([]MissionTask, error)
 	GetTaskByName(missionID, taskName string) (*MissionTask, error)
 	GetMission(id string) (*MissionRecord, error)
+	ListMissions(limit, offset int) ([]MissionRecord, int, error)
 	StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON, summary string) error
 	GetTaskOutputs(taskID string) ([]TaskOutputRow, error)
 }
@@ -83,12 +85,16 @@ type SessionStore interface {
 	GetMessages(sessionID string) ([]SessionMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)
 	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error
+
+	// Chat-specific methods
+	CreateChatSession(agentName, model string) (string, error)
+	ListChatSessions(agentName string, limit, offset int) ([]SessionInfo, int, error)
 }
 
 // SessionInfo describes a session
 type SessionInfo struct {
 	ID             string    `json:"id"`
-	TaskID         string    `json:"taskId"`
+	TaskID         string    `json:"taskId,omitempty"`
 	Role           string    `json:"role"`
 	AgentName      string    `json:"agentName,omitempty"`
 	Model          string    `json:"model,omitempty"`
@@ -122,5 +128,24 @@ type DatasetStore interface {
 	GetSample(datasetID string, count int) ([]cty.Value, error)
 	GetDatasetByName(missionID, name string) (id string, err error)
 	ListDatasets(missionID string) ([]DatasetInfo, error)
+}
+
+// EventStore persists mission execution events for history/audit
+type EventStore interface {
+	StoreEvent(event MissionEvent) error
+	GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error)
+	GetEventsByTask(taskID string, limit, offset int) ([]MissionEvent, error)
+}
+
+// MissionEvent represents a single event during mission execution
+type MissionEvent struct {
+	ID             string    `json:"id"`
+	MissionID      string    `json:"missionId"`
+	TaskID         *string   `json:"taskId,omitempty"`
+	SessionID      *string   `json:"sessionId,omitempty"`
+	IterationIndex *int      `json:"iterationIndex,omitempty"`
+	EventType      string    `json:"eventType"`
+	DataJSON       string    `json:"dataJson"`
+	CreatedAt      time.Time `json:"createdAt"`
 }
 

@@ -9,8 +9,9 @@ import (
 	"time"
 
 	"squadron/config"
-	"squadron/streamers/cli"
 	"squadron/mission"
+	"squadron/streamers"
+	"squadron/streamers/cli"
 
 	"github.com/spf13/cobra"
 )
@@ -72,8 +73,9 @@ var missionCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Create handler
-		streamer := cli.NewMissionHandler()
+		// Create handler with event persistence
+		cliHandler := cli.NewMissionHandler()
+		streamer := streamers.NewStoringMissionHandler(cliHandler, runner.EventStore())
 
 		// Run the mission
 		if err := runner.Run(ctx, streamer); err != nil {

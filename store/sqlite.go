@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS mission_tasks (
 
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
-    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
+    task_id TEXT REFERENCES mission_tasks(id),
     role TEXT NOT NULL,
     agent_name TEXT,
     model TEXT,
@@ -93,6 +93,20 @@ CREATE TABLE IF NOT EXISTS dataset_items (
     PRIMARY KEY (dataset_id, item_index)
 );
 
+CREATE TABLE IF NOT EXISTS mission_events (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    task_id TEXT REFERENCES mission_tasks(id),
+    session_id TEXT REFERENCES sessions(id),
+    iteration_index INTEGER,
+    event_type TEXT NOT NULL,
+    data_json TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_mission_events_mission ON mission_events(mission_id);
+CREATE INDEX IF NOT EXISTS idx_mission_events_task ON mission_events(task_id);
+CREATE INDEX IF NOT EXISTS idx_mission_events_type ON mission_events(mission_id, event_type);
+
 `
 
 // NewSQLiteBundle creates a Bundle backed by SQLite at the given path
@@ -111,6 +125,7 @@ func NewSQLiteBundle(dbPath string) (*Bundle, error) {
 		Missions: &SQLiteMissionStore{db: db},
 		Datasets: &SQLiteDatasetStore{db: db},
 		Sessions: &SQLiteSessionStore{db: db},
+		Events:   &SQLiteEventStore{db: db},
 		closer:   db.Close,
 	}, nil
 }
@@ -404,10 +419,13 @@ func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 	var sessions []SessionInfo
 	for rows.Next() {
 		var si SessionInfo
-		var agentName sql.NullString
+		var taskIDNull, agentName sql.NullString
 		var iterIdx sql.NullInt64
-		if err := rows.Scan(&si.ID, &si.TaskID, &si.Role, &agentName, &si.Model, &si.Status, &iterIdx, &si.StartedAt); err != nil {
+		if err := rows.Scan(&si.ID, &taskIDNull, &si.Role, &agentName, &si.Model, &si.Status, &iterIdx, &si.StartedAt); err != nil {
 			return nil, err
+		}
+		if taskIDNull.Valid {
+			si.TaskID = taskIDNull.String
 		}
 		if agentName.Valid {
 			si.AgentName = agentName.String
@@ -428,6 +446,62 @@ func (s *SQLiteSessionStore) StoreToolResult(taskID, sessionID, toolName, inputP
 		id, taskID, sessionID, toolName, inputParams, rawData,
 	)
 	return err
+}
+
+func (s *SQLiteSessionStore) CreateChatSession(agentName, model string) (string, error) {
+	id := generateID()
+	_, err := s.db.Exec(
+		`INSERT INTO sessions (id, role, agent_name, model) VALUES (?, 'chat', ?, ?)`,
+		id, agentName, model,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create chat session: %w", err)
+	}
+	return id, nil
+}
+
+func (s *SQLiteSessionStore) ListChatSessions(agentName string, limit, offset int) ([]SessionInfo, int, error) {
+	// Count total
+	var total int
+	countQuery := `SELECT COUNT(*) FROM sessions WHERE role = 'chat' AND status != 'completed'`
+	args := []any{}
+	if agentName != "" {
+		countQuery += ` AND agent_name = ?`
+		args = append(args, agentName)
+	}
+	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count chat sessions: %w", err)
+	}
+
+	// Fetch page
+	query := `SELECT id, role, agent_name, model, status, started_at FROM sessions WHERE role = 'chat' AND status != 'completed'`
+	fetchArgs := []any{}
+	if agentName != "" {
+		query += ` AND agent_name = ?`
+		fetchArgs = append(fetchArgs, agentName)
+	}
+	query += ` ORDER BY started_at DESC LIMIT ? OFFSET ?`
+	fetchArgs = append(fetchArgs, limit, offset)
+
+	rows, err := s.db.Query(query, fetchArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var sessions []SessionInfo
+	for rows.Next() {
+		var si SessionInfo
+		var agName sql.NullString
+		if err := rows.Scan(&si.ID, &si.Role, &agName, &si.Model, &si.Status, &si.StartedAt); err != nil {
+			return nil, 0, err
+		}
+		if agName.Valid {
+			si.AgentName = agName.String
+		}
+		sessions = append(sessions, si)
+	}
+	return sessions, total, nil
 }
 
 // =============================================================================
@@ -684,5 +758,112 @@ func goJSONToCty(jsonStr string) cty.Value {
 		return cty.StringVal(jsonStr)
 	}
 	return goToCtyValue(v)
+}
+
+// =============================================================================
+// SQLiteMissionStore.ListMissions
+// =============================================================================
+
+func (s *SQLiteMissionStore) ListMissions(limit, offset int) ([]MissionRecord, int, error) {
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM missions`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count missions: %w", err)
+	}
+
+	rows, err := s.db.Query(
+		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var missions []MissionRecord
+	for rows.Next() {
+		var m MissionRecord
+		var inputsJSON, configJSON sql.NullString
+		var finishedAt sql.NullTime
+
+		if err := rows.Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &m.StartedAt, &finishedAt); err != nil {
+			return nil, 0, err
+		}
+		if inputsJSON.Valid {
+			m.InputValuesJSON = inputsJSON.String
+		}
+		if configJSON.Valid {
+			m.ConfigJSON = configJSON.String
+		}
+		if finishedAt.Valid {
+			m.FinishedAt = &finishedAt.Time
+		}
+		missions = append(missions, m)
+	}
+	return missions, total, nil
+}
+
+// =============================================================================
+// SQLiteEventStore
+// =============================================================================
+
+type SQLiteEventStore struct {
+	db *sql.DB
+}
+
+func (s *SQLiteEventStore) StoreEvent(event MissionEvent) error {
+	_, err := s.db.Exec(
+		`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.MissionID, event.TaskID, event.SessionID, event.IterationIndex, event.EventType, event.DataJSON,
+	)
+	return err
+}
+
+func (s *SQLiteEventStore) GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error) {
+	rows, err := s.db.Query(
+		`SELECT id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at FROM mission_events WHERE mission_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?`,
+		missionID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
+func (s *SQLiteEventStore) GetEventsByTask(taskID string, limit, offset int) ([]MissionEvent, error) {
+	rows, err := s.db.Query(
+		`SELECT id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at FROM mission_events WHERE task_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?`,
+		taskID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
+func scanEvents(rows *sql.Rows) ([]MissionEvent, error) {
+	var events []MissionEvent
+	for rows.Next() {
+		var e MissionEvent
+		var taskID, sessionID sql.NullString
+		var iterIdx sql.NullInt64
+
+		if err := rows.Scan(&e.ID, &e.MissionID, &taskID, &sessionID, &iterIdx, &e.EventType, &e.DataJSON, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		if taskID.Valid {
+			e.TaskID = &taskID.String
+		}
+		if sessionID.Valid {
+			e.SessionID = &sessionID.String
+		}
+		if iterIdx.Valid {
+			idx := int(iterIdx.Int64)
+			e.IterationIndex = &idx
+		}
+		events = append(events, e)
+	}
+	return events, nil
 }
 

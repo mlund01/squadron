@@ -26,6 +26,9 @@ type Config struct {
 	// Storage configuration (optional, defaults to memory backend)
 	Storage *StorageConfig `hcl:"-"`
 
+	// Commander configuration (optional, nil when absent = standalone mode)
+	Commander *CommanderConfig `hcl:"-"`
+
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
 	// PluginWarnings holds warnings for plugins that could not be loaded
@@ -71,6 +74,12 @@ func (c *Config) Validate() error {
 	for _, v := range c.Variables {
 		if err := v.Validate(); err != nil {
 			return fmt.Errorf("variable '%s': %w", v.Name, err)
+		}
+	}
+
+	if c.Commander != nil {
+		if err := c.Commander.Validate(); err != nil {
+			return fmt.Errorf("commander: %w", err)
 		}
 	}
 
@@ -179,6 +188,7 @@ type parsedBlocks struct {
 	Plugins   []*hcl.Block
 	Missions  []*hcl.Block
 	Storage   []*hcl.Block
+	Commander []*hcl.Block
 }
 
 // loadFromFiles implements staged loading: variables → models → agents → tools
@@ -203,6 +213,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "plugin", LabelNames: []string{"name"}},
 				{Type: "mission", LabelNames: []string{"name"}},
 				{Type: "storage"},
+				{Type: "commander"},
 			},
 		})
 		if diags.HasErrors() {
@@ -226,6 +237,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.Missions = append(pb.Missions, block)
 			case "storage":
 				pb.Storage = append(pb.Storage, block)
+			case "commander":
+				pb.Commander = append(pb.Commander, block)
 			}
 		}
 		allParsedBlocks = append(allParsedBlocks, pb)
@@ -259,6 +272,20 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 	}
 	storageConfig.Defaults()
+
+	// Parse commander block (optional singleton, with vars context)
+	var commanderConfig *CommanderConfig
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.Commander {
+			var cc CommanderConfig
+			diags := gohcl.DecodeBody(block.Body, varsCtx, &cc)
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("commander: %w", diags)
+			}
+			cc.Defaults()
+			commanderConfig = &cc
+		}
+	}
 
 	// Stage 1.5: Load plugins (with vars context - plugins are simple, load early so tools can reference them)
 	var allPlugins []Plugin
@@ -363,6 +390,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		Plugins:        allPlugins,
 		Missions:      allMissions,
 		Storage:        &storageConfig,
+		Commander:      commanderConfig,
 		LoadedPlugins:  loadedPlugins,
 		PluginWarnings: pluginWarnings,
 		ResolvedVars:   resolvedVars,
@@ -656,6 +684,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Attributes: []hcl.AttributeSchema{
 			{Name: "commander", Required: true},
 			{Name: "agents", Required: true},
+			{Name: "directive"},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "task", LabelNames: []string{"name"}},
@@ -688,10 +717,20 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		missionAgents = append(missionAgents, v.AsString())
 	}
 
+	var directive string
+	if attr, ok := missionContent.Attributes["directive"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' directive: %w", missionName, diags)
+		}
+		directive = val.AsString()
+	}
+
 	mission := &Mission{
-		Name:            missionName,
+		Name:      missionName,
+		Directive: directive,
 		Commander: commanderModelVal.AsString(),
-		Agents:          missionAgents,
+		Agents:    missionAgents,
 	}
 
 	// Parse input blocks first
@@ -1072,6 +1111,9 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		return nil, fmt.Errorf("task '%s': %w", taskName, diags)
 	}
 
+	// Extract the raw objective text from source for display purposes
+	rawObjective := extractExpressionSource(objectiveExpr)
+
 	// Get agents (optional array of agent references)
 	var agents []string
 	if agentsAttr, ok := taskContent.Attributes["agents"]; ok {
@@ -1127,6 +1169,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 	return &Task{
 		Name:          taskName,
 		ObjectiveExpr: objectiveExpr,
+		RawObjective:  rawObjective,
 		Agents:        agents,
 		DependsOn:     dependsOn,
 		Iterator:      iterator,
@@ -1240,4 +1283,39 @@ func parsePluginBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Plugin, error) {
 
 	_ = remainBody // No remaining body expected
 	return p, nil
+}
+
+// extractExpressionSource reads the raw source text of an HCL expression from its source file.
+// For template strings like "Get weather for ${item.name}", this returns the text with
+// interpolation placeholders intact, making it suitable for display in the UI.
+func extractExpressionSource(expr hcl.Expression) string {
+	rng := expr.Range()
+	if rng.Filename == "" {
+		return ""
+	}
+	src, err := os.ReadFile(rng.Filename)
+	if err != nil {
+		return ""
+	}
+	if rng.Start.Byte >= len(src) || rng.End.Byte > len(src) {
+		return ""
+	}
+	raw := string(src[rng.Start.Byte:rng.End.Byte])
+	// Strip surrounding quotes from HCL string literals
+	if len(raw) >= 2 && raw[0] == '"' && raw[len(raw)-1] == '"' {
+		raw = raw[1 : len(raw)-1]
+	}
+	// Strip HCL heredoc markers (<<EOT / <<-EOT ... EOT)
+	if strings.HasPrefix(raw, "<<") {
+		// Find end of first line (the marker line)
+		if idx := strings.Index(raw, "\n"); idx >= 0 {
+			raw = raw[idx+1:]
+		}
+		// Find and remove the closing marker (last non-empty line)
+		if idx := strings.LastIndex(raw, "\n"); idx >= 0 {
+			raw = raw[:idx]
+		}
+		raw = strings.TrimSpace(raw)
+	}
+	return raw
 }

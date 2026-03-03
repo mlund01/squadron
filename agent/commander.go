@@ -131,6 +131,10 @@ type CommanderToolCallbacks struct {
 	// Used when resuming from stored state — the runner finds the existing session
 	// and passes its ID so messages continue appending to the same session.
 	ExistingSessionID string
+
+	// OnSessionCreated is called when a session is created (commander or agent).
+	// Used to register session IDs with the event store for correlation.
+	OnSessionCreated func(taskName, agentName, sessionID string)
 }
 
 // DebugLogger is the interface for debug logging during mission execution
@@ -217,8 +221,8 @@ type AggregateResult struct {
 type SessionLogger interface {
 	CreateSession(taskID, role, agentName, model string, iterationIndex *int) (id string, err error)
 	CompleteSession(id string, err error)
-	AppendMessage(sessionID, role, content string) error
-	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error
+	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
+	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
 }
 
 // CommanderStreamer is the interface for streaming commander events
@@ -226,7 +230,7 @@ type CommanderStreamer interface {
 	Reasoning(content string)
 	Answer(content string)
 	CallingTool(name, input string)
-	ToolComplete(name string)
+	ToolComplete(name string, result string)
 }
 
 // completedAgent stores a completed agent instance for follow-up queries
@@ -365,8 +369,17 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	}
 
 	// Create submit_output tool — convert OutputFieldSchema to aitools.OutputField
+	// Use default schema if none specified
+	taskSchema := opts.TaskOutputSchema
+	if len(taskSchema) == 0 {
+		taskSchema = []OutputFieldSchema{
+			{Name: "summary", Type: "string", Description: "Short summary of task completion", Required: true},
+			{Name: "metadata", Type: "object", Description: "Optional flat key/value map with specifics about the task (string keys and string values)", Required: false},
+		}
+	}
+
 	var outputFields []aitools.OutputField
-	for _, f := range opts.TaskOutputSchema {
+	for _, f := range taskSchema {
 		outputFields = append(outputFields, aitools.OutputField{
 			Name:     f.Name,
 			Type:     f.Type,
@@ -376,10 +389,8 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	sup.submitOutput = aitools.NewSubmitOutputTool(outputFields)
 	sup.tools["submit_output"] = sup.submitOutput
 
-	// If task has an output schema, inject instructions for structured output
-	if len(opts.TaskOutputSchema) > 0 {
-		sup.injectOutputSchemaInstructions(opts.TaskOutputSchema)
-	}
+	// Inject instructions for structured output
+	sup.injectOutputSchemaInstructions(taskSchema)
 
 	// If there's previous iteration output (sequential iterations), inject it
 	if len(opts.PrevIterationOutput) > 0 {
@@ -422,6 +433,14 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 			// Create new session
 			if id, err := callbacks.SessionLogger.CreateSession(callbacks.TaskID, "commander", "", s.ModelName, callbacks.IterationIndex); err == nil {
 				s.sessionID = id
+				if callbacks.OnSessionCreated != nil {
+					callbacks.OnSessionCreated(s.TaskName, "commander", id)
+				}
+				// Persist system prompts to store
+				now := time.Now()
+				for _, sp := range s.session.GetSystemPrompts() {
+					s.sessionLogger.AppendMessage(id, "system", sp, now, now)
+				}
 			}
 		}
 	}
@@ -446,8 +465,11 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		commander: s,
 	}
 
-	// Add bridge tool if DatasetStore is available
+	// Add dataset tools if DatasetStore is available
 	if callbacks.DatasetStore != nil {
+		s.tools["set_dataset"] = &aitools.SetDatasetTool{Store: callbacks.DatasetStore}
+		s.tools["dataset_sample"] = &aitools.DatasetSampleTool{Store: callbacks.DatasetStore}
+		s.tools["dataset_count"] = &aitools.DatasetCountTool{Store: callbacks.DatasetStore}
 		s.tools["result_to_dataset"] = &aitools.ResultToDatasetTool{
 			ResultStore:  s.resultStore,
 			DatasetStore: callbacks.DatasetStore,
@@ -483,6 +505,11 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		s.tools["get_commander_answer"] = &getCommanderAnswerTool{
 			commander: s,
 		}
+	}
+
+	// Inject commander tools as a system prompt so the LLM knows about them
+	if toolsPrompt := prompts.FormatCommanderTools(s.tools); toolsPrompt != "" {
+		s.session.AddSystemPrompt(toolsPrompt)
 	}
 }
 
@@ -748,14 +775,16 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found.\n</OBSERVATION>", action)
 		} else {
 			streamer.CallingTool(action, actionInput)
+			toolStart := time.Now()
 			result := tool.Call(actionInput)
-			streamer.ToolComplete(action)
+
+			var observationContent string
+			currentInput, observationContent = s.formatObservation(action, result)
+			streamer.ToolComplete(action, observationContent)
 
 			if s.sessionLogger != nil && s.sessionID != "" {
-				s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result)
+				s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result, toolStart, time.Now())
 			}
-
-			currentInput = s.formatObservation(action, result)
 		}
 	} else {
 		// DEFAULT: result was lost, tell the LLM
@@ -840,7 +869,8 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		} else {
 			// Normal turn — log user message, then send
 			if s.sessionLogger != nil && s.sessionID != "" {
-				s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput)
+				now := time.Now()
+				s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput, now, now)
 			}
 			resp, err = s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
 				if chunk.Content != "" {
@@ -879,7 +909,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 		// Log assistant response to session store
 		if s.sessionLogger != nil && s.sessionID != "" && resp != nil {
-			s.sessionLogger.AppendMessage(s.sessionID, "assistant", resp.Content)
+			s.sessionLogger.AppendMessage(s.sessionID, "assistant", resp.Content, llmStart, time.Now())
 		}
 
 		// Determine action for turn logging
@@ -914,8 +944,9 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		// Look up the tool
 		tool := s.tools[action]
 		if tool == nil {
-			streamer.ToolComplete(action)
-			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found. Available tools: call_agent, ask_agent\n</OBSERVATION>", action)
+			errMsg := fmt.Sprintf("Error: Tool '%s' not found. Available tools: call_agent, ask_agent", action)
+			streamer.ToolComplete(action, errMsg)
+			currentInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
 			continue
 		}
 
@@ -923,7 +954,10 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		toolStart := time.Now()
 		result := tool.Call(actionInput)
 
-		streamer.ToolComplete(action)
+		// Format observation (may intercept/truncate large results)
+		var observationContent string
+		currentInput, observationContent = s.formatObservation(action, result)
+		streamer.ToolComplete(action, observationContent)
 
 		// Log tool result event
 		if s.debugLogger != nil {
@@ -937,11 +971,8 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 		// Persist tool result for auditing
 		if s.sessionLogger != nil && s.sessionID != "" {
-			s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result)
+			s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result, toolStart, time.Now())
 		}
-
-		// Intercept large results and format observation
-		currentInput = s.formatObservation(action, result)
 	}
 
 	if s.turnLogger != nil {
@@ -958,12 +989,12 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 // AnswerQuestion handles a follow-up question from another commander (via ask_commander)
 func (s *Commander) AnswerQuestion(ctx context.Context, question string) (string, error) {
-	prompt := fmt.Sprintf(`<FOLLOWUP_QUESTION>
+	prompt := fmt.Sprintf(`<QUESTION>
 Another commander is asking for clarification about your completed task.
 Question: %s
 
 Please provide a concise, factual answer based on what you learned during your task execution.
-</FOLLOWUP_QUESTION>`, question)
+</QUESTION>`, question)
 
 	resp, err := s.session.Send(ctx, prompt)
 	if err != nil {
@@ -1064,14 +1095,14 @@ func (s *Commander) CloneForQuery() *Commander {
 // This is called on a cloned commander and does not affect the original.
 // It runs an execution loop to handle any tool calls (like ask_agent) before returning.
 func (s *Commander) AnswerQueryIsolated(ctx context.Context, question string) (string, error) {
-	currentInput := fmt.Sprintf(`<FOLLOWUP_QUESTION>
+	currentInput := fmt.Sprintf(`<QUESTION>
 Another commander is asking for additional information about your completed task.
 Question: %s
 
 You may use ask_agent to query your agents if you need more details from them.
 Provide a concise, factual answer based on what you learned during your task execution.
 Wrap your final answer in <ANSWER> tags.
-</FOLLOWUP_QUESTION>`, question)
+</QUESTION>`, question)
 
 	// Run execution loop to handle any tool calls
 	for {
@@ -1103,7 +1134,7 @@ Wrap your final answer in <ANSWER> tags.
 		}
 
 		result := tool.Call(actionInput)
-		currentInput = s.formatObservation(action, result)
+		currentInput, _ = s.formatObservation(action, result)
 	}
 }
 
@@ -1145,18 +1176,19 @@ func (s *Commander) extractAnswer(content string) string {
 	return strings.TrimSpace(content)
 }
 
-// formatObservation formats a tool result as an observation, with optional metadata
-func (s *Commander) formatObservation(toolName, result string) string {
+// formatObservation formats a tool result as an observation, with optional metadata.
+// Returns the formatted observation string and the observation content (what the LLM sees inside the tags).
+func (s *Commander) formatObservation(toolName, result string) (formatted string, content string) {
 	if s.interceptor == nil {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result)
+		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result), result
 	}
 
 	ir := s.interceptor.Intercept(toolName, result)
 	if ir.Metadata == "" {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data)
+		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data), ir.Data
 	}
 
-	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata)
+	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata), ir.Data
 }
 
 // ExecuteAggregation performs a simple LLM call for summary aggregation (no tools)
@@ -1337,6 +1369,8 @@ func (p *commanderParser) processBuffer() {
 				finalContent := strings.TrimRight(content[:idx], "\n")
 				if len(finalContent) > 0 {
 					p.reasoningText.WriteString(finalContent)
+				}
+				if p.reasoningText.Len() > 0 {
 					p.streamer.Reasoning(p.reasoningText.String())
 				}
 				p.reasoningText.Reset()
@@ -1552,6 +1586,14 @@ func (t *callAgentTool) Call(input string) string {
 				a.sessionLogger = t.commander.sessionLogger
 				a.sessionID = sid
 				a.taskID = t.commander.callbacksTaskID
+				if t.commander.callbacks != nil && t.commander.callbacks.OnSessionCreated != nil {
+					t.commander.callbacks.OnSessionCreated(t.commander.TaskName, params.Name, sid)
+				}
+				// Persist agent system prompts to store
+				now := time.Now()
+				for _, sp := range a.session.GetSystemPrompts() {
+					t.commander.sessionLogger.AppendMessage(sid, "system", sp, now, now)
+				}
 			}
 		}
 	}
@@ -1591,29 +1633,11 @@ func (t *callAgentTool) Call(input string) string {
 		var agentInput string
 		if params.Response != "" {
 			agentInput = fmt.Sprintf("<COMMANDER_RESPONSE>\n%s\n</COMMANDER_RESPONSE>", params.Response)
-		} else if exists {
-			agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
 		} else {
-			agentInput = params.Task
-		}
-
-		// Log agent input to session store
-		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
-			t.commander.sessionLogger.AppendMessage(agentSID, "user", agentInput)
+			agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
 		}
 
 		result, err = a.Chat(ctx, agentInput, agentHandler)
-	}
-
-	// Log agent output to session store
-	if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
-		if err != nil {
-			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", fmt.Sprintf("ERROR: %v", err))
-		} else if result.Complete {
-			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", result.Answer)
-		} else if result.AskCommander != "" {
-			t.commander.sessionLogger.AppendMessage(agentSID, "assistant", fmt.Sprintf("ASK_COMMANDER: %s", result.AskCommander))
-		}
 	}
 
 	// Notify that agent is done

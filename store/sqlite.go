@@ -10,6 +10,41 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// tsMillis formats a time.Time as an ISO-8601 string with millisecond precision.
+const tsFormat = "2006-01-02T15:04:05.000Z"
+
+func tsNow() string { return time.Now().UTC().Format(tsFormat) }
+func tsFrom(t time.Time) string { return t.UTC().Format(tsFormat) }
+func tsFromPtr(t *time.Time) *string {
+	if t == nil {
+		return nil
+	}
+	s := tsFrom(*t)
+	return &s
+}
+
+// tsParse parses an ISO-8601 timestamp string back to time.Time.
+// Falls back to second-precision format if millisecond parse fails.
+func tsParse(s string) (time.Time, error) {
+	t, err := time.Parse(tsFormat, s)
+	if err != nil {
+		t, err = time.Parse("2006-01-02T15:04:05Z", s)
+	}
+	return t, err
+}
+
+// tsParseNull parses an optional timestamp string to *time.Time.
+func tsParseNull(s sql.NullString) (*time.Time, error) {
+	if !s.Valid || s.String == "" {
+		return nil, nil
+	}
+	t, err := tsParse(s.String)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS missions (
     id TEXT PRIMARY KEY,
@@ -17,8 +52,8 @@ CREATE TABLE IF NOT EXISTS missions (
     status TEXT DEFAULT 'running',
     input_values_json TEXT,
     config_json TEXT,
-    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    finished_at DATETIME
+    started_at TEXT,
+    finished_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS mission_tasks (
@@ -27,8 +62,8 @@ CREATE TABLE IF NOT EXISTS mission_tasks (
     task_name TEXT NOT NULL,
     status TEXT DEFAULT 'pending',
     config_json TEXT,
-    started_at DATETIME,
-    finished_at DATETIME,
+    started_at TEXT,
+    finished_at TEXT,
     summary TEXT,
     output_json TEXT,
     error TEXT
@@ -42,8 +77,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     model TEXT,
     status TEXT DEFAULT 'running',
     iteration_index INTEGER,
-    started_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    finished_at DATETIME
+    started_at TEXT,
+    finished_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS session_messages (
@@ -51,7 +86,8 @@ CREATE TABLE IF NOT EXISTS session_messages (
     session_id TEXT NOT NULL REFERENCES sessions(id),
     role TEXT NOT NULL,
     content TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT,
+    completed_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id);
 
@@ -62,7 +98,8 @@ CREATE TABLE IF NOT EXISTS tool_results (
     tool_name TEXT NOT NULL,
     input_params TEXT,
     raw_data TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    started_at TEXT,
+    finished_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS task_outputs (
@@ -73,7 +110,7 @@ CREATE TABLE IF NOT EXISTS task_outputs (
     item_id TEXT,
     output_json TEXT,
     summary TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS datasets (
@@ -82,7 +119,7 @@ CREATE TABLE IF NOT EXISTS datasets (
     name TEXT NOT NULL,
     description TEXT,
     item_count INTEGER DEFAULT 0,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    created_at TEXT,
     UNIQUE(mission_id, name)
 );
 
@@ -101,7 +138,7 @@ CREATE TABLE IF NOT EXISTS mission_events (
     iteration_index INTEGER,
     event_type TEXT NOT NULL,
     data_json TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mission_events_mission ON mission_events(mission_id);
 CREATE INDEX IF NOT EXISTS idx_mission_events_task ON mission_events(task_id);
@@ -141,8 +178,8 @@ type SQLiteMissionStore struct {
 func (s *SQLiteMissionStore) CreateMission(name string, inputsJSON, configJSON string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO missions (id, mission_name, input_values_json, config_json) VALUES (?, ?, ?, ?)`,
-		id, name, inputsJSON, configJSON,
+		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES (?, ?, ?, ?, ?)`,
+		id, name, inputsJSON, configJSON, tsNow(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create mission: %w", err)
@@ -151,10 +188,10 @@ func (s *SQLiteMissionStore) CreateMission(name string, inputsJSON, configJSON s
 }
 
 func (s *SQLiteMissionStore) UpdateMissionStatus(id, status string) error {
-	var finishedAt *time.Time
+	var finishedAt *string
 	if status == "completed" || status == "failed" {
-		now := time.Now()
-		finishedAt = &now
+		s := tsNow()
+		finishedAt = &s
 	}
 	_, err := s.db.Exec(
 		`UPDATE missions SET status = ?, finished_at = ? WHERE id = ?`,
@@ -167,7 +204,7 @@ func (s *SQLiteMissionStore) CreateTask(missionID, taskName, configJSON string) 
 	id := generateID()
 	_, err := s.db.Exec(
 		`INSERT INTO mission_tasks (id, mission_id, task_name, config_json, started_at) VALUES (?, ?, ?, ?, ?)`,
-		id, missionID, taskName, configJSON, time.Now(),
+		id, missionID, taskName, configJSON, tsNow(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create task: %w", err)
@@ -176,10 +213,10 @@ func (s *SQLiteMissionStore) CreateTask(missionID, taskName, configJSON string) 
 }
 
 func (s *SQLiteMissionStore) UpdateTaskStatus(id, status string, summary, outputJSON, errMsg *string) error {
-	var finishedAt *time.Time
+	var finishedAt *string
 	if status == "completed" || status == "failed" {
-		now := time.Now()
-		finishedAt = &now
+		s := tsNow()
+		finishedAt = &s
 	}
 	_, err := s.db.Exec(
 		`UPDATE mission_tasks SET status = ?, summary = ?, output_json = ?, error = ?, finished_at = ? WHERE id = ?`,
@@ -202,22 +239,18 @@ func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 	for rows.Next() {
 		var t MissionTask
 		var configJSON sql.NullString
-		var startedAt, finishedAt sql.NullTime
+		var startedAtStr, finishedAtStr sql.NullString
 		var summary, outputJSON, errMsg sql.NullString
 
-		if err := rows.Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAt, &finishedAt, &summary, &outputJSON, &errMsg); err != nil {
+		if err := rows.Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &summary, &outputJSON, &errMsg); err != nil {
 			return nil, err
 		}
 
 		if configJSON.Valid {
 			t.ConfigJSON = configJSON.String
 		}
-		if startedAt.Valid {
-			t.StartedAt = &startedAt.Time
-		}
-		if finishedAt.Valid {
-			t.FinishedAt = &finishedAt.Time
-		}
+		t.StartedAt, _ = tsParseNull(startedAtStr)
+		t.FinishedAt, _ = tsParseNull(finishedAtStr)
 		if summary.Valid {
 			t.Summary = &summary.String
 		}
@@ -236,22 +269,54 @@ func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 func (s *SQLiteMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON, summary string) error {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO task_outputs (id, task_id, dataset_name, dataset_index, item_id, output_json, summary) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, taskID, datasetName, datasetIndex, itemID, outputJSON, summary,
+		`INSERT INTO task_outputs (id, task_id, dataset_name, dataset_index, item_id, output_json, summary, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, taskID, datasetName, datasetIndex, itemID, outputJSON, summary, tsNow(),
 	)
 	return err
+}
+
+func (s *SQLiteMissionStore) GetTask(id string) (*MissionTask, error) {
+	var t MissionTask
+	var configJSON sql.NullString
+	var startedAtStr, finishedAtStr sql.NullString
+	var summary, outputJSON, errMsg sql.NullString
+
+	err := s.db.QueryRow(
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, summary, output_json, error FROM mission_tasks WHERE id = ?`,
+		id,
+	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &summary, &outputJSON, &errMsg)
+	if err != nil {
+		return nil, fmt.Errorf("task %q not found: %w", id, err)
+	}
+
+	if configJSON.Valid {
+		t.ConfigJSON = configJSON.String
+	}
+	t.StartedAt, _ = tsParseNull(startedAtStr)
+	t.FinishedAt, _ = tsParseNull(finishedAtStr)
+	if summary.Valid {
+		t.Summary = &summary.String
+	}
+	if outputJSON.Valid {
+		t.OutputJSON = &outputJSON.String
+	}
+	if errMsg.Valid {
+		t.Error = &errMsg.String
+	}
+
+	return &t, nil
 }
 
 func (s *SQLiteMissionStore) GetTaskByName(missionID, taskName string) (*MissionTask, error) {
 	var t MissionTask
 	var configJSON sql.NullString
-	var startedAt, finishedAt sql.NullTime
+	var startedAtStr, finishedAtStr sql.NullString
 	var summary, outputJSON, errMsg sql.NullString
 
 	err := s.db.QueryRow(
 		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, summary, output_json, error FROM mission_tasks WHERE mission_id = ? AND task_name = ?`,
 		missionID, taskName,
-	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAt, &finishedAt, &summary, &outputJSON, &errMsg)
+	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &summary, &outputJSON, &errMsg)
 	if err != nil {
 		return nil, fmt.Errorf("task '%s' not found: %w", taskName, err)
 	}
@@ -259,12 +324,8 @@ func (s *SQLiteMissionStore) GetTaskByName(missionID, taskName string) (*Mission
 	if configJSON.Valid {
 		t.ConfigJSON = configJSON.String
 	}
-	if startedAt.Valid {
-		t.StartedAt = &startedAt.Time
-	}
-	if finishedAt.Valid {
-		t.FinishedAt = &finishedAt.Time
-	}
+	t.StartedAt, _ = tsParseNull(startedAtStr)
+	t.FinishedAt, _ = tsParseNull(finishedAtStr)
 	if summary.Valid {
 		t.Summary = &summary.String
 	}
@@ -281,25 +342,25 @@ func (s *SQLiteMissionStore) GetTaskByName(missionID, taskName string) (*Mission
 func (s *SQLiteMissionStore) GetMission(id string) (*MissionRecord, error) {
 	var m MissionRecord
 	var inputsJSON, configJSON sql.NullString
-	var finishedAt sql.NullTime
+	var startedAtStr string
+	var finishedAtStr sql.NullString
 
 	err := s.db.QueryRow(
 		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions WHERE id = ?`,
 		id,
-	).Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &m.StartedAt, &finishedAt)
+	).Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("mission not found: %w", err)
 	}
 
+	m.StartedAt, _ = tsParse(startedAtStr)
 	if inputsJSON.Valid {
 		m.InputValuesJSON = inputsJSON.String
 	}
 	if configJSON.Valid {
 		m.ConfigJSON = configJSON.String
 	}
-	if finishedAt.Valid {
-		m.FinishedAt = &finishedAt.Time
-	}
+	m.FinishedAt, _ = tsParseNull(finishedAtStr)
 
 	return &m, nil
 }
@@ -319,10 +380,12 @@ func (s *SQLiteMissionStore) GetTaskOutputs(taskID string) ([]TaskOutputRow, err
 		var o TaskOutputRow
 		var datasetName, itemID, outputJSON, summary sql.NullString
 		var datasetIndex sql.NullInt64
+		var createdAtStr string
 
-		if err := rows.Scan(&o.ID, &o.TaskID, &datasetName, &datasetIndex, &itemID, &outputJSON, &summary, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.TaskID, &datasetName, &datasetIndex, &itemID, &outputJSON, &summary, &createdAtStr); err != nil {
 			return nil, err
 		}
+		o.CreatedAt, _ = tsParse(createdAtStr)
 
 		if datasetName.Valid {
 			o.DatasetName = &datasetName.String
@@ -357,8 +420,8 @@ type SQLiteSessionStore struct {
 func (s *SQLiteSessionStore) CreateSession(taskID, role, agentName, model string, iterationIndex *int) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO sessions (id, task_id, role, agent_name, model, iteration_index) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, taskID, role, agentName, model, iterationIndex,
+		`INSERT INTO sessions (id, task_id, role, agent_name, model, iteration_index, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		id, taskID, role, agentName, model, iterationIndex, tsNow(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create session: %w", err)
@@ -373,21 +436,21 @@ func (s *SQLiteSessionStore) CompleteSession(id string, err error) {
 	}
 	s.db.Exec(
 		`UPDATE sessions SET status = ?, finished_at = ? WHERE id = ?`,
-		status, time.Now(), id,
+		status, tsNow(), id,
 	)
 }
 
-func (s *SQLiteSessionStore) AppendMessage(sessionID, role, content string) error {
+func (s *SQLiteSessionStore) AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error {
 	_, err := s.db.Exec(
-		`INSERT INTO session_messages (session_id, role, content) VALUES (?, ?, ?)`,
-		sessionID, role, content,
+		`INSERT INTO session_messages (session_id, role, content, created_at, completed_at) VALUES (?, ?, ?, ?, ?)`,
+		sessionID, role, content, tsFrom(createdAt), tsFrom(completedAt),
 	)
 	return err
 }
 
 func (s *SQLiteSessionStore) GetMessages(sessionID string) ([]SessionMessage, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, created_at FROM session_messages WHERE session_id = ? ORDER BY id`,
+		`SELECT id, role, content, created_at, completed_at FROM session_messages WHERE session_id = ? ORDER BY id`,
 		sessionID,
 	)
 	if err != nil {
@@ -398,8 +461,16 @@ func (s *SQLiteSessionStore) GetMessages(sessionID string) ([]SessionMessage, er
 	var msgs []SessionMessage
 	for rows.Next() {
 		var m SessionMessage
-		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.CreatedAt); err != nil {
+		var createdAtStr string
+		var completedAtStr sql.NullString
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &createdAtStr, &completedAtStr); err != nil {
 			return nil, err
+		}
+		m.CreatedAt, _ = tsParse(createdAtStr)
+		if completedAtStr.Valid {
+			m.CompletedAt, _ = tsParse(completedAtStr.String)
+		} else {
+			m.CompletedAt = m.CreatedAt
 		}
 		msgs = append(msgs, m)
 	}
@@ -408,7 +479,7 @@ func (s *SQLiteSessionStore) GetMessages(sessionID string) ([]SessionMessage, er
 
 func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task_id, role, agent_name, model, status, iteration_index, started_at FROM sessions WHERE task_id = ?`,
+		`SELECT id, task_id, role, agent_name, model, status, iteration_index, started_at, finished_at FROM sessions WHERE task_id = ?`,
 		taskID,
 	)
 	if err != nil {
@@ -421,9 +492,12 @@ func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 		var si SessionInfo
 		var taskIDNull, agentName sql.NullString
 		var iterIdx sql.NullInt64
-		if err := rows.Scan(&si.ID, &taskIDNull, &si.Role, &agentName, &si.Model, &si.Status, &iterIdx, &si.StartedAt); err != nil {
+		var startedAtStr string
+		var finishedAtStr sql.NullString
+		if err := rows.Scan(&si.ID, &taskIDNull, &si.Role, &agentName, &si.Model, &si.Status, &iterIdx, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, err
 		}
+		si.StartedAt, _ = tsParse(startedAtStr)
 		if taskIDNull.Valid {
 			si.TaskID = taskIDNull.String
 		}
@@ -434,18 +508,46 @@ func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 			idx := int(iterIdx.Int64)
 			si.IterationIndex = &idx
 		}
+		si.FinishedAt, _ = tsParseNull(finishedAtStr)
 		sessions = append(sessions, si)
 	}
 	return sessions, nil
 }
 
-func (s *SQLiteSessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error {
+func (s *SQLiteSessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO tool_results (id, task_id, session_id, tool_name, input_params, raw_data) VALUES (?, ?, ?, ?, ?, ?)`,
-		id, taskID, sessionID, toolName, inputParams, rawData,
+		`INSERT INTO tool_results (id, task_id, session_id, tool_name, input_params, raw_data, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		id, taskID, sessionID, toolName, inputParams, rawData, tsFrom(startedAt), tsFrom(finishedAt),
 	)
 	return err
+}
+
+func (s *SQLiteSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, error) {
+	rows, err := s.db.Query(
+		`SELECT id, task_id, session_id, tool_name, input_params, raw_data, started_at, finished_at FROM tool_results WHERE task_id = ? ORDER BY started_at`,
+		taskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []ToolResult
+	for rows.Next() {
+		var tr ToolResult
+		var inputParams, rawData sql.NullString
+		var startedAtStr, finishedAtStr string
+		if err := rows.Scan(&tr.ID, &tr.TaskID, &tr.SessionID, &tr.ToolName, &inputParams, &rawData, &startedAtStr, &finishedAtStr); err != nil {
+			return nil, err
+		}
+		tr.InputParams = inputParams.String
+		tr.RawData = rawData.String
+		tr.StartedAt, _ = time.Parse(tsFormat, startedAtStr)
+		tr.FinishedAt, _ = time.Parse(tsFormat, finishedAtStr)
+		results = append(results, tr)
+	}
+	return results, nil
 }
 
 func (s *SQLiteSessionStore) CreateChatSession(agentName, model string) (string, error) {
@@ -474,7 +576,7 @@ func (s *SQLiteSessionStore) ListChatSessions(agentName string, limit, offset in
 	}
 
 	// Fetch page
-	query := `SELECT id, role, agent_name, model, status, started_at FROM sessions WHERE role = 'chat' AND status != 'completed'`
+	query := `SELECT id, role, agent_name, model, status, started_at, finished_at FROM sessions WHERE role = 'chat' AND status != 'completed'`
 	fetchArgs := []any{}
 	if agentName != "" {
 		query += ` AND agent_name = ?`
@@ -493,12 +595,16 @@ func (s *SQLiteSessionStore) ListChatSessions(agentName string, limit, offset in
 	for rows.Next() {
 		var si SessionInfo
 		var agName sql.NullString
-		if err := rows.Scan(&si.ID, &si.Role, &agName, &si.Model, &si.Status, &si.StartedAt); err != nil {
+		var startedAtStr string
+		var finishedAtStr sql.NullString
+		if err := rows.Scan(&si.ID, &si.Role, &agName, &si.Model, &si.Status, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, 0, err
 		}
+		si.StartedAt, _ = tsParse(startedAtStr)
 		if agName.Valid {
 			si.AgentName = agName.String
 		}
+		si.FinishedAt, _ = tsParseNull(finishedAtStr)
 		sessions = append(sessions, si)
 	}
 	return sessions, total, nil
@@ -515,8 +621,8 @@ type SQLiteDatasetStore struct {
 func (s *SQLiteDatasetStore) CreateDataset(missionID, name, description string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO datasets (id, mission_id, name, description) VALUES (?, ?, ?, ?)`,
-		id, missionID, name, description,
+		`INSERT INTO datasets (id, mission_id, name, description, created_at) VALUES (?, ?, ?, ?, ?)`,
+		id, missionID, name, description, tsNow(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create dataset: %w", err)
@@ -655,7 +761,7 @@ func (s *SQLiteDatasetStore) GetDatasetByName(missionID, name string) (string, e
 
 func (s *SQLiteDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, error) {
 	rows, err := s.db.Query(
-		`SELECT name, description, item_count FROM datasets WHERE mission_id = ?`,
+		`SELECT id, name, description, item_count FROM datasets WHERE mission_id = ?`,
 		missionID,
 	)
 	if err != nil {
@@ -667,7 +773,7 @@ func (s *SQLiteDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, erro
 	for rows.Next() {
 		var info DatasetInfo
 		var desc sql.NullString
-		if err := rows.Scan(&info.Name, &desc, &info.ItemCount); err != nil {
+		if err := rows.Scan(&info.ID, &info.Name, &desc, &info.ItemCount); err != nil {
 			return nil, err
 		}
 		if desc.Valid {
@@ -676,6 +782,27 @@ func (s *SQLiteDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, erro
 		infos = append(infos, info)
 	}
 	return infos, nil
+}
+
+func (s *SQLiteDatasetStore) GetItemsRaw(datasetID string, offset, limit int) ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT item_json FROM dataset_items WHERE dataset_id = ? ORDER BY item_index LIMIT ? OFFSET ?`,
+		datasetID, limit, offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []string
+	for rows.Next() {
+		var itemJSON string
+		if err := rows.Scan(&itemJSON); err != nil {
+			return nil, err
+		}
+		items = append(items, itemJSON)
+	}
+	return items, nil
 }
 
 // =============================================================================
@@ -783,20 +910,20 @@ func (s *SQLiteMissionStore) ListMissions(limit, offset int) ([]MissionRecord, i
 	for rows.Next() {
 		var m MissionRecord
 		var inputsJSON, configJSON sql.NullString
-		var finishedAt sql.NullTime
+		var startedAtStr string
+		var finishedAtStr sql.NullString
 
-		if err := rows.Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &m.StartedAt, &finishedAt); err != nil {
+		if err := rows.Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, 0, err
 		}
+		m.StartedAt, _ = tsParse(startedAtStr)
 		if inputsJSON.Valid {
 			m.InputValuesJSON = inputsJSON.String
 		}
 		if configJSON.Valid {
 			m.ConfigJSON = configJSON.String
 		}
-		if finishedAt.Valid {
-			m.FinishedAt = &finishedAt.Time
-		}
+		m.FinishedAt, _ = tsParseNull(finishedAtStr)
 		missions = append(missions, m)
 	}
 	return missions, total, nil
@@ -812,8 +939,8 @@ type SQLiteEventStore struct {
 
 func (s *SQLiteEventStore) StoreEvent(event MissionEvent) error {
 	_, err := s.db.Exec(
-		`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.MissionID, event.TaskID, event.SessionID, event.IterationIndex, event.EventType, event.DataJSON,
+		`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.MissionID, event.TaskID, event.SessionID, event.IterationIndex, event.EventType, event.DataJSON, tsFrom(event.CreatedAt),
 	)
 	return err
 }
@@ -848,10 +975,12 @@ func scanEvents(rows *sql.Rows) ([]MissionEvent, error) {
 		var e MissionEvent
 		var taskID, sessionID sql.NullString
 		var iterIdx sql.NullInt64
+		var createdAtStr string
 
-		if err := rows.Scan(&e.ID, &e.MissionID, &taskID, &sessionID, &iterIdx, &e.EventType, &e.DataJSON, &e.CreatedAt); err != nil {
+		if err := rows.Scan(&e.ID, &e.MissionID, &taskID, &sessionID, &iterIdx, &e.EventType, &e.DataJSON, &createdAtStr); err != nil {
 			return nil, err
 		}
+		e.CreatedAt, _ = tsParse(createdAtStr)
 		if taskID.Valid {
 			e.TaskID = &taskID.String
 		}

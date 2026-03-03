@@ -71,14 +71,37 @@ func (s *Session) SetStopSequences(sequences []string) {
 	s.stopSequences = sequences
 }
 
+// stripStopSequences removes any stop sequence text from response content.
+// When models don't support the 'stop' API parameter, they may output the
+// stop sequence literally. This ensures it's never stored in session history.
+func (s *Session) stripStopSequences(content string) string {
+	for _, seq := range s.stopSequences {
+		content = strings.ReplaceAll(content, seq, "")
+	}
+	return content
+}
+
 func (s *Session) GetHistory() []Message {
 	return s.messages
 }
 
 // LoadMessages replaces the session's message history with the provided messages.
+// Messages with RoleSystem are loaded into systemPrompts; all others into messages.
 // Used for restoring a session from persisted state (e.g., mission resume).
 func (s *Session) LoadMessages(msgs []Message) {
-	s.messages = msgs
+	var systemPrompts []string
+	var conversationMsgs []Message
+	for _, m := range msgs {
+		if m.Role == RoleSystem {
+			systemPrompts = append(systemPrompts, m.Content)
+		} else {
+			conversationMsgs = append(conversationMsgs, m)
+		}
+	}
+	if len(systemPrompts) > 0 {
+		s.systemPrompts = systemPrompts
+	}
+	s.messages = conversationMsgs
 }
 
 // GetSystemPrompts returns the session's system prompts
@@ -187,6 +210,8 @@ func (s *Session) Send(ctx context.Context, userMessage string) (*ChatResponse, 
 		return nil, err
 	}
 
+	resp.Content = s.stripStopSequences(resp.Content)
+
 	s.logMessage("LLM Response", resp.Content)
 
 	// Append user message and assistant response to history
@@ -227,7 +252,7 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 		lastChunk = chunk
 	}
 
-	content := contentBuilder.String()
+	content := s.stripStopSequences(contentBuilder.String())
 
 	s.logMessage("LLM Response", content)
 
@@ -284,7 +309,7 @@ func (s *Session) ContinueStream(ctx context.Context, onChunk func(StreamChunk))
 		lastChunk = chunk
 	}
 
-	content := contentBuilder.String()
+	content := s.stripStopSequences(contentBuilder.String())
 
 	s.logMessage("LLM Response", content)
 
@@ -511,7 +536,7 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 		lastChunk = chunk
 	}
 
-	content := contentBuilder.String()
+	content := s.stripStopSequences(contentBuilder.String())
 
 	s.logMessage("LLM Response", content)
 

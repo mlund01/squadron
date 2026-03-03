@@ -172,7 +172,19 @@ func LoadFile(filename string) (*Config, error) {
 }
 
 func LoadDir(dir string) (*Config, error) {
-	files, err := filepath.Glob(filepath.Join(dir, "*.hcl"))
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".hcl") {
+			files = append(files, path)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -10,8 +10,10 @@ import (
 
 // DatasetStore provides access to mission datasets at runtime
 type DatasetStore interface {
-	// SetDataset sets a dataset's values
+	// SetDataset sets a dataset's values (replaces all existing items)
 	SetDataset(name string, items []cty.Value) error
+	// AppendDataset appends items to a dataset without replacing existing ones
+	AppendDataset(name string, items []cty.Value) error
 	// GetDatasetSample returns a sample of items from a dataset
 	GetDatasetSample(name string, count int) ([]cty.Value, error)
 	// GetDatasetCount returns the number of items in a dataset
@@ -50,7 +52,8 @@ func (t *SetDatasetTool) ToolName() string {
 
 func (t *SetDatasetTool) ToolDescription() string {
 	var sb strings.Builder
-	sb.WriteString("Set a dataset's values. Use this to populate a dataset with items for subsequent tasks to iterate over.\n\n")
+	sb.WriteString("Set or append to a dataset's values. **Only use this tool when your task explicitly instructs you to add or set data in a dataset.** Do not use this tool speculatively or to store intermediate results.\n\n")
+	sb.WriteString("By default, replaces all existing items. Set `append` to true to add items without removing existing ones.\n\n")
 
 	if t.Store != nil {
 		info := t.Store.GetDatasetInfo()
@@ -91,6 +94,10 @@ func (t *SetDatasetTool) ToolPayloadSchema() Schema {
 				Type:        TypeArray,
 				Description: "The list of items to set in the dataset. Each item should match the dataset's schema.",
 			},
+			"append": {
+				Type:        TypeBoolean,
+				Description: "If true, append items to the existing dataset instead of replacing all items. Defaults to false.",
+			},
 		},
 		Required: []string{"name", "items"},
 	}
@@ -102,8 +109,9 @@ func (t *SetDatasetTool) Call(params string) string {
 	}
 
 	var input struct {
-		Name  string `json:"name"`
-		Items []any  `json:"items"`
+		Name   string `json:"name"`
+		Items  []any  `json:"items"`
+		Append bool   `json:"append"`
 	}
 	if err := json.Unmarshal([]byte(params), &input); err != nil {
 		return fmt.Sprintf("Error: invalid input: %v", err)
@@ -115,10 +123,16 @@ func (t *SetDatasetTool) Call(params string) string {
 		ctyItems[i] = goToCtyValue(item)
 	}
 
+	if input.Append {
+		if err := t.Store.AppendDataset(input.Name, ctyItems); err != nil {
+			return fmt.Sprintf("Error: %v", err)
+		}
+		return fmt.Sprintf("Successfully appended %d items to dataset '%s'", len(ctyItems), input.Name)
+	}
+
 	if err := t.Store.SetDataset(input.Name, ctyItems); err != nil {
 		return fmt.Sprintf("Error: %v", err)
 	}
-
 	return fmt.Sprintf("Successfully set dataset '%s' with %d items", input.Name, len(ctyItems))
 }
 

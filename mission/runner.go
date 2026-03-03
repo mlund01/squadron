@@ -788,6 +788,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		taskConfigJSON, _ := json.Marshal(taskSnapshot(task, objective))
 		taskID, _ = r.stores.Missions.CreateTask(missionID, task.Name, string(taskConfigJSON))
 	}
+	if reg, ok := streamer.(streamers.IDRegistrar); ok {
+		reg.SetTaskID(task.Name, taskID)
+	}
 	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil, nil)
 
 	// Helper to update task status on completion/failure
@@ -916,6 +919,11 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		SessionLogger:     r.stores.Sessions,
 		TaskID:            taskID,
 		ExistingSessionID: existingSessionID,
+		OnSessionCreated: func(taskName, agentName, sessionID string) {
+			if reg, ok := streamer.(streamers.IDRegistrar); ok {
+				reg.SetSessionID(taskName, agentName, sessionID)
+			}
+		},
 	}, depSummaries)
 
 	// Restore any agent sessions from the store (so call_agent reuses them)
@@ -1075,8 +1083,8 @@ func (s *commanderStreamerAdapter) CallingTool(name, input string) {
 	s.streamer.CommanderCallingTool(s.taskName, name, input)
 }
 
-func (s *commanderStreamerAdapter) ToolComplete(name string) {
-	s.streamer.CommanderToolComplete(s.taskName, name)
+func (s *commanderStreamerAdapter) ToolComplete(name string, result string) {
+	s.streamer.CommanderToolComplete(s.taskName, name, result)
 }
 
 // missionSnapshot returns a JSON-friendly representation of the mission config.
@@ -1181,6 +1189,9 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 		}
 		taskConfigJSON, _ := json.Marshal(taskSnapshot(task, representativeObj))
 		taskID, _ = r.stores.Missions.CreateTask(missionID, task.Name, string(taskConfigJSON))
+	}
+	if reg, ok := streamer.(streamers.IDRegistrar); ok {
+		reg.SetTaskID(task.Name, taskID)
 	}
 	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil, nil)
 
@@ -1436,6 +1447,11 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		},
 		SessionLogger: r.stores.Sessions,
 		TaskID:        taskID,
+		OnSessionCreated: func(taskName, agentName, sessionID string) {
+			if reg, ok := streamer.(streamers.IDRegistrar); ok {
+				reg.SetSessionID(taskName, agentName, sessionID)
+			}
+		},
 	}, depSummaries)
 
 	// Create streamer adapter for the commander
@@ -1810,6 +1826,11 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 		SessionLogger:     r.stores.Sessions,
 		TaskID:            taskID,
 		ExistingSessionID: existingSessionID,
+		OnSessionCreated: func(taskName, agentName, sessionID string) {
+			if reg, ok := streamer.(streamers.IDRegistrar); ok {
+				reg.SetSessionID(taskName, agentName, sessionID)
+			}
+		},
 	}, depSummaries)
 
 	// Restore any agent sessions from the store
@@ -1991,6 +2012,11 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		TaskID:            taskID,
 		IterationIndex:    &iterIdx,
 		ExistingSessionID: existingSessionID,
+		OnSessionCreated: func(taskName, agentName, sessionID string) {
+			if reg, ok := streamer.(streamers.IDRegistrar); ok {
+				reg.SetSessionID(taskName, agentName, sessionID)
+			}
+		},
 	}, depSummaries)
 
 	// Restore any agent sessions from the store
@@ -2155,8 +2181,8 @@ func (s *iterationStreamerAdapter) CallingTool(name, input string) {
 	s.streamer.CommanderCallingTool(fmt.Sprintf("%s[%d]", s.taskName, s.index), name, input)
 }
 
-func (s *iterationStreamerAdapter) ToolComplete(name string) {
-	s.streamer.CommanderToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.index), name)
+func (s *iterationStreamerAdapter) ToolComplete(name string, result string) {
+	s.streamer.CommanderToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.index), name, result)
 }
 
 // =============================================================================
@@ -2391,7 +2417,7 @@ func (r *Runner) askCommanderWithCache(ctx context.Context, targetTask string, i
 // DatasetStore Implementation - provides runtime dataset access for agents
 // =============================================================================
 
-// SetDataset sets a dataset's values at runtime
+// SetDataset sets a dataset's values at runtime (replaces all existing items)
 func (r *Runner) SetDataset(name string, items []cty.Value) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -2422,6 +2448,39 @@ func (r *Runner) SetDataset(name string, items []cty.Value) error {
 	}
 	if err := r.stores.Datasets.SetItems(dsID, items); err != nil {
 		return fmt.Errorf("persist dataset '%s': %w", name, err)
+	}
+
+	return nil
+}
+
+// AppendDataset appends items to a dataset without replacing existing ones
+func (r *Runner) AppendDataset(name string, items []cty.Value) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	var ds *config.Dataset
+	for i := range r.mission.Datasets {
+		if r.mission.Datasets[i].Name == name {
+			ds = &r.mission.Datasets[i]
+			break
+		}
+	}
+	if ds == nil {
+		return fmt.Errorf("dataset '%s' not found", name)
+	}
+
+	for i, item := range items {
+		if err := ds.ValidateItem(item); err != nil {
+			return fmt.Errorf("item %d: %w", i, err)
+		}
+	}
+
+	dsID, ok := r.datasetIDs[name]
+	if !ok {
+		return fmt.Errorf("dataset '%s' not initialized", name)
+	}
+	if err := r.stores.Datasets.AddItems(dsID, items); err != nil {
+		return fmt.Errorf("append to dataset '%s': %w", name, err)
 	}
 
 	return nil

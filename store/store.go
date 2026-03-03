@@ -32,6 +32,7 @@ type MissionStore interface {
 	UpdateMissionStatus(id, status string) error
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
 	UpdateTaskStatus(id, status string, summary, outputJSON, errMsg *string) error
+	GetTask(id string) (*MissionTask, error)
 	GetTasksByMission(missionID string) ([]MissionTask, error)
 	GetTaskByName(missionID, taskName string) (*MissionTask, error)
 	GetMission(id string) (*MissionRecord, error)
@@ -81,10 +82,11 @@ type TaskOutputRow struct {
 type SessionStore interface {
 	CreateSession(taskID, role, agentName, model string, iterationIndex *int) (id string, err error)
 	CompleteSession(id string, err error)
-	AppendMessage(sessionID, role, content string) error
+	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
 	GetMessages(sessionID string) ([]SessionMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)
-	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error
+	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
+	GetToolResultsByTask(taskID string) ([]ToolResult, error)
 
 	// Chat-specific methods
 	CreateChatSession(agentName, model string) (string, error)
@@ -93,26 +95,41 @@ type SessionStore interface {
 
 // SessionInfo describes a session
 type SessionInfo struct {
-	ID             string    `json:"id"`
-	TaskID         string    `json:"taskId,omitempty"`
-	Role           string    `json:"role"`
-	AgentName      string    `json:"agentName,omitempty"`
-	Model          string    `json:"model,omitempty"`
-	Status         string    `json:"status"`
-	StartedAt      time.Time `json:"startedAt"`
-	IterationIndex *int      `json:"iterationIndex,omitempty"`
+	ID             string     `json:"id"`
+	TaskID         string     `json:"taskId,omitempty"`
+	Role           string     `json:"role"`
+	AgentName      string     `json:"agentName,omitempty"`
+	Model          string     `json:"model,omitempty"`
+	Status         string     `json:"status"`
+	StartedAt      time.Time  `json:"startedAt"`
+	FinishedAt     *time.Time `json:"finishedAt,omitempty"`
+	IterationIndex *int       `json:"iterationIndex,omitempty"`
+}
+
+// ToolResult represents a stored tool call with timing
+type ToolResult struct {
+	ID          string    `json:"id"`
+	TaskID      string    `json:"taskId"`
+	SessionID   string    `json:"sessionId"`
+	ToolName    string    `json:"toolName"`
+	InputParams string    `json:"inputParams"`
+	RawData     string    `json:"rawData"`
+	StartedAt   time.Time `json:"startedAt"`
+	FinishedAt  time.Time `json:"finishedAt"`
 }
 
 // SessionMessage represents a single message in a session
 type SessionMessage struct {
-	ID        int       `json:"id"`
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	CreatedAt time.Time `json:"createdAt"`
+	ID          int       `json:"id"`
+	Role        string    `json:"role"`
+	Content     string    `json:"content"`
+	CreatedAt   time.Time `json:"createdAt"`
+	CompletedAt time.Time `json:"completedAt"`
 }
 
 // DatasetInfo describes a dataset (defined here to avoid import cycles with aitools)
 type DatasetInfo struct {
+	ID          string `json:"id"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	ItemCount   int    `json:"itemCount"`
@@ -128,6 +145,7 @@ type DatasetStore interface {
 	GetSample(datasetID string, count int) ([]cty.Value, error)
 	GetDatasetByName(missionID, name string) (id string, err error)
 	ListDatasets(missionID string) ([]DatasetInfo, error)
+	GetItemsRaw(datasetID string, offset, limit int) ([]string, error)
 }
 
 // EventStore persists mission execution events for history/audit

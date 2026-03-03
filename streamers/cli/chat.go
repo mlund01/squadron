@@ -72,7 +72,7 @@ func (s *ChatHandler) CallingTool(toolName string, payload string) {
 	s.spinner.Start("", fmt.Sprintf("Calling %s%s%s...", ColorBold, toolName, ColorReset))
 }
 
-func (s *ChatHandler) ToolComplete(toolName string) {
+func (s *ChatHandler) ToolComplete(toolName string, result string) {
 	s.spinner.Stop()
 	fmt.Printf("%s✓%s %s%s%s called\n\n", ColorGray, ColorReset, ColorBold, toolName, ColorReset)
 }

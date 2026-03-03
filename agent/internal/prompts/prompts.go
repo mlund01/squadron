@@ -250,6 +250,9 @@ func GetCommanderPrompt(agents []AgentInfo, iterOpts IterationOptions) string {
 	agentsDescription := formatAgents(agents)
 	prompt = strings.Replace(prompt, "{{AGENTS}}", agentsDescription, 1)
 
+	// Commander tools placeholder — cleared here, injected later via FormatCommanderTools
+	prompt = strings.Replace(prompt, "{{COMMANDER_TOOLS}}", "", 1)
+
 	// Inject iteration-specific content conditionally
 	parallelContent := ""
 	sequentialContent := ""
@@ -266,6 +269,64 @@ func GetCommanderPrompt(agents []AgentInfo, iterOpts IterationOptions) string {
 	prompt = strings.Replace(prompt, "{{SEQUENTIAL_ITERATION_CONTEXT}}", sequentialContent, 1)
 
 	return prompt
+}
+
+// InlineDocumentedTools lists tools already documented inline in commander.md.
+// These are excluded from the dynamic Commander Tools section.
+var InlineDocumentedTools = map[string]bool{
+	"call_agent":               true,
+	"ask_agent":                true,
+	"ask_commander":            true,
+	"query_task_output":        true,
+	"list_commander_questions": true,
+	"get_commander_answer":     true,
+}
+
+// FormatCommanderTools builds a system prompt section describing tools
+// available directly to the commander (excluding ones hardcoded in the prompt).
+func FormatCommanderTools(tools map[string]aitools.Tool) string {
+	if len(tools) == 0 {
+		return ""
+	}
+
+	var filtered []aitools.Tool
+	for name, tool := range tools {
+		if !InlineDocumentedTools[name] {
+			filtered = append(filtered, tool)
+		}
+	}
+
+	if len(filtered) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Commander Tools\n\n")
+	sb.WriteString("You can use these tools directly via ACTION tags (e.g., `<ACTION>set_dataset</ACTION>`).\n\n")
+
+	for _, tool := range filtered {
+		sb.WriteString(fmt.Sprintf("### %s\n", tool.ToolName()))
+		sb.WriteString(tool.ToolDescription())
+		sb.WriteString("\n\n")
+
+		schema := tool.ToolPayloadSchema()
+		if len(schema.Properties) > 0 {
+			sb.WriteString("**Parameters:**\n")
+			for name, prop := range schema.Properties {
+				req := ""
+				for _, r := range schema.Required {
+					if r == name {
+						req = " (required)"
+						break
+					}
+				}
+				sb.WriteString(fmt.Sprintf("- `%s` (%s%s): %s\n", name, prop.Type, req, prop.Description))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
 }
 
 // getParallelIterationContent returns content about reusing questions from other iterations

@@ -3,10 +3,25 @@ package llm
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 )
+
+// modelSupportsStop returns false for models that reject the 'stop' parameter
+// (reasoning models like o-series and GPT-5 family).
+func modelSupportsStop(model string) bool {
+	m := strings.ToLower(model)
+	switch {
+	case strings.HasPrefix(m, "o1"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"):
+		return false
+	case strings.HasPrefix(m, "gpt-5"):
+		return false
+	default:
+		return true
+	}
+}
 
 type OpenAIProvider struct {
 	client *openai.Client
@@ -33,7 +48,7 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		params.Temperature = openai.Float(req.Temperature)
 	}
 
-	if len(req.StopSequences) > 0 {
+	if len(req.StopSequences) > 0 && modelSupportsStop(req.Model) {
 		params.Stop = openai.ChatCompletionNewParamsStopUnion{
 			OfStringArray: req.StopSequences,
 		}
@@ -86,7 +101,7 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 		params.Temperature = openai.Float(req.Temperature)
 	}
 
-	if len(req.StopSequences) > 0 {
+	if len(req.StopSequences) > 0 && modelSupportsStop(req.Model) {
 		params.Stop = openai.ChatCompletionNewParamsStopUnion{
 			OfStringArray: req.StopSequences,
 		}

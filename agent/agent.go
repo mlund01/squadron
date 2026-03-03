@@ -240,6 +240,11 @@ func (a *Agent) LoadSessionMessages(msgs []llm.Message) {
 	a.session.LoadMessages(msgs)
 }
 
+// GetSystemPrompts returns the agent's system prompts.
+func (a *Agent) GetSystemPrompts() []string {
+	return a.session.GetSystemPrompts()
+}
+
 // NeedsResume returns true if the agent has pending input the LLM hasn't responded to.
 // This happens when the agent was interrupted mid-response or when healing injected
 // a placeholder observation after an interrupted tool call.
@@ -306,7 +311,7 @@ func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatH
 // AnswerFollowUp handles a follow-up question using the agent's existing conversation context.
 // The agent answers from memory without executing any tool calls.
 func (a *Agent) AnswerFollowUp(ctx context.Context, question string) (string, error) {
-	prompt := fmt.Sprintf(`<FOLLOWUP_QUESTION>%s</FOLLOWUP_QUESTION>
+	prompt := fmt.Sprintf(`<QUESTION>%s</QUESTION>
 
 Answer this question based on your previous work. Do not use any tools.
 Provide a direct, factual answer wrapped in <ANSWER> tags.`, question)

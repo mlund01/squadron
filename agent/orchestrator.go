@@ -149,6 +149,11 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			})
 			currentImageInput = nil // Reset for next iteration
 		} else {
+			// Log user message to session store
+			if o.sessionLogger != nil && o.sessionID != "" {
+				now := time.Now()
+				o.sessionLogger.AppendMessage(o.sessionID, "user", currentTextInput, now, now)
+			}
 			resp, err = o.session.SendStream(ctx, currentTextInput, func(content string) {
 				if content != "" {
 					parser.ProcessChunk(content)
@@ -196,6 +201,11 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			return ChatResult{}, err
 		}
 
+		// Log assistant response to session store
+		if o.sessionLogger != nil && o.sessionID != "" && resp != nil {
+			o.sessionLogger.AppendMessage(o.sessionID, "assistant", resp.Content, llmStart, time.Now())
+		}
+
 		// Determine what action (if any) was parsed — needed for turn logging
 		action := parser.GetAction()
 
@@ -228,16 +238,18 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		// Inject secrets before tool execution
 		injectedInput, secretErr := o.secretInjector.Inject(cleanInput)
 		if secretErr != nil {
-			o.streamer.ToolComplete(action)
-			currentTextInput = fmt.Sprintf("<OBSERVATION>\nError: %v\n</OBSERVATION>", secretErr)
+			errMsg := fmt.Sprintf("Error: %v", secretErr)
+			o.streamer.ToolComplete(action, errMsg)
+			currentTextInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
 			continue
 		}
 
 		// Look up the tool
 		tool := o.lookupTool(action)
 		if tool == nil {
-			o.streamer.ToolComplete(action)
-			currentTextInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found\n</OBSERVATION>", action)
+			errMsg := fmt.Sprintf("Error: Tool '%s' not found", action)
+			o.streamer.ToolComplete(action, errMsg)
+			currentTextInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
 			continue
 		}
 
@@ -260,16 +272,16 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 		// Persist tool result for auditing
 		if o.sessionLogger != nil && o.sessionID != "" {
-			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, action, cleanInput, result)
+			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, action, cleanInput, result, toolStart, time.Now())
 		}
 
-		o.streamer.ToolComplete(action)
+		// Format observation (may intercept/truncate large results)
+		var observationContent string
+		currentTextInput, currentImageInput, observationContent = o.formatObservation(action, result)
+		o.streamer.ToolComplete(action, observationContent)
 
 		// Store pending prune params - will be applied after next SendStream
 		o.pendingPrune = pruneParams
-
-		// Check if result is an image or format as observation
-		currentTextInput, currentImageInput = o.formatObservation(action, result)
 	}
 
 	// Apply any remaining pending prune from the last tool call so it's not lost
@@ -398,26 +410,26 @@ func (o *orchestrator) lookupTool(name string) aitools.Tool {
 	return nil
 }
 
-// formatObservation formats a tool result as an observation, with optional metadata
-// If the result is an image, returns empty string and the ImageBlock (images are not wrapped in OBSERVATION)
-func (o *orchestrator) formatObservation(toolName, result string) (string, *llm.ImageBlock) {
+// formatObservation formats a tool result as an observation, with optional metadata.
+// Returns the formatted string, optional ImageBlock (for image results), and the observation content fed to the LLM.
+func (o *orchestrator) formatObservation(toolName, result string) (string, *llm.ImageBlock, string) {
 	// Check if result is an image first
 	if img := aitools.DetectImage(result); img != nil {
 		return "", &llm.ImageBlock{
 			Data:      img.Data,
 			MediaType: img.MediaType,
-		}
+		}, ""
 	}
 
 	// Not an image - format as text observation
 	if o.interceptor == nil {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result), nil
+		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result), nil, result
 	}
 
 	ir := o.interceptor.Intercept(toolName, result)
 	if ir.Metadata == "" {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data), nil
+		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data), nil, ir.Data
 	}
 
-	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata), nil
+	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata), nil, ir.Data
 }

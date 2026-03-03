@@ -16,12 +16,20 @@ var ModelPricingTable = map[string]ModelPricing{
 	"claude-3-5-sonnet-20241022": {InputPer1M: 3.00, OutputPer1M: 15.00},
 
 	// OpenAI models
-	"gpt-4o":      {InputPer1M: 2.50, OutputPer1M: 10.00},
-	"gpt-4o-mini": {InputPer1M: 0.15, OutputPer1M: 0.60},
-	"gpt-4-turbo": {InputPer1M: 10.00, OutputPer1M: 30.00},
-	"o1":          {InputPer1M: 15.00, OutputPer1M: 60.00},
-	"o1-mini":     {InputPer1M: 3.00, OutputPer1M: 12.00},
-	"o3-mini":     {InputPer1M: 1.10, OutputPer1M: 4.40},
+	"gpt-5":        {InputPer1M: 1.25, OutputPer1M: 10.00},
+	"gpt-5-mini":   {InputPer1M: 0.25, OutputPer1M: 2.00},
+	"gpt-5-nano":   {InputPer1M: 0.05, OutputPer1M: 0.40},
+	"gpt-4.1":      {InputPer1M: 2.00, OutputPer1M: 8.00},
+	"gpt-4.1-mini": {InputPer1M: 0.40, OutputPer1M: 1.60},
+	"gpt-4.1-nano": {InputPer1M: 0.10, OutputPer1M: 0.40},
+	"o3":           {InputPer1M: 10.00, OutputPer1M: 40.00},
+	"o4-mini":      {InputPer1M: 1.10, OutputPer1M: 4.40},
+	"gpt-4o":       {InputPer1M: 2.50, OutputPer1M: 10.00},
+	"gpt-4o-mini":  {InputPer1M: 0.15, OutputPer1M: 0.60},
+	"gpt-4-turbo":  {InputPer1M: 10.00, OutputPer1M: 30.00},
+	"o1":           {InputPer1M: 15.00, OutputPer1M: 60.00},
+	"o1-mini":      {InputPer1M: 3.00, OutputPer1M: 12.00},
+	"o3-mini":      {InputPer1M: 1.10, OutputPer1M: 4.40},
 
 	// Gemini models
 	"gemini-2.0-flash":     {InputPer1M: 0.10, OutputPer1M: 0.40},

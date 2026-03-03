@@ -208,10 +208,11 @@ func (h *WSMissionHandler) CommanderCallingTool(taskName string, toolName string
 	})
 }
 
-func (h *WSMissionHandler) CommanderToolComplete(taskName string, toolName string) {
+func (h *WSMissionHandler) CommanderToolComplete(taskName string, toolName string, result string) {
 	h.sendEvent(protocol.EventCommanderToolComplete, protocol.CommanderToolCompleteData{
 		TaskName: taskName,
 		ToolName: toolName,
+		Result:   result,
 	})
 }
 
@@ -273,11 +274,12 @@ func (c *wsChatHandler) CallingTool(toolName string, payload string) {
 	})
 }
 
-func (c *wsChatHandler) ToolComplete(toolName string) {
+func (c *wsChatHandler) ToolComplete(toolName string, result string) {
 	c.parent.sendEvent(protocol.EventAgentToolComplete, protocol.AgentToolCompleteData{
 		TaskName:  c.taskName,
 		AgentName: c.agentName,
 		ToolName:  toolName,
+		Result:    result,
 	})
 }
 

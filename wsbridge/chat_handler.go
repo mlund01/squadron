@@ -65,9 +65,10 @@ func (h *WSChatHandler) CallingTool(toolName string, payload string) {
 	})
 }
 
-func (h *WSChatHandler) ToolComplete(toolName string) {
+func (h *WSChatHandler) ToolComplete(toolName string, result string) {
 	h.sendChatEvent(protocol.ChatEventToolComplete, protocol.ChatToolData{
 		ToolName: toolName,
+		Result:   result,
 	})
 }
 

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -71,11 +72,12 @@ func (s *MemoryMissionStore) CreateTask(missionID, taskName, configJSON string) 
 	id := generateID()
 	now := time.Now()
 	s.tasks[id] = &MissionTask{
-		ID:        id,
-		MissionID: missionID,
-		TaskName:  taskName,
-		Status:    "pending",
-		StartedAt: &now,
+		ID:         id,
+		MissionID:  missionID,
+		TaskName:   taskName,
+		ConfigJSON: configJSON,
+		Status:     "pending",
+		StartedAt:  &now,
 	}
 	return id, nil
 }
@@ -95,6 +97,19 @@ func (s *MemoryMissionStore) UpdateTaskStatus(id, status string, summary, output
 		}
 	}
 	return nil
+}
+
+func (s *MemoryMissionStore) GetTask(id string) (*MissionTask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, t := range s.tasks {
+		if t.ID == id {
+			cp := *t
+			return &cp, nil
+		}
+	}
+	return nil, fmt.Errorf("task %q not found", id)
 }
 
 func (s *MemoryMissionStore) GetTasksByMission(missionID string) ([]MissionTask, error) {
@@ -179,8 +194,9 @@ type memSession struct {
 }
 
 type MemorySessionStore struct {
-	mu       sync.Mutex
-	sessions map[string]*memSession
+	mu          sync.Mutex
+	sessions    map[string]*memSession
+	toolResults []ToolResult
 }
 
 func (s *MemorySessionStore) CreateSession(taskID, role, agentName, model string, iterationIndex *int) (string, error) {
@@ -269,7 +285,7 @@ func (s *MemorySessionStore) CompleteSession(id string, err error) {
 	}
 }
 
-func (s *MemorySessionStore) AppendMessage(sessionID, role, content string) error {
+func (s *MemorySessionStore) AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -279,10 +295,11 @@ func (s *MemorySessionStore) AppendMessage(sessionID, role, content string) erro
 	}
 
 	sess.messages = append(sess.messages, SessionMessage{
-		ID:        len(sess.messages) + 1,
-		Role:      role,
-		Content:   content,
-		CreatedAt: time.Now(),
+		ID:          len(sess.messages) + 1,
+		Role:        role,
+		Content:     content,
+		CreatedAt:   createdAt,
+		CompletedAt: completedAt,
 	})
 	return nil
 }
@@ -314,8 +331,32 @@ func (s *MemorySessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 	return sessions, nil
 }
 
-func (s *MemorySessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string) error {
-	return nil // no-op for memory store
+func (s *MemorySessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolResults = append(s.toolResults, ToolResult{
+		ID:          generateID(),
+		TaskID:      taskID,
+		SessionID:   sessionID,
+		ToolName:    toolName,
+		InputParams: inputParams,
+		RawData:     rawData,
+		StartedAt:   startedAt,
+		FinishedAt:  finishedAt,
+	})
+	return nil
+}
+
+func (s *MemorySessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var results []ToolResult
+	for _, tr := range s.toolResults {
+		if tr.TaskID == taskID {
+			results = append(results, tr)
+		}
+	}
+	return results, nil
 }
 
 // =============================================================================
@@ -409,6 +450,36 @@ func (s *MemoryDatasetStore) GetItems(datasetID string, offset, limit int) ([]ct
 	return result, nil
 }
 
+func (s *MemoryDatasetStore) GetItemsRaw(datasetID string, offset, limit int) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ds, ok := s.datasets[datasetID]
+	if !ok {
+		return nil, fmt.Errorf("dataset %s not found", datasetID)
+	}
+
+	if offset >= len(ds.items) {
+		return nil, nil
+	}
+
+	end := offset + limit
+	if end > len(ds.items) {
+		end = len(ds.items)
+	}
+
+	result := make([]string, end-offset)
+	for i, di := range ds.items[offset:end] {
+		b, err := json.Marshal(ctyValueToGo(di.item))
+		if err != nil {
+			result[i] = "{}"
+		} else {
+			result[i] = string(b)
+		}
+	}
+	return result, nil
+}
+
 func (s *MemoryDatasetStore) GetItemCount(datasetID string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -466,6 +537,7 @@ func (s *MemoryDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, erro
 	for _, ds := range s.datasets {
 		if ds.missionID == missionID {
 			infos = append(infos, DatasetInfo{
+				ID:          ds.id,
 				Name:        ds.name,
 				Description: ds.description,
 				ItemCount:   len(ds.items),

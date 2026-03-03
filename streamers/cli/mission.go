@@ -74,7 +74,7 @@ func (s *MissionHandler) CommanderCallingTool(taskName string, toolName string, 
 	fmt.Printf("[%s] Calling: %s\n", taskName, toolName)
 }
 
-func (s *MissionHandler) CommanderToolComplete(taskName string, toolName string) {
+func (s *MissionHandler) CommanderToolComplete(taskName string, toolName string, result string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("[%s] %s complete\n", taskName, toolName)
@@ -210,7 +210,7 @@ func (s *agentHandler) CallingTool(toolName, payload string) {
 	fmt.Printf("%s    [%s/%s] Calling %s...%s\n", ColorLightBrown, s.taskName, s.agentName, toolName, ColorReset)
 }
 
-func (s *agentHandler) ToolComplete(toolName string) {
+func (s *agentHandler) ToolComplete(toolName string, result string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("%s    [%s/%s] %s complete%s\n", ColorLightBrown, s.taskName, s.agentName, toolName, ColorReset)

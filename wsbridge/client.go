@@ -26,6 +26,7 @@ const (
 // Client manages the WebSocket connection from a squadron instance to commander.
 type Client struct {
 	cfg        *config.Config
+	cfgMu      sync.RWMutex
 	configPath string
 	stores     *store.Bundle
 	version    string
@@ -80,7 +81,7 @@ func NewClient(cfg *config.Config, configPath string, stores *store.Bundle, vers
 
 // Connect dials the commander WebSocket endpoint, registers, and starts read/write pumps.
 func (c *Client) Connect() error {
-	url := c.cfg.Commander.URL
+	url := c.getConfig().Commander.URL
 	log.Printf("Connecting to commander at %s...", url)
 
 	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
@@ -126,11 +127,53 @@ func (c *Client) InstanceID() string {
 	return c.instanceID
 }
 
+// getConfig returns the current config, safe for concurrent access.
+func (c *Client) getConfig() *config.Config {
+	c.cfgMu.RLock()
+	defer c.cfgMu.RUnlock()
+	return c.cfg
+}
+
+// ReloadConfig re-reads the config from disk, validates it, and swaps it in.
+// On failure the old config stays active. The caller (commander) updates its
+// registry from the returned config — no re-register needed.
+func (c *Client) ReloadConfig() error {
+	newCfg, err := config.LoadAndValidate(c.configPath)
+	if err != nil {
+		return fmt.Errorf("config validation failed: %w", err)
+	}
+
+	c.cfgMu.Lock()
+	oldCfg := c.cfg
+	c.cfg = newCfg
+	c.cfgMu.Unlock()
+
+	// Close plugin clients that were removed in the new config
+	closeRemovedPlugins(oldCfg, newCfg)
+
+	log.Println("Config reloaded successfully")
+	return nil
+}
+
+// closeRemovedPlugins shuts down plugin clients that exist in old but not in new config.
+func closeRemovedPlugins(oldCfg, newCfg *config.Config) {
+	newPlugins := make(map[string]bool, len(newCfg.Plugins))
+	for _, p := range newCfg.Plugins {
+		newPlugins[p.Name] = true
+	}
+	for name, client := range oldCfg.LoadedPlugins {
+		if !newPlugins[name] {
+			client.Close()
+		}
+	}
+}
+
 func (c *Client) register() error {
-	instanceConfig := ConfigToInstanceConfig(c.cfg)
+	cfg := c.getConfig()
+	instanceConfig := ConfigToInstanceConfig(cfg)
 
 	req, err := protocol.NewRequest(protocol.TypeRegister, &protocol.RegisterPayload{
-		InstanceName: c.cfg.Commander.InstanceName,
+		InstanceName: cfg.Commander.InstanceName,
 		Version:      c.version,
 		Config:       instanceConfig,
 	})

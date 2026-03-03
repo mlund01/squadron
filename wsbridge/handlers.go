@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/mlund01/squadron-sdk/protocol"
@@ -25,10 +28,30 @@ func (c *Client) registerHandlers() {
 	c.handlers[protocol.TypeGetChatHistory] = c.handleGetChatHistory
 	c.handlers[protocol.TypeGetChatMessages] = c.handleGetChatMessages
 	c.handlers[protocol.TypeArchiveChat] = c.handleArchiveChat
+	c.handlers[protocol.TypeReloadConfig] = c.handleReloadConfig
+	c.handlers[protocol.TypeGetDatasets] = c.handleGetDatasets
+	c.handlers[protocol.TypeGetDatasetItems] = c.handleGetDatasetItems
+	c.handlers[protocol.TypeListConfigFiles] = c.handleListConfigFiles
+	c.handlers[protocol.TypeGetConfigFile] = c.handleGetConfigFile
+	c.handlers[protocol.TypeWriteConfigFile] = c.handleWriteConfigFile
+	c.handlers[protocol.TypeValidateConfig] = c.handleValidateConfig
+}
+
+func (c *Client) handleReloadConfig(env *protocol.Envelope) (*protocol.Envelope, error) {
+	if err := c.ReloadConfig(); err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeReloadConfigResult, &protocol.ReloadConfigResultPayload{
+			Success: false,
+			Error:   err.Error(),
+		})
+	}
+	return protocol.NewResponse(env.RequestID, protocol.TypeReloadConfigResult, &protocol.ReloadConfigResultPayload{
+		Success: true,
+		Config:  ConfigToInstanceConfig(c.getConfig()),
+	})
 }
 
 func (c *Client) handleGetConfig(env *protocol.Envelope) (*protocol.Envelope, error) {
-	instanceConfig := ConfigToInstanceConfig(c.cfg)
+	instanceConfig := ConfigToInstanceConfig(c.getConfig())
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetConfigResult, &protocol.GetConfigResultPayload{
 		Config: instanceConfig,
 	})
@@ -40,11 +63,14 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 		return nil, fmt.Errorf("decode run_mission: %w", err)
 	}
 
+	// Snapshot config for this mission run
+	cfg := c.getConfig()
+
 	// Validate mission exists
 	var missionCfg *config.Mission
-	for i := range c.cfg.Missions {
-		if c.cfg.Missions[i].Name == payload.MissionName {
-			missionCfg = &c.cfg.Missions[i]
+	for i := range cfg.Missions {
+		if cfg.Missions[i].Name == payload.MissionName {
+			missionCfg = &cfg.Missions[i]
 			break
 		}
 	}
@@ -57,7 +83,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 
 	// Create mission runner with no-op debug logger
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(c.cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger))
+	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger))
 	if err != nil {
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
 			Accepted: false,
@@ -126,10 +152,10 @@ func (c *Client) handleGetMissions(env *protocol.Envelope) (*protocol.Envelope, 
 			Name:       r.MissionName,
 			Status:     r.Status,
 			InputsJSON: r.InputValuesJSON,
-			StartedAt:  r.StartedAt.Format("2006-01-02T15:04:05Z"),
+			StartedAt:  r.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		}
 		if r.FinishedAt != nil {
-			s := r.FinishedAt.Format("2006-01-02T15:04:05Z")
+			s := r.FinishedAt.UTC().Format("2006-01-02T15:04:05.000Z")
 			info.FinishedAt = &s
 		}
 		infos[i] = info
@@ -159,10 +185,10 @@ func (c *Client) handleGetMission(env *protocol.Envelope) (*protocol.Envelope, e
 		ID:        record.ID,
 		Name:      record.MissionName,
 		Status:    record.Status,
-		StartedAt: record.StartedAt.Format("2006-01-02T15:04:05Z"),
+		StartedAt: record.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 	}
 	if record.FinishedAt != nil {
-		s := record.FinishedAt.Format("2006-01-02T15:04:05Z")
+		s := record.FinishedAt.UTC().Format("2006-01-02T15:04:05.000Z")
 		missionInfo.FinishedAt = &s
 	}
 
@@ -174,20 +200,21 @@ func (c *Client) handleGetMission(env *protocol.Envelope) (*protocol.Envelope, e
 	taskInfos := make([]protocol.MissionTaskInfo, len(tasks))
 	for i, t := range tasks {
 		ti := protocol.MissionTaskInfo{
-			ID:        t.ID,
-			MissionID: t.MissionID,
-			TaskName:  t.TaskName,
-			Status:    t.Status,
-			Summary:   t.Summary,
+			ID:         t.ID,
+			MissionID:  t.MissionID,
+			TaskName:   t.TaskName,
+			Status:     t.Status,
+			ConfigJSON: t.ConfigJSON,
+			Summary:    t.Summary,
 			OutputJSON: t.OutputJSON,
-			Error:     t.Error,
+			Error:      t.Error,
 		}
 		if t.StartedAt != nil {
-			s := t.StartedAt.Format("2006-01-02T15:04:05Z")
+			s := t.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z")
 			ti.StartedAt = &s
 		}
 		if t.FinishedAt != nil {
-			s := t.FinishedAt.Format("2006-01-02T15:04:05Z")
+			s := t.FinishedAt.UTC().Format("2006-01-02T15:04:05.000Z")
 			ti.FinishedAt = &s
 		}
 		taskInfos[i] = ti
@@ -205,6 +232,30 @@ func (c *Client) handleGetTaskDetail(env *protocol.Envelope) (*protocol.Envelope
 		return nil, fmt.Errorf("decode get_task_detail: %w", err)
 	}
 
+	// Get task record
+	taskRecord, err := c.stores.Missions.GetTask(payload.TaskID)
+	if err != nil {
+		return nil, fmt.Errorf("get task: %w", err)
+	}
+	taskInfo := protocol.MissionTaskInfo{
+		ID:         taskRecord.ID,
+		MissionID:  taskRecord.MissionID,
+		TaskName:   taskRecord.TaskName,
+		Status:     taskRecord.Status,
+		ConfigJSON: taskRecord.ConfigJSON,
+		Summary:    taskRecord.Summary,
+		OutputJSON: taskRecord.OutputJSON,
+		Error:      taskRecord.Error,
+	}
+	if taskRecord.StartedAt != nil {
+		s := taskRecord.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z")
+		taskInfo.StartedAt = &s
+	}
+	if taskRecord.FinishedAt != nil {
+		f := taskRecord.FinishedAt.UTC().Format("2006-01-02T15:04:05.000Z")
+		taskInfo.FinishedAt = &f
+	}
+
 	// Get task outputs
 	outputs, err := c.stores.Missions.GetTaskOutputs(payload.TaskID)
 	if err != nil {
@@ -218,7 +269,7 @@ func (c *Client) handleGetTaskDetail(env *protocol.Envelope) (*protocol.Envelope
 			DatasetName: o.DatasetName,
 			OutputJSON:  o.OutputJSON,
 			Summary:     o.Summary,
-			CreatedAt:   o.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			CreatedAt:   o.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		}
 	}
 
@@ -229,21 +280,45 @@ func (c *Client) handleGetTaskDetail(env *protocol.Envelope) (*protocol.Envelope
 	}
 	sessionInfos := make([]protocol.SessionInfoDTO, len(sessions))
 	for i, s := range sessions {
-		sessionInfos[i] = protocol.SessionInfoDTO{
+		dto := protocol.SessionInfoDTO{
 			ID:             s.ID,
 			TaskID:         s.TaskID,
 			Role:           s.Role,
 			AgentName:      s.AgentName,
 			Model:          s.Model,
 			Status:         s.Status,
-			StartedAt:      s.StartedAt.Format("2006-01-02T15:04:05Z"),
+			StartedAt:      s.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 			IterationIndex: s.IterationIndex,
+		}
+		if s.FinishedAt != nil {
+			f := s.FinishedAt.UTC().Format("2006-01-02T15:04:05.000Z")
+			dto.FinishedAt = &f
+		}
+		sessionInfos[i] = dto
+	}
+
+	// Get tool results
+	toolResults, err := c.stores.Sessions.GetToolResultsByTask(payload.TaskID)
+	if err != nil {
+		return nil, fmt.Errorf("get tool results: %w", err)
+	}
+	toolResultInfos := make([]protocol.ToolResultDTO, len(toolResults))
+	for i, tr := range toolResults {
+		toolResultInfos[i] = protocol.ToolResultDTO{
+			ID:          tr.ID,
+			SessionID:   tr.SessionID,
+			ToolName:    tr.ToolName,
+			InputParams: tr.InputParams,
+			StartedAt:   tr.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+			FinishedAt:  tr.FinishedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		}
 	}
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetTaskDetailResult, &protocol.GetTaskDetailResultPayload{
-		Outputs:  outputInfos,
-		Sessions: sessionInfos,
+		Task:        taskInfo,
+		Outputs:     outputInfos,
+		Sessions:    sessionInfos,
+		ToolResults: toolResultInfos,
 	})
 }
 
@@ -261,11 +336,14 @@ func (c *Client) handleChatMessage(env *protocol.Envelope) (*protocol.Envelope, 
 	c.chatMu.Unlock()
 
 	if !exists {
+		// Snapshot config for this chat session
+		cfg := c.getConfig()
+
 		// Validate agent exists in config
 		var agentCfg *config.Agent
-		for i, ag := range c.cfg.Agents {
+		for i, ag := range cfg.Agents {
 			if ag.Name == payload.AgentName {
-				agentCfg = &c.cfg.Agents[i]
+				agentCfg = &cfg.Agents[i]
 				break
 			}
 		}
@@ -279,7 +357,7 @@ func (c *Client) handleChatMessage(env *protocol.Envelope) (*protocol.Envelope, 
 
 		a, err := agent.New(context.Background(), agent.Options{
 			ConfigPath: c.configPath,
-			Config:     c.cfg,
+			Config:     cfg,
 			AgentName:  payload.AgentName,
 		})
 		if err != nil {
@@ -296,6 +374,12 @@ func (c *Client) handleChatMessage(env *protocol.Envelope) (*protocol.Envelope, 
 			log.Printf("Failed to create chat session in store: %v", storeErr)
 		}
 		sessionID = storeID
+
+		// Persist agent system prompts to store
+		now := time.Now()
+		for _, sp := range a.GetSystemPrompts() {
+			c.stores.Sessions.AppendMessage(sessionID, "system", sp, now, now)
+		}
 
 		sess = &chatSession{agent: a}
 		c.chatMu.Lock()
@@ -317,15 +401,17 @@ func (c *Client) handleChatMessage(env *protocol.Envelope) (*protocol.Envelope, 
 	go func() {
 		// Persist user message
 		if sessionID != "" {
-			c.stores.Sessions.AppendMessage(sessionID, "user", payload.Content)
+			now := time.Now()
+			c.stores.Sessions.AppendMessage(sessionID, "user", payload.Content, now, now)
 		}
 
+		chatStart := time.Now()
 		_, chatErr := sess.agent.Chat(context.Background(), payload.Content, chatHandler)
 
 		// Persist assistant answer
 		if sessionID != "" {
 			if answer := chatHandler.FullAnswer(); answer != "" {
-				c.stores.Sessions.AppendMessage(sessionID, "assistant", answer)
+				c.stores.Sessions.AppendMessage(sessionID, "assistant", answer, chatStart, time.Now())
 			}
 		}
 
@@ -370,7 +456,7 @@ func (c *Client) handleGetChatHistory(env *protocol.Envelope) (*protocol.Envelop
 			AgentName: s.AgentName,
 			Model:     s.Model,
 			Status:    s.Status,
-			StartedAt: s.StartedAt.Format("2006-01-02T15:04:05Z"),
+			StartedAt: s.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		}
 	}
 
@@ -397,7 +483,7 @@ func (c *Client) handleGetChatMessages(env *protocol.Envelope) (*protocol.Envelo
 			ID:        m.ID,
 			Role:      m.Role,
 			Content:   m.Content,
-			CreatedAt: m.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			CreatedAt: m.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		}
 	}
 
@@ -450,11 +536,278 @@ func (c *Client) handleGetEvents(env *protocol.Envelope) (*protocol.Envelope, er
 			IterationIndex: e.IterationIndex,
 			EventType:      e.EventType,
 			DataJSON:       e.DataJSON,
-			CreatedAt:      e.CreatedAt.Format("2006-01-02T15:04:05Z"),
+			CreatedAt:      e.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		}
 	}
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetEventsResult, &protocol.GetEventsResultPayload{
 		Events: eventInfos,
+	})
+}
+
+func (c *Client) handleGetDatasets(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.GetDatasetsPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode get_datasets: %w", err)
+	}
+
+	datasets, err := c.stores.Datasets.ListDatasets(payload.MissionID)
+	if err != nil {
+		return nil, fmt.Errorf("list datasets: %w", err)
+	}
+
+	infos := make([]protocol.DatasetRecordInfo, len(datasets))
+	for i, d := range datasets {
+		infos[i] = protocol.DatasetRecordInfo{
+			ID:          d.ID,
+			Name:        d.Name,
+			Description: d.Description,
+			ItemCount:   d.ItemCount,
+		}
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeGetDatasetsResult, &protocol.GetDatasetsResultPayload{
+		Datasets: infos,
+	})
+}
+
+func (c *Client) handleGetDatasetItems(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.GetDatasetItemsPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode get_dataset_items: %w", err)
+	}
+
+	limit := payload.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	items, err := c.stores.Datasets.GetItemsRaw(payload.DatasetID, payload.Offset, limit)
+	if err != nil {
+		return nil, fmt.Errorf("get dataset items: %w", err)
+	}
+
+	total, err := c.stores.Datasets.GetItemCount(payload.DatasetID)
+	if err != nil {
+		return nil, fmt.Errorf("get item count: %w", err)
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeGetDatasetItemsResult, &protocol.GetDatasetItemsResultPayload{
+		Items: items,
+		Total: total,
+	})
+}
+
+func (c *Client) handleValidateConfig(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.ValidateConfigPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode validate_config: %w", err)
+	}
+
+	// Create temp dir and copy all config files into it
+	tmpDir, err := os.MkdirTemp("", "squadron-validate-*")
+	if err != nil {
+		return nil, fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Resolve config directory
+	info, err := os.Stat(c.configPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat config path: %w", err)
+	}
+
+	var configDir string
+	if info.IsDir() {
+		configDir = c.configPath
+	} else {
+		configDir = filepath.Dir(c.configPath)
+	}
+
+	// Copy existing .hcl files to temp dir (recursively)
+	filepath.WalkDir(configDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		if !d.IsDir() && strings.HasSuffix(d.Name(), ".hcl") {
+			rel, err := filepath.Rel(configDir, path)
+			if err != nil {
+				return nil
+			}
+			content, err := os.ReadFile(path)
+			if err != nil {
+				return nil
+			}
+			destPath := filepath.Join(tmpDir, rel)
+			os.MkdirAll(filepath.Dir(destPath), 0755)
+			os.WriteFile(destPath, content, 0644)
+		}
+		return nil
+	})
+
+	// Overlay modified files from the payload
+	for name, content := range payload.Files {
+		if err := validateConfigPath(name); err != nil {
+			return protocol.NewResponse(env.RequestID, protocol.TypeValidateConfigResult, &protocol.ValidateConfigResultPayload{
+				Valid:  false,
+				Errors: []string{fmt.Sprintf("invalid filename %q: %v", name, err)},
+			})
+		}
+		destPath := filepath.Join(tmpDir, name)
+		os.MkdirAll(filepath.Dir(destPath), 0755)
+		os.WriteFile(destPath, []byte(content), 0644)
+	}
+
+	// Validate by loading the full config from the temp dir
+	_, loadErr := config.LoadAndValidate(tmpDir)
+	if loadErr != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeValidateConfigResult, &protocol.ValidateConfigResultPayload{
+			Valid:  false,
+			Errors: []string{loadErr.Error()},
+		})
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeValidateConfigResult, &protocol.ValidateConfigResultPayload{
+		Valid: true,
+	})
+}
+
+// validateConfigPath checks that a file path is safe (no path traversal, stays within config dir).
+func validateConfigPath(name string) error {
+	if name == "" {
+		return fmt.Errorf("filename is required")
+	}
+	if strings.Contains(name, "\\") {
+		return fmt.Errorf("invalid filename")
+	}
+	if strings.HasPrefix(name, "/") {
+		return fmt.Errorf("invalid filename")
+	}
+	cleaned := filepath.Clean(name)
+	if strings.HasPrefix(cleaned, "..") || strings.Contains(cleaned, string(filepath.Separator)+"..") {
+		return fmt.Errorf("invalid filename")
+	}
+	return nil
+}
+
+func (c *Client) handleListConfigFiles(env *protocol.Envelope) (*protocol.Envelope, error) {
+	info, err := os.Stat(c.configPath)
+	if err != nil {
+		return nil, fmt.Errorf("stat config path: %w", err)
+	}
+
+	var files []protocol.ConfigFileInfo
+	var configDir string
+
+	if info.IsDir() {
+		configDir = c.configPath
+		filepath.WalkDir(configDir, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			// Skip hidden directories
+			if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+				return filepath.SkipDir
+			}
+			if d.IsDir() {
+				return nil
+			}
+			rel, err := filepath.Rel(configDir, path)
+			if err != nil {
+				return nil
+			}
+			fi, err := d.Info()
+			if err != nil {
+				return nil
+			}
+			files = append(files, protocol.ConfigFileInfo{
+				Name: rel,
+				Size: fi.Size(),
+			})
+			return nil
+		})
+	} else {
+		configDir = filepath.Dir(c.configPath)
+		fi, err := os.Stat(c.configPath)
+		if err != nil {
+			return nil, fmt.Errorf("stat config file: %w", err)
+		}
+		files = append(files, protocol.ConfigFileInfo{
+			Name: filepath.Base(c.configPath),
+			Size: fi.Size(),
+		})
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeListConfigFilesResult, &protocol.ListConfigFilesResultPayload{
+		Files: files,
+		Path:  configDir,
+	})
+}
+
+func (c *Client) handleGetConfigFile(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.GetConfigFilePayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode get_config_file: %w", err)
+	}
+
+	if err := validateConfigPath(payload.Name); err != nil {
+		return nil, err
+	}
+
+	// Resolve the config directory
+	info, _ := os.Stat(c.configPath)
+	var dir string
+	if info != nil && info.IsDir() {
+		dir = c.configPath
+	} else {
+		dir = filepath.Dir(c.configPath)
+	}
+
+	content, err := os.ReadFile(filepath.Join(dir, payload.Name))
+	if err != nil {
+		return nil, fmt.Errorf("read config file: %w", err)
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeGetConfigFileResult, &protocol.GetConfigFileResultPayload{
+		Name:    payload.Name,
+		Content: string(content),
+	})
+}
+
+func (c *Client) handleWriteConfigFile(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.WriteConfigFilePayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode write_config_file: %w", err)
+	}
+
+	if err := validateConfigPath(payload.Name); err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeWriteConfigFileResult, &protocol.WriteConfigFileResultPayload{
+			Success: false,
+			Error:   err.Error(),
+		})
+	}
+
+	// Resolve the config directory
+	info, _ := os.Stat(c.configPath)
+	var dir string
+	if info != nil && info.IsDir() {
+		dir = c.configPath
+	} else {
+		dir = filepath.Dir(c.configPath)
+	}
+
+	filePath := filepath.Join(dir, payload.Name)
+	if err := os.WriteFile(filePath, []byte(payload.Content), 0644); err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeWriteConfigFileResult, &protocol.WriteConfigFileResultPayload{
+			Success: false,
+			Error:   err.Error(),
+		})
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeWriteConfigFileResult, &protocol.WriteConfigFileResultPayload{
+		Success: true,
 	})
 }

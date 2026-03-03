@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -48,12 +49,26 @@ func (h *StoringMissionHandler) storeEvent(eventType protocol.MissionEventType, 
 	if taskName != nil {
 		if tid, ok := h.taskIDs[*taskName]; ok {
 			taskID = &tid
+		} else if bracketIdx := strings.LastIndex(*taskName, "["); bracketIdx != -1 {
+			// Iterated tasks use "taskName[N]" but IDs are registered under "taskName"
+			if tid, ok := h.taskIDs[(*taskName)[:bracketIdx]]; ok {
+				taskID = &tid
+			}
 		}
 	}
 	var sessionID *string
 	if sessionKey != nil {
 		if sid, ok := h.sessionIDs[*sessionKey]; ok {
 			sessionID = &sid
+		} else if bracketIdx := strings.LastIndex(*sessionKey, "["); bracketIdx != -1 {
+			// Strip iteration suffix from session key (e.g. "write_story[0]:commander" → "write_story:commander")
+			colonIdx := strings.LastIndex(*sessionKey, ":")
+			if colonIdx > bracketIdx {
+				baseKey := (*sessionKey)[:bracketIdx] + (*sessionKey)[colonIdx:]
+				if sid, ok := h.sessionIDs[baseKey]; ok {
+					sessionID = &sid
+				}
+			}
 		}
 	}
 	h.mu.Unlock()
@@ -201,7 +216,8 @@ func (h *StoringMissionHandler) IterationRetrying(taskName string, index int, at
 }
 
 func (h *StoringMissionHandler) IterationReasoning(taskName string, index int, content string) {
-	h.storeEvent(protocol.EventIterationReasoning, &taskName, nil, &index, protocol.IterationReasoningData{
+	sessionKey := taskName + ":commander"
+	h.storeEvent(protocol.EventIterationReasoning, &taskName, &sessionKey, &index, protocol.IterationReasoningData{
 		TaskName: taskName,
 		Index:    index,
 		Content:  content,
@@ -210,7 +226,8 @@ func (h *StoringMissionHandler) IterationReasoning(taskName string, index int, c
 }
 
 func (h *StoringMissionHandler) IterationAnswer(taskName string, index int, content string) {
-	h.storeEvent(protocol.EventIterationAnswer, &taskName, nil, &index, protocol.IterationAnswerData{
+	sessionKey := taskName + ":commander"
+	h.storeEvent(protocol.EventIterationAnswer, &taskName, &sessionKey, &index, protocol.IterationAnswerData{
 		TaskName: taskName,
 		Index:    index,
 		Content:  content,
@@ -254,17 +271,19 @@ func (h *StoringMissionHandler) CommanderCallingTool(taskName string, toolName s
 	h.inner.CommanderCallingTool(taskName, toolName, input)
 }
 
-func (h *StoringMissionHandler) CommanderToolComplete(taskName string, toolName string) {
+func (h *StoringMissionHandler) CommanderToolComplete(taskName string, toolName string, result string) {
 	sessionKey := taskName + ":commander"
 	h.storeEvent(protocol.EventCommanderToolComplete, &taskName, &sessionKey, nil, protocol.CommanderToolCompleteData{
 		TaskName: taskName,
 		ToolName: toolName,
+		Result:   result,
 	})
-	h.inner.CommanderToolComplete(taskName, toolName)
+	h.inner.CommanderToolComplete(taskName, toolName, result)
 }
 
 func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string) {
-	h.storeEvent(protocol.EventAgentStarted, &taskName, nil, nil, protocol.AgentStartedData{
+	sessionKey := taskName + ":" + agentName
+	h.storeEvent(protocol.EventAgentStarted, &taskName, &sessionKey, nil, protocol.AgentStartedData{
 		TaskName:  taskName,
 		AgentName: agentName,
 	})
@@ -284,7 +303,8 @@ func (h *StoringMissionHandler) AgentHandler(taskName string, agentName string) 
 }
 
 func (h *StoringMissionHandler) AgentCompleted(taskName string, agentName string) {
-	h.storeEvent(protocol.EventAgentCompleted, &taskName, nil, nil, protocol.AgentCompletedData{
+	sessionKey := taskName + ":" + agentName
+	h.storeEvent(protocol.EventAgentCompleted, &taskName, &sessionKey, nil, protocol.AgentCompletedData{
 		TaskName:  taskName,
 		AgentName: agentName,
 	})
@@ -301,6 +321,8 @@ type storingChatHandler struct {
 	taskName   string
 	agentName  string
 	sessionKey string
+	reasoningBuf strings.Builder
+	answerBuf    strings.Builder
 }
 
 func (c *storingChatHandler) Welcome(agentName string, modelName string) {
@@ -320,10 +342,7 @@ func (c *storingChatHandler) Error(err error) {
 }
 
 func (c *storingChatHandler) Thinking() {
-	c.parent.storeEvent(protocol.EventAgentThinking, &c.taskName, &c.sessionKey, nil, protocol.AgentThinkingData{
-		TaskName:  c.taskName,
-		AgentName: c.agentName,
-	})
+	c.reasoningBuf.Reset()
 	c.inner.Thinking()
 }
 
@@ -337,35 +356,47 @@ func (c *storingChatHandler) CallingTool(toolName string, payload string) {
 	c.inner.CallingTool(toolName, payload)
 }
 
-func (c *storingChatHandler) ToolComplete(toolName string) {
+func (c *storingChatHandler) ToolComplete(toolName string, result string) {
 	c.parent.storeEvent(protocol.EventAgentToolComplete, &c.taskName, &c.sessionKey, nil, protocol.AgentToolCompleteData{
 		TaskName:  c.taskName,
 		AgentName: c.agentName,
 		ToolName:  toolName,
+		Result:    result,
 	})
-	c.inner.ToolComplete(toolName)
+	c.inner.ToolComplete(toolName, result)
 }
 
 func (c *storingChatHandler) PublishReasoningChunk(chunk string) {
-	// Reasoning chunks are high-volume; we don't store individual chunks.
-	// The full reasoning is captured by the session message store.
+	c.reasoningBuf.WriteString(chunk)
 	c.inner.PublishReasoningChunk(chunk)
 }
 
 func (c *storingChatHandler) FinishReasoning() {
+	if c.reasoningBuf.Len() > 0 {
+		c.parent.storeEvent(protocol.EventAgentThinking, &c.taskName, &c.sessionKey, nil, protocol.AgentThinkingData{
+			TaskName:  c.taskName,
+			AgentName: c.agentName,
+			Content:   c.reasoningBuf.String(),
+		})
+		c.reasoningBuf.Reset()
+	}
 	c.inner.FinishReasoning()
 }
 
 func (c *storingChatHandler) PublishAnswerChunk(chunk string) {
-	// Answer chunks are high-volume; we don't store individual chunks.
+	c.answerBuf.WriteString(chunk)
 	c.inner.PublishAnswerChunk(chunk)
 }
 
 func (c *storingChatHandler) FinishAnswer() {
-	c.parent.storeEvent(protocol.EventAgentAnswer, &c.taskName, &c.sessionKey, nil, protocol.AgentAnswerData{
-		TaskName:  c.taskName,
-		AgentName: c.agentName,
-	})
+	if c.answerBuf.Len() > 0 {
+		c.parent.storeEvent(protocol.EventAgentAnswer, &c.taskName, &c.sessionKey, nil, protocol.AgentAnswerData{
+			TaskName:  c.taskName,
+			AgentName: c.agentName,
+			Content:   c.answerBuf.String(),
+		})
+		c.answerBuf.Reset()
+	}
 	c.inner.FinishAnswer()
 }
 

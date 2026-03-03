@@ -16,9 +16,9 @@ var ModelPricingTable = map[string]ModelPricing{
 	"claude-3-5-sonnet-20241022": {InputPer1M: 3.00, OutputPer1M: 15.00},
 
 	// OpenAI models
-	"gpt-5":        {InputPer1M: 1.25, OutputPer1M: 10.00},
-	"gpt-5-mini":   {InputPer1M: 0.25, OutputPer1M: 2.00},
-	"gpt-5-nano":   {InputPer1M: 0.05, OutputPer1M: 0.40},
+	"gpt-5":            {InputPer1M: 1.25, OutputPer1M: 10.00},
+	"gpt-5-mini":       {InputPer1M: 0.25, OutputPer1M: 2.00},
+	"gpt-5-nano":       {InputPer1M: 0.05, OutputPer1M: 0.40},
 	"gpt-4.1":      {InputPer1M: 2.00, OutputPer1M: 8.00},
 	"gpt-4.1-mini": {InputPer1M: 0.40, OutputPer1M: 1.60},
 	"gpt-4.1-nano": {InputPer1M: 0.10, OutputPer1M: 0.40},

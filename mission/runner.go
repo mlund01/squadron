@@ -873,6 +873,12 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	// Check for existing session state (finds stored session from prior run if any)
 	existingSessionID := r.findAndLoadExistingSession(sup, taskID, nil)
 
+	// Track commander session ID for subtask callbacks
+	var cmdSessionID string
+	if existingSessionID != "" {
+		cmdSessionID = existingSessionID
+	}
+
 	// Set up tool callbacks
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
 		OnAgentStart: func(taskName, agentName string) {
@@ -920,9 +926,21 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		TaskID:            taskID,
 		ExistingSessionID: existingSessionID,
 		OnSessionCreated: func(taskName, agentName, sessionID string) {
+			if agentName == "commander" {
+				cmdSessionID = sessionID
+			}
 			if reg, ok := streamer.(streamers.IDRegistrar); ok {
 				reg.SetSessionID(taskName, agentName, sessionID)
 			}
+		},
+		SetSubtasks: func(titles []string) error {
+			return r.stores.Missions.SetSubtasks(taskID, cmdSessionID, titles)
+		},
+		GetSubtasks: func() ([]store.Subtask, error) {
+			return r.stores.Missions.GetSubtasks(taskID, cmdSessionID)
+		},
+		CompleteSubtask: func() error {
+			return r.stores.Missions.CompleteSubtask(taskID, cmdSessionID)
 		},
 	}, depSummaries)
 
@@ -1398,6 +1416,9 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		}}
 	}
 
+	// Track commander session ID for subtask callbacks
+	var seqCmdSessionID string
+
 	// Set up tool callbacks
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
 		OnAgentStart: func(taskName, agentName string) {
@@ -1448,9 +1469,21 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		SessionLogger: r.stores.Sessions,
 		TaskID:        taskID,
 		OnSessionCreated: func(taskName, agentName, sessionID string) {
+			if agentName == "commander" {
+				seqCmdSessionID = sessionID
+			}
 			if reg, ok := streamer.(streamers.IDRegistrar); ok {
 				reg.SetSessionID(taskName, agentName, sessionID)
 			}
+		},
+		SetSubtasks: func(titles []string) error {
+			return r.stores.Missions.SetSubtasks(taskID, seqCmdSessionID, titles)
+		},
+		GetSubtasks: func() ([]store.Subtask, error) {
+			return r.stores.Missions.GetSubtasks(taskID, seqCmdSessionID)
+		},
+		CompleteSubtask: func() error {
+			return r.stores.Missions.CompleteSubtask(taskID, seqCmdSessionID)
 		},
 	}, depSummaries)
 
@@ -1786,6 +1819,12 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 	// Check for existing session state
 	existingSessionID := r.findAndLoadExistingSession(sup, taskID, nil)
 
+	// Track commander session ID for subtask callbacks
+	var seqResumeCmdSessionID string
+	if existingSessionID != "" {
+		seqResumeCmdSessionID = existingSessionID
+	}
+
 	// Set up tool callbacks
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
 		OnAgentStart: func(taskName, agentName string) {
@@ -1827,9 +1866,21 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 		TaskID:            taskID,
 		ExistingSessionID: existingSessionID,
 		OnSessionCreated: func(taskName, agentName, sessionID string) {
+			if agentName == "commander" {
+				seqResumeCmdSessionID = sessionID
+			}
 			if reg, ok := streamer.(streamers.IDRegistrar); ok {
 				reg.SetSessionID(taskName, agentName, sessionID)
 			}
+		},
+		SetSubtasks: func(titles []string) error {
+			return r.stores.Missions.SetSubtasks(taskID, seqResumeCmdSessionID, titles)
+		},
+		GetSubtasks: func() ([]store.Subtask, error) {
+			return r.stores.Missions.GetSubtasks(taskID, seqResumeCmdSessionID)
+		},
+		CompleteSubtask: func() error {
+			return r.stores.Missions.CompleteSubtask(taskID, seqResumeCmdSessionID)
 		},
 	}, depSummaries)
 
@@ -1964,6 +2015,12 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 	iterIdx := index
 	existingSessionID := r.findAndLoadExistingSession(sup, taskID, &iterIdx)
 
+	// Track commander session ID for subtask callbacks
+	var iterCmdSessionID string
+	if existingSessionID != "" {
+		iterCmdSessionID = existingSessionID
+	}
+
 	// Set up tool callbacks for iteration
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
 		OnAgentStart: func(taskName, agentName string) {
@@ -2013,9 +2070,21 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		IterationIndex:    &iterIdx,
 		ExistingSessionID: existingSessionID,
 		OnSessionCreated: func(taskName, agentName, sessionID string) {
+			if agentName == "commander" {
+				iterCmdSessionID = sessionID
+			}
 			if reg, ok := streamer.(streamers.IDRegistrar); ok {
 				reg.SetSessionID(taskName, agentName, sessionID)
 			}
+		},
+		SetSubtasks: func(titles []string) error {
+			return r.stores.Missions.SetSubtasks(taskID, iterCmdSessionID, titles)
+		},
+		GetSubtasks: func() ([]store.Subtask, error) {
+			return r.stores.Missions.GetSubtasks(taskID, iterCmdSessionID)
+		},
+		CompleteSubtask: func() error {
+			return r.stores.Missions.CompleteSubtask(taskID, iterCmdSessionID)
 		},
 	}, depSummaries)
 

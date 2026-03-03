@@ -17,6 +17,7 @@ func NewMemoryBundle() *Bundle {
 			missions:    make(map[string]*MissionRecord),
 			tasks:       make(map[string]*MissionTask),
 			taskOutputs: make(map[string][]TaskOutputRow),
+			subtasks:    make(map[string][]Subtask),
 		},
 		Datasets: &MemoryDatasetStore{datasets: make(map[string]*memDataset)},
 		Sessions: &MemorySessionStore{sessions: make(map[string]*memSession)},
@@ -33,6 +34,7 @@ type MemoryMissionStore struct {
 	missions    map[string]*MissionRecord
 	tasks       map[string]*MissionTask
 	taskOutputs map[string][]TaskOutputRow // taskID -> outputs
+	subtasks    map[string][]Subtask       // "taskID:sessionID" -> subtasks
 }
 
 func (s *MemoryMissionStore) CreateMission(name string, inputsJSON, configJSON string) (string, error) {
@@ -578,6 +580,63 @@ func (s *MemoryMissionStore) ListMissions(limit, offset int) ([]MissionRecord, i
 		end = total
 	}
 	return all[offset:end], total, nil
+}
+
+func (s *MemoryMissionStore) SetSubtasks(taskID, sessionID string, titles []string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := taskID + ":" + sessionID
+	now := time.Now()
+	subtasks := make([]Subtask, len(titles))
+	for i, title := range titles {
+		status := "pending"
+		if i == 0 {
+			status = "in_progress"
+		}
+		subtasks[i] = Subtask{
+			ID:        generateID(),
+			TaskID:    taskID,
+			SessionID: sessionID,
+			Index:     i,
+			Title:     title,
+			Status:    status,
+			CreatedAt: now,
+		}
+	}
+	s.subtasks[key] = subtasks
+	return nil
+}
+
+func (s *MemoryMissionStore) GetSubtasks(taskID, sessionID string) ([]Subtask, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := taskID + ":" + sessionID
+	result := make([]Subtask, len(s.subtasks[key]))
+	copy(result, s.subtasks[key])
+	return result, nil
+}
+
+func (s *MemoryMissionStore) CompleteSubtask(taskID, sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := taskID + ":" + sessionID
+	subtasks := s.subtasks[key]
+	for i, st := range subtasks {
+		if st.Status == "pending" || st.Status == "in_progress" {
+			now := time.Now()
+			subtasks[i].Status = "completed"
+			subtasks[i].CompletedAt = &now
+			// Advance next pending to in_progress
+			if i+1 < len(subtasks) && subtasks[i+1].Status == "pending" {
+				subtasks[i+1].Status = "in_progress"
+			}
+			return nil
+		}
+	}
+	return fmt.Errorf("no pending subtask to complete")
 }
 
 // =============================================================================

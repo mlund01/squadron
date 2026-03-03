@@ -130,6 +130,18 @@ CREATE TABLE IF NOT EXISTS dataset_items (
     PRIMARY KEY (dataset_id, item_index)
 );
 
+CREATE TABLE IF NOT EXISTS mission_task_subtasks (
+    id TEXT PRIMARY KEY,
+    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    idx INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    status TEXT DEFAULT 'pending',
+    created_at TEXT,
+    completed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_subtasks_task_session ON mission_task_subtasks(task_id, session_id);
+
 CREATE TABLE IF NOT EXISTS mission_events (
     id TEXT PRIMARY KEY,
     mission_id TEXT NOT NULL REFERENCES missions(id),
@@ -927,6 +939,93 @@ func (s *SQLiteMissionStore) ListMissions(limit, offset int) ([]MissionRecord, i
 		missions = append(missions, m)
 	}
 	return missions, total, nil
+}
+
+func (s *SQLiteMissionStore) SetSubtasks(taskID, sessionID string, titles []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete existing subtasks for this task+session
+	if _, err := tx.Exec(`DELETE FROM mission_task_subtasks WHERE task_id = ? AND session_id = ?`, taskID, sessionID); err != nil {
+		return fmt.Errorf("delete existing subtasks: %w", err)
+	}
+
+	now := tsNow()
+	for i, title := range titles {
+		status := "pending"
+		if i == 0 {
+			status = "in_progress"
+		}
+		id := generateID()
+		if _, err := tx.Exec(
+			`INSERT INTO mission_task_subtasks (id, task_id, session_id, idx, title, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			id, taskID, sessionID, i, title, status, now,
+		); err != nil {
+			return fmt.Errorf("insert subtask %d: %w", i, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *SQLiteMissionStore) GetSubtasks(taskID, sessionID string) ([]Subtask, error) {
+	rows, err := s.db.Query(
+		`SELECT id, task_id, session_id, idx, title, status, created_at, completed_at FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? ORDER BY idx`,
+		taskID, sessionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var subtasks []Subtask
+	for rows.Next() {
+		var st Subtask
+		var createdAtStr string
+		var completedAtStr sql.NullString
+		if err := rows.Scan(&st.ID, &st.TaskID, &st.SessionID, &st.Index, &st.Title, &st.Status, &createdAtStr, &completedAtStr); err != nil {
+			return nil, err
+		}
+		st.CreatedAt, _ = tsParse(createdAtStr)
+		st.CompletedAt, _ = tsParseNull(completedAtStr)
+		subtasks = append(subtasks, st)
+	}
+	return subtasks, nil
+}
+
+func (s *SQLiteMissionStore) CompleteSubtask(taskID, sessionID string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Find the first non-completed subtask
+	var id string
+	err = tx.QueryRow(
+		`SELECT id FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND status IN ('pending', 'in_progress') ORDER BY idx LIMIT 1`,
+		taskID, sessionID,
+	).Scan(&id)
+	if err != nil {
+		return fmt.Errorf("no pending subtask to complete: %w", err)
+	}
+
+	// Mark it completed
+	now := tsNow()
+	if _, err := tx.Exec(`UPDATE mission_task_subtasks SET status = 'completed', completed_at = ? WHERE id = ?`, now, id); err != nil {
+		return fmt.Errorf("complete subtask: %w", err)
+	}
+
+	// Advance next pending to in_progress
+	tx.Exec(
+		`UPDATE mission_task_subtasks SET status = 'in_progress' WHERE id = (SELECT id FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND status = 'pending' ORDER BY idx LIMIT 1)`,
+		taskID, sessionID,
+	)
+
+	return tx.Commit()
 }
 
 // =============================================================================

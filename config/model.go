@@ -14,9 +14,9 @@ const (
 // The keys are the variable names used in HCL references (e.g., models.openai.gpt_4o)
 var SupportedModels = map[Provider]map[string]string{
 	ProviderOpenAI: {
-		"gpt_5":        "gpt-5",
-		"gpt_5_mini":   "gpt-5-mini",
-		"gpt_5_nano":   "gpt-5-nano",
+		"gpt_5":            "gpt-5",
+		"gpt_5_mini":       "gpt-5-mini",
+		"gpt_5_nano":       "gpt-5-nano",
 		"gpt_4_1":      "gpt-4.1",
 		"gpt_4_1_mini": "gpt-4.1-mini",
 		"gpt_4_1_nano": "gpt-4.1-nano",

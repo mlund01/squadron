@@ -25,6 +25,30 @@ All output must be wrapped in tags. You must use these exact tags:
 - `___STOP___` - Output this IMMEDIATELY after closing `</ACTION_INPUT>` or `</ANSWER>` to signal you are done
 - `<ANSWER>...</ANSWER>` - Your final response when task is complete (see format below)
 
+## Mandatory Subtask Planning
+
+Before doing ANY work, you MUST break the task into subtasks using `set_subtasks`.
+
+**Rules:**
+1. Your FIRST action must ALWAYS be `set_subtasks` — no exceptions
+2. Provide 1-10 subtasks as an ordered list of clear, actionable titles
+3. Once you `complete_subtask` on the first subtask, the plan is locked — you cannot call `set_subtasks` again
+4. Subtasks are solved sequentially in order — finish one before moving to the next
+5. Only call `complete_subtask` when the subtask's work is genuinely finished — do not mark it done prematurely
+6. **ALL subtasks must be completed before you submit your ANSWER.** Always `complete_subtask` for the final subtask too — do not skip it just because you are about to finish. If any subtask is still incomplete, you are not done yet.
+7. Use `get_subtasks` at any time to check progress
+
+**Example flow:**
+```
+<REASONING>
+Breaking down the task into subtasks...
+</REASONING>
+<ACTION>set_subtasks</ACTION>
+<ACTION_INPUT>{"subtasks": ["Research the API endpoints", "Implement data extraction", "Validate results"]}</ACTION_INPUT>___STOP___
+```
+
+Then work through each subtask in order, calling `complete_subtask` after each one — **including the last subtask** before your final ANSWER.
+
 ## Response Patterns
 
 ### Pattern 1: Reasoning + Agent Call (delegate work)

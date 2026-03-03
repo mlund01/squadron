@@ -13,6 +13,7 @@ import (
 	"squadron/aitools"
 	"squadron/config"
 	"squadron/llm"
+	"squadron/store"
 	"squadron/streamers"
 )
 
@@ -135,6 +136,12 @@ type CommanderToolCallbacks struct {
 	// OnSessionCreated is called when a session is created (commander or agent).
 	// Used to register session IDs with the event store for correlation.
 	OnSessionCreated func(taskName, agentName, sessionID string)
+
+	// Subtask management callbacks (optional). When set, the commander gets
+	// set_subtasks, get_subtasks, and complete_subtask tools.
+	SetSubtasks     func(titles []string) error
+	GetSubtasks     func() ([]store.Subtask, error)
+	CompleteSubtask func() error
 }
 
 // DebugLogger is the interface for debug logging during mission execution
@@ -269,6 +276,7 @@ type Commander struct {
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
 	callbacksTaskID    string                 // Task ID from callbacks (for agent session creation)
 	iterationIndex     *int                   // Iteration index (nil for non-iterated tasks)
+	subtasksSet        bool                   // Whether set_subtasks has been called
 }
 
 // NewCommander creates a new commander for a mission task
@@ -504,6 +512,29 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 	if callbacks.GetCommanderAnswer != nil {
 		s.tools["get_commander_answer"] = &getCommanderAnswerTool{
 			commander: s,
+		}
+	}
+
+	// Register subtask tools if callbacks are provided
+	if callbacks.SetSubtasks != nil {
+		s.tools["set_subtasks"] = &setSubtasksTool{
+			onSet: func(titles []string) error {
+				s.subtasksSet = true
+				return callbacks.SetSubtasks(titles)
+			},
+			onGet: callbacks.GetSubtasks,
+		}
+		s.tools["get_subtasks"] = &getSubtasksTool{onGet: callbacks.GetSubtasks}
+		s.tools["complete_subtask"] = &completeSubtaskTool{
+			onComplete: callbacks.CompleteSubtask,
+			onGet:      callbacks.GetSubtasks,
+		}
+
+		// Restore subtasksSet flag if resuming with existing subtasks
+		if callbacks.ExistingSessionID != "" && callbacks.GetSubtasks != nil {
+			if subtasks, err := callbacks.GetSubtasks(); err == nil && len(subtasks) > 0 {
+				s.subtasksSet = true
+			}
 		}
 	}
 

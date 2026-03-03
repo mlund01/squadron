@@ -39,6 +39,11 @@ type MissionStore interface {
 	ListMissions(limit, offset int) ([]MissionRecord, int, error)
 	StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON, summary string) error
 	GetTaskOutputs(taskID string) ([]TaskOutputRow, error)
+
+	// Subtask management
+	SetSubtasks(taskID, sessionID string, titles []string) error
+	GetSubtasks(taskID, sessionID string) ([]Subtask, error)
+	CompleteSubtask(taskID, sessionID string) error
 }
 
 // MissionTask represents a task within a mission run
@@ -76,6 +81,18 @@ type TaskOutputRow struct {
 	OutputJSON   string    `json:"outputJson"`
 	Summary      string    `json:"summary"`
 	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// Subtask represents a planned step within a task execution
+type Subtask struct {
+	ID          string     `json:"id"`
+	TaskID      string     `json:"taskId"`
+	SessionID   string     `json:"sessionId"`
+	Index       int        `json:"index"`
+	Title       string     `json:"title"`
+	Status      string     `json:"status"` // pending, in_progress, completed
+	CreatedAt   time.Time  `json:"createdAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
 // SessionStore tracks agent/commander sessions and their message history

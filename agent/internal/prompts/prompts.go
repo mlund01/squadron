@@ -443,3 +443,44 @@ func formatTools(tools map[string]aitools.Tool) string {
 	}
 	return sb.String()
 }
+
+// FormatFolderContext builds a system prompt section describing available folders.
+func FormatFolderContext(store aitools.FolderStore) string {
+	if store == nil {
+		return ""
+	}
+	infos := store.FolderInfos()
+	if len(infos) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Available Folders\n\n")
+	sb.WriteString("You have access to file folders via the file_list, file_read, file_create, file_delete, file_search, and file_grep tools.\n")
+	sb.WriteString("Use the `folder` parameter to specify which folder. ")
+
+	defaultFolder := store.DefaultFolder()
+	if defaultFolder != "" {
+		sb.WriteString(fmt.Sprintf("Omit it to use the default folder (%q).\n\n", defaultFolder))
+	} else {
+		sb.WriteString("The `folder` parameter is required since no default folder is configured.\n\n")
+	}
+
+	for _, info := range infos {
+		access := "read-only"
+		if info.Writable {
+			access = "read/write"
+		}
+		label := ""
+		if info.IsDedicated {
+			label = " (dedicated mission folder)"
+		}
+		desc := ""
+		if info.Description != "" {
+			desc = " — " + info.Description
+		}
+		sb.WriteString(fmt.Sprintf("- **%s**%s%s (%s)\n", info.Name, label, desc, access))
+	}
+
+	return sb.String()
+}

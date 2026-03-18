@@ -388,7 +388,7 @@ Use Playwright plugin with AI-friendly tools:
 
 ### Sequential Data Processing
 
-Use iterated tasks with `parallel = false` to pass context between iterations via `PrevIterationOutput` and `PrevIterationLearnings`.
+Use iterated tasks with `parallel = false` to pass context between iterations via `PrevIterationOutput`.
 
 ### Parallel with Shared Context
 

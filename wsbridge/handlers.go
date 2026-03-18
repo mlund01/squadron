@@ -2,6 +2,7 @@ package wsbridge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -35,6 +36,15 @@ func (c *Client) registerHandlers() {
 	c.handlers[protocol.TypeGetConfigFile] = c.handleGetConfigFile
 	c.handlers[protocol.TypeWriteConfigFile] = c.handleWriteConfigFile
 	c.handlers[protocol.TypeValidateConfig] = c.handleValidateConfig
+	c.handlers[protocol.TypeListSharedFolders] = c.handleListSharedFolders
+	c.handlers[protocol.TypeBrowseDirectory] = c.handleBrowseDirectory
+	c.handlers[protocol.TypeReadBrowseFile] = c.handleReadBrowseFile
+	c.handlers[protocol.TypeWriteBrowseFile] = c.handleWriteBrowseFile
+	c.handlers[protocol.TypeDownloadFile] = c.handleDownloadFile
+	c.handlers[protocol.TypeDownloadDirectory] = c.handleDownloadDirectory
+	c.handlers[protocol.TypeGetVariables] = c.handleGetVariables
+	c.handlers[protocol.TypeSetVariable] = c.handleSetVariable
+	c.handlers[protocol.TypeDeleteVariable] = c.handleDeleteVariable
 }
 
 func (c *Client) handleReloadConfig(env *protocol.Envelope) (*protocol.Envelope, error) {
@@ -205,7 +215,6 @@ func (c *Client) handleGetMission(env *protocol.Envelope) (*protocol.Envelope, e
 			TaskName:   t.TaskName,
 			Status:     t.Status,
 			ConfigJSON: t.ConfigJSON,
-			Summary:    t.Summary,
 			OutputJSON: t.OutputJSON,
 			Error:      t.Error,
 		}
@@ -243,7 +252,6 @@ func (c *Client) handleGetTaskDetail(env *protocol.Envelope) (*protocol.Envelope
 		TaskName:   taskRecord.TaskName,
 		Status:     taskRecord.Status,
 		ConfigJSON: taskRecord.ConfigJSON,
-		Summary:    taskRecord.Summary,
 		OutputJSON: taskRecord.OutputJSON,
 		Error:      taskRecord.Error,
 	}
@@ -264,12 +272,13 @@ func (c *Client) handleGetTaskDetail(env *protocol.Envelope) (*protocol.Envelope
 	outputInfos := make([]protocol.TaskOutputInfo, len(outputs))
 	for i, o := range outputs {
 		outputInfos[i] = protocol.TaskOutputInfo{
-			ID:          o.ID,
-			TaskID:      o.TaskID,
-			DatasetName: o.DatasetName,
-			OutputJSON:  o.OutputJSON,
-			Summary:     o.Summary,
-			CreatedAt:   o.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+			ID:           o.ID,
+			TaskID:       o.TaskID,
+			DatasetName:  o.DatasetName,
+			DatasetIndex: o.DatasetIndex,
+			ItemID:       o.ItemID,
+			OutputJSON:   o.OutputJSON,
+			CreatedAt:    o.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		}
 	}
 
@@ -309,16 +318,78 @@ func (c *Client) handleGetTaskDetail(env *protocol.Envelope) (*protocol.Envelope
 			SessionID:   tr.SessionID,
 			ToolName:    tr.ToolName,
 			InputParams: tr.InputParams,
+			Output:      tr.RawData,
 			StartedAt:   tr.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 			FinishedAt:  tr.FinishedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 		}
 	}
 
+	// Get subtasks
+	subtasks, err := c.stores.Missions.GetSubtasksByTask(payload.TaskID)
+	if err != nil {
+		return nil, fmt.Errorf("get subtasks: %w", err)
+	}
+	subtaskInfos := make([]protocol.SubtaskInfo, len(subtasks))
+	for i, st := range subtasks {
+		subtaskInfos[i] = protocol.SubtaskInfo{
+			Index:          st.Index,
+			Title:          st.Title,
+			Status:         st.Status,
+			SessionID:      st.SessionID,
+			IterationIndex: st.IterationIndex,
+		}
+		if st.CompletedAt != nil {
+			f := st.CompletedAt.UTC().Format("2006-01-02T15:04:05.000Z")
+			subtaskInfos[i].CompletedAt = &f
+		}
+	}
+
+	// Get task inputs
+	taskInputs, _ := c.stores.Missions.GetTaskInputs(payload.TaskID)
+	inputInfos := make([]protocol.TaskInputInfo, len(taskInputs))
+	for i, ti := range taskInputs {
+		inputInfos[i] = protocol.TaskInputInfo{
+			IterationIndex: ti.IterationIndex,
+			Objective:      ti.Objective,
+		}
+	}
+
+	// Get dataset items if the task has an iterator
+	var datasetItemInfos []protocol.DatasetItemInfo
+	if taskRecord.ConfigJSON != "" {
+		var taskCfg struct {
+			Iterator *struct {
+				Dataset string `json:"dataset"`
+			} `json:"iterator,omitempty"`
+		}
+		if err := json.Unmarshal([]byte(taskRecord.ConfigJSON), &taskCfg); err == nil && taskCfg.Iterator != nil {
+			dsID, err := c.stores.Datasets.GetDatasetByName(taskRecord.MissionID, taskCfg.Iterator.Dataset)
+			if err == nil {
+				count, _ := c.stores.Datasets.GetItemCount(dsID)
+				if count > 0 {
+					rawItems, err := c.stores.Datasets.GetItemsRaw(dsID, 0, count)
+					if err == nil {
+						datasetItemInfos = make([]protocol.DatasetItemInfo, len(rawItems))
+						for i, raw := range rawItems {
+							datasetItemInfos[i] = protocol.DatasetItemInfo{
+								Index:    i,
+								ItemJSON: raw,
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetTaskDetailResult, &protocol.GetTaskDetailResultPayload{
-		Task:        taskInfo,
-		Outputs:     outputInfos,
-		Sessions:    sessionInfos,
-		ToolResults: toolResultInfos,
+		Task:         taskInfo,
+		Outputs:      outputInfos,
+		Sessions:     sessionInfos,
+		ToolResults:  toolResultInfos,
+		Subtasks:     subtaskInfos,
+		Inputs:       inputInfos,
+		DatasetItems: datasetItemInfos,
 	})
 }
 
@@ -808,6 +879,121 @@ func (c *Client) handleWriteConfigFile(env *protocol.Envelope) (*protocol.Envelo
 	}
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeWriteConfigFileResult, &protocol.WriteConfigFileResultPayload{
+		Success: true,
+	})
+}
+
+// =============================================================================
+// Variable operations
+// =============================================================================
+
+func maskSecret(value string) string {
+	if len(value) <= 4 {
+		return strings.Repeat("•", len(value))
+	}
+	return value[:4] + "••••"
+}
+
+func (c *Client) handleGetVariables(env *protocol.Envelope) (*protocol.Envelope, error) {
+	cfg := c.getConfig()
+
+	fileVars, err := config.LoadVarsFromFile()
+	if err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeError, &protocol.ErrorPayload{
+			Code:    "vars_load_error",
+			Message: err.Error(),
+		})
+	}
+
+	details := make([]protocol.VariableDetail, 0, len(cfg.Variables))
+	for _, v := range cfg.Variables {
+		detail := protocol.VariableDetail{
+			Name:   v.Name,
+			Secret: v.Secret,
+		}
+
+		if fileVal, ok := fileVars[v.Name]; ok {
+			detail.HasValue = true
+			detail.Source = "override"
+			if v.Secret {
+				detail.Value = maskSecret(fileVal)
+			} else {
+				detail.Value = fileVal
+			}
+		} else if v.Default != "" {
+			detail.HasValue = true
+			detail.Source = "default"
+			detail.Default = v.Default
+			if v.Secret {
+				detail.Value = maskSecret(v.Default)
+			} else {
+				detail.Value = v.Default
+			}
+		} else {
+			detail.Source = "unset"
+		}
+
+		details = append(details, detail)
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeGetVariablesResult, &protocol.GetVariablesResultPayload{
+		Variables: details,
+	})
+}
+
+func (c *Client) handleSetVariable(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.SetVariablePayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
+			Error: "invalid payload: " + err.Error(),
+		})
+	}
+
+	// Validate variable exists in config
+	cfg := c.getConfig()
+	found := false
+	for _, v := range cfg.Variables {
+		if v.Name == payload.Name {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
+			Error: fmt.Sprintf("variable %q not defined in config", payload.Name),
+		})
+	}
+
+	if err := config.SetVar(payload.Name, payload.Value); err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
+			Error: err.Error(),
+		})
+	}
+
+	_ = c.ReloadConfig()
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
+		Success: true,
+	})
+}
+
+func (c *Client) handleDeleteVariable(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.DeleteVariablePayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeDeleteVariableResult, &protocol.DeleteVariableResultPayload{
+			Error: "invalid payload: " + err.Error(),
+		})
+	}
+
+	if err := config.DeleteVar(payload.Name); err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeDeleteVariableResult, &protocol.DeleteVariableResultPayload{
+			Error: err.Error(),
+		})
+	}
+
+	_ = c.ReloadConfig()
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeDeleteVariableResult, &protocol.DeleteVariableResultPayload{
 		Success: true,
 	})
 }

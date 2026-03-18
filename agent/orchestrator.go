@@ -89,6 +89,7 @@ type orchestrator struct {
 	turnLogger     *llm.TurnLogger
 	secretInjector *secretInjector
 	compaction     *CompactionConfig
+	onCompaction   func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 	sessionLogger  SessionLogger
 	sessionID      string
 	taskID         string
@@ -363,13 +364,18 @@ func (o *orchestrator) checkAndCompact(inputTokens int) {
 	}
 
 	compacted := adapter.GetSession().Compact(o.compaction.TurnRetention)
-	if compacted > 0 && o.eventLogger != nil {
-		o.eventLogger.LogEvent("compaction", map[string]any{
-			"input_tokens":      inputTokens,
-			"token_limit":       o.compaction.TokenLimit,
-			"messages_compacted": compacted,
-			"turn_retention":    o.compaction.TurnRetention,
-		})
+	if compacted > 0 {
+		if o.onCompaction != nil {
+			o.onCompaction(inputTokens, o.compaction.TokenLimit, compacted, o.compaction.TurnRetention)
+		}
+		if o.eventLogger != nil {
+			o.eventLogger.LogEvent("compaction", map[string]any{
+				"input_tokens":       inputTokens,
+				"token_limit":        o.compaction.TokenLimit,
+				"messages_compacted": compacted,
+				"turn_retention":     o.compaction.TurnRetention,
+			})
+		}
 	}
 }
 

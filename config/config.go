@@ -29,6 +29,9 @@ type Config struct {
 	// Commander configuration (optional, nil when absent = standalone mode)
 	Commander *CommanderConfig `hcl:"-"`
 
+	// File browser configurations (optional)
+	SharedFolders []SharedFolder `hcl:"-"`
+
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
 	// PluginWarnings holds warnings for plugins that could not be loaded
@@ -86,6 +89,12 @@ func (c *Config) Validate() error {
 	for _, a := range c.Agents {
 		if err := a.Validate(); err != nil {
 			return err
+		}
+	}
+
+	for _, fb := range c.SharedFolders {
+		if err := fb.Validate(); err != nil {
+			return fmt.Errorf("shared_folder '%s': %w", fb.Name, err)
 		}
 	}
 
@@ -150,7 +159,7 @@ func (c *Config) Validate() error {
 
 	// Validate missions
 	for _, w := range c.Missions {
-		if err := w.Validate(c.Models, c.Agents); err != nil {
+		if err := w.Validate(c.Models, c.Agents, c.SharedFolders); err != nil {
 			return fmt.Errorf("mission '%s': %w", w.Name, err)
 		}
 	}
@@ -199,8 +208,9 @@ type parsedBlocks struct {
 	Tools     []*hcl.Block
 	Plugins   []*hcl.Block
 	Missions  []*hcl.Block
-	Storage   []*hcl.Block
-	Commander []*hcl.Block
+	Storage      []*hcl.Block
+	Commander    []*hcl.Block
+	SharedFolders []*hcl.Block
 }
 
 // loadFromFiles implements staged loading: variables → models → agents → tools
@@ -226,6 +236,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "mission", LabelNames: []string{"name"}},
 				{Type: "storage"},
 				{Type: "commander"},
+				{Type: "shared_folder", LabelNames: []string{"name"}},
 			},
 		})
 		if diags.HasErrors() {
@@ -251,6 +262,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.Storage = append(pb.Storage, block)
 			case "commander":
 				pb.Commander = append(pb.Commander, block)
+			case "shared_folder":
+				pb.SharedFolders = append(pb.SharedFolders, block)
 			}
 		}
 		allParsedBlocks = append(allParsedBlocks, pb)
@@ -296,6 +309,20 @@ func loadFromFiles(files []string) (*Config, error) {
 			}
 			cc.Defaults()
 			commanderConfig = &cc
+		}
+	}
+
+	// Parse shared_folder blocks (optional, with vars context)
+	var allSharedFolders []SharedFolder
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.SharedFolders {
+			var fb SharedFolder
+			fb.Name = block.Labels[0]
+			diags := gohcl.DecodeBody(block.Body, varsCtx, &fb)
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("shared_folder '%s': %w", fb.Name, diags)
+			}
+			allSharedFolders = append(allSharedFolders, fb)
 		}
 	}
 
@@ -382,7 +409,16 @@ func loadFromFiles(files []string) (*Config, error) {
 	// Build agents context (add to full context)
 	agentsCtx := buildAgentsContext(fullCtx, allAgents)
 
-	// Stage 5: Load missions (with vars + models + tools + agents context)
+	// Add shared_folders namespace for mission references
+	if len(allSharedFolders) > 0 {
+		folderMap := make(map[string]cty.Value)
+		for _, f := range allSharedFolders {
+			folderMap[f.Name] = cty.StringVal(f.Name)
+		}
+		agentsCtx.Variables["shared_folders"] = cty.ObjectVal(folderMap)
+	}
+
+	// Stage 5: Load missions (with vars + models + tools + agents + shared_folders context)
 	var allMissions []Mission
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Missions {
@@ -403,6 +439,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		Missions:      allMissions,
 		Storage:        &storageConfig,
 		Commander:      commanderConfig,
+		SharedFolders:   allSharedFolders,
 		LoadedPlugins:  loadedPlugins,
 		PluginWarnings: pluginWarnings,
 		ResolvedVars:   resolvedVars,
@@ -694,26 +731,76 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 	// Parse the mission block content
 	missionContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
-			{Name: "commander", Required: true},
 			{Name: "agents", Required: true},
 			{Name: "directive"},
+			{Name: "folders"},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "commander"},
 			{Type: "task", LabelNames: []string{"name"}},
 			{Type: "input", LabelNames: []string{"name"}},
 			{Type: "dataset", LabelNames: []string{"name"}},
 			{Type: "secret", LabelNames: []string{"name"}},
+			{Type: "folder"},
 		},
 	})
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
 	}
 
-	// Get commander attribute
-	commanderModelAttr := missionContent.Attributes["commander"]
-	commanderModelVal, diags := commanderModelAttr.Expr.Value(ctx)
-	if diags.HasErrors() {
-		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
+	// Parse commander block (required)
+	var missionCommander *MissionCommander
+	for _, cmdBlock := range missionContent.Blocks {
+		if cmdBlock.Type != "commander" {
+			continue
+		}
+		if missionCommander != nil {
+			return nil, fmt.Errorf("mission '%s': only one commander block allowed", missionName)
+		}
+
+		// Parse commander block content
+		cmdContent, _, cmdDiags := cmdBlock.Body.PartialContent(&hcl.BodySchema{
+			Attributes: []hcl.AttributeSchema{
+				{Name: "model", Required: true},
+			},
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "compaction"},
+			},
+		})
+		if cmdDiags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' commander: %w", missionName, cmdDiags)
+		}
+
+		// Get model attribute
+		modelAttr := cmdContent.Attributes["model"]
+		modelVal, modelDiags := modelAttr.Expr.Value(ctx)
+		if modelDiags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' commander model: %w", missionName, modelDiags)
+		}
+
+		missionCommander = &MissionCommander{
+			Model: modelVal.AsString(),
+		}
+
+		// Parse optional compaction sub-block
+		for _, compBlock := range cmdContent.Blocks {
+			if compBlock.Type != "compaction" {
+				continue
+			}
+			var comp Compaction
+			compDiags := gohcl.DecodeBody(compBlock.Body, ctx, &comp)
+			if compDiags.HasErrors() {
+				return nil, fmt.Errorf("mission '%s' commander compaction: %w", missionName, compDiags)
+			}
+			// Default turn_retention to 10 when compaction is enabled
+			if comp.TurnRetention <= 0 {
+				comp.TurnRetention = 10
+			}
+			missionCommander.Compaction = &comp
+		}
+	}
+	if missionCommander == nil {
+		return nil, fmt.Errorf("mission '%s': commander block is required", missionName)
 	}
 
 	// Get agents attribute (mission-level agents)
@@ -738,11 +825,43 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		directive = val.AsString()
 	}
 
+	// Parse optional folders attribute (list of shared folder names)
+	var missionFolders []string
+	if foldersAttr, ok := missionContent.Attributes["folders"]; ok {
+		foldersVal, diags := foldersAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' folders: %w", missionName, diags)
+		}
+		for it := foldersVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			missionFolders = append(missionFolders, v.AsString())
+		}
+	}
+
+	// Parse optional folder block (dedicated mission folder)
+	var missionFolder *MissionFolder
+	for _, folderBlock := range missionContent.Blocks {
+		if folderBlock.Type != "folder" {
+			continue
+		}
+		if missionFolder != nil {
+			return nil, fmt.Errorf("mission '%s': only one folder block allowed", missionName)
+		}
+		var mf MissionFolder
+		diags := gohcl.DecodeBody(folderBlock.Body, ctx, &mf)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' folder: %w", missionName, diags)
+		}
+		missionFolder = &mf
+	}
+
 	mission := &Mission{
 		Name:      missionName,
 		Directive: directive,
-		Commander: commanderModelVal.AsString(),
+		Commander: missionCommander,
 		Agents:    missionAgents,
+		Folders:   missionFolders,
+		Folder:    missionFolder,
 	}
 
 	// Parse input blocks first
@@ -1175,6 +1294,16 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			}
 			output = out
 			break
+		}
+	}
+
+	// Validate: sequential iterator tasks must not reference `item` in their objective.
+	// The commander receives item data via the dataset_next tool, not through the objective.
+	if iterator != nil && !iterator.Parallel {
+		for _, traversal := range objectiveExpr.Variables() {
+			if traversal.RootName() == "item" {
+				return nil, fmt.Errorf("task '%s': sequential iterator tasks cannot reference 'item' in their objective — the commander receives each item via the dataset_next tool", taskName)
+			}
 		}
 	}
 

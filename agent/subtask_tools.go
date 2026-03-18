@@ -11,8 +11,9 @@ import (
 
 // setSubtasksTool allows the commander to define subtasks for the current task
 type setSubtasksTool struct {
-	onSet func(titles []string) error
-	onGet func() ([]store.Subtask, error)
+	onSet            func(titles []string) error
+	onGet            func() ([]store.Subtask, error)
+	datasetAdvanced  bool // set to true when dataset_next advances, allowing redefinition
 }
 
 func (t *setSubtasksTool) ToolName() string { return "set_subtasks" }
@@ -48,15 +49,18 @@ func (t *setSubtasksTool) Call(params string) string {
 	}
 
 	// Check if any subtask has already been completed (plan is locked)
-	if t.onGet != nil {
+	// But allow redefinition if the dataset cursor advanced (new item = new subtasks)
+	if !t.datasetAdvanced && t.onGet != nil {
 		if existing, err := t.onGet(); err == nil {
 			for _, st := range existing {
 				if st.Status == "completed" {
-					return `{"status": "error", "message": "cannot redefine subtasks after work has started (a subtask has already been completed)"}`
+					return `{"status": "error", "message": "cannot redefine subtasks after work has started (a subtask has already been completed). For sequential datasets, call dataset_next first to advance to the next item."}`
 				}
 			}
 		}
 	}
+
+	t.datasetAdvanced = false // reset after redefinition
 
 	if err := t.onSet(input.Subtasks); err != nil {
 		return fmt.Sprintf(`{"status": "error", "message": "failed to set subtasks: %v"}`, err)

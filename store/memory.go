@@ -17,6 +17,7 @@ func NewMemoryBundle() *Bundle {
 			missions:    make(map[string]*MissionRecord),
 			tasks:       make(map[string]*MissionTask),
 			taskOutputs: make(map[string][]TaskOutputRow),
+			taskInputs:  make(map[string][]TaskInput),
 			subtasks:    make(map[string][]Subtask),
 		},
 		Datasets: &MemoryDatasetStore{datasets: make(map[string]*memDataset)},
@@ -34,7 +35,8 @@ type MemoryMissionStore struct {
 	missions    map[string]*MissionRecord
 	tasks       map[string]*MissionTask
 	taskOutputs map[string][]TaskOutputRow // taskID -> outputs
-	subtasks    map[string][]Subtask       // "taskID:sessionID" -> subtasks
+	taskInputs  map[string][]TaskInput     // taskID -> inputs
+	subtasks    map[string][]Subtask       // "taskID:sessionID:iterIdx" -> subtasks
 }
 
 func (s *MemoryMissionStore) CreateMission(name string, inputsJSON, configJSON string) (string, error) {
@@ -84,13 +86,12 @@ func (s *MemoryMissionStore) CreateTask(missionID, taskName, configJSON string) 
 	return id, nil
 }
 
-func (s *MemoryMissionStore) UpdateTaskStatus(id, status string, summary, outputJSON, errMsg *string) error {
+func (s *MemoryMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if task, ok := s.tasks[id]; ok {
 		task.Status = status
-		task.Summary = summary
 		task.OutputJSON = outputJSON
 		task.Error = errMsg
 		if status == "completed" || status == "failed" {
@@ -152,7 +153,7 @@ func (s *MemoryMissionStore) GetMission(id string) (*MissionRecord, error) {
 	return &cp, nil
 }
 
-func (s *MemoryMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON, summary string) error {
+func (s *MemoryMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -160,7 +161,6 @@ func (s *MemoryMissionStore) StoreTaskOutput(taskID string, datasetName *string,
 		ID:         generateID(),
 		TaskID:     taskID,
 		OutputJSON: outputJSON,
-		Summary:    summary,
 		CreatedAt:  time.Now(),
 	}
 	if datasetName != nil {
@@ -174,6 +174,31 @@ func (s *MemoryMissionStore) StoreTaskOutput(taskID string, datasetName *string,
 	}
 	s.taskOutputs[taskID] = append(s.taskOutputs[taskID], row)
 	return nil
+}
+
+func (s *MemoryMissionStore) StoreTaskInput(taskID string, iterationIndex *int, objective string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ti := TaskInput{
+		ID:             generateID(),
+		TaskID:         taskID,
+		IterationIndex: iterationIndex,
+		Objective:      objective,
+		CreatedAt:      time.Now(),
+	}
+	s.taskInputs[taskID] = append(s.taskInputs[taskID], ti)
+	return nil
+}
+
+func (s *MemoryMissionStore) GetTaskInputs(taskID string) ([]TaskInput, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	inputs := s.taskInputs[taskID]
+	result := make([]TaskInput, len(inputs))
+	copy(result, inputs)
+	return result, nil
 }
 
 func (s *MemoryMissionStore) GetTaskOutputs(taskID string) ([]TaskOutputRow, error) {
@@ -582,11 +607,19 @@ func (s *MemoryMissionStore) ListMissions(limit, offset int) ([]MissionRecord, i
 	return all[offset:end], total, nil
 }
 
-func (s *MemoryMissionStore) SetSubtasks(taskID, sessionID string, titles []string) error {
+func memSubtaskKey(taskID, sessionID string, iterationIndex *int) string {
+	key := taskID + ":" + sessionID
+	if iterationIndex != nil {
+		key += fmt.Sprintf(":%d", *iterationIndex)
+	}
+	return key
+}
+
+func (s *MemoryMissionStore) SetSubtasks(taskID, sessionID string, iterationIndex *int, titles []string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	key := taskID + ":" + sessionID
+	key := memSubtaskKey(taskID, sessionID, iterationIndex)
 	now := time.Now()
 	subtasks := make([]Subtask, len(titles))
 	for i, title := range titles {
@@ -595,34 +628,48 @@ func (s *MemoryMissionStore) SetSubtasks(taskID, sessionID string, titles []stri
 			status = "in_progress"
 		}
 		subtasks[i] = Subtask{
-			ID:        generateID(),
-			TaskID:    taskID,
-			SessionID: sessionID,
-			Index:     i,
-			Title:     title,
-			Status:    status,
-			CreatedAt: now,
+			ID:             generateID(),
+			TaskID:         taskID,
+			SessionID:      sessionID,
+			IterationIndex: iterationIndex,
+			Index:          i,
+			Title:          title,
+			Status:         status,
+			CreatedAt:      now,
 		}
 	}
 	s.subtasks[key] = subtasks
 	return nil
 }
 
-func (s *MemoryMissionStore) GetSubtasks(taskID, sessionID string) ([]Subtask, error) {
+func (s *MemoryMissionStore) GetSubtasks(taskID, sessionID string, iterationIndex *int) ([]Subtask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	key := taskID + ":" + sessionID
+	key := memSubtaskKey(taskID, sessionID, iterationIndex)
 	result := make([]Subtask, len(s.subtasks[key]))
 	copy(result, s.subtasks[key])
 	return result, nil
 }
 
-func (s *MemoryMissionStore) CompleteSubtask(taskID, sessionID string) error {
+func (s *MemoryMissionStore) GetSubtasksByTask(taskID string) ([]Subtask, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	key := taskID + ":" + sessionID
+	var result []Subtask
+	for key, subs := range s.subtasks {
+		if len(key) > len(taskID) && key[:len(taskID)] == taskID && key[len(taskID)] == ':' {
+			result = append(result, subs...)
+		}
+	}
+	return result, nil
+}
+
+func (s *MemoryMissionStore) CompleteSubtask(taskID, sessionID string, iterationIndex *int) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	key := memSubtaskKey(taskID, sessionID, iterationIndex)
 	subtasks := s.subtasks[key]
 	for i, st := range subtasks {
 		if st.Status == "pending" || st.Status == "in_progress" {

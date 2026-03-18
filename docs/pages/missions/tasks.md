@@ -81,13 +81,14 @@ mission "report" {
 Each task gets a commander that:
 
 1. Receives the objective
-2. Reasons about how to accomplish it
-3. Delegates to agents using `call_agent`
-4. Synthesizes a final summary
+2. Breaks the task into subtasks using `set_subtasks`
+3. Works through each subtask, delegating to agents using `call_agent`
+4. Calls `submit_output` if the task has an output schema
+5. Calls `task_complete` when all work is done
 
 ## Context from Dependencies
 
-Commanders receive summaries from completed dependencies:
+Commanders receive context from completed dependency tasks. They can query structured data using `query_task_output` and ask follow-up questions to previous commanders using `ask_commander`.
 
 ```hcl
 task "step_2" {
@@ -96,11 +97,11 @@ task "step_2" {
 }
 ```
 
-The step_2 commander sees step_1's summary and can query structured data using `query_task_output`.
+The step_2 commander can query step_1's structured output and ask its commander clarifying questions.
 
 ## Structured Output
 
-Tasks can define a structured output schema. When defined, the commander must output data matching the schema:
+Tasks can define a structured output schema. When defined, the commander must call `submit_output` with data matching the schema:
 
 ```hcl
 task "analyze_sales" {

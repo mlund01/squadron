@@ -37,6 +37,7 @@ type Agent struct {
 	turnLogger     *llm.TurnLogger   // Persists across Chat() calls for consistent turn numbering
 	secretInfos    []SecretInfo      // Secret names and descriptions (for prompts)
 	secretValues   map[string]string // Actual secret values (for tool call injection)
+	onCompaction   func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 	sessionLogger  SessionLogger    // Optional session logger for tool result auditing
 	sessionID      string           // Session ID for tool result auditing
 	taskID         string           // Task ID for tool result auditing
@@ -70,6 +71,10 @@ type Options struct {
 	SecretInfos []SecretInfo
 	// SecretValues contains actual secret values for tool call injection
 	SecretValues map[string]string
+	// FolderStore provides file folder access for the mission (optional)
+	FolderStore aitools.FolderStore
+	// OnCompaction is called when context compaction occurs (optional, mission context only)
+	OnCompaction func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 }
 
 // New creates a new agent from config
@@ -137,6 +142,16 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		}
 	}
 
+	// Add folder tools if FolderStore is available
+	if opts.FolderStore != nil {
+		tools["file_list"] = &aitools.FolderListTool{Store: opts.FolderStore}
+		tools["file_read"] = &aitools.FolderReadTool{Store: opts.FolderStore}
+		tools["file_create"] = &aitools.FolderCreateTool{Store: opts.FolderStore}
+		tools["file_delete"] = &aitools.FolderDeleteTool{Store: opts.FolderStore}
+		tools["file_search"] = &aitools.FolderSearchTool{Store: opts.FolderStore}
+		tools["file_grep"] = &aitools.FolderGrepTool{Store: opts.FolderStore}
+	}
+
 	// Determine mode (defaults to chat, can be overridden via Options)
 	mode := config.ModeChat
 	if opts.Mode != nil {
@@ -164,6 +179,13 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	if opts.DatasetStore != nil {
 		if datasetPrompt := formatDatasetInfo(opts.DatasetStore.GetDatasetInfo()); datasetPrompt != "" {
 			systemPrompts = append(systemPrompts, datasetPrompt)
+		}
+	}
+
+	// Add folder context if FolderStore is available
+	if opts.FolderStore != nil {
+		if folderPrompt := prompts.FormatFolderContext(opts.FolderStore); folderPrompt != "" {
+			systemPrompts = append(systemPrompts, folderPrompt)
 		}
 	}
 
@@ -218,6 +240,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		pruningManager: pruningManager,
 		compaction:     compaction,
 		eventLogger:    opts.EventLogger,
+		onCompaction:   opts.OnCompaction,
 		turnLogger:     turnLogger,
 		secretInfos:    opts.SecretInfos,
 		secretValues:   opts.SecretValues,
@@ -258,6 +281,7 @@ func (a *Agent) NeedsResume() bool {
 func (a *Agent) Resume(ctx context.Context, streamer streamers.ChatHandler) (ChatResult, error) {
 	sessionAdapter := llm.NewSessionAdapter(a.session)
 	orch := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
+	orch.onCompaction = a.onCompaction
 	orch.sessionLogger = a.sessionLogger
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID
@@ -302,6 +326,7 @@ func (a *Agent) Close() {
 func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatHandler) (ChatResult, error) {
 	sessionAdapter := llm.NewSessionAdapter(a.session)
 	orch := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
+	orch.onCompaction = a.onCompaction
 	orch.sessionLogger = a.sessionLogger
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID

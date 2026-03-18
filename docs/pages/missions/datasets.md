@@ -216,7 +216,7 @@ Use `result_to_dataset` to convert a large array result into a dataset for itera
 }
 ```
 
-After promotion, the data is available via standard dataset tools and can be iterated with `for_each`.
+After promotion, the data is available via standard dataset tools and can be iterated using an `iterator` block.
 
 ### Example Flow
 
@@ -224,7 +224,7 @@ After promotion, the data is available via standard dataset tools and can be ite
 2. Interceptor stores full array, LLM sees sample of 5
 3. LLM examines sample, decides this is useful
 4. LLM calls `result_to_dataset("_result_http_get_1", "users")`
-5. Subsequent task iterates: `for_each = datasets.users`
+5. Subsequent task iterates: `iterator { dataset = datasets.users }`
 
 ## See Also
 

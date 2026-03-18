@@ -12,6 +12,7 @@ var ModelPricingTable = map[string]ModelPricing{
 	// Anthropic models
 	"claude-sonnet-4-20250514":   {InputPer1M: 3.00, OutputPer1M: 15.00},
 	"claude-opus-4-20250514":     {InputPer1M: 15.00, OutputPer1M: 75.00},
+	"claude-haiku-4-5-20251001":  {InputPer1M: 0.80, OutputPer1M: 4.00},
 	"claude-3-5-haiku-20241022":  {InputPer1M: 0.80, OutputPer1M: 4.00},
 	"claude-3-5-sonnet-20241022": {InputPer1M: 3.00, OutputPer1M: 15.00},
 

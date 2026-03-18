@@ -2,8 +2,9 @@ package config
 
 // StorageConfig defines the storage backend for mission state
 type StorageConfig struct {
-	Backend string `hcl:"backend,optional"` // "memory" or "sqlite"
-	Path    string `hcl:"path,optional"`    // SQLite file path (default: ".squadron/store.db")
+	Backend    string `hcl:"backend,optional"`     // "memory", "sqlite", or "postgres"
+	Path       string `hcl:"path,optional"`        // SQLite file path (default: ".squadron/store.db")
+	ConnString string `hcl:"conn_string,optional"` // Postgres connection string
 }
 
 // Defaults fills in default values for unset fields

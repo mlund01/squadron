@@ -1,12 +1,14 @@
 package store_test
 
 import (
+	"database/sql"
 	"os"
 	"path/filepath"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"squadron/store"
 )
@@ -164,6 +166,25 @@ var _ = Describe("EventStore", func() {
 			return bundle, func() {
 				bundle.Close()
 				os.RemoveAll(dir)
+			}
+		})
+	})
+
+	Context("Postgres backend", func() {
+		connStr := os.Getenv("SQUADRON_TEST_POSTGRES_URL")
+		if connStr == "" {
+			return
+		}
+
+		runEventStoreTests(func() (*store.Bundle, func()) {
+			bundle, err := store.NewPostgresBundle(connStr)
+			Expect(err).NotTo(HaveOccurred())
+
+			return bundle, func() {
+				db, _ := sql.Open("pgx", connStr)
+				db.Exec(`DROP TABLE IF EXISTS mission_events, mission_task_subtasks, dataset_items, datasets, task_outputs, tool_results, session_messages, sessions, mission_tasks, missions CASCADE`)
+				db.Close()
+				bundle.Close()
 			}
 		})
 	})

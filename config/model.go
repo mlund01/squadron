@@ -38,6 +38,7 @@ var SupportedModels = map[Provider]map[string]string{
 	ProviderAnthropic: {
 		"claude_sonnet_4":   "claude-sonnet-4-20250514",
 		"claude_opus_4":     "claude-opus-4-20250514",
+		"claude_haiku_4_5":  "claude-haiku-4-5-20251001",
 		"claude_3_5_haiku":  "claude-3-5-haiku-20241022",
 		"claude_3_5_sonnet": "claude-3-5-sonnet-20241022",
 	},

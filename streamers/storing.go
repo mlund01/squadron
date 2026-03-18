@@ -143,12 +143,11 @@ func (h *StoringMissionHandler) TaskStarted(taskName string, objective string) {
 	h.inner.TaskStarted(taskName, objective)
 }
 
-func (h *StoringMissionHandler) TaskCompleted(taskName string, summary string) {
+func (h *StoringMissionHandler) TaskCompleted(taskName string) {
 	h.storeEvent(protocol.EventTaskCompleted, &taskName, nil, nil, protocol.TaskCompletedData{
 		TaskName: taskName,
-		Summary:  summary,
 	})
-	h.inner.TaskCompleted(taskName, summary)
+	h.inner.TaskCompleted(taskName)
 }
 
 func (h *StoringMissionHandler) TaskFailed(taskName string, err error) {
@@ -168,13 +167,12 @@ func (h *StoringMissionHandler) TaskIterationStarted(taskName string, totalItems
 	h.inner.TaskIterationStarted(taskName, totalItems, parallel)
 }
 
-func (h *StoringMissionHandler) TaskIterationCompleted(taskName string, completedCount int, workingSummary string) {
+func (h *StoringMissionHandler) TaskIterationCompleted(taskName string, completedCount int) {
 	h.storeEvent(protocol.EventTaskIterationCompleted, &taskName, nil, nil, protocol.TaskIterationCompletedData{
 		TaskName:       taskName,
 		CompletedCount: completedCount,
-		WorkingSummary: workingSummary,
 	})
-	h.inner.TaskIterationCompleted(taskName, completedCount, workingSummary)
+	h.inner.TaskIterationCompleted(taskName, completedCount)
 }
 
 func (h *StoringMissionHandler) IterationStarted(taskName string, index int, objective string) {
@@ -186,13 +184,12 @@ func (h *StoringMissionHandler) IterationStarted(taskName string, index int, obj
 	h.inner.IterationStarted(taskName, index, objective)
 }
 
-func (h *StoringMissionHandler) IterationCompleted(taskName string, index int, summary string) {
+func (h *StoringMissionHandler) IterationCompleted(taskName string, index int) {
 	h.storeEvent(protocol.EventIterationCompleted, &taskName, nil, &index, protocol.IterationCompletedData{
 		TaskName: taskName,
 		Index:    index,
-		Summary:  summary,
 	})
-	h.inner.IterationCompleted(taskName, index, summary)
+	h.inner.IterationCompleted(taskName, index)
 }
 
 func (h *StoringMissionHandler) IterationFailed(taskName string, index int, err error) {
@@ -235,14 +232,6 @@ func (h *StoringMissionHandler) IterationAnswer(taskName string, index int, cont
 	h.inner.IterationAnswer(taskName, index, content)
 }
 
-func (h *StoringMissionHandler) SummaryAggregation(taskName string, summaryCount int) {
-	h.storeEvent(protocol.EventSummaryAggregation, &taskName, nil, nil, protocol.SummaryAggregationData{
-		TaskName:     taskName,
-		SummaryCount: summaryCount,
-	})
-	h.inner.SummaryAggregation(taskName, summaryCount)
-}
-
 func (h *StoringMissionHandler) CommanderReasoning(taskName string, content string) {
 	sessionKey := taskName + ":commander"
 	h.storeEvent(protocol.EventCommanderReasoning, &taskName, &sessionKey, nil, protocol.CommanderReasoningData{
@@ -279,6 +268,19 @@ func (h *StoringMissionHandler) CommanderToolComplete(taskName string, toolName 
 		Result:   result,
 	})
 	h.inner.CommanderToolComplete(taskName, toolName, result)
+}
+
+func (h *StoringMissionHandler) Compaction(taskName string, entity string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
+	sessionKey := taskName + ":" + entity
+	h.storeEvent(protocol.EventCompaction, &taskName, &sessionKey, nil, protocol.CompactionData{
+		TaskName:          taskName,
+		Entity:            entity,
+		InputTokens:       inputTokens,
+		TokenLimit:        tokenLimit,
+		MessagesCompacted: messagesCompacted,
+		TurnRetention:     turnRetention,
+	})
+	h.inner.Compaction(taskName, entity, inputTokens, tokenLimit, messagesCompacted, turnRetention)
 }
 
 func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string) {

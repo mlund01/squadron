@@ -45,29 +45,29 @@ type MissionHandler interface {
 
 	// Task lifecycle
 	TaskStarted(taskName string, objective string)
-	TaskCompleted(taskName string, summary string)
+	TaskCompleted(taskName string)
 	TaskFailed(taskName string, err error)
 
 	// Task iteration lifecycle (for tasks with iterator)
 	TaskIterationStarted(taskName string, totalItems int, parallel bool)
-	TaskIterationCompleted(taskName string, completedCount int, workingSummary string)
+	TaskIterationCompleted(taskName string, completedCount int)
 
 	// Individual iteration events
 	IterationStarted(taskName string, index int, objective string)
-	IterationCompleted(taskName string, index int, summary string)
+	IterationCompleted(taskName string, index int)
 	IterationFailed(taskName string, index int, err error)
 	IterationRetrying(taskName string, index int, attempt int, maxRetries int, err error)
 	IterationReasoning(taskName string, index int, content string)
 	IterationAnswer(taskName string, index int, content string)
-
-	// Summary aggregation events
-	SummaryAggregation(taskName string, summaryCount int)
 
 	// Commander events
 	CommanderReasoning(taskName string, content string)
 	CommanderAnswer(taskName string, content string)
 	CommanderCallingTool(taskName string, toolName string, input string)
 	CommanderToolComplete(taskName string, toolName string, result string)
+
+	// Compaction events (context window compacted)
+	Compaction(taskName string, entity string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 
 	// Agent execution events (for streaming agent output during call_agent)
 	AgentStarted(taskName string, agentName string)

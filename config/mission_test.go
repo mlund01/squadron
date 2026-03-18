@@ -15,7 +15,9 @@ var _ = Describe("Mission", func() {
 		It("parses a minimal mission with one task", func() {
 			hcl := fullBaseHCL() + `
 mission "simple" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "only_task" {
     objective = "Do something"
@@ -27,7 +29,7 @@ mission "simple" {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Missions).To(HaveLen(1))
 			Expect(cfg.Missions[0].Name).To(Equal("simple"))
-			Expect(cfg.Missions[0].Commander).To(Equal("claude_sonnet_4"))
+			Expect(cfg.Missions[0].Commander.Model).To(Equal("claude_sonnet_4"))
 			Expect(cfg.Missions[0].Agents).To(ConsistOf("test_agent"))
 			Expect(cfg.Missions[0].Tasks).To(HaveLen(1))
 			Expect(cfg.Missions[0].Tasks[0].Name).To(Equal("only_task"))
@@ -36,7 +38,9 @@ mission "simple" {
 		It("parses mission with task dependencies", func() {
 			hcl := fullBaseHCL() + `
 mission "chained" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "first" { objective = "Step 1" }
   task "second" {
@@ -59,7 +63,9 @@ mission "chained" {
 		It("parses mission with inputs", func() {
 			hcl := fullBaseHCL() + `
 mission "with_inputs" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   input "target_url" {
     type        = "string"
@@ -88,7 +94,9 @@ mission "with_inputs" {
 		It("parses mission with secret input", func() {
 			hcl := fullBaseHCL() + `
 mission "with_secret" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   input "api_token" {
     type   = "string"
@@ -108,7 +116,9 @@ mission "with_secret" {
 		It("parses mission with dataset and schema", func() {
 			hcl := fullBaseHCL() + `
 mission "with_dataset" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   dataset "cities" {
     description = "City list"
@@ -143,7 +153,9 @@ mission "with_dataset" {
 		It("parses mission with task output schema", func() {
 			hcl := fullBaseHCL() + `
 mission "with_output" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "analyze" {
     objective = "Analyze data"
@@ -171,7 +183,9 @@ mission "with_output" {
 		It("parses mission with parallel iterator options", func() {
 			hcl := fullBaseHCL() + `
 mission "parallel" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   dataset "items" { description = "Items" }
   task "process" {
@@ -202,7 +216,9 @@ mission "parallel" {
 		It("parses dataset with bind_to input reference", func() {
 			hcl := fullBaseHCL() + `
 mission "bound" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   input "urls" {
     type = "list"
@@ -237,7 +253,9 @@ agent "agent_b" {
   tools       = [plugins.http.get]
 }
 mission "multi_agent" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.agent_a]
   task "task1" { objective = "First task" }
   task "task2" {
@@ -259,24 +277,21 @@ mission "multi_agent" {
 			It("rejects mission with no commander", func() {
 				hcl := fullBaseHCL() + `
 mission "no_commander" {
-  commander = ""
   agents    = [agents.test_agent]
   task "t" { objective = "Do work" }
 }
 `
 				_, f := writeFixture("config.hcl", hcl)
-				cfg, err := config.LoadFile(f)
-				Expect(err).NotTo(HaveOccurred())
-				err = cfg.Validate()
+				_, err := config.LoadFile(f)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("commander is required"))
+				Expect(err.Error()).To(ContainSubstring("commander block is required"))
 			})
 
 			It("rejects mission with zero tasks", func() {
-				m := config.Mission{Name: "empty", Commander: "claude_sonnet_4", Agents: []string{"a"}}
+				m := config.Mission{Name: "empty", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Agents: []string{"a"}}
 				models := []config.Model{{Provider: "anthropic", AllowedModels: []string{"claude_sonnet_4"}}}
 				agents := []config.Agent{{Name: "a"}}
-				err := m.Validate(models, agents)
+				err := m.Validate(models, agents, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("at least one task"))
 			})
@@ -284,7 +299,9 @@ mission "no_commander" {
 			It("rejects mission with unknown agent reference", func() {
 				hcl := fullBaseHCL() + `
 mission "bad_agent" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "t" { objective = "Do work" }
 }
@@ -303,7 +320,9 @@ mission "bad_agent" {
 			It("rejects duplicate task names", func() {
 				hcl := fullBaseHCL() + `
 mission "dup_tasks" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "same_name" { objective = "First" }
   task "same_name" { objective = "Second" }
@@ -320,7 +339,9 @@ mission "dup_tasks" {
 			It("accepts valid mission with multiple tasks", func() {
 				hcl := fullBaseHCL() + `
 mission "valid" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "a" { objective = "Task A" }
   task "b" {
@@ -390,7 +411,9 @@ mission "valid" {
 			It("rejects task self-dependency", func() {
 				hcl := fullBaseHCL() + `
 mission "self_dep" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "loop" {
     objective  = "I depend on myself"
@@ -418,7 +441,9 @@ mission "self_dep" {
 			It("rejects concurrency_limit when parallel=false", func() {
 				hcl := fullBaseHCL() + `
 mission "bad_iter" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   dataset "items" { description = "Items" }
   task "work" {
@@ -440,7 +465,9 @@ mission "bad_iter" {
 			It("rejects start_delay when parallel=false", func() {
 				hcl := fullBaseHCL() + `
 mission "bad_iter2" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   dataset "items" { description = "Items" }
   task "work" {
@@ -462,7 +489,9 @@ mission "bad_iter2" {
 			It("rejects smoketest when parallel=false", func() {
 				hcl := fullBaseHCL() + `
 mission "bad_iter3" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   dataset "items" { description = "Items" }
   task "work" {
@@ -484,7 +513,9 @@ mission "bad_iter3" {
 			It("accepts parallel-specific options when parallel=true", func() {
 				hcl := fullBaseHCL() + `
 mission "good_iter" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   dataset "items" { description = "Items" }
   task "work" {
@@ -510,7 +541,9 @@ mission "good_iter" {
 			It("accepts linear dependency chain", func() {
 				hcl := fullBaseHCL() + `
 mission "linear" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "a" {
     objective = "A"
@@ -533,7 +566,9 @@ mission "linear" {
 			It("detects direct cycle A -> B -> A", func() {
 				hcl := fullBaseHCL() + `
 mission "cycle" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "a" {
     objective  = "Task A"
@@ -556,7 +591,9 @@ mission "cycle" {
 			It("detects indirect cycle A -> B -> C -> A", func() {
 				hcl := fullBaseHCL() + `
 mission "long_cycle" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "a" {
     objective  = "Task A"
@@ -583,7 +620,9 @@ mission "long_cycle" {
 			It("accepts diamond dependency (no cycle)", func() {
 				hcl := fullBaseHCL() + `
 mission "diamond" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "root" { objective = "Root" }
   task "left" {

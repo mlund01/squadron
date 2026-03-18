@@ -15,12 +15,11 @@ type OutputField struct {
 
 // SubmitResult holds one submitted output
 type SubmitResult struct {
-	Output  map[string]any
-	Summary string
+	Output map[string]any
 }
 
 // SubmitOutputCallback is called after each output submission
-type SubmitOutputCallback func(index int, output map[string]any, summary string)
+type SubmitOutputCallback func(index int, output map[string]any)
 
 // SubmitOutputTool allows the LLM to submit structured task output.
 // Used by all task types: non-iterated, sequential iterations, and parallel iterations.
@@ -48,7 +47,6 @@ func (t *SubmitOutputTool) ToolDescription() string {
 
 Parameters:
 - output: A JSON object containing the structured result of your work. Must include all required fields defined in the task output schema.
-- summary: A brief summary of what was accomplished.
 
 Call this tool once when you have completed your task. For sequential dataset processing, call it once per item after processing each item.`
 }
@@ -61,10 +59,6 @@ func (t *SubmitOutputTool) ToolPayloadSchema() Schema {
 				Type:        TypeObject,
 				Description: "The structured output (must match the task output schema if defined)",
 			},
-			"summary": {
-				Type:        TypeString,
-				Description: "Brief summary of what was accomplished",
-			},
 		},
 		Required: []string{"output"},
 	}
@@ -72,8 +66,7 @@ func (t *SubmitOutputTool) ToolPayloadSchema() Schema {
 
 func (t *SubmitOutputTool) Call(params string) string {
 	var input struct {
-		Output  map[string]any `json:"output"`
-		Summary string         `json:"summary"`
+		Output map[string]any `json:"output"`
 	}
 	if err := json.Unmarshal([]byte(params), &input); err != nil {
 		return fmt.Sprintf(`{"status": "error", "message": "invalid input: %v"}`, err)
@@ -103,14 +96,13 @@ func (t *SubmitOutputTool) Call(params string) string {
 	t.mu.Lock()
 	index := len(t.results)
 	t.results = append(t.results, SubmitResult{
-		Output:  input.Output,
-		Summary: input.Summary,
+		Output: input.Output,
 	})
 	t.mu.Unlock()
 
 	// Fire callback for persistence
 	if t.OnSubmit != nil {
-		t.OnSubmit(index, input.Output, input.Summary)
+		t.OnSubmit(index, input.Output)
 	}
 
 	return fmt.Sprintf(`{"status": "ok", "index": %d}`, index)

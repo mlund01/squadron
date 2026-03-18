@@ -61,15 +61,37 @@ type OutputField struct {
 	Required    bool   `json:"required,omitempty"`
 }
 
+// MissionFolder represents a dedicated folder for a mission
+type MissionFolder struct {
+	Path        string `hcl:"path"`
+	Description string `hcl:"description,optional"`
+}
+
+// Validate checks that the mission folder configuration is valid
+func (mf *MissionFolder) Validate() error {
+	if mf.Path == "" {
+		return fmt.Errorf("path is required")
+	}
+	return nil
+}
+
+// MissionCommander holds configuration for the mission's commander LLM
+type MissionCommander struct {
+	Model      string      `json:"model"`
+	Compaction *Compaction `json:"compaction,omitempty"`
+}
+
 // Mission represents a mission configuration with multiple tasks
 type Mission struct {
-	Name      string   `hcl:"name,label"`
-	Directive string   `hcl:"directive,optional"`
-	Commander string   `hcl:"commander"`
-	Agents    []string `hcl:"agents"`
-	Tasks     []Task   `hcl:"task,block"`
-	Inputs    []MissionInput // Parsed from input blocks
-	Datasets  []Dataset      // Parsed from dataset blocks
+	Name      string            `hcl:"name,label"`
+	Directive string            `hcl:"directive,optional"`
+	Commander *MissionCommander `json:"-"` // Parsed manually from commander block
+	Agents    []string         `hcl:"agents"`
+	Tasks     []Task           `hcl:"task,block"`
+	Inputs    []MissionInput   // Parsed from input blocks
+	Datasets  []Dataset        // Parsed from dataset blocks
+	Folders   []string         // Shared folder names referenced by this mission
+	Folder    *MissionFolder   // Optional dedicated mission folder
 }
 
 // Task represents a single task within a mission
@@ -84,18 +106,25 @@ type Task struct {
 }
 
 // Validate checks that the mission configuration is valid
-func (w *Mission) Validate(models []Model, agents []Agent) error {
+func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []SharedFolder) error {
 	if w.Name == "" {
 		return fmt.Errorf("mission name is required")
 	}
 
-	if w.Commander == "" {
+	if w.Commander == nil || w.Commander.Model == "" {
 		return fmt.Errorf("commander is required")
 	}
 
 	// Validate commander references a valid model
-	if !isValidModelRef(w.Commander, models) {
-		return fmt.Errorf("commander '%s' not found in models", w.Commander)
+	if !isValidModelRef(w.Commander.Model, models) {
+		return fmt.Errorf("commander '%s' not found in models", w.Commander.Model)
+	}
+
+	// Validate compaction settings if present
+	if w.Commander.Compaction != nil {
+		if w.Commander.Compaction.TokenLimit <= 0 {
+			return fmt.Errorf("commander compaction token_limit must be > 0")
+		}
 	}
 
 	if len(w.Tasks) == 0 {
@@ -156,6 +185,24 @@ func (w *Mission) Validate(models []Model, agents []Agent) error {
 	for _, agentRef := range w.Agents {
 		if !agentNames[agentRef] {
 			return fmt.Errorf("agent '%s' not found", agentRef)
+		}
+	}
+
+	// Validate folder references
+	folderNames := make(map[string]bool)
+	for _, sf := range sharedFolders {
+		folderNames[sf.Name] = true
+	}
+	for _, folderRef := range w.Folders {
+		if !folderNames[folderRef] {
+			return fmt.Errorf("shared folder '%s' not found", folderRef)
+		}
+	}
+
+	// Validate dedicated folder if present
+	if w.Folder != nil {
+		if err := w.Folder.Validate(); err != nil {
+			return fmt.Errorf("folder: %w", err)
 		}
 	}
 

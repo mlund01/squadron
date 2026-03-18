@@ -42,7 +42,7 @@ mission "data_pipeline" {
 2. **Parallel Execution** - Independent tasks run concurrently
 3. **Commander Creation** - Each task gets a commander
 4. **Agent Delegation** - Commanders delegate to agents via `call_agent`
-5. **Result Propagation** - Task summaries flow to dependents
+5. **Result Propagation** - Structured outputs are stored and queryable by downstream tasks
 
 ## Execution Flow
 
@@ -78,12 +78,15 @@ squadron mission data_pipeline -c ./config --input source=api --input format=jso
 
 Commanders have access to special tools:
 
+- **set_subtasks** / **complete_subtask** / **get_subtasks** - Plan and track work through ordered subtasks
 - **call_agent** - Delegate work to an agent
 - **ask_agent** - Ask a completed agent follow-up questions
+- **submit_output** - Submit structured output matching the task's output schema
+- **task_complete** - Signal that the task is done
 - **query_task_output** - Query structured data from completed dependency tasks
 - **ask_commander** - Query a dependency task's commander for more context
-- **list_commander_questions** - See questions already asked by other iterations (parallel dedup)
-- **get_commander_answer** - Get a cached answer from the shared question store
+- **dataset_next** - Get the next item in sequential dataset processing
+- **list_commander_questions** / **get_commander_answer** - Reuse answers from the shared question store (parallel dedup)
 
 See [Internal Tools](/missions/internal-tools) for full details.
 

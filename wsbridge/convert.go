@@ -37,7 +37,7 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		mi := protocol.MissionInfo{
 			Name:        m.Name,
 			Description: m.Directive,
-			Commander:   m.Commander,
+			Commander:   m.Commander.Model,
 			Agents:      m.Agents,
 		}
 		for _, ds := range m.Datasets {
@@ -129,6 +129,45 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Name:   v.Name,
 			Secret: v.Secret,
 		})
+	}
+
+	// Build shared folder → missions map
+	sharedMissions := map[string][]string{}
+	for _, m := range cfg.Missions {
+		for _, folderName := range m.Folders {
+			sharedMissions[folderName] = append(sharedMissions[folderName], m.Name)
+		}
+	}
+
+	for _, fb := range cfg.SharedFolders {
+		label := fb.Label
+		if label == "" {
+			label = fb.Name
+		}
+		ic.SharedFolders = append(ic.SharedFolders, protocol.SharedFolderInfo{
+			Name:        fb.Name,
+			Path:        fb.Path,
+			Label:       label,
+			Description: fb.Description,
+			Editable:    fb.Editable,
+			IsShared:    true,
+			Missions:    sharedMissions[fb.Name],
+		})
+	}
+
+	// Add dedicated mission folders
+	for _, m := range cfg.Missions {
+		if m.Folder != nil {
+			ic.SharedFolders = append(ic.SharedFolders, protocol.SharedFolderInfo{
+				Name:        m.Name,
+				Path:        m.Folder.Path,
+				Label:       m.Name,
+				Description: m.Folder.Description,
+				Editable:    true,
+				IsShared:    false,
+				Missions:    []string{m.Name},
+			})
+		}
 	}
 
 	return ic

@@ -51,8 +51,6 @@ type CommanderOptions struct {
 	TaskOutputSchema []OutputFieldSchema
 	// PrevIterationOutput contains the structured output from the previous iteration (sequential only)
 	PrevIterationOutput map[string]any
-	// PrevIterationLearnings contains insights and recommendations from the previous iteration (sequential only)
-	PrevIterationLearnings map[string]any
 	// SecretInfos contains names and descriptions of available secrets (for prompts)
 	SecretInfos []SecretInfo
 	// SecretValues contains actual secret values for tool call injection
@@ -66,6 +64,10 @@ type CommanderOptions struct {
 	// SequentialDataset contains all items for sequential iteration processing
 	// When set, the commander handles all items in a single session using dataset_next/submit_output tools
 	SequentialDataset []cty.Value
+	// FolderStore provides file folder access for the mission (optional)
+	FolderStore aitools.FolderStore
+	// Compaction settings for the commander session (nil if disabled)
+	Compaction *CompactionConfig
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -137,6 +139,10 @@ type CommanderToolCallbacks struct {
 	// Used to register session IDs with the event store for correlation.
 	OnSessionCreated func(taskName, agentName, sessionID string)
 
+	// OnAgentCompaction is called when an agent's context is compacted.
+	// Receives taskName, agentName, and compaction metrics.
+	OnAgentCompaction func(taskName, agentName string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
+
 	// Subtask management callbacks (optional). When set, the commander gets
 	// set_subtasks, get_subtasks, and complete_subtask tools.
 	SetSubtasks     func(titles []string) error
@@ -168,7 +174,6 @@ type KnowledgeStore interface {
 type TaskOutputInfo struct {
 	TaskName        string
 	Status          string
-	Summary         string
 	IsIterated      bool
 	TotalIterations int
 	Iterations      []IterationInfo
@@ -177,11 +182,10 @@ type TaskOutputInfo struct {
 
 // IterationInfo represents a single iteration's output
 type IterationInfo struct {
-	Index   int
-	ItemID  string
-	Status  string
-	Summary string
-	Output  map[string]any
+	Index  int
+	ItemID string
+	Status string
+	Output map[string]any
 }
 
 // TaskQuery represents a query for task outputs
@@ -238,6 +242,7 @@ type CommanderStreamer interface {
 	Answer(content string)
 	CallingTool(name, input string)
 	ToolComplete(name string, result string)
+	Compaction(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 }
 
 // completedAgent stores a completed agent instance for follow-up queries
@@ -271,12 +276,15 @@ type Commander struct {
 	secretValues    map[string]string      // Actual secret values for tool call injection
 	datasetCursor      *aitools.DatasetCursor      // Cursor for sequential dataset iteration (nil if not sequential)
 	submitOutput       *aitools.SubmitOutputTool   // Universal output submission tool
+	taskComplete       *aitools.TaskCompleteTool   // Tool to signal task completion
 	sessionLogger      SessionLogger               // Session persistence (nil if not tracking)
 	sessionID          string                 // Store session ID (empty if not tracking)
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
 	callbacksTaskID    string                 // Task ID from callbacks (for agent session creation)
 	iterationIndex     *int                   // Iteration index (nil for non-iterated tasks)
 	subtasksSet        bool                   // Whether set_subtasks has been called
+	folderStore        aitools.FolderStore    // Folder access for missions (nil if not configured)
+	compaction         *CompactionConfig      // Compaction settings (nil if disabled)
 }
 
 // NewCommander creates a new commander for a mission task
@@ -362,6 +370,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		agentSessions:   make(map[string]*Agent),
 		secretInfos:     opts.SecretInfos,
 		secretValues:    opts.SecretValues,
+		compaction:      opts.Compaction,
 	}
 
 	// Add result tools to commander's tool map
@@ -371,50 +380,56 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	sup.tools["result_keys"] = &aitools.ResultKeysTool{Store: resultStore}
 	sup.tools["result_chunk"] = &aitools.ResultChunkTool{Store: resultStore}
 
+	// Add folder tools if FolderStore is available
+	if opts.FolderStore != nil {
+		sup.folderStore = opts.FolderStore
+		sup.tools["file_list"] = &aitools.FolderListTool{Store: opts.FolderStore}
+		sup.tools["file_read"] = &aitools.FolderReadTool{Store: opts.FolderStore}
+		sup.tools["file_create"] = &aitools.FolderCreateTool{Store: opts.FolderStore}
+		sup.tools["file_delete"] = &aitools.FolderDeleteTool{Store: opts.FolderStore}
+		sup.tools["file_search"] = &aitools.FolderSearchTool{Store: opts.FolderStore}
+		sup.tools["file_grep"] = &aitools.FolderGrepTool{Store: opts.FolderStore}
+		if folderPrompt := prompts.FormatFolderContext(opts.FolderStore); folderPrompt != "" {
+			session.AddSystemPrompt(folderPrompt)
+		}
+	}
+
 	// If there are dependency summaries or output schemas, add them as a secondary system prompt
 	if len(opts.DepSummaries) > 0 || len(opts.DepOutputSchemas) > 0 {
 		sup.injectDependencyContext(opts.DepSummaries, opts.DepOutputSchemas)
 	}
 
-	// Create submit_output tool — convert OutputFieldSchema to aitools.OutputField
-	// Use default schema if none specified
-	taskSchema := opts.TaskOutputSchema
-	if len(taskSchema) == 0 {
-		taskSchema = []OutputFieldSchema{
-			{Name: "summary", Type: "string", Description: "Short summary of task completion", Required: true},
-			{Name: "metadata", Type: "object", Description: "Optional flat key/value map with specifics about the task (string keys and string values)", Required: false},
+	// Create submit_output tool only if task has an explicit output schema
+	if len(opts.TaskOutputSchema) > 0 {
+		var outputFields []aitools.OutputField
+		for _, f := range opts.TaskOutputSchema {
+			outputFields = append(outputFields, aitools.OutputField{
+				Name:     f.Name,
+				Type:     f.Type,
+				Required: f.Required,
+			})
 		}
+		sup.submitOutput = aitools.NewSubmitOutputTool(outputFields)
+		sup.tools["submit_output"] = sup.submitOutput
+		sup.injectOutputSchemaInstructions(opts.TaskOutputSchema)
 	}
 
-	var outputFields []aitools.OutputField
-	for _, f := range taskSchema {
-		outputFields = append(outputFields, aitools.OutputField{
-			Name:     f.Name,
-			Type:     f.Type,
-			Required: f.Required,
-		})
-	}
-	sup.submitOutput = aitools.NewSubmitOutputTool(outputFields)
-	sup.tools["submit_output"] = sup.submitOutput
-
-	// Inject instructions for structured output
-	sup.injectOutputSchemaInstructions(taskSchema)
+	// Register task_complete tool (always available)
+	sup.taskComplete = &aitools.TaskCompleteTool{}
+	sup.tools["task_complete"] = sup.taskComplete
 
 	// If there's previous iteration output (sequential iterations), inject it
 	if len(opts.PrevIterationOutput) > 0 {
 		sup.injectPrevIterationOutput(opts.PrevIterationOutput)
 	}
 
-	// If there are learnings from previous iteration (sequential iterations), inject them
-	if len(opts.PrevIterationLearnings) > 0 {
-		sup.injectPrevIterationLearnings(opts.PrevIterationLearnings)
-	}
-
 	// If sequential dataset is provided, set up cursor and dataset_next tool
 	if len(opts.SequentialDataset) > 0 {
 		sup.datasetCursor = aitools.NewDatasetCursor(opts.TaskName, opts.SequentialDataset)
 		nextTool := aitools.NewDatasetNextTool(sup.datasetCursor)
-		nextTool.OutputCounter = sup.submitOutput.ResultCount
+		if sup.submitOutput != nil {
+			nextTool.OutputCounter = sup.submitOutput.ResultCount
+		}
 		sup.tools["dataset_next"] = nextTool
 		sup.injectSequentialDatasetInstructions(len(opts.SequentialDataset))
 	}
@@ -515,19 +530,63 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		}
 	}
 
+	// Wire up subtask checker on task_complete
+	if callbacks.SetSubtasks != nil && callbacks.GetSubtasks != nil {
+		s.taskComplete.SubtaskChecker = func() (int, int) {
+			subtasks, err := callbacks.GetSubtasks()
+			if err != nil || len(subtasks) == 0 {
+				return 0, 0
+			}
+			incomplete := 0
+			for _, st := range subtasks {
+				if st.Status != "completed" {
+					incomplete++
+				}
+			}
+			return len(subtasks), incomplete
+		}
+	}
+
 	// Register subtask tools if callbacks are provided
 	if callbacks.SetSubtasks != nil {
-		s.tools["set_subtasks"] = &setSubtasksTool{
+		setTool := &setSubtasksTool{
 			onSet: func(titles []string) error {
 				s.subtasksSet = true
 				return callbacks.SetSubtasks(titles)
 			},
 			onGet: callbacks.GetSubtasks,
 		}
+		s.tools["set_subtasks"] = setTool
 		s.tools["get_subtasks"] = &getSubtasksTool{onGet: callbacks.GetSubtasks}
 		s.tools["complete_subtask"] = &completeSubtaskTool{
 			onComplete: callbacks.CompleteSubtask,
 			onGet:      callbacks.GetSubtasks,
+		}
+
+		// Wire up dataset_next <-> subtask integration for sequential tasks
+		if nextTool, ok := s.tools["dataset_next"].(*aitools.DatasetNextTool); ok {
+			// dataset_next checks subtasks are complete before advancing
+			nextTool.SubtaskChecker = func() (int, int) {
+				subtasks, err := callbacks.GetSubtasks()
+				if err != nil || len(subtasks) == 0 {
+					return 0, 0
+				}
+				incomplete := 0
+				for _, st := range subtasks {
+					if st.Status != "completed" {
+						incomplete++
+					}
+				}
+				return len(subtasks), incomplete
+			}
+			// When dataset_next advances, allow set_subtasks to redefine
+			origOnNext := s.datasetCursor.OnNext
+			s.datasetCursor.OnNext = func(index int) {
+				setTool.datasetAdvanced = true
+				if origOnNext != nil {
+					origOnNext(index)
+				}
+			}
 		}
 
 		// Restore subtasksSet flag if resuming with existing subtasks
@@ -665,25 +724,6 @@ Your current task is for a NEW item with its own parameters.
 	s.session.AddSystemPrompt(prompt)
 }
 
-// injectPrevIterationLearnings adds insights and recommendations from the previous iteration (for sequential iterations)
-func (s *Commander) injectPrevIterationLearnings(learnings map[string]any) {
-	learningsJSON, err := json.MarshalIndent(learnings, "", "  ")
-	if err != nil {
-		// Fallback to simple format if marshaling fails
-		learningsJSON = []byte(fmt.Sprintf("%v", learnings))
-	}
-
-	prompt := fmt.Sprintf(`## Learnings from Previous Iteration
-
-The previous dataset item's processing provided these insights:
-%s
-
-These learnings are from processing a DIFFERENT item, not the one you're handling now.
-Apply general insights (API behaviors, error handling, etc.) but focus on your current item's specific parameters.
-`, string(learningsJSON))
-
-	s.session.AddSystemPrompt(prompt)
-}
 
 // GetSubmitResults returns all outputs submitted via the submit_output tool
 func (s *Commander) GetSubmitResults() []aitools.SubmitResult {
@@ -706,9 +746,39 @@ func (s *Commander) GetSessionID() string {
 	return s.sessionID
 }
 
+// IsTaskSucceeded returns whether task_complete was called with succeed=true (or default).
+func (s *Commander) IsTaskSucceeded() bool {
+	return s.taskComplete.IsSucceeded()
+}
+
+// TaskFailureReason returns the reason provided when task_complete was called with succeed=false.
+func (s *Commander) TaskFailureReason() string {
+	return s.taskComplete.FailureReason()
+}
+
 // HasSequentialDataset returns true if this commander is processing a sequential dataset
 func (s *Commander) HasSequentialDataset() bool {
 	return s.datasetCursor != nil
+}
+
+// SetDatasetOnNext sets a callback that fires when the dataset cursor advances to a new item.
+func (s *Commander) SetDatasetOnNext(fn func(index int)) {
+	if s.datasetCursor != nil {
+		s.datasetCursor.OnNext = fn
+	}
+}
+
+// GetCurrentDatasetIndex returns the current dataset cursor index (0-based),
+// or nil if there's no sequential dataset cursor.
+func (s *Commander) GetCurrentDatasetIndex() *int {
+	if s.datasetCursor == nil {
+		return nil
+	}
+	idx := s.datasetCursor.CurrentIndex()
+	if idx < 0 {
+		return nil
+	}
+	return &idx
 }
 
 // injectSequentialDatasetInstructions adds instructions for processing a sequential dataset
@@ -717,31 +787,37 @@ func (s *Commander) injectSequentialDatasetInstructions(itemCount int) {
 
 You have a dataset of %d items to process sequentially in this single session.
 
+**IMPORTANT: For sequential dataset tasks, the normal "set_subtasks as first action" rule is replaced by the workflow below. Follow these steps exactly.**
+
 **Tools:**
 - dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
 - submit_output: Submit output for current item. Required before calling dataset_next again.
+- set_subtasks: **MANDATORY** — define subtasks for each item after calling dataset_next.
+- complete_subtask: Mark the current subtask as done. You MUST call this for each subtask.
 
-**Workflow:**
+**Workflow (follow this exactly for EVERY item):**
 1. Call dataset_next to get an item
-2. Process the item (delegate to agent, use tools, etc.)
-3. Call submit_output with the output for this item
-4. Repeat until dataset_next returns "exhausted"
-5. Produce final ANSWER summarizing the batch
+2. Call set_subtasks to define subtasks for this item — this is REQUIRED, not optional
+3. Work through each subtask, calling complete_subtask after finishing each one
+4. Call submit_output with the structured output for this item
+5. Repeat from step 1 until dataset_next returns "exhausted"
+6. Call task_complete when all items are processed
 
 You MUST call submit_output before dataset_next or you will get an error.
+You MUST use set_subtasks and complete_subtask for every item — do not skip them.
 `, itemCount)
 
 	s.session.AddSystemPrompt(prompt)
 }
 
 // ExecuteTask runs the task objective to completion
-func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer CommanderStreamer) (string, error) {
+func (s *Commander) ExecuteTask(ctx context.Context, objective string, streamer CommanderStreamer) error {
 	return s.runLoop(ctx, objective, false, streamer)
 }
 
 // ExecuteOrResume checks if the session has stored messages (loaded via LoadSessionMessages).
 // If so, it resumes from where the prior run left off. Otherwise, it starts fresh.
-func (s *Commander) ExecuteOrResume(ctx context.Context, objective string, streamer CommanderStreamer) (string, error) {
+func (s *Commander) ExecuteOrResume(ctx context.Context, objective string, streamer CommanderStreamer) error {
 	if len(s.session.GetHistory()) > 0 {
 		return s.ResumeTask(ctx, streamer)
 	}
@@ -753,11 +829,11 @@ func (s *Commander) ExecuteOrResume(ctx context.Context, objective string, strea
 // - Last message is user: LLM was interrupted mid-response — use ContinueStream
 // - Last message is assistant with call_agent ACTION: re-execute (agent resumes from its own session)
 // - Last message is assistant with other ACTION: inject placeholder observation
-// - Last message is assistant with ANSWER: task was already complete
-func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) (string, error) {
+// - Last message is assistant with no action: task was already complete
+func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) error {
 	msgs := s.session.GetHistory()
 	if len(msgs) == 0 {
-		return "", fmt.Errorf("no messages to resume from")
+		return fmt.Errorf("no messages to resume from")
 	}
 	last := msgs[len(msgs)-1]
 
@@ -772,27 +848,16 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 	parser.ProcessChunk(last.Content)
 	parser.Finish()
 
-	if answer := parser.GetAnswer(); answer != "" {
-		// Task was already complete
-		if s.turnLogger != nil {
-			s.turnLogger.Close()
-		}
-		if s.sessionLogger != nil && s.sessionID != "" {
-			s.sessionLogger.CompleteSession(s.sessionID, nil)
-		}
-		return answer, nil
-	}
-
 	action := parser.GetAction()
 	if action == "" {
-		// No action, no answer — consider done
+		// No action — consider done
 		if s.turnLogger != nil {
 			s.turnLogger.Close()
 		}
 		if s.sessionLogger != nil && s.sessionID != "" {
 			s.sessionLogger.CompleteSession(s.sessionID, nil)
 		}
-		return "", nil
+		return nil
 	}
 
 	// Tool call was in-flight — handle based on tool type
@@ -867,13 +932,11 @@ func (s *Commander) AddRestoredActiveAgent(agentName string, a *Agent, sessionID
 // runLoop is the core execution loop shared by ExecuteTask and ResumeTask.
 // When resume=true, the first LLM call uses ContinueStream (no new user message,
 // no store logging) because the session already has a pending user message.
-func (s *Commander) runLoop(ctx context.Context, currentInput string, resume bool, streamer CommanderStreamer) (string, error) {
-	var finalAnswer string
-
+func (s *Commander) runLoop(ctx context.Context, currentInput string, resume bool, streamer CommanderStreamer) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return ctx.Err()
 		default:
 		}
 
@@ -932,10 +995,15 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			s.debugLogger.LogEvent("commander_llm_end", eventData)
 		}
 
+		// Check if compaction is needed after response
+		if resp != nil {
+			s.checkAndCompact(resp.Usage.InputTokens, streamer)
+		}
+
 		parser.Finish()
 
 		if err != nil {
-			return "", err
+			return err
 		}
 
 		// Log assistant response to session store
@@ -949,11 +1017,6 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		// Log turn snapshot
 		if s.turnLogger != nil {
 			s.turnLogger.LogTurn(action, s.session.SnapshotMessages())
-		}
-
-		// Capture the answer if one was provided
-		if answer := parser.GetAnswer(); answer != "" {
-			finalAnswer = answer
 		}
 
 		if action == "" {
@@ -1004,6 +1067,11 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		if s.sessionLogger != nil && s.sessionID != "" {
 			s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result, toolStart, time.Now())
 		}
+
+		// Check if task_complete was called
+		if s.taskComplete.IsCompleted() {
+			break
+		}
 	}
 
 	if s.turnLogger != nil {
@@ -1015,7 +1083,72 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		s.sessionLogger.CompleteSession(s.sessionID, nil)
 	}
 
-	return finalAnswer, nil
+	return nil
+}
+
+// checkAndCompact checks if compaction is needed and performs it if so
+func (s *Commander) checkAndCompact(inputTokens int, streamer CommanderStreamer) {
+	if s.compaction == nil || s.compaction.TokenLimit <= 0 {
+		return
+	}
+
+	if inputTokens <= s.compaction.TokenLimit {
+		return
+	}
+
+	extraContext := s.buildCompactionContext()
+	compacted := s.session.CompactWithContext(s.compaction.TurnRetention, extraContext)
+	if compacted > 0 {
+		streamer.Compaction(inputTokens, s.compaction.TokenLimit, compacted, s.compaction.TurnRetention)
+		if s.debugLogger != nil {
+			s.debugLogger.LogEvent("commander_compaction", map[string]any{
+				"input_tokens":       inputTokens,
+				"token_limit":        s.compaction.TokenLimit,
+				"messages_compacted": compacted,
+				"turn_retention":     s.compaction.TurnRetention,
+			})
+		}
+	}
+}
+
+// buildCompactionContext returns commander-specific state for the compaction summary
+func (s *Commander) buildCompactionContext() string {
+	var sb strings.Builder
+	sb.WriteString("**Commander State:**\n")
+
+	// Dataset progress (sequential iteration)
+	if s.datasetCursor != nil {
+		current := s.datasetCursor.CurrentIndex()
+		total := s.datasetCursor.Total()
+		sb.WriteString(fmt.Sprintf("- Dataset progress: item %d of %d\n", current+1, total))
+	}
+
+	// Subtask status
+	if s.callbacks != nil && s.callbacks.GetSubtasks != nil {
+		subtasks, err := s.callbacks.GetSubtasks()
+		if err == nil && len(subtasks) > 0 {
+			completed := 0
+			for _, st := range subtasks {
+				if st.Status == "completed" {
+					completed++
+				}
+			}
+			sb.WriteString(fmt.Sprintf("- Subtasks: %d/%d complete\n", completed, len(subtasks)))
+			for _, st := range subtasks {
+				sb.WriteString(fmt.Sprintf("  - %s: %s\n", st.Title, st.Status))
+			}
+		}
+	}
+
+	// Output count
+	if s.submitOutput != nil {
+		count := s.submitOutput.ResultCount()
+		if count > 0 {
+			sb.WriteString(fmt.Sprintf("- Outputs submitted: %d\n", count))
+		}
+	}
+
+	return sb.String()
 }
 
 // AnswerQuestion handles a follow-up question from another commander (via ask_commander)
@@ -1284,8 +1417,6 @@ const (
 	commanderStateReasoning
 	commanderStateAction
 	commanderStateActionInput
-	commanderStateAnswer
-	commanderStateOutput
 )
 
 // commanderParser parses ReAct-formatted streaming output for commanders
@@ -1294,13 +1425,9 @@ type commanderParser struct {
 	state            commanderParserState
 	buffer           strings.Builder
 	reasoningStarted bool
-	answerStarted    bool
-	outputStarted    bool
 	actionName       string
 	actionInput      string
-	answerText       strings.Builder
 	reasoningText    strings.Builder
-	outputText       strings.Builder
 }
 
 // newCommanderParser creates a new parser with the given streamer
@@ -1325,16 +1452,6 @@ func (p *commanderParser) GetAction() string {
 // GetActionInput returns the parsed action input
 func (p *commanderParser) GetActionInput() string {
 	return p.actionInput
-}
-
-// GetAnswer returns the parsed answer text, including OUTPUT block if present
-func (p *commanderParser) GetAnswer() string {
-	answer := p.answerText.String()
-	if p.outputText.Len() > 0 {
-		// Append the OUTPUT block to the answer so parseOutput can extract it
-		answer += "\n<OUTPUT>\n" + p.outputText.String() + "\n</OUTPUT>"
-	}
-	return answer
 }
 
 // Finish signals that streaming is complete
@@ -1366,20 +1483,6 @@ func (p *commanderParser) processBuffer() {
 			if idx := strings.Index(content, "<ACTION_INPUT>"); idx != -1 {
 				p.state = commanderStateActionInput
 				content = content[idx+14:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			if idx := strings.Index(content, "<ANSWER>"); idx != -1 {
-				p.state = commanderStateAnswer
-				content = content[idx+8:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			if idx := strings.Index(content, "<OUTPUT>"); idx != -1 {
-				p.state = commanderStateOutput
-				content = content[idx+8:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
@@ -1441,70 +1544,6 @@ func (p *commanderParser) processBuffer() {
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
-			}
-			return
-
-		case commanderStateAnswer:
-			if !p.answerStarted {
-				content = strings.TrimLeft(content, "\n")
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				if len(content) > 0 {
-					p.answerStarted = true
-				}
-			}
-
-			if idx := strings.Index(content, "</ANSWER>"); idx != -1 {
-				finalContent := strings.TrimRight(content[:idx], "\n")
-				if len(finalContent) > 0 {
-					p.answerText.WriteString(finalContent)
-					p.streamer.Answer(p.answerText.String())
-				}
-				p.state = commanderStateNone
-				content = content[idx+9:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			// Buffer content for answer
-			if len(content) > 9 {
-				safeLen := len(content) - 9
-				p.answerText.WriteString(content[:safeLen])
-				content = content[safeLen:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-			}
-			return
-
-		case commanderStateOutput:
-			if !p.outputStarted {
-				content = strings.TrimLeft(content, "\n")
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				if len(content) > 0 {
-					p.outputStarted = true
-				}
-			}
-
-			if idx := strings.Index(content, "</OUTPUT>"); idx != -1 {
-				finalContent := strings.TrimSpace(content[:idx])
-				if len(finalContent) > 0 {
-					p.outputText.WriteString(finalContent)
-				}
-				p.outputStarted = false
-				p.state = commanderStateNone
-				content = content[idx+9:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			// Buffer content for output
-			if len(content) > 9 {
-				safeLen := len(content) - 9
-				p.outputText.WriteString(content[:safeLen])
-				content = content[safeLen:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
 			}
 			return
 		}
@@ -1594,6 +1633,17 @@ func (t *callAgentTool) Call(input string) string {
 			datasetStore = t.commander.callbacks.DatasetStore
 		}
 
+		// Build OnCompaction callback for agent → mission handler
+		var onCompaction func(int, int, int, int)
+		if t.commander.callbacks != nil && t.commander.callbacks.OnAgentCompaction != nil {
+			taskName := t.commander.TaskName
+			agentName := agentCfg.Name
+			cb := t.commander.callbacks.OnAgentCompaction
+			onCompaction = func(inputTokens, tokenLimit, messagesCompacted, turnRetention int) {
+				cb(taskName, agentName, inputTokens, tokenLimit, messagesCompacted, turnRetention)
+			}
+		}
+
 		var err error
 		a, err = New(ctx, Options{
 			ConfigPath:   t.commander.configPath,
@@ -1602,6 +1652,8 @@ func (t *callAgentTool) Call(input string) string {
 			DatasetStore: datasetStore,
 			SecretInfos:  t.commander.secretInfos,
 			SecretValues: t.commander.secretValues,
+			FolderStore:  t.commander.folderStore,
+			OnCompaction: onCompaction,
 		})
 		if err != nil {
 			return fmt.Sprintf("Error creating agent '%s': %v", params.Name, err)

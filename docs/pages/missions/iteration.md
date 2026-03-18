@@ -13,7 +13,8 @@ task "process_city" {
   objective = "Get weather for ${item.name}, ${item.state}"
 
   iterator {
-    dataset = datasets.city_list
+    dataset  = datasets.city_list
+    parallel = true
   }
 }
 ```
@@ -29,53 +30,83 @@ task "process_city" {
 | `start_delay` | int | Milliseconds delay between starts in first concurrent batch (default: 0). Only valid with `parallel = true`. |
 | `smoketest` | bool | Run first iteration completely before starting others; skip remaining if first fails (default: false). Only valid with `parallel = true`. |
 
-## The `item` Variable
+## The `item` Variable (Parallel Only)
 
-Inside an iterated task, `item` refers to the current dataset item:
+In **parallel** iterated tasks, `item` refers to the current dataset item and can be used in the objective:
 
 ```hcl
 task "send_notification" {
   objective = "Send notification to ${item.email} about ${item.topic}"
 
   iterator {
-    dataset = datasets.notifications
+    dataset  = datasets.notifications
+    parallel = true
   }
 }
 ```
 
 If items are objects with fields, access them as `item.field_name`.
 
+> **Note:** Sequential tasks (`parallel = false`) cannot use `item` in their objective. The commander receives each item via the `dataset_next` tool instead. See [Sequential Mode](#sequential-default) below.
+
 ## Sequential vs Parallel
 
 ### Sequential (Default)
 
-Items are processed one at a time:
+A single commander processes all items in one session. The commander calls `dataset_next` to fetch each item, processes it, calls `submit_output`, and repeats until the dataset is exhausted.
 
 ```hcl
-iterator {
-  dataset  = datasets.items
-  parallel = false  # Default
+task "process_items" {
+  objective = "Process each item: calculate the total and flag any anomalies"
+
+  iterator {
+    dataset  = datasets.items
+    parallel = false  # Default
+  }
+
+  output {
+    field "total" { type = "number"; required = true }
+    field "flagged" { type = "boolean" }
+  }
 }
 ```
 
-- Predictable order
+**How it works:**
+
+1. The commander receives the task objective once at the start
+2. It calls `dataset_next` to get the first item
+3. It defines subtasks for that item using `set_subtasks`
+4. It works through the subtasks, calling `complete_subtask` after each
+5. It calls `submit_output` with the structured output for that item
+6. It calls `dataset_next` to get the next item (repeating steps 3-5)
+7. When `dataset_next` returns `"exhausted"`, it calls `task_complete`
+
+**Key characteristics:**
+
+- Single commander session maintains context across all items
+- Predictable processing order
+- The objective should describe the work generically, not reference specific item fields
 - Fail-fast on first error (after retries exhausted)
-- Access to previous iteration's output (see below)
 
 ### Parallel
 
-All items are processed concurrently:
+Each item gets its own independent commander:
 
 ```hcl
-iterator {
-  dataset  = datasets.items
-  parallel = true
+task "get_weather" {
+  objective = "Get current weather for ${item.name}, ${item.state}"
+
+  iterator {
+    dataset  = datasets.city_list
+    parallel = true
+  }
 }
 ```
 
 - Faster for independent operations
 - All iterations run simultaneously
 - Each iteration retries independently before overall failure
+- The `item` variable is resolved into the objective for each iteration
 
 #### Parallel Options
 
@@ -102,91 +133,6 @@ iterator {
 This helps when iterations need to populate shared caches before others start.
 
 **smoketest**: Runs the first iteration completely before starting the rest. If the first iteration fails (after retries), the remaining iterations are skipped. Useful for catching configuration errors early without wasting resources on doomed iterations.
-
-## Previous Iteration Context (Sequential Only)
-
-In sequential mode, each iteration has access to the previous iteration's structured output. **Important:** Each iteration processes a *different* item from the dataset—the previous output is from a different dataset item, not the same one.
-
-This enables use cases like:
-
-- **Pagination**: Pass cursor/offset to the next iteration
-- **Web crawling**: Track visited URLs across iterations
-- **Cumulative state**: Build up results across all items
-
-### How It Works
-
-When running sequentially, the commander receives the previous iteration's `output` in its system prompt:
-
-```
-## Previous Iteration Output
-
-You are processing one item in a sequential iteration. The PREVIOUS item (a different item from the dataset) produced this output:
-{
-  "cursor": "abc123",
-  "items_processed": 50
-}
-
-This is NOT the same item you are processing now - it's from the previous dataset item.
-Use this context only if relevant (e.g., pagination cursors, cumulative state, or patterns to follow).
-Your current task is for a NEW item with its own parameters.
-```
-
-The first iteration has no previous context. Parallel iterations do not receive previous context (since ordering is non-deterministic).
-
-### Example: Paginated API
-
-```hcl
-task "fetch_all_pages" {
-  objective = <<-EOT
-    Fetch the next page of results from the API.
-    If there is a cursor from the previous iteration, use it to continue pagination.
-    Otherwise, start from the first page.
-    Store the results and extract the next_cursor for the following iteration.
-  EOT
-
-  iterator {
-    dataset     = datasets.page_requests
-    parallel    = false  # Required for previous context
-    max_retries = 2
-  }
-
-  output {
-    field "next_cursor" {
-      type        = "string"
-      description = "Cursor for next page, null if no more pages"
-    }
-    field "items_count" {
-      type = "number"
-    }
-  }
-}
-```
-
-### Example: Web Crawling
-
-```hcl
-task "crawl_site" {
-  objective = <<-EOT
-    Continue crawling the website.
-    Check the previous iteration's output for the last URL visited.
-    Avoid revisiting pages. Process the next unvisited page.
-  EOT
-
-  iterator {
-    dataset  = datasets.pages_to_crawl
-    parallel = false
-  }
-
-  output {
-    field "last_url" {
-      type = "string"
-    }
-    field "visited_urls" {
-      type = "array"
-    }
-  }
-}
-```
 
 ## Example: Weather Report
 
@@ -265,7 +211,7 @@ When an iteration fails:
 
 ### Empty Datasets
 
-If a dataset is empty, the task completes immediately with a "No items to process" summary.
+If a dataset is empty, the task completes immediately.
 
 ## Querying Iteration Commanders
 
@@ -295,7 +241,7 @@ Use the `index` from the query results to ask follow-up questions:
 }
 ```
 
-The iteration commander responds from its completed context—it remembers the full conversation with its agents and can query them for additional details.
+The iteration commander responds from its completed context — it remembers the full conversation with its agents and can query them for additional details.
 
 ### Example: Character Crossover
 
@@ -304,7 +250,8 @@ task "create_backstories" {
   objective = "Create a backstory for ${item.name}, who is a ${item.role}"
 
   iterator {
-    dataset = datasets.characters
+    dataset  = datasets.characters
+    parallel = true
   }
 
   output {
@@ -332,12 +279,11 @@ During iteration, the CLI shows progress:
 
 ```
 [2/3] get_weather (5 iterations, parallel)
-  → [0] Processing Chicago, IL...
-  → [1] Processing Detroit, MI...
-  → [2] Processing Milwaukee, WI...
+  -> [0] Processing Chicago, IL...
+  -> [1] Processing Detroit, MI...
+  -> [2] Processing Milwaukee, WI...
   ✓ [0] Complete
   ✓ [1] Complete
   ✓ [2] Complete
-  → Aggregating summaries...
   ✓ Complete
 ```

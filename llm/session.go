@@ -384,6 +384,46 @@ func (s *Session) Compact(turnRetention int) int {
 	return compactedCount
 }
 
+// CompactWithContext is like Compact but injects additional context into the compaction summary.
+// Used by commanders to preserve state like dataset progress and subtask status.
+func (s *Session) CompactWithContext(turnRetention int, extraContext string) int {
+	// A turn is a user message + assistant response pair (2 messages)
+	messagesToRetain := turnRetention * 2
+
+	if len(s.messages) <= messagesToRetain {
+		return 0
+	}
+
+	compactEnd := len(s.messages) - messagesToRetain
+	if compactEnd <= 0 {
+		return 0
+	}
+
+	summary := s.buildCompactionSummary(s.messages[:compactEnd])
+
+	// Inject extra context after the opening tag and description
+	if extraContext != "" {
+		insertPoint := strings.Index(summary, "\n\n")
+		if insertPoint != -1 {
+			summary = summary[:insertPoint+2] + extraContext + "\n" + summary[insertPoint+2:]
+		}
+	}
+
+	newMessages := make([]Message, 0, 1+messagesToRetain)
+	newMessages = append(newMessages, Message{
+		Role:    RoleUser,
+		Content: summary,
+	})
+	newMessages = append(newMessages, s.messages[compactEnd:]...)
+
+	compactedCount := compactEnd
+	s.messages = newMessages
+
+	s.logMessage("Compaction", fmt.Sprintf("Compacted %d messages into summary with extra context. Retained last %d turns.", compactedCount, turnRetention))
+
+	return compactedCount
+}
+
 // buildCompactionSummary creates a condensed summary of compacted messages
 func (s *Session) buildCompactionSummary(messages []Message) string {
 	var summary strings.Builder

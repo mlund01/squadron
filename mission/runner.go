@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"regexp"
-	"strings"
 	"sync"
 	"time"
 
@@ -59,6 +57,9 @@ type Runner struct {
 	// Resume support
 	resumeMissionID string            // Non-empty when resuming a prior mission
 	rawInputs       map[string]string // Raw input strings for persistence/resume
+
+	// Folder access for mission
+	folderStore aitools.FolderStore
 }
 
 // askCommanderStore holds questions and answers shared across parallel iterations
@@ -94,28 +95,24 @@ func WithResume(missionID string) RunnerOption {
 // TaskResult holds the outcome of a completed task
 type TaskResult struct {
 	TaskName string
-	Summary  string
 	Success  bool
 	Error    error
 }
 
 // IterationResult holds the outcome of a single iteration
 type IterationResult struct {
-	Index     int
-	ItemID    string
-	Summary   string
-	Output    map[string]any
-	Learnings map[string]any
-	Success   bool
-	Error     error
+	Index   int
+	ItemID  string
+	Output  map[string]any
+	Success bool
+	Error   error
 }
 
 // IteratedTaskResult holds the outcome of an iterated task
 type IteratedTaskResult struct {
-	TaskName       string
-	WorkingSummary string
-	Iterations     []IterationResult
-	AllSuccess     bool
+	TaskName   string
+	Iterations []IterationResult
+	AllSuccess bool
 }
 
 // NewRunner creates a new mission runner
@@ -191,6 +188,13 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		}
 		r.secretValues = secretValues
 		r.secretInfos = secretInfos
+
+		// Build folder store from mission config
+		folderStore, err := buildFolderStore(mission, cfg.SharedFolders)
+		if err != nil {
+			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
+		}
+		r.folderStore = folderStore
 	}
 
 	return r, nil
@@ -596,7 +600,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			ConfigPath:       r.configPath,
 			MissionName:     r.mission.Name,
 			TaskName:         taskName,
-			Commander:  r.mission.Commander,
+			Commander:  r.mission.Commander.Model,
 			AgentNames:       agents,
 			DepSummaries:     depSummaries,
 			DepOutputSchemas: depOutputSchemas,
@@ -604,6 +608,8 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			SecretInfos:      r.secretInfos,
 			SecretValues:     r.secretValues,
 			IsIteration:      isIterated,
+			FolderStore:      r.folderStore,
+			Compaction:       r.commanderCompaction(),
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -791,14 +797,17 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	if reg, ok := streamer.(streamers.IDRegistrar); ok {
 		reg.SetTaskID(task.Name, taskID)
 	}
-	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil, nil)
+	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil)
+
+	// Store resolved task input (non-iterated = single input, no iteration index)
+	r.stores.Missions.StoreTaskInput(taskID, nil, objective)
 
 	// Helper to update task status on completion/failure
-	updateTaskDone := func(success bool, summary, outputJSON, errMsg *string) {
+	updateTaskDone := func(success bool, outputJSON, errMsg *string) {
 		if success {
-			r.stores.Missions.UpdateTaskStatus(taskID, "completed", summary, outputJSON, nil)
+			r.stores.Missions.UpdateTaskStatus(taskID, "completed", outputJSON, nil)
 		} else {
-			r.stores.Missions.UpdateTaskStatus(taskID, "failed", nil, nil, errMsg)
+			r.stores.Missions.UpdateTaskStatus(taskID, "failed", nil, errMsg)
 		}
 	}
 
@@ -806,7 +815,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	depSummaries, err := r.queryAncestorsForContext(ctx, task.Name, objective)
 	if err != nil {
 		errStr := err.Error()
-		updateTaskDone(false, nil, nil, &errStr)
+		updateTaskDone(false, nil, &errStr)
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
 			TaskName: task.Name,
@@ -849,7 +858,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		ConfigPath:       r.configPath,
 		MissionName:     r.mission.Name,
 		TaskName:         task.Name,
-		Commander:  r.mission.Commander,
+		Commander:  r.mission.Commander.Model,
 		AgentNames:       agents,
 		DepSummaries:     depSummaries,
 		DepOutputSchemas: depOutputSchemas,
@@ -858,10 +867,12 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		SecretValues:     r.secretValues,
 		IsIteration:      false, // Not an iterated task
 		DebugFile:        debugFile,
+		FolderStore:      r.folderStore,
+		Compaction:       r.commanderCompaction(),
 	})
 	if err != nil {
 		errStr := err.Error()
-		updateTaskDone(false, nil, nil, &errStr)
+		updateTaskDone(false, nil, &errStr)
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
 			TaskName: task.Name,
@@ -902,6 +913,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 				})
 			}
 		},
+		OnAgentCompaction: agentCompactionCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
@@ -918,9 +930,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
-		OnSubmitOutput: func(index int, output map[string]any, summary string) {
+		OnSubmitOutput: func(index int, output map[string]any) {
 			outputJSON, _ := json.Marshal(output)
-			r.stores.Missions.StoreTaskOutput(taskID, nil, nil, nil, string(outputJSON), summary)
+			r.stores.Missions.StoreTaskOutput(taskID, nil, nil, nil, string(outputJSON))
 		},
 		SessionLogger:     r.stores.Sessions,
 		TaskID:            taskID,
@@ -934,13 +946,13 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 			}
 		},
 		SetSubtasks: func(titles []string) error {
-			return r.stores.Missions.SetSubtasks(taskID, cmdSessionID, titles)
+			return r.stores.Missions.SetSubtasks(taskID, cmdSessionID, nil, titles)
 		},
 		GetSubtasks: func() ([]store.Subtask, error) {
-			return r.stores.Missions.GetSubtasks(taskID, cmdSessionID)
+			return r.stores.Missions.GetSubtasks(taskID, cmdSessionID, nil)
 		},
 		CompleteSubtask: func() error {
-			return r.stores.Missions.CompleteSubtask(taskID, cmdSessionID)
+			return r.stores.Missions.CompleteSubtask(taskID, cmdSessionID, nil)
 		},
 	}, depSummaries)
 
@@ -954,10 +966,10 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	}
 
 	// Execute (or resume if stored messages were loaded)
-	summary, err := sup.ExecuteOrResume(ctx, objective, taskStreamer)
+	err = sup.ExecuteOrResume(ctx, objective, taskStreamer)
 	if err != nil {
 		errStr := err.Error()
-		updateTaskDone(false, nil, nil, &errStr)
+		updateTaskDone(false, nil, &errStr)
 		sup.Close()
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
@@ -965,6 +977,22 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 			Success:  false,
 			Error:    err,
 		}, err
+	}
+
+	// Check if task was explicitly marked as failed
+	if !sup.IsTaskSucceeded() {
+		errStr := "task marked as failed by commander"
+		if reason := sup.TaskFailureReason(); reason != "" {
+			errStr = reason
+		}
+		updateTaskDone(false, nil, &errStr)
+		sup.Close()
+		streamer.TaskFailed(task.Name, fmt.Errorf(errStr))
+		return &TaskResult{
+			TaskName: task.Name,
+			Success:  false,
+			Error:    fmt.Errorf(errStr),
+		}, fmt.Errorf(errStr)
 	}
 
 	// Store commander for ask_commander queries from dependent tasks
@@ -981,12 +1009,11 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	// Update task status to completed (output already persisted via OnSubmitOutput)
 	outputJSON, _ := json.Marshal(output)
 	outputStr := string(outputJSON)
-	updateTaskDone(true, &summary, &outputStr, nil)
+	updateTaskDone(true, &outputStr, nil)
 
-	streamer.TaskCompleted(task.Name, summary)
+	streamer.TaskCompleted(task.Name)
 	return &TaskResult{
 		TaskName: task.Name,
-		Summary:  summary,
 		Success:  true,
 	}, nil
 }
@@ -1105,11 +1132,33 @@ func (s *commanderStreamerAdapter) ToolComplete(name string, result string) {
 	s.streamer.CommanderToolComplete(s.taskName, name, result)
 }
 
+func (s *commanderStreamerAdapter) Compaction(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
+	s.streamer.Compaction(s.taskName, "commander", inputTokens, tokenLimit, messagesCompacted, turnRetention)
+}
+
+// agentCompactionCallback returns a callback for agent compaction events that routes to the streamer.
+func agentCompactionCallback(streamer streamers.MissionHandler) func(string, string, int, int, int, int) {
+	return func(taskName, agentName string, inputTokens, tokenLimit, messagesCompacted, turnRetention int) {
+		streamer.Compaction(taskName, agentName, inputTokens, tokenLimit, messagesCompacted, turnRetention)
+	}
+}
+
+// commanderCompaction returns CompactionConfig from mission config, or nil if not set.
+func (r *Runner) commanderCompaction() *agent.CompactionConfig {
+	if r.mission.Commander == nil || r.mission.Commander.Compaction == nil {
+		return nil
+	}
+	return &agent.CompactionConfig{
+		TokenLimit:    r.mission.Commander.Compaction.TokenLimit,
+		TurnRetention: r.mission.Commander.Compaction.TurnRetention,
+	}
+}
+
 // missionSnapshot returns a JSON-friendly representation of the mission config.
 func (r *Runner) missionSnapshot() map[string]any {
 	snap := map[string]any{
 		"name":      r.mission.Name,
-		"commander": r.mission.Commander,
+		"commander": r.mission.Commander.Model,
 		"agents":    r.mission.Agents,
 	}
 
@@ -1211,26 +1260,24 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	if reg, ok := streamer.(streamers.IDRegistrar); ok {
 		reg.SetTaskID(task.Name, taskID)
 	}
-	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil, nil)
+	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil)
 
-	updateTaskDone := func(success bool, summary, outputJSON, errMsg *string) {
+	updateTaskDone := func(success bool, outputJSON, errMsg *string) {
 		if success {
-			r.stores.Missions.UpdateTaskStatus(taskID, "completed", summary, outputJSON, nil)
+			r.stores.Missions.UpdateTaskStatus(taskID, "completed", outputJSON, nil)
 		} else {
-			r.stores.Missions.UpdateTaskStatus(taskID, "failed", nil, nil, errMsg)
+			r.stores.Missions.UpdateTaskStatus(taskID, "failed", nil, errMsg)
 		}
 	}
 
 	if len(items) == 0 {
-		// No items to iterate - return success with empty summary
+		// No items to iterate - return success
 		streamer.TaskStarted(task.Name, fmt.Sprintf("(0 iterations over %s)", datasetName))
-		streamer.TaskCompleted(task.Name, "No items to process")
+		streamer.TaskCompleted(task.Name)
 
-		emptySummary := "No items to process"
-		updateTaskDone(true, &emptySummary, nil, nil)
+		updateTaskDone(true, nil, nil)
 		return &TaskResult{
 			TaskName: task.Name,
-			Summary:  "No items to process",
 			Success:  true,
 		}, nil
 	}
@@ -1240,14 +1287,23 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	representativeObjective, err := r.resolveIterationObjective(task, items[0])
 	if err != nil {
 		errStr := err.Error()
-		updateTaskDone(false, nil, nil, &errStr)
+		updateTaskDone(false, nil, &errStr)
 		return nil, fmt.Errorf("resolving representative objective: %w", err)
 	}
 	depSummaries, err = r.queryAncestorsForContext(ctx, task.Name, representativeObjective)
 	if err != nil {
 		errStr := err.Error()
-		updateTaskDone(false, nil, nil, &errStr)
+		updateTaskDone(false, nil, &errStr)
 		return nil, fmt.Errorf("querying ancestors: %w", err)
+	}
+
+	// Store resolved task inputs for each iteration
+	if existingTaskID == "" {
+		for i, item := range items {
+			iterObj, _ := r.resolveIterationObjective(task, item)
+			idx := i
+			r.stores.Missions.StoreTaskInput(taskID, &idx, iterObj)
+		}
 	}
 
 	// Notify mission handler about iteration start
@@ -1289,7 +1345,7 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 				iterations = make([]IterationResult, len(items))
 				for i := range items {
 					if completedIndices[i] {
-						iterations[i] = IterationResult{Index: i, Success: true, Summary: "(completed in prior run)"}
+						iterations[i] = IterationResult{Index: i, Success: true}
 					}
 				}
 				for _, result := range partialResults {
@@ -1326,7 +1382,7 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 
 	if !allSuccess {
 		errStr := firstError.Error()
-		updateTaskDone(false, nil, nil, &errStr)
+		updateTaskDone(false, nil, &errStr)
 		streamer.TaskFailed(task.Name, firstError)
 		return &TaskResult{
 			TaskName: task.Name,
@@ -1335,19 +1391,15 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 		}, firstError
 	}
 
-	// Create a simple summary (no LLM aggregation)
-	// Individual iteration outputs already persisted via OnSubmitOutput callbacks
-	summary := fmt.Sprintf("Completed %d iterations over %s", len(iterations), datasetName)
-
 	// Update task status to completed
-	updateTaskDone(true, &summary, nil, nil)
+	// Individual iteration outputs already persisted via OnSubmitOutput callbacks
+	updateTaskDone(true, nil, nil)
 
-	streamer.TaskIterationCompleted(task.Name, len(iterations), summary)
-	streamer.TaskCompleted(task.Name, summary)
+	streamer.TaskIterationCompleted(task.Name, len(iterations))
+	streamer.TaskCompleted(task.Name)
 
 	return &TaskResult{
 		TaskName: task.Name,
-		Summary:  summary,
 		Success:  true,
 	}, nil
 }
@@ -1373,8 +1425,8 @@ func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, 
 	}
 
 	// Build objective for sequential dataset processing
-	// Use the first item to resolve a representative objective
-	representativeObjective, err := r.resolveIterationObjective(task, items[0])
+	// Sequential tasks don't use item vars in the objective — the commander gets items via dataset_next
+	taskObjective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
 	if err != nil {
 		return []IterationResult{{
 			Index:   0,
@@ -1385,10 +1437,10 @@ func (r *Runner) runSequentialIterations(ctx context.Context, task config.Task, 
 
 	objective := fmt.Sprintf(`Process the following task for each of %d items in the dataset.
 
-Task objective (example for first item): %s
+Task objective: %s
 
 Use dataset_next to get each item. Process it completely, then call submit_output with the output.
-Continue until dataset_next returns "exhausted".`, len(items), representativeObjective)
+Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 
 	// Create single commander with all items
 	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
@@ -1396,7 +1448,7 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		ConfigPath:        r.configPath,
 		MissionName:      r.mission.Name,
 		TaskName:          task.Name,
-		Commander:   r.mission.Commander,
+		Commander:   r.mission.Commander.Model,
 		AgentNames:        agents,
 		DepSummaries:      depSummaries,
 		DepOutputSchemas:  depOutputSchemas,
@@ -1407,6 +1459,8 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		IsParallel:        false,
 		DebugFile:         debugFile,
 		SequentialDataset: items, // Pass all items for sequential processing
+		FolderStore:       r.folderStore,
+		Compaction:        r.commanderCompaction(),
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -1416,8 +1470,14 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		}}
 	}
 
+	// Wire up OnNext to emit iteration_started events
+	sup.SetDatasetOnNext(func(index int) {
+		streamer.IterationStarted(task.Name, index, taskObjective)
+	})
+
 	// Track commander session ID for subtask callbacks
 	var seqCmdSessionID string
+	var seqSubtaskIterIdx *int
 
 	// Set up tool callbacks
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
@@ -1442,6 +1502,7 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 				})
 			}
 		},
+		OnAgentCompaction: agentCompactionCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
@@ -1457,14 +1518,15 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
-		OnSubmitOutput: func(index int, output map[string]any, summary string) {
+		OnSubmitOutput: func(index int, output map[string]any) {
 			datasetName := task.Iterator.Dataset
 			itemID := ""
 			if index < len(items) {
 				itemID = getItemID(items[index], index)
 			}
 			outputJSON, _ := json.Marshal(output)
-			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &index, &itemID, string(outputJSON), summary)
+			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &index, &itemID, string(outputJSON))
+			streamer.IterationCompleted(task.Name, index)
 		},
 		SessionLogger: r.stores.Sessions,
 		TaskID:        taskID,
@@ -1477,25 +1539,46 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 			}
 		},
 		SetSubtasks: func(titles []string) error {
-			return r.stores.Missions.SetSubtasks(taskID, seqCmdSessionID, titles)
+			iterIdx := sup.GetCurrentDatasetIndex()
+			seqSubtaskIterIdx = iterIdx
+			return r.stores.Missions.SetSubtasks(taskID, seqCmdSessionID, iterIdx, titles)
 		},
 		GetSubtasks: func() ([]store.Subtask, error) {
-			return r.stores.Missions.GetSubtasks(taskID, seqCmdSessionID)
+			return r.stores.Missions.GetSubtasks(taskID, seqCmdSessionID, seqSubtaskIterIdx)
 		},
 		CompleteSubtask: func() error {
-			return r.stores.Missions.CompleteSubtask(taskID, seqCmdSessionID)
+			return r.stores.Missions.CompleteSubtask(taskID, seqCmdSessionID, seqSubtaskIterIdx)
 		},
 	}, depSummaries)
 
-	// Create streamer adapter for the commander
+	// Create streamer adapter for the commander with dynamic index
 	seqStreamer := &iterationStreamerAdapter{
 		taskName: task.Name,
-		index:    0, // Use 0 as we're handling all items in one session
+		indexFunc: func() int {
+			if idx := sup.GetCurrentDatasetIndex(); idx != nil {
+				return *idx
+			}
+			return 0
+		},
 		streamer: streamer,
 	}
 
 	// Execute the task - commander handles all items internally
-	_, err = sup.ExecuteTask(ctx, objective, seqStreamer)
+	err = sup.ExecuteTask(ctx, objective, seqStreamer)
+
+	// Check if task was explicitly marked as failed
+	if err == nil && !sup.IsTaskSucceeded() {
+		failMsg := "task marked as failed by commander"
+		if reason := sup.TaskFailureReason(); reason != "" {
+			failMsg = reason
+		}
+		sup.Close()
+		return []IterationResult{{
+			Index:   0,
+			Success: false,
+			Error:   fmt.Errorf(failMsg),
+		}}
+	}
 
 	// Get results from submit_output tool
 	results := sup.GetSubmitResults()
@@ -1525,7 +1608,6 @@ Continue until dataset_next returns "exhausted".`, len(items), representativeObj
 		iterations[i] = IterationResult{
 			Index:   i,
 			ItemID:  itemID,
-			Summary: r.Summary,
 			Output:  r.Output,
 			Success: true,
 		}
@@ -1585,7 +1667,7 @@ func (r *Runner) runParallelIterations(ctx context.Context, task config.Task, it
 			default:
 			}
 
-			firstResult = r.runSingleIteration(ctx, task, 0, items[0], nil, nil, taskID, depSummaries, streamer)
+			firstResult = r.runSingleIteration(ctx, task, 0, items[0], nil, taskID, depSummaries, streamer)
 			if firstResult.Success {
 				break
 			}
@@ -1660,8 +1742,8 @@ func (r *Runner) runParallelIterationsCore(ctx context.Context, task config.Task
 				default:
 				}
 
-				// Pass nil for prevOutput and prevLearnings in parallel iterations (no meaningful ordering)
-				result = r.runSingleIteration(ctx, task, actualIndex, item, nil, nil, taskID, depSummaries, streamer)
+				// Pass nil for prevOutput in parallel iterations (no meaningful ordering)
+				result = r.runSingleIteration(ctx, task, actualIndex, item, nil, taskID, depSummaries, streamer)
 				if result.Success {
 					break
 				}
@@ -1720,7 +1802,7 @@ func (r *Runner) runParallelIterationsWithIndices(ctx context.Context, task conf
 				default:
 				}
 
-				result = r.runSingleIteration(ctx, task, actualIndex, item, nil, nil, taskID, depSummaries, streamer)
+				result = r.runSingleIteration(ctx, task, actualIndex, item, nil, taskID, depSummaries, streamer)
 				if result.Success {
 					break
 				}
@@ -1755,7 +1837,7 @@ func (r *Runner) runSequentialIterationsResume(ctx context.Context, task config.
 	// Build iterations: completed ones from store + run remaining
 	iterations := make([]IterationResult, 0, len(items))
 	for i := 0; i < completedCount; i++ {
-		iterations = append(iterations, IterationResult{Index: i, Success: true, Summary: "(completed in prior run)"})
+		iterations = append(iterations, IterationResult{Index: i, Success: true})
 	}
 
 	// Run the remaining items with a sequential commander
@@ -1774,7 +1856,7 @@ func (r *Runner) runSequentialIterationsResume(ctx context.Context, task config.
 		debugFile = r.debugLogger.GetMessageFile("commander", task.Name)
 	}
 
-	representativeObjective, err := r.resolveIterationObjective(task, remainingItems[0])
+	taskObjective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
 	if err != nil {
 		return append(iterations, IterationResult{
 			Index:   completedCount,
@@ -1785,10 +1867,10 @@ func (r *Runner) runSequentialIterationsResume(ctx context.Context, task config.
 
 	objective := fmt.Sprintf(`Process the following task for each of %d items in the dataset.
 
-Task objective (example for first item): %s
+Task objective: %s
 
 Use dataset_next to get each item. Process it completely, then call submit_output with the output.
-Continue until dataset_next returns "exhausted".`, len(remainingItems), representativeObjective)
+Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObjective)
 
 	// Create commander for remaining items
 	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
@@ -1796,7 +1878,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 		ConfigPath:        r.configPath,
 		MissionName:      r.mission.Name,
 		TaskName:          task.Name,
-		Commander:   r.mission.Commander,
+		Commander:   r.mission.Commander.Model,
 		AgentNames:        agents,
 		DepSummaries:      depSummaries,
 		DepOutputSchemas:  depOutputSchemas,
@@ -1807,6 +1889,8 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 		IsParallel:        false,
 		DebugFile:         debugFile,
 		SequentialDataset: remainingItems,
+		FolderStore:       r.folderStore,
+		Compaction:        r.commanderCompaction(),
 	})
 	if err != nil {
 		return append(iterations, IterationResult{
@@ -1816,11 +1900,18 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 		})
 	}
 
+	// Wire up OnNext to emit iteration_started events
+	sup.SetDatasetOnNext(func(index int) {
+		actualIndex := index + completedCount
+		streamer.IterationStarted(task.Name, actualIndex, taskObjective)
+	})
+
 	// Check for existing session state
 	existingSessionID := r.findAndLoadExistingSession(sup, taskID, nil)
 
 	// Track commander session ID for subtask callbacks
 	var seqResumeCmdSessionID string
+	var seqResumeSubtaskIterIdx *int
 	if existingSessionID != "" {
 		seqResumeCmdSessionID = existingSessionID
 	}
@@ -1836,6 +1927,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 		OnAgentComplete: func(taskName, agentName string) {
 			streamer.AgentCompleted(taskName, agentName)
 		},
+		OnAgentCompaction: agentCompactionCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
@@ -1851,7 +1943,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
-		OnSubmitOutput: func(index int, output map[string]any, summary string) {
+		OnSubmitOutput: func(index int, output map[string]any) {
 			// Adjust index to account for already-completed items
 			actualIndex := index + completedCount
 			datasetName := task.Iterator.Dataset
@@ -1860,7 +1952,8 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 				itemID = getItemID(items[actualIndex], actualIndex)
 			}
 			outputJSON, _ := json.Marshal(output)
-			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &actualIndex, &itemID, string(outputJSON), summary)
+			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &actualIndex, &itemID, string(outputJSON))
+			streamer.IterationCompleted(task.Name, actualIndex)
 		},
 		SessionLogger:     r.stores.Sessions,
 		TaskID:            taskID,
@@ -1874,13 +1967,15 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 			}
 		},
 		SetSubtasks: func(titles []string) error {
-			return r.stores.Missions.SetSubtasks(taskID, seqResumeCmdSessionID, titles)
+			iterIdx := sup.GetCurrentDatasetIndex()
+			seqResumeSubtaskIterIdx = iterIdx
+			return r.stores.Missions.SetSubtasks(taskID, seqResumeCmdSessionID, iterIdx, titles)
 		},
 		GetSubtasks: func() ([]store.Subtask, error) {
-			return r.stores.Missions.GetSubtasks(taskID, seqResumeCmdSessionID)
+			return r.stores.Missions.GetSubtasks(taskID, seqResumeCmdSessionID, seqResumeSubtaskIterIdx)
 		},
 		CompleteSubtask: func() error {
-			return r.stores.Missions.CompleteSubtask(taskID, seqResumeCmdSessionID)
+			return r.stores.Missions.CompleteSubtask(taskID, seqResumeCmdSessionID, seqResumeSubtaskIterIdx)
 		},
 	}, depSummaries)
 
@@ -1889,12 +1984,32 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 
 	seqStreamer := &iterationStreamerAdapter{
 		taskName: task.Name,
-		index:    completedCount,
+		indexFunc: func() int {
+			if idx := sup.GetCurrentDatasetIndex(); idx != nil {
+				return *idx
+			}
+			return completedCount
+		},
 		streamer: streamer,
 	}
 
 	// Execute (or resume if stored messages were loaded)
-	_, err = sup.ExecuteOrResume(ctx, objective, seqStreamer)
+	err = sup.ExecuteOrResume(ctx, objective, seqStreamer)
+
+	// Check if task was explicitly marked as failed
+	if err == nil && !sup.IsTaskSucceeded() {
+		failMsg := "task marked as failed by commander"
+		if reason := sup.TaskFailureReason(); reason != "" {
+			failMsg = reason
+		}
+		sup.Close()
+		iterations = append(iterations, IterationResult{
+			Index:   completedCount,
+			Success: false,
+			Error:   fmt.Errorf(failMsg),
+		})
+		return iterations
+	}
 
 	// Get results
 	results := sup.GetSubmitResults()
@@ -1907,7 +2022,6 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 		iterations = append(iterations, IterationResult{
 			Index:   actualIndex,
 			ItemID:  itemID,
-			Summary: res.Summary,
 			Output:  res.Output,
 			Success: true,
 		})
@@ -1934,7 +2048,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), represen
 
 // runSingleIteration executes a single iteration of an iterated task.
 // It checks the store for existing session state and resumes automatically if found.
-func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index int, item cty.Value, prevOutput map[string]any, prevLearnings map[string]any, taskID string, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) IterationResult {
+func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index int, item cty.Value, prevOutput map[string]any, taskID string, depSummaries []agent.DependencySummary, streamer streamers.MissionHandler) IterationResult {
 	itemID := getItemID(item, index)
 
 	// Resolve the objective with item context
@@ -1986,18 +2100,19 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		ConfigPath:             r.configPath,
 		MissionName:           r.mission.Name,
 		TaskName:               iterTaskName,
-		Commander:        r.mission.Commander,
+		Commander:        r.mission.Commander.Model,
 		AgentNames:             agents,
 		DepSummaries:           depSummaries,
 		DepOutputSchemas:       depOutputSchemas,
 		TaskOutputSchema:       taskOutputSchema,
 		PrevIterationOutput:    prevOutput,
-		PrevIterationLearnings: prevLearnings,
 		SecretInfos:            r.secretInfos,
 		SecretValues:           r.secretValues,
 		IsIteration:            true,
 		IsParallel:             task.Iterator.Parallel,
 		DebugFile:              debugFile,
+		FolderStore:            r.folderStore,
+		Compaction:             r.commanderCompaction(),
 	})
 	if err != nil {
 		streamer.IterationFailed(task.Name, index, err)
@@ -2044,6 +2159,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 				})
 			}
 		},
+		OnAgentCompaction: agentCompactionCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
@@ -2059,11 +2175,11 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		AskCommanderWithCache: func(targetTask string, iterationIndex int, question string) (string, error) {
 			return r.askCommanderWithCache(ctx, targetTask, iterationIndex, task.Name, question)
 		},
-		OnSubmitOutput: func(idx int, output map[string]any, summary string) {
+		OnSubmitOutput: func(idx int, output map[string]any) {
 			datasetName := task.Iterator.Dataset
 			outputJSON, _ := json.Marshal(output)
 			actualIdx := index
-			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &actualIdx, &itemID, string(outputJSON), summary)
+			r.stores.Missions.StoreTaskOutput(taskID, &datasetName, &actualIdx, &itemID, string(outputJSON))
 		},
 		SessionLogger:     r.stores.Sessions,
 		TaskID:            taskID,
@@ -2078,13 +2194,13 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 			}
 		},
 		SetSubtasks: func(titles []string) error {
-			return r.stores.Missions.SetSubtasks(taskID, iterCmdSessionID, titles)
+			return r.stores.Missions.SetSubtasks(taskID, iterCmdSessionID, &iterIdx, titles)
 		},
 		GetSubtasks: func() ([]store.Subtask, error) {
-			return r.stores.Missions.GetSubtasks(taskID, iterCmdSessionID)
+			return r.stores.Missions.GetSubtasks(taskID, iterCmdSessionID, &iterIdx)
 		},
 		CompleteSubtask: func() error {
-			return r.stores.Missions.CompleteSubtask(taskID, iterCmdSessionID)
+			return r.stores.Missions.CompleteSubtask(taskID, iterCmdSessionID, &iterIdx)
 		},
 	}, depSummaries)
 
@@ -2099,7 +2215,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 	}
 
 	// Execute (or resume if stored messages were loaded)
-	summary, err := sup.ExecuteOrResume(ctx, objective, iterStreamer)
+	err = sup.ExecuteOrResume(ctx, objective, iterStreamer)
 	if err != nil {
 		sup.Close() // Close on failure
 		streamer.IterationFailed(task.Name, index, err)
@@ -2111,14 +2227,28 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		}
 	}
 
+	// Check if task was explicitly marked as failed
+	if !sup.IsTaskSucceeded() {
+		failMsg := "iteration marked as failed by commander"
+		if reason := sup.TaskFailureReason(); reason != "" {
+			failMsg = reason
+		}
+		sup.Close()
+		failErr := fmt.Errorf(failMsg)
+		streamer.IterationFailed(task.Name, index, failErr)
+		return IterationResult{
+			Index:   index,
+			ItemID:  itemID,
+			Success: false,
+			Error:   failErr,
+		}
+	}
+
 	// Get output from submit_output tool
 	var output map[string]any
 	if results := sup.GetSubmitResults(); len(results) > 0 {
 		output = results[0].Output
 	}
-
-	// Parse LEARNINGS block if present
-	learnings, cleanSummary := parseLearnings(summary)
 
 	// Store the iteration commander for ask_commander queries from dependent tasks
 	r.mu.Lock()
@@ -2128,14 +2258,12 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 	r.iterationCommanders[task.Name][index] = sup
 	r.mu.Unlock()
 
-	streamer.IterationCompleted(task.Name, index, cleanSummary)
+	streamer.IterationCompleted(task.Name, index)
 	return IterationResult{
-		Index:     index,
-		ItemID:    itemID,
-		Summary:   cleanSummary,
-		Output:    output,
-		Learnings: learnings,
-		Success:   true,
+		Index:   index,
+		ItemID:  itemID,
+		Output:  output,
+		Success: true,
 	}
 }
 
@@ -2153,63 +2281,6 @@ func (r *Runner) resolveIterationObjective(task config.Task, item cty.Value) (st
 		return "", fmt.Errorf("evaluating objective: %s", diags.Error())
 	}
 	return val.AsString(), nil
-}
-
-// parseLearnings extracts learnings from an answer containing a LEARNINGS block
-// Returns the parsed learnings map and the answer with the LEARNINGS block removed
-func parseLearnings(answer string) (map[string]any, string) {
-	// Match <LEARNINGS>...</LEARNINGS> block
-	re := regexp.MustCompile(`(?s)<LEARNINGS>\s*(.*?)\s*</LEARNINGS>`)
-	match := re.FindStringSubmatch(answer)
-
-	if match == nil {
-		return nil, answer
-	}
-
-	// Parse the JSON content
-	var learnings map[string]any
-	if err := json.Unmarshal([]byte(match[1]), &learnings); err != nil {
-		// If parsing fails, return nil learnings but still strip the block
-		return nil, re.ReplaceAllString(answer, "")
-	}
-
-	// Remove the LEARNINGS block from the answer
-	cleanAnswer := strings.TrimSpace(re.ReplaceAllString(answer, ""))
-	return learnings, cleanAnswer
-}
-
-// mergeLearnings combines two learnings maps, appending arrays and overwriting strings
-// Used to accumulate learnings from failed retry attempts
-func mergeLearnings(base, new map[string]any) map[string]any {
-	if base == nil {
-		return new
-	}
-	if new == nil {
-		return base
-	}
-
-	merged := make(map[string]any)
-	// Copy base
-	for k, v := range base {
-		merged[k] = v
-	}
-
-	// Merge new values
-	for k, v := range new {
-		if existing, ok := merged[k]; ok {
-			// If both are slices, append
-			if existingSlice, ok := existing.([]any); ok {
-				if newSlice, ok := v.([]any); ok {
-					merged[k] = append(existingSlice, newSlice...)
-					continue
-				}
-			}
-		}
-		// Otherwise, overwrite (new value takes precedence for recommendations, etc.)
-		merged[k] = v
-	}
-
-	return merged
 }
 
 // getItemID generates an identifier for an iteration item
@@ -2233,25 +2304,37 @@ func getItemID(item cty.Value, index int) string {
 
 // iterationStreamerAdapter adapts MissionHandler to agent.CommanderStreamer for iterations
 type iterationStreamerAdapter struct {
-	taskName string
-	index    int
-	streamer streamers.MissionHandler
+	taskName  string
+	index     int        // static index (parallel)
+	indexFunc func() int // dynamic index (sequential), takes precedence
+	streamer  streamers.MissionHandler
+}
+
+func (s *iterationStreamerAdapter) getIndex() int {
+	if s.indexFunc != nil {
+		return s.indexFunc()
+	}
+	return s.index
 }
 
 func (s *iterationStreamerAdapter) Reasoning(content string) {
-	s.streamer.IterationReasoning(s.taskName, s.index, content)
+	s.streamer.CommanderReasoning(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), content)
 }
 
 func (s *iterationStreamerAdapter) Answer(content string) {
-	s.streamer.IterationAnswer(s.taskName, s.index, content)
+	s.streamer.CommanderAnswer(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), content)
 }
 
 func (s *iterationStreamerAdapter) CallingTool(name, input string) {
-	s.streamer.CommanderCallingTool(fmt.Sprintf("%s[%d]", s.taskName, s.index), name, input)
+	s.streamer.CommanderCallingTool(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), name, input)
 }
 
 func (s *iterationStreamerAdapter) ToolComplete(name string, result string) {
-	s.streamer.CommanderToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.index), name, result)
+	s.streamer.CommanderToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), name, result)
+}
+
+func (s *iterationStreamerAdapter) Compaction(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
+	s.streamer.Compaction(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), "commander", inputTokens, tokenLimit, messagesCompacted, turnRetention)
 }
 
 // =============================================================================
@@ -2708,7 +2791,6 @@ func (a *knowledgeStoreAdapter) GetTaskOutput(taskName string) (*agent.TaskOutpu
 	info := &agent.TaskOutputInfo{
 		TaskName:        output.TaskName,
 		Status:          output.Status,
-		Summary:         output.Summary,
 		IsIterated:      output.IsIterated,
 		TotalIterations: output.TotalIterations,
 		Output:          output.Output,
@@ -2717,11 +2799,10 @@ func (a *knowledgeStoreAdapter) GetTaskOutput(taskName string) (*agent.TaskOutpu
 	// Convert iterations
 	for _, iter := range output.Iterations {
 		info.Iterations = append(info.Iterations, agent.IterationInfo{
-			Index:   iter.Index,
-			ItemID:  iter.ItemID,
-			Status:  iter.Status,
-			Summary: iter.Summary,
-			Output:  iter.Output,
+			Index:  iter.Index,
+			ItemID: iter.ItemID,
+			Status: iter.Status,
+			Output: iter.Output,
 		})
 	}
 
@@ -2752,11 +2833,10 @@ func (a *knowledgeStoreAdapter) Query(taskName string, query agent.TaskQuery) ag
 	var iterations []agent.IterationInfo
 	for _, iter := range result.Results {
 		iterations = append(iterations, agent.IterationInfo{
-			Index:   iter.Index,
-			ItemID:  iter.ItemID,
-			Status:  iter.Status,
-			Summary: iter.Summary,
-			Output:  iter.Output,
+			Index:  iter.Index,
+			ItemID: iter.ItemID,
+			Status: iter.Status,
+			Output: iter.Output,
 		})
 	}
 
@@ -2795,11 +2875,10 @@ func (a *knowledgeStoreAdapter) Aggregate(taskName string, query agent.Aggregate
 
 	if result.Item != nil {
 		agentResult.Item = &agent.IterationInfo{
-			Index:   result.Item.Index,
-			ItemID:  result.Item.ItemID,
-			Status:  result.Item.Status,
-			Summary: result.Item.Summary,
-			Output:  result.Item.Output,
+			Index:  result.Item.Index,
+			ItemID: result.Item.ItemID,
+			Status: result.Item.Status,
+			Output: result.Item.Output,
 		}
 	}
 

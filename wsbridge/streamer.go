@@ -99,10 +99,9 @@ func (h *WSMissionHandler) TaskStarted(taskName string, objective string) {
 	})
 }
 
-func (h *WSMissionHandler) TaskCompleted(taskName string, summary string) {
+func (h *WSMissionHandler) TaskCompleted(taskName string) {
 	h.sendEvent(protocol.EventTaskCompleted, protocol.TaskCompletedData{
 		TaskName: taskName,
-		Summary:  summary,
 	})
 }
 
@@ -121,11 +120,10 @@ func (h *WSMissionHandler) TaskIterationStarted(taskName string, totalItems int,
 	})
 }
 
-func (h *WSMissionHandler) TaskIterationCompleted(taskName string, completedCount int, workingSummary string) {
+func (h *WSMissionHandler) TaskIterationCompleted(taskName string, completedCount int) {
 	h.sendEvent(protocol.EventTaskIterationCompleted, protocol.TaskIterationCompletedData{
 		TaskName:       taskName,
 		CompletedCount: completedCount,
-		WorkingSummary: workingSummary,
 	})
 }
 
@@ -137,11 +135,10 @@ func (h *WSMissionHandler) IterationStarted(taskName string, index int, objectiv
 	})
 }
 
-func (h *WSMissionHandler) IterationCompleted(taskName string, index int, summary string) {
+func (h *WSMissionHandler) IterationCompleted(taskName string, index int) {
 	h.sendEvent(protocol.EventIterationCompleted, protocol.IterationCompletedData{
 		TaskName: taskName,
 		Index:    index,
-		Summary:  summary,
 	})
 }
 
@@ -179,13 +176,6 @@ func (h *WSMissionHandler) IterationAnswer(taskName string, index int, content s
 	})
 }
 
-func (h *WSMissionHandler) SummaryAggregation(taskName string, summaryCount int) {
-	h.sendEvent(protocol.EventSummaryAggregation, protocol.SummaryAggregationData{
-		TaskName:     taskName,
-		SummaryCount: summaryCount,
-	})
-}
-
 func (h *WSMissionHandler) CommanderReasoning(taskName string, content string) {
 	h.sendEvent(protocol.EventCommanderReasoning, protocol.CommanderReasoningData{
 		TaskName: taskName,
@@ -213,6 +203,17 @@ func (h *WSMissionHandler) CommanderToolComplete(taskName string, toolName strin
 		TaskName: taskName,
 		ToolName: toolName,
 		Result:   result,
+	})
+}
+
+func (h *WSMissionHandler) Compaction(taskName string, entity string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
+	h.sendEvent(protocol.EventCompaction, protocol.CompactionData{
+		TaskName:          taskName,
+		Entity:            entity,
+		InputTokens:       inputTokens,
+		TokenLimit:        tokenLimit,
+		MessagesCompacted: messagesCompacted,
+		TurnRetention:     turnRetention,
 	})
 }
 

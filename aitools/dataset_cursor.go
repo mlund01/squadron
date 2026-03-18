@@ -14,6 +14,8 @@ type DatasetCursor struct {
 	index    int
 	taskName string
 	mu       sync.Mutex
+	// OnNext is called after advancing to a new item, with the item's index.
+	OnNext func(index int)
 }
 
 // NewDatasetCursor creates a new cursor for the given items
@@ -30,6 +32,14 @@ func (c *DatasetCursor) Total() int {
 	return len(c.items)
 }
 
+// CurrentIndex returns the index of the last item returned by Next,
+// or -1 if nothing has been fetched yet.
+func (c *DatasetCursor) CurrentIndex() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.index - 1
+}
+
 // =============================================================================
 // DatasetNextTool - advances to the next item in the dataset
 // =============================================================================
@@ -39,6 +49,8 @@ type DatasetNextTool struct {
 	// OutputCounter returns the number of outputs submitted so far.
 	// Used to gate advancement: must submit output before getting next item.
 	OutputCounter func() int
+	// SubtaskChecker returns incomplete subtask count. If > 0, dataset_next is blocked.
+	SubtaskChecker func() (total int, incomplete int)
 }
 
 func NewDatasetNextTool(cursor *DatasetCursor) *DatasetNextTool {
@@ -77,6 +89,14 @@ func (t *DatasetNextTool) Call(params string) string {
 		}
 	}
 
+	// Validate that all subtasks from the current item are completed
+	if t.cursor.index > 0 && t.SubtaskChecker != nil {
+		total, incomplete := t.SubtaskChecker()
+		if total > 0 && incomplete > 0 {
+			return fmt.Sprintf(`{"status": "error", "message": "cannot advance to next item: %d of %d subtasks are still incomplete — call complete_subtask for each subtask before calling dataset_next"}`, incomplete, total)
+		}
+	}
+
 	// Check if exhausted
 	if t.cursor.index >= len(t.cursor.items) {
 		submitted := 0
@@ -90,6 +110,11 @@ func (t *DatasetNextTool) Call(params string) string {
 	item := t.cursor.items[t.cursor.index]
 	currentIndex := t.cursor.index
 	t.cursor.index++
+
+	// Notify listener
+	if t.cursor.OnNext != nil {
+		t.cursor.OnNext(currentIndex)
+	}
 
 	// Convert cty.Value to JSON
 	itemGo := ctyValueToGo(item)

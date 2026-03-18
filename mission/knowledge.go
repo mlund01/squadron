@@ -110,9 +110,6 @@ func (s *PersistentKnowledgeStore) GetTaskOutput(taskName string) (*TaskOutput, 
 		Status:    "success",
 		Timestamp: time.Now(),
 	}
-	if task.Summary != nil {
-		to.Summary = *task.Summary
-	}
 
 	if len(outputs) == 0 {
 		return to, true
@@ -129,7 +126,6 @@ func (s *PersistentKnowledgeStore) GetTaskOutput(taskName string) (*TaskOutput, 
 			}
 			iter := IterationOutput{
 				Status:    "success",
-				Summary:   row.Summary,
 				Output:    outputMap,
 				Timestamp: row.CreatedAt,
 			}
@@ -384,8 +380,6 @@ func getFieldValue(iter IterationOutput, field string) any {
 		return iter.ItemID
 	case "status":
 		return iter.Status
-	case "summary":
-		return iter.Summary
 	}
 
 	// Check output map

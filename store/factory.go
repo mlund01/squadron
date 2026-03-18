@@ -23,10 +23,16 @@ func NewBundle(cfg *config.StorageConfig) (*Bundle, error) {
 		}
 		return NewSQLiteBundle(cfg.Path)
 
+	case "postgres":
+		if cfg.ConnString == "" {
+			return nil, fmt.Errorf("postgres backend requires conn_string to be set")
+		}
+		return NewPostgresBundle(cfg.ConnString)
+
 	case "memory":
 		return NewMemoryBundle(), nil
 
 	default:
-		return nil, fmt.Errorf("unknown storage backend: %s (expected 'memory' or 'sqlite')", cfg.Backend)
+		return nil, fmt.Errorf("unknown storage backend: %s (expected 'memory', 'sqlite', or 'postgres')", cfg.Backend)
 	}
 }

@@ -13,7 +13,9 @@ var _ = Describe("LoadAndValidate (end-to-end)", func() {
 		It("succeeds with a complete valid config", func() {
 			hcl := fullBaseHCL() + `
 mission "test_mission" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
 
   task "first" {
@@ -39,7 +41,9 @@ mission "test_mission" {
 				"agents.hcl":    minimalAgentHCL(),
 				"missions.hcl": `
 mission "pipeline" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
 
   task "step_one" {
@@ -108,7 +112,9 @@ agent "test_agent" {
 		It("rejects a task dependency cycle", func() {
 			hcl := fullBaseHCL() + `
 mission "cycled" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
 
   task "a" {
@@ -216,7 +222,9 @@ agent "researcher" {
 }
 
 mission "research_pipeline" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.researcher]
 
   input "city" {

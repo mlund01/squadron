@@ -39,15 +39,10 @@ func (s *MissionHandler) TaskStarted(taskName string, objective string) {
 	fmt.Printf("%sObjective: %s%s\n\n", ColorGray, objective, ColorReset)
 }
 
-func (s *MissionHandler) TaskCompleted(taskName string, answer string) {
+func (s *MissionHandler) TaskCompleted(taskName string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("\n%s%s[Task '%s' completed]%s\n", ColorBold, ColorGreen, taskName, ColorReset)
-	if answer != "" {
-		// Show a truncated version of the answer
-		truncated := truncate(answer, 300)
-		fmt.Printf("%s%s%s\n", ColorGray, truncated, ColorReset)
-	}
 }
 
 func (s *MissionHandler) TaskFailed(taskName string, err error) {
@@ -100,6 +95,13 @@ func (s *MissionHandler) AgentCompleted(taskName string, agentName string) {
 	fmt.Printf("%s[%s] Agent '%s' finished%s\n", ColorLightBrown, taskName, agentName, ColorReset)
 }
 
+func (s *MissionHandler) Compaction(taskName string, entity string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fmt.Printf("%s[%s] Context compacted (%s): %d tokens > %d limit, %d messages compacted%s\n",
+		ColorYellow, taskName, entity, inputTokens, tokenLimit, messagesCompacted, ColorReset)
+}
+
 // Task iteration events
 
 func (s *MissionHandler) TaskIterationStarted(taskName string, totalItems int, parallel bool) {
@@ -112,7 +114,7 @@ func (s *MissionHandler) TaskIterationStarted(taskName string, totalItems int, p
 	fmt.Printf("\n%s%s--- Task: %s (iterating %d items, %s) ---%s\n", ColorBold, ColorCyan, taskName, totalItems, mode, ColorReset)
 }
 
-func (s *MissionHandler) TaskIterationCompleted(taskName string, completedCount int, workingSummary string) {
+func (s *MissionHandler) TaskIterationCompleted(taskName string, completedCount int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("\n%s%s[Task '%s' iterations completed: %d]%s\n", ColorBold, ColorGreen, taskName, completedCount, ColorReset)
@@ -124,7 +126,7 @@ func (s *MissionHandler) IterationStarted(taskName string, index int, objective 
 	fmt.Printf("\n  [%s][%d] Starting: %s\n", taskName, index, truncate(objective, 80))
 }
 
-func (s *MissionHandler) IterationCompleted(taskName string, index int, summary string) {
+func (s *MissionHandler) IterationCompleted(taskName string, index int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("  [%s][%d] Completed\n", taskName, index)
@@ -154,11 +156,6 @@ func (s *MissionHandler) IterationAnswer(taskName string, index int, content str
 	fmt.Printf("  [%s][%d] Answer: %s\n", taskName, index, truncate(content, 100))
 }
 
-func (s *MissionHandler) SummaryAggregation(taskName string, summaryCount int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	fmt.Printf("  [%s] Aggregating %d summaries...\n", taskName, summaryCount)
-}
 
 // truncate shortens a string to max length, adding ellipsis if needed
 func truncate(s string, max int) string {

@@ -108,7 +108,7 @@ func testConfig(wsURL string) *config.Config {
 			{Name: "my-agent", Model: "my-model", Tools: []string{"web_search"}},
 		},
 		Missions: []config.Mission{
-			{Name: "my-mission", Agents: []string{"my-agent"}},
+			{Name: "my-mission", Commander: &config.MissionCommander{Model: "my-model"}, Agents: []string{"my-agent"}},
 		},
 		Variables: []config.Variable{
 			{Name: "api_key", Secret: true},
@@ -328,8 +328,9 @@ func TestConfigConversion(t *testing.T) {
 		},
 		Missions: []config.Mission{
 			{
-				Name:   "mission1",
-				Agents: []string{"agent1"},
+				Name:      "mission1",
+				Commander: &config.MissionCommander{Model: "m1"},
+				Agents:    []string{"agent1"},
 				Inputs: []config.MissionInput{
 					{Name: "query", Type: "string", Description: "Search query"},
 				},

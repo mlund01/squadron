@@ -31,19 +31,24 @@ type MissionStore interface {
 	CreateMission(name string, inputsJSON, configJSON string) (id string, err error)
 	UpdateMissionStatus(id, status string) error
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
-	UpdateTaskStatus(id, status string, summary, outputJSON, errMsg *string) error
+	UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error
 	GetTask(id string) (*MissionTask, error)
 	GetTasksByMission(missionID string) ([]MissionTask, error)
 	GetTaskByName(missionID, taskName string) (*MissionTask, error)
 	GetMission(id string) (*MissionRecord, error)
 	ListMissions(limit, offset int) ([]MissionRecord, int, error)
-	StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON, summary string) error
+	StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON string) error
 	GetTaskOutputs(taskID string) ([]TaskOutputRow, error)
 
+	// Task inputs (per-execution/iteration resolved inputs)
+	StoreTaskInput(taskID string, iterationIndex *int, objective string) error
+	GetTaskInputs(taskID string) ([]TaskInput, error)
+
 	// Subtask management
-	SetSubtasks(taskID, sessionID string, titles []string) error
-	GetSubtasks(taskID, sessionID string) ([]Subtask, error)
-	CompleteSubtask(taskID, sessionID string) error
+	SetSubtasks(taskID, sessionID string, iterationIndex *int, titles []string) error
+	GetSubtasks(taskID, sessionID string, iterationIndex *int) ([]Subtask, error)
+	GetSubtasksByTask(taskID string) ([]Subtask, error)
+	CompleteSubtask(taskID, sessionID string, iterationIndex *int) error
 }
 
 // MissionTask represents a task within a mission run
@@ -55,7 +60,6 @@ type MissionTask struct {
 	ConfigJSON string     `json:"configJson"`
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
-	Summary    *string    `json:"summary,omitempty"`
 	OutputJSON *string    `json:"outputJson,omitempty"`
 	Error      *string    `json:"error,omitempty"`
 }
@@ -79,20 +83,29 @@ type TaskOutputRow struct {
 	DatasetIndex *int      `json:"datasetIndex,omitempty"`
 	ItemID       *string   `json:"itemId,omitempty"`
 	OutputJSON   string    `json:"outputJson"`
-	Summary      string    `json:"summary"`
 	CreatedAt    time.Time `json:"createdAt"`
+}
+
+// TaskInput represents a resolved input for a task execution (or one iteration of it)
+type TaskInput struct {
+	ID             string    `json:"id"`
+	TaskID         string    `json:"taskId"`
+	IterationIndex *int      `json:"iterationIndex,omitempty"`
+	Objective      string    `json:"objective"`
+	CreatedAt      time.Time `json:"createdAt"`
 }
 
 // Subtask represents a planned step within a task execution
 type Subtask struct {
-	ID          string     `json:"id"`
-	TaskID      string     `json:"taskId"`
-	SessionID   string     `json:"sessionId"`
-	Index       int        `json:"index"`
-	Title       string     `json:"title"`
-	Status      string     `json:"status"` // pending, in_progress, completed
-	CreatedAt   time.Time  `json:"createdAt"`
-	CompletedAt *time.Time `json:"completedAt,omitempty"`
+	ID             string     `json:"id"`
+	TaskID         string     `json:"taskId"`
+	SessionID      string     `json:"sessionId"`
+	IterationIndex *int       `json:"iterationIndex,omitempty"`
+	Index          int        `json:"index"`
+	Title          string     `json:"title"`
+	Status         string     `json:"status"` // pending, in_progress, completed
+	CreatedAt      time.Time  `json:"createdAt"`
+	CompletedAt    *time.Time `json:"completedAt,omitempty"`
 }
 
 // SessionStore tracks agent/commander sessions and their message history

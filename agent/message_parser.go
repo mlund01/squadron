@@ -20,17 +20,17 @@ const (
 
 // MessageParser parses ReAct-formatted streaming output and dispatches to a ChatHandler
 type MessageParser struct {
-	streamer          streamers.ChatHandler
-	state             MessageParserState
-	buffer            strings.Builder
-	thinkingDisplayed bool
-	reasoningStarted  bool
-	answerStarted     bool
-	askCommanderStarted    bool
-	actionName        string
-	actionInput       string
-	answerText        strings.Builder
-	askCommanderText       strings.Builder
+	streamer            streamers.ChatHandler
+	state               MessageParserState
+	buffer              strings.Builder
+	thinkingDisplayed   bool
+	reasoningStarted    bool
+	answerStarted       bool
+	askCommanderStarted bool
+	actionName          string
+	actionInput         string
+	answerText          strings.Builder
+	askCommanderText    strings.Builder
 }
 
 // NewMessageParser creates a new parser with the given handler

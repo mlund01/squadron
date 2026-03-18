@@ -7,10 +7,10 @@ import (
 	"time"
 
 	"github.com/zclconf/go-cty/cty"
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
-const schema = `
+const pgSchema = `
 CREATE TABLE IF NOT EXISTS missions (
     id TEXT PRIMARY KEY,
     mission_name TEXT NOT NULL,
@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 
 CREATE TABLE IF NOT EXISTS session_messages (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id SERIAL PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     role TEXT NOT NULL,
     content TEXT NOT NULL,
@@ -130,47 +130,55 @@ CREATE TABLE IF NOT EXISTS mission_events (
 CREATE INDEX IF NOT EXISTS idx_mission_events_mission ON mission_events(mission_id);
 CREATE INDEX IF NOT EXISTS idx_mission_events_task ON mission_events(task_id);
 CREATE INDEX IF NOT EXISTS idx_mission_events_type ON mission_events(mission_id, event_type);
-
 `
 
-// NewSQLiteBundle creates a Bundle backed by SQLite at the given path
-func NewSQLiteBundle(dbPath string) (*Bundle, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+// NewPostgresBundle creates a Bundle backed by PostgreSQL
+func NewPostgresBundle(connStr string) (*Bundle, error) {
+	db, err := sql.Open("pgx", connStr)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, fmt.Errorf("open postgres: %w", err)
 	}
 
-	if _, err := db.Exec(schema); err != nil {
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(5)
+	db.SetConnMaxLifetime(5 * time.Minute)
+
+	if err := db.Ping(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("ping postgres: %w", err)
+	}
+
+	if _, err := db.Exec(pgSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
 	// Migrate existing dev databases
-	db.Exec(`ALTER TABLE mission_task_subtasks ADD COLUMN iteration_index INTEGER`)
+	db.Exec(`ALTER TABLE mission_task_subtasks ADD COLUMN IF NOT EXISTS iteration_index INTEGER`)
 	db.Exec(`CREATE TABLE IF NOT EXISTS task_inputs (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES mission_tasks(id), iteration_index INTEGER, objective TEXT NOT NULL, created_at TEXT)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_task_inputs_task ON task_inputs(task_id)`)
 
 	return &Bundle{
-		Missions: &SQLiteMissionStore{db: db},
-		Datasets: &SQLiteDatasetStore{db: db},
-		Sessions: &SQLiteSessionStore{db: db},
-		Events:   &SQLiteEventStore{db: db},
+		Missions: &PgMissionStore{db: db},
+		Datasets: &PgDatasetStore{db: db},
+		Sessions: &PgSessionStore{db: db},
+		Events:   &PgEventStore{db: db},
 		closer:   db.Close,
 	}, nil
 }
 
 // =============================================================================
-// SQLiteMissionStore
+// PgMissionStore
 // =============================================================================
 
-type SQLiteMissionStore struct {
+type PgMissionStore struct {
 	db *sql.DB
 }
 
-func (s *SQLiteMissionStore) CreateMission(name string, inputsJSON, configJSON string) (string, error) {
+func (s *PgMissionStore) CreateMission(name string, inputsJSON, configJSON string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES ($1, $2, $3, $4, $5)`,
 		id, name, inputsJSON, configJSON, tsNow(),
 	)
 	if err != nil {
@@ -179,23 +187,23 @@ func (s *SQLiteMissionStore) CreateMission(name string, inputsJSON, configJSON s
 	return id, nil
 }
 
-func (s *SQLiteMissionStore) UpdateMissionStatus(id, status string) error {
+func (s *PgMissionStore) UpdateMissionStatus(id, status string) error {
 	var finishedAt *string
 	if status == "completed" || status == "failed" {
 		s := tsNow()
 		finishedAt = &s
 	}
 	_, err := s.db.Exec(
-		`UPDATE missions SET status = ?, finished_at = ? WHERE id = ?`,
+		`UPDATE missions SET status = $1, finished_at = $2 WHERE id = $3`,
 		status, finishedAt, id,
 	)
 	return err
 }
 
-func (s *SQLiteMissionStore) CreateTask(missionID, taskName, configJSON string) (string, error) {
+func (s *PgMissionStore) CreateTask(missionID, taskName, configJSON string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO mission_tasks (id, mission_id, task_name, config_json, started_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO mission_tasks (id, mission_id, task_name, config_json, started_at) VALUES ($1, $2, $3, $4, $5)`,
 		id, missionID, taskName, configJSON, tsNow(),
 	)
 	if err != nil {
@@ -204,22 +212,22 @@ func (s *SQLiteMissionStore) CreateTask(missionID, taskName, configJSON string) 
 	return id, nil
 }
 
-func (s *SQLiteMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error {
+func (s *PgMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error {
 	var finishedAt *string
 	if status == "completed" || status == "failed" {
 		s := tsNow()
 		finishedAt = &s
 	}
 	_, err := s.db.Exec(
-		`UPDATE mission_tasks SET status = ?, output_json = ?, error = ?, finished_at = ? WHERE id = ?`,
+		`UPDATE mission_tasks SET status = $1, output_json = $2, error = $3, finished_at = $4 WHERE id = $5`,
 		status, outputJSON, errMsg, finishedAt, id,
 	)
 	return err
 }
 
-func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask, error) {
+func (s *PgMissionStore) GetTasksByMission(missionID string) ([]MissionTask, error) {
 	rows, err := s.db.Query(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = ?`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = $1`,
 		missionID,
 	)
 	if err != nil {
@@ -255,23 +263,23 @@ func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 	return tasks, nil
 }
 
-func (s *SQLiteMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON string) error {
+func (s *PgMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON string) error {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO task_outputs (id, task_id, dataset_name, dataset_index, item_id, output_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO task_outputs (id, task_id, dataset_name, dataset_index, item_id, output_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		id, taskID, datasetName, datasetIndex, itemID, outputJSON, tsNow(),
 	)
 	return err
 }
 
-func (s *SQLiteMissionStore) GetTask(id string) (*MissionTask, error) {
+func (s *PgMissionStore) GetTask(id string) (*MissionTask, error) {
 	var t MissionTask
 	var configJSON sql.NullString
 	var startedAtStr, finishedAtStr sql.NullString
 	var outputJSON, errMsg sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE id = ?`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE id = $1`,
 		id,
 	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &errMsg)
 	if err != nil {
@@ -293,14 +301,14 @@ func (s *SQLiteMissionStore) GetTask(id string) (*MissionTask, error) {
 	return &t, nil
 }
 
-func (s *SQLiteMissionStore) GetTaskByName(missionID, taskName string) (*MissionTask, error) {
+func (s *PgMissionStore) GetTaskByName(missionID, taskName string) (*MissionTask, error) {
 	var t MissionTask
 	var configJSON sql.NullString
 	var startedAtStr, finishedAtStr sql.NullString
 	var outputJSON, errMsg sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = ? AND task_name = ?`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = $1 AND task_name = $2`,
 		missionID, taskName,
 	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &errMsg)
 	if err != nil {
@@ -322,14 +330,14 @@ func (s *SQLiteMissionStore) GetTaskByName(missionID, taskName string) (*Mission
 	return &t, nil
 }
 
-func (s *SQLiteMissionStore) GetMission(id string) (*MissionRecord, error) {
+func (s *PgMissionStore) GetMission(id string) (*MissionRecord, error) {
 	var m MissionRecord
 	var inputsJSON, configJSON sql.NullString
 	var startedAtStr string
 	var finishedAtStr sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions WHERE id = ?`,
+		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions WHERE id = $1`,
 		id,
 	).Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr)
 	if err != nil {
@@ -348,9 +356,9 @@ func (s *SQLiteMissionStore) GetMission(id string) (*MissionRecord, error) {
 	return &m, nil
 }
 
-func (s *SQLiteMissionStore) GetTaskOutputs(taskID string) ([]TaskOutputRow, error) {
+func (s *PgMissionStore) GetTaskOutputs(taskID string) ([]TaskOutputRow, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task_id, dataset_name, dataset_index, item_id, output_json, created_at FROM task_outputs WHERE task_id = ? ORDER BY dataset_index ASC, created_at ASC`,
+		`SELECT id, task_id, dataset_name, dataset_index, item_id, output_json, created_at FROM task_outputs WHERE task_id = $1 ORDER BY dataset_index ASC, created_at ASC`,
 		taskID,
 	)
 	if err != nil {
@@ -390,17 +398,209 @@ func (s *SQLiteMissionStore) GetTaskOutputs(taskID string) ([]TaskOutputRow, err
 }
 
 // =============================================================================
-// SQLiteSessionStore
+// PgMissionStore.ListMissions
 // =============================================================================
 
-type SQLiteSessionStore struct {
+func (s *PgMissionStore) ListMissions(limit, offset int) ([]MissionRecord, int, error) {
+	var total int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM missions`).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count missions: %w", err)
+	}
+
+	rows, err := s.db.Query(
+		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions ORDER BY started_at DESC, id DESC LIMIT $1 OFFSET $2`,
+		limit, offset,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var missions []MissionRecord
+	for rows.Next() {
+		var m MissionRecord
+		var inputsJSON, configJSON sql.NullString
+		var startedAtStr string
+		var finishedAtStr sql.NullString
+
+		if err := rows.Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr); err != nil {
+			return nil, 0, err
+		}
+		m.StartedAt, _ = tsParse(startedAtStr)
+		if inputsJSON.Valid {
+			m.InputValuesJSON = inputsJSON.String
+		}
+		if configJSON.Valid {
+			m.ConfigJSON = configJSON.String
+		}
+		m.FinishedAt, _ = tsParseNull(finishedAtStr)
+		missions = append(missions, m)
+	}
+	return missions, total, nil
+}
+
+func (s *PgMissionStore) StoreTaskInput(taskID string, iterationIndex *int, objective string) error {
+	id := generateID()
+	_, err := s.db.Exec(
+		`INSERT INTO task_inputs (id, task_id, iteration_index, objective, created_at) VALUES ($1, $2, $3, $4, $5)`,
+		id, taskID, iterationIndex, objective, tsNow(),
+	)
+	return err
+}
+
+func (s *PgMissionStore) GetTaskInputs(taskID string) ([]TaskInput, error) {
+	rows, err := s.db.Query(
+		`SELECT id, task_id, iteration_index, objective, created_at FROM task_inputs WHERE task_id = $1 ORDER BY iteration_index ASC, created_at ASC`,
+		taskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var inputs []TaskInput
+	for rows.Next() {
+		var ti TaskInput
+		var iterIdx sql.NullInt64
+		var createdAtStr string
+		if err := rows.Scan(&ti.ID, &ti.TaskID, &iterIdx, &ti.Objective, &createdAtStr); err != nil {
+			return nil, err
+		}
+		ti.CreatedAt, _ = tsParse(createdAtStr)
+		if iterIdx.Valid {
+			idx := int(iterIdx.Int64)
+			ti.IterationIndex = &idx
+		}
+		inputs = append(inputs, ti)
+	}
+	return inputs, nil
+}
+
+func (s *PgMissionStore) SetSubtasks(taskID, sessionID string, iterationIndex *int, titles []string) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Delete existing subtasks for this task+session+iteration
+	if iterationIndex != nil {
+		tx.Exec(`DELETE FROM mission_task_subtasks WHERE task_id = $1 AND session_id = $2 AND iteration_index = $3`, taskID, sessionID, *iterationIndex)
+	} else {
+		tx.Exec(`DELETE FROM mission_task_subtasks WHERE task_id = $1 AND session_id = $2 AND iteration_index IS NULL`, taskID, sessionID)
+	}
+
+	now := tsNow()
+	for i, title := range titles {
+		status := "pending"
+		if i == 0 {
+			status = "in_progress"
+		}
+		id := generateID()
+		if _, err := tx.Exec(
+			`INSERT INTO mission_task_subtasks (id, task_id, session_id, iteration_index, idx, title, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			id, taskID, sessionID, iterationIndex, i, title, status, now,
+		); err != nil {
+			return fmt.Errorf("insert subtask %d: %w", i, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (s *PgMissionStore) GetSubtasks(taskID, sessionID string, iterationIndex *int) ([]Subtask, error) {
+	var rows *sql.Rows
+	var err error
+	if iterationIndex != nil {
+		rows, err = s.db.Query(
+			`SELECT id, task_id, session_id, iteration_index, idx, title, status, created_at, completed_at FROM mission_task_subtasks WHERE task_id = $1 AND session_id = $2 AND iteration_index = $3 ORDER BY idx`,
+			taskID, sessionID, *iterationIndex,
+		)
+	} else {
+		rows, err = s.db.Query(
+			`SELECT id, task_id, session_id, iteration_index, idx, title, status, created_at, completed_at FROM mission_task_subtasks WHERE task_id = $1 AND session_id = $2 AND iteration_index IS NULL ORDER BY idx`,
+			taskID, sessionID,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanSubtasks(rows)
+}
+
+func (s *PgMissionStore) GetSubtasksByTask(taskID string) ([]Subtask, error) {
+	rows, err := s.db.Query(
+		`SELECT id, task_id, session_id, iteration_index, idx, title, status, created_at, completed_at FROM mission_task_subtasks WHERE task_id = $1 ORDER BY idx`,
+		taskID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	return scanSubtasks(rows)
+}
+
+func (s *PgMissionStore) CompleteSubtask(taskID, sessionID string, iterationIndex *int) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Find the first non-completed subtask
+	var id string
+	if iterationIndex != nil {
+		err = tx.QueryRow(
+			`SELECT id FROM mission_task_subtasks WHERE task_id = $1 AND session_id = $2 AND iteration_index = $3 AND status IN ('pending', 'in_progress') ORDER BY idx LIMIT 1`,
+			taskID, sessionID, *iterationIndex,
+		).Scan(&id)
+	} else {
+		err = tx.QueryRow(
+			`SELECT id FROM mission_task_subtasks WHERE task_id = $1 AND session_id = $2 AND iteration_index IS NULL AND status IN ('pending', 'in_progress') ORDER BY idx LIMIT 1`,
+			taskID, sessionID,
+		).Scan(&id)
+	}
+	if err != nil {
+		return fmt.Errorf("no pending subtask to complete: %w", err)
+	}
+
+	// Mark it completed
+	now := tsNow()
+	if _, err := tx.Exec(`UPDATE mission_task_subtasks SET status = 'completed', completed_at = $1 WHERE id = $2`, now, id); err != nil {
+		return fmt.Errorf("complete subtask: %w", err)
+	}
+
+	// Advance next pending to in_progress
+	if iterationIndex != nil {
+		tx.Exec(
+			`UPDATE mission_task_subtasks SET status = 'in_progress' WHERE id = (SELECT id FROM mission_task_subtasks WHERE task_id = $1 AND session_id = $2 AND iteration_index = $3 AND status = 'pending' ORDER BY idx LIMIT 1)`,
+			taskID, sessionID, *iterationIndex,
+		)
+	} else {
+		tx.Exec(
+			`UPDATE mission_task_subtasks SET status = 'in_progress' WHERE id = (SELECT id FROM mission_task_subtasks WHERE task_id = $1 AND session_id = $2 AND iteration_index IS NULL AND status = 'pending' ORDER BY idx LIMIT 1)`,
+			taskID, sessionID,
+		)
+	}
+
+	return tx.Commit()
+}
+
+// =============================================================================
+// PgSessionStore
+// =============================================================================
+
+type PgSessionStore struct {
 	db *sql.DB
 }
 
-func (s *SQLiteSessionStore) CreateSession(taskID, role, agentName, model string, iterationIndex *int) (string, error) {
+func (s *PgSessionStore) CreateSession(taskID, role, agentName, model string, iterationIndex *int) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO sessions (id, task_id, role, agent_name, model, iteration_index, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO sessions (id, task_id, role, agent_name, model, iteration_index, started_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
 		id, taskID, role, agentName, model, iterationIndex, tsNow(),
 	)
 	if err != nil {
@@ -409,28 +609,28 @@ func (s *SQLiteSessionStore) CreateSession(taskID, role, agentName, model string
 	return id, nil
 }
 
-func (s *SQLiteSessionStore) CompleteSession(id string, err error) {
+func (s *PgSessionStore) CompleteSession(id string, err error) {
 	status := "completed"
 	if err != nil {
 		status = "failed"
 	}
 	s.db.Exec(
-		`UPDATE sessions SET status = ?, finished_at = ? WHERE id = ?`,
+		`UPDATE sessions SET status = $1, finished_at = $2 WHERE id = $3`,
 		status, tsNow(), id,
 	)
 }
 
-func (s *SQLiteSessionStore) AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error {
+func (s *PgSessionStore) AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error {
 	_, err := s.db.Exec(
-		`INSERT INTO session_messages (session_id, role, content, created_at, completed_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO session_messages (session_id, role, content, created_at, completed_at) VALUES ($1, $2, $3, $4, $5)`,
 		sessionID, role, content, tsFrom(createdAt), tsFrom(completedAt),
 	)
 	return err
 }
 
-func (s *SQLiteSessionStore) GetMessages(sessionID string) ([]SessionMessage, error) {
+func (s *PgSessionStore) GetMessages(sessionID string) ([]SessionMessage, error) {
 	rows, err := s.db.Query(
-		`SELECT id, role, content, created_at, completed_at FROM session_messages WHERE session_id = ? ORDER BY id`,
+		`SELECT id, role, content, created_at, completed_at FROM session_messages WHERE session_id = $1 ORDER BY id`,
 		sessionID,
 	)
 	if err != nil {
@@ -457,9 +657,9 @@ func (s *SQLiteSessionStore) GetMessages(sessionID string) ([]SessionMessage, er
 	return msgs, nil
 }
 
-func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, error) {
+func (s *PgSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task_id, role, agent_name, model, status, iteration_index, started_at, finished_at FROM sessions WHERE task_id = ?`,
+		`SELECT id, task_id, role, agent_name, model, status, iteration_index, started_at, finished_at FROM sessions WHERE task_id = $1`,
 		taskID,
 	)
 	if err != nil {
@@ -494,18 +694,18 @@ func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 	return sessions, nil
 }
 
-func (s *SQLiteSessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error {
+func (s *PgSessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO tool_results (id, task_id, session_id, tool_name, input_params, raw_data, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tool_results (id, task_id, session_id, tool_name, input_params, raw_data, started_at, finished_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		id, taskID, sessionID, toolName, inputParams, rawData, tsFrom(startedAt), tsFrom(finishedAt),
 	)
 	return err
 }
 
-func (s *SQLiteSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, error) {
+func (s *PgSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task_id, session_id, tool_name, input_params, raw_data, started_at, finished_at FROM tool_results WHERE task_id = ? ORDER BY started_at`,
+		`SELECT id, task_id, session_id, tool_name, input_params, raw_data, started_at, finished_at FROM tool_results WHERE task_id = $1 ORDER BY started_at`,
 		taskID,
 	)
 	if err != nil {
@@ -530,10 +730,10 @@ func (s *SQLiteSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, 
 	return results, nil
 }
 
-func (s *SQLiteSessionStore) CreateChatSession(agentName, model string) (string, error) {
+func (s *PgSessionStore) CreateChatSession(agentName, model string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO sessions (id, role, agent_name, model) VALUES (?, 'chat', ?, ?)`,
+		`INSERT INTO sessions (id, role, agent_name, model) VALUES ($1, 'chat', $2, $3)`,
 		id, agentName, model,
 	)
 	if err != nil {
@@ -542,14 +742,16 @@ func (s *SQLiteSessionStore) CreateChatSession(agentName, model string) (string,
 	return id, nil
 }
 
-func (s *SQLiteSessionStore) ListChatSessions(agentName string, limit, offset int) ([]SessionInfo, int, error) {
+func (s *PgSessionStore) ListChatSessions(agentName string, limit, offset int) ([]SessionInfo, int, error) {
 	// Count total
 	var total int
 	countQuery := `SELECT COUNT(*) FROM sessions WHERE role = 'chat' AND status != 'completed'`
 	args := []any{}
+	argIdx := 1
 	if agentName != "" {
-		countQuery += ` AND agent_name = ?`
+		countQuery += fmt.Sprintf(` AND agent_name = $%d`, argIdx)
 		args = append(args, agentName)
+		argIdx++
 	}
 	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("count chat sessions: %w", err)
@@ -558,11 +760,13 @@ func (s *SQLiteSessionStore) ListChatSessions(agentName string, limit, offset in
 	// Fetch page
 	query := `SELECT id, role, agent_name, model, status, started_at, finished_at FROM sessions WHERE role = 'chat' AND status != 'completed'`
 	fetchArgs := []any{}
+	fetchIdx := 1
 	if agentName != "" {
-		query += ` AND agent_name = ?`
+		query += fmt.Sprintf(` AND agent_name = $%d`, fetchIdx)
 		fetchArgs = append(fetchArgs, agentName)
+		fetchIdx++
 	}
-	query += ` ORDER BY started_at DESC LIMIT ? OFFSET ?`
+	query += fmt.Sprintf(` ORDER BY started_at DESC LIMIT $%d OFFSET $%d`, fetchIdx, fetchIdx+1)
 	fetchArgs = append(fetchArgs, limit, offset)
 
 	rows, err := s.db.Query(query, fetchArgs...)
@@ -591,17 +795,17 @@ func (s *SQLiteSessionStore) ListChatSessions(agentName string, limit, offset in
 }
 
 // =============================================================================
-// SQLiteDatasetStore
+// PgDatasetStore
 // =============================================================================
 
-type SQLiteDatasetStore struct {
+type PgDatasetStore struct {
 	db *sql.DB
 }
 
-func (s *SQLiteDatasetStore) CreateDataset(missionID, name, description string) (string, error) {
+func (s *PgDatasetStore) CreateDataset(missionID, name, description string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO datasets (id, mission_id, name, description, created_at) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO datasets (id, mission_id, name, description, created_at) VALUES ($1, $2, $3, $4, $5)`,
 		id, missionID, name, description, tsNow(),
 	)
 	if err != nil {
@@ -610,7 +814,7 @@ func (s *SQLiteDatasetStore) CreateDataset(missionID, name, description string) 
 	return id, nil
 }
 
-func (s *SQLiteDatasetStore) AddItems(datasetID string, items []cty.Value) error {
+func (s *PgDatasetStore) AddItems(datasetID string, items []cty.Value) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -619,10 +823,10 @@ func (s *SQLiteDatasetStore) AddItems(datasetID string, items []cty.Value) error
 
 	// Get current max index
 	var maxIndex int
-	row := tx.QueryRow(`SELECT COALESCE(MAX(item_index), -1) FROM dataset_items WHERE dataset_id = ?`, datasetID)
+	row := tx.QueryRow(`SELECT COALESCE(MAX(item_index), -1) FROM dataset_items WHERE dataset_id = $1`, datasetID)
 	row.Scan(&maxIndex)
 
-	stmt, err := tx.Prepare(`INSERT INTO dataset_items (dataset_id, item_index, item_json) VALUES (?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT INTO dataset_items (dataset_id, item_index, item_json) VALUES ($1, $2, $3)`)
 	if err != nil {
 		return err
 	}
@@ -639,13 +843,13 @@ func (s *SQLiteDatasetStore) AddItems(datasetID string, items []cty.Value) error
 	}
 
 	// Update item count
-	tx.Exec(`UPDATE datasets SET item_count = (SELECT COUNT(*) FROM dataset_items WHERE dataset_id = ?) WHERE id = ?`,
+	tx.Exec(`UPDATE datasets SET item_count = (SELECT COUNT(*) FROM dataset_items WHERE dataset_id = $1) WHERE id = $2`,
 		datasetID, datasetID)
 
 	return tx.Commit()
 }
 
-func (s *SQLiteDatasetStore) SetItems(datasetID string, items []cty.Value) error {
+func (s *PgDatasetStore) SetItems(datasetID string, items []cty.Value) error {
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -653,11 +857,11 @@ func (s *SQLiteDatasetStore) SetItems(datasetID string, items []cty.Value) error
 	defer tx.Rollback()
 
 	// Delete existing items
-	if _, err := tx.Exec(`DELETE FROM dataset_items WHERE dataset_id = ?`, datasetID); err != nil {
+	if _, err := tx.Exec(`DELETE FROM dataset_items WHERE dataset_id = $1`, datasetID); err != nil {
 		return fmt.Errorf("clear items: %w", err)
 	}
 
-	stmt, err := tx.Prepare(`INSERT INTO dataset_items (dataset_id, item_index, item_json) VALUES (?, ?, ?)`)
+	stmt, err := tx.Prepare(`INSERT INTO dataset_items (dataset_id, item_index, item_json) VALUES ($1, $2, $3)`)
 	if err != nil {
 		return err
 	}
@@ -674,14 +878,14 @@ func (s *SQLiteDatasetStore) SetItems(datasetID string, items []cty.Value) error
 	}
 
 	// Update item count
-	tx.Exec(`UPDATE datasets SET item_count = ? WHERE id = ?`, len(items), datasetID)
+	tx.Exec(`UPDATE datasets SET item_count = $1 WHERE id = $2`, len(items), datasetID)
 
 	return tx.Commit()
 }
 
-func (s *SQLiteDatasetStore) GetItems(datasetID string, offset, limit int) ([]cty.Value, error) {
+func (s *PgDatasetStore) GetItems(datasetID string, offset, limit int) ([]cty.Value, error) {
 	rows, err := s.db.Query(
-		`SELECT item_json FROM dataset_items WHERE dataset_id = ? ORDER BY item_index LIMIT ? OFFSET ?`,
+		`SELECT item_json FROM dataset_items WHERE dataset_id = $1 ORDER BY item_index LIMIT $2 OFFSET $3`,
 		datasetID, limit, offset,
 	)
 	if err != nil {
@@ -700,15 +904,15 @@ func (s *SQLiteDatasetStore) GetItems(datasetID string, offset, limit int) ([]ct
 	return items, nil
 }
 
-func (s *SQLiteDatasetStore) GetItemCount(datasetID string) (int, error) {
+func (s *PgDatasetStore) GetItemCount(datasetID string) (int, error) {
 	var count int
-	err := s.db.QueryRow(`SELECT COUNT(*) FROM dataset_items WHERE dataset_id = ?`, datasetID).Scan(&count)
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM dataset_items WHERE dataset_id = $1`, datasetID).Scan(&count)
 	return count, err
 }
 
-func (s *SQLiteDatasetStore) GetSample(datasetID string, count int) ([]cty.Value, error) {
+func (s *PgDatasetStore) GetSample(datasetID string, count int) ([]cty.Value, error) {
 	rows, err := s.db.Query(
-		`SELECT item_json FROM dataset_items WHERE dataset_id = ? ORDER BY RANDOM() LIMIT ?`,
+		`SELECT item_json FROM dataset_items WHERE dataset_id = $1 ORDER BY RANDOM() LIMIT $2`,
 		datasetID, count,
 	)
 	if err != nil {
@@ -727,10 +931,10 @@ func (s *SQLiteDatasetStore) GetSample(datasetID string, count int) ([]cty.Value
 	return items, nil
 }
 
-func (s *SQLiteDatasetStore) GetDatasetByName(missionID, name string) (string, error) {
+func (s *PgDatasetStore) GetDatasetByName(missionID, name string) (string, error) {
 	var id string
 	err := s.db.QueryRow(
-		`SELECT id FROM datasets WHERE mission_id = ? AND name = ?`,
+		`SELECT id FROM datasets WHERE mission_id = $1 AND name = $2`,
 		missionID, name,
 	).Scan(&id)
 	if err != nil {
@@ -739,9 +943,9 @@ func (s *SQLiteDatasetStore) GetDatasetByName(missionID, name string) (string, e
 	return id, nil
 }
 
-func (s *SQLiteDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, error) {
+func (s *PgDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, description, item_count FROM datasets WHERE mission_id = ?`,
+		`SELECT id, name, description, item_count FROM datasets WHERE mission_id = $1`,
 		missionID,
 	)
 	if err != nil {
@@ -764,9 +968,9 @@ func (s *SQLiteDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, erro
 	return infos, nil
 }
 
-func (s *SQLiteDatasetStore) GetItemsRaw(datasetID string, offset, limit int) ([]string, error) {
+func (s *PgDatasetStore) GetItemsRaw(datasetID string, offset, limit int) ([]string, error) {
 	rows, err := s.db.Query(
-		`SELECT item_json FROM dataset_items WHERE dataset_id = ? ORDER BY item_index LIMIT ? OFFSET ?`,
+		`SELECT item_json FROM dataset_items WHERE dataset_id = $1 ORDER BY item_index LIMIT $2 OFFSET $3`,
 		datasetID, limit, offset,
 	)
 	if err != nil {
@@ -786,216 +990,24 @@ func (s *SQLiteDatasetStore) GetItemsRaw(datasetID string, offset, limit int) ([
 }
 
 // =============================================================================
-// SQLiteMissionStore.ListMissions
+// PgEventStore
 // =============================================================================
 
-func (s *SQLiteMissionStore) ListMissions(limit, offset int) ([]MissionRecord, int, error) {
-	var total int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM missions`).Scan(&total); err != nil {
-		return nil, 0, fmt.Errorf("count missions: %w", err)
-	}
-
-	rows, err := s.db.Query(
-		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`,
-		limit, offset,
-	)
-	if err != nil {
-		return nil, 0, err
-	}
-	defer rows.Close()
-
-	var missions []MissionRecord
-	for rows.Next() {
-		var m MissionRecord
-		var inputsJSON, configJSON sql.NullString
-		var startedAtStr string
-		var finishedAtStr sql.NullString
-
-		if err := rows.Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr); err != nil {
-			return nil, 0, err
-		}
-		m.StartedAt, _ = tsParse(startedAtStr)
-		if inputsJSON.Valid {
-			m.InputValuesJSON = inputsJSON.String
-		}
-		if configJSON.Valid {
-			m.ConfigJSON = configJSON.String
-		}
-		m.FinishedAt, _ = tsParseNull(finishedAtStr)
-		missions = append(missions, m)
-	}
-	return missions, total, nil
-}
-
-func (s *SQLiteMissionStore) StoreTaskInput(taskID string, iterationIndex *int, objective string) error {
-	id := generateID()
-	_, err := s.db.Exec(
-		`INSERT INTO task_inputs (id, task_id, iteration_index, objective, created_at) VALUES (?, ?, ?, ?, ?)`,
-		id, taskID, iterationIndex, objective, tsNow(),
-	)
-	return err
-}
-
-func (s *SQLiteMissionStore) GetTaskInputs(taskID string) ([]TaskInput, error) {
-	rows, err := s.db.Query(
-		`SELECT id, task_id, iteration_index, objective, created_at FROM task_inputs WHERE task_id = ? ORDER BY iteration_index ASC, created_at ASC`,
-		taskID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var inputs []TaskInput
-	for rows.Next() {
-		var ti TaskInput
-		var iterIdx sql.NullInt64
-		var createdAtStr string
-		if err := rows.Scan(&ti.ID, &ti.TaskID, &iterIdx, &ti.Objective, &createdAtStr); err != nil {
-			return nil, err
-		}
-		ti.CreatedAt, _ = tsParse(createdAtStr)
-		if iterIdx.Valid {
-			idx := int(iterIdx.Int64)
-			ti.IterationIndex = &idx
-		}
-		inputs = append(inputs, ti)
-	}
-	return inputs, nil
-}
-
-func (s *SQLiteMissionStore) SetSubtasks(taskID, sessionID string, iterationIndex *int, titles []string) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Delete existing subtasks for this task+session+iteration
-	if iterationIndex != nil {
-		tx.Exec(`DELETE FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND iteration_index = ?`, taskID, sessionID, *iterationIndex)
-	} else {
-		tx.Exec(`DELETE FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND iteration_index IS NULL`, taskID, sessionID)
-	}
-
-	now := tsNow()
-	for i, title := range titles {
-		status := "pending"
-		if i == 0 {
-			status = "in_progress"
-		}
-		id := generateID()
-		if _, err := tx.Exec(
-			`INSERT INTO mission_task_subtasks (id, task_id, session_id, iteration_index, idx, title, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, taskID, sessionID, iterationIndex, i, title, status, now,
-		); err != nil {
-			return fmt.Errorf("insert subtask %d: %w", i, err)
-		}
-	}
-
-	return tx.Commit()
-}
-
-func (s *SQLiteMissionStore) GetSubtasks(taskID, sessionID string, iterationIndex *int) ([]Subtask, error) {
-	var rows *sql.Rows
-	var err error
-	if iterationIndex != nil {
-		rows, err = s.db.Query(
-			`SELECT id, task_id, session_id, iteration_index, idx, title, status, created_at, completed_at FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND iteration_index = ? ORDER BY idx`,
-			taskID, sessionID, *iterationIndex,
-		)
-	} else {
-		rows, err = s.db.Query(
-			`SELECT id, task_id, session_id, iteration_index, idx, title, status, created_at, completed_at FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND iteration_index IS NULL ORDER BY idx`,
-			taskID, sessionID,
-		)
-	}
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return scanSubtasks(rows)
-}
-
-func (s *SQLiteMissionStore) GetSubtasksByTask(taskID string) ([]Subtask, error) {
-	rows, err := s.db.Query(
-		`SELECT id, task_id, session_id, iteration_index, idx, title, status, created_at, completed_at FROM mission_task_subtasks WHERE task_id = ? ORDER BY idx`,
-		taskID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	return scanSubtasks(rows)
-}
-
-func (s *SQLiteMissionStore) CompleteSubtask(taskID, sessionID string, iterationIndex *int) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	// Find the first non-completed subtask
-	var id string
-	if iterationIndex != nil {
-		err = tx.QueryRow(
-			`SELECT id FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND iteration_index = ? AND status IN ('pending', 'in_progress') ORDER BY idx LIMIT 1`,
-			taskID, sessionID, *iterationIndex,
-		).Scan(&id)
-	} else {
-		err = tx.QueryRow(
-			`SELECT id FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND iteration_index IS NULL AND status IN ('pending', 'in_progress') ORDER BY idx LIMIT 1`,
-			taskID, sessionID,
-		).Scan(&id)
-	}
-	if err != nil {
-		return fmt.Errorf("no pending subtask to complete: %w", err)
-	}
-
-	// Mark it completed
-	now := tsNow()
-	if _, err := tx.Exec(`UPDATE mission_task_subtasks SET status = 'completed', completed_at = ? WHERE id = ?`, now, id); err != nil {
-		return fmt.Errorf("complete subtask: %w", err)
-	}
-
-	// Advance next pending to in_progress
-	if iterationIndex != nil {
-		tx.Exec(
-			`UPDATE mission_task_subtasks SET status = 'in_progress' WHERE id = (SELECT id FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND iteration_index = ? AND status = 'pending' ORDER BY idx LIMIT 1)`,
-			taskID, sessionID, *iterationIndex,
-		)
-	} else {
-		tx.Exec(
-			`UPDATE mission_task_subtasks SET status = 'in_progress' WHERE id = (SELECT id FROM mission_task_subtasks WHERE task_id = ? AND session_id = ? AND iteration_index IS NULL AND status = 'pending' ORDER BY idx LIMIT 1)`,
-			taskID, sessionID,
-		)
-	}
-
-	return tx.Commit()
-}
-
-// =============================================================================
-// SQLiteEventStore
-// =============================================================================
-
-type SQLiteEventStore struct {
+type PgEventStore struct {
 	db *sql.DB
 }
 
-func (s *SQLiteEventStore) StoreEvent(event MissionEvent) error {
+func (s *PgEventStore) StoreEvent(event MissionEvent) error {
 	_, err := s.db.Exec(
-		`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		event.ID, event.MissionID, event.TaskID, event.SessionID, event.IterationIndex, event.EventType, event.DataJSON, tsFrom(event.CreatedAt),
 	)
 	return err
 }
 
-func (s *SQLiteEventStore) GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error) {
+func (s *PgEventStore) GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error) {
 	rows, err := s.db.Query(
-		`SELECT id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at FROM mission_events WHERE mission_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?`,
+		`SELECT id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at FROM mission_events WHERE mission_id = $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3`,
 		missionID, limit, offset,
 	)
 	if err != nil {
@@ -1005,9 +1017,9 @@ func (s *SQLiteEventStore) GetEventsByMission(missionID string, limit, offset in
 	return scanEvents(rows)
 }
 
-func (s *SQLiteEventStore) GetEventsByTask(taskID string, limit, offset int) ([]MissionEvent, error) {
+func (s *PgEventStore) GetEventsByTask(taskID string, limit, offset int) ([]MissionEvent, error) {
 	rows, err := s.db.Query(
-		`SELECT id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at FROM mission_events WHERE task_id = ? ORDER BY created_at ASC LIMIT ? OFFSET ?`,
+		`SELECT id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at FROM mission_events WHERE task_id = $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3`,
 		taskID, limit, offset,
 	)
 	if err != nil {
@@ -1016,5 +1028,3 @@ func (s *SQLiteEventStore) GetEventsByTask(taskID string, limit, offset int) ([]
 	defer rows.Close()
 	return scanEvents(rows)
 }
-
-

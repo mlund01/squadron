@@ -137,7 +137,9 @@ agent "a" {
 		It("resolves agent references in mission blocks", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "t" { objective = "Do work" }
 }
@@ -151,7 +153,9 @@ mission "m" {
 		It("resolves task dependency references", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
   agents    = [agents.test_agent]
   task "first" { objective = "Step 1" }
   task "second" {

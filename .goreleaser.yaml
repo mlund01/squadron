@@ -28,21 +28,3 @@ release:
   github:
     owner: mlund01
     name: squadron
-
-homebrew_casks:
-  - name: squadron
-    repository:
-      owner: mlund01
-      name: homebrew-squadron
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    directory: Casks
-    homepage: "https://github.com/mlund01/squadron"
-    description: "CLI for defining and running AI agents and multi-agent missions"
-    binaries:
-      - squadron
-    hooks:
-      post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/squadron"]
-          end

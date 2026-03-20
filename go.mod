@@ -24,8 +24,6 @@ require (
 	google.golang.org/api v0.259.0
 )
 
-replace github.com/mlund01/squadron-sdk => ../squadron-sdk
-
 require (
 	cloud.google.com/go v0.115.0 // indirect
 	cloud.google.com/go/ai v0.8.0 // indirect

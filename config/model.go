@@ -46,10 +46,19 @@ var SupportedModels = map[Provider]map[string]string{
 
 // Model represents a model provider configuration
 type Model struct {
-	Name          string   `hcl:"name,label"`
-	Provider      Provider `hcl:"provider"`
-	AllowedModels []string `hcl:"allowed_models"`
-	APIKey        string   `hcl:"api_key"`
+	Name           string   `hcl:"name,label"`
+	Provider       Provider `hcl:"provider"`
+	AllowedModels  []string `hcl:"allowed_models"`
+	APIKey         string   `hcl:"api_key"`
+	PromptCaching  *bool    `hcl:"prompt_caching,optional"`
+}
+
+// IsPromptCachingEnabled returns whether prompt caching is enabled (defaults to true).
+func (m *Model) IsPromptCachingEnabled() bool {
+	if m.PromptCaching == nil {
+		return true
+	}
+	return *m.PromptCaching
 }
 
 func (m *Model) Validate() error {

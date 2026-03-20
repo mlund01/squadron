@@ -8,7 +8,7 @@ import (
 // Plugin represents a plugin configuration
 type Plugin struct {
 	Name     string            `hcl:"name,label"`
-	Source   string            `hcl:"source"`
+	Source   string            `hcl:"source,optional"`
 	Version  string            `hcl:"version"`
 	Settings map[string]string `hcl:"-"` // Parsed manually from settings block
 }
@@ -28,8 +28,8 @@ func (p *Plugin) Validate() error {
 		return fmt.Errorf("plugin name '%s' is reserved for internal tools", p.Name)
 	}
 
-	if p.Source == "" {
-		return fmt.Errorf("plugin source is required")
+	if p.Source == "" && !p.IsLocal() {
+		return fmt.Errorf("plugin source is required (unless version is 'local')")
 	}
 
 	if p.Version == "" {

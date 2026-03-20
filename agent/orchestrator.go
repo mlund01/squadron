@@ -2,10 +2,11 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
+
+	"github.com/mlund01/squadron-sdk/protocol"
 
 	"squadron/aitools"
 	"squadron/llm"
@@ -61,22 +62,6 @@ type llmSession interface {
 	ContinueStream(ctx context.Context, onChunk func(content string)) (*llm.ChatResponse, error)
 }
 
-// pruneToolExclusions are internal helper tools whose results should never be pruned
-var pruneToolExclusions = map[string]bool{
-	"result_info":       true,
-	"result_items":      true,
-	"result_get":        true,
-	"result_keys":       true,
-	"result_to_dataset": true,
-}
-
-// pendingPrune holds pruning parameters from the last tool call
-type pendingPrune struct {
-	toolName             string
-	overrideToolRecency  int // LLM override (0 = use default)
-	overrideMsgRecency   int // LLM override (0 = use default)
-}
-
 // orchestrator handles the agent conversation loop
 type orchestrator struct {
 	session        llmSession
@@ -84,12 +69,13 @@ type orchestrator struct {
 	tools          map[string]aitools.Tool
 	interceptor    *aitools.ResultInterceptor
 	pruningManager *llm.PruningManager
-	pendingPrune   *pendingPrune
 	eventLogger    EventLogger
 	turnLogger     *llm.TurnLogger
 	secretInjector *secretInjector
 	compaction     *CompactionConfig
 	onCompaction   func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
+	onSessionTurn  func(data protocol.SessionTurnData)
+	modelName      string
 	sessionLogger  SessionLogger
 	sessionID      string
 	taskID         string
@@ -162,17 +148,33 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			})
 		}
 
-		// Apply pending pruning from previous tool call AFTER the observation is in the session.
-		// This registers the correct message (the one just sent) for future pruning.
-		o.applyPendingPrune()
-
 		// Check if compaction is needed after response
 		if resp != nil {
 			o.checkAndCompact(resp.Usage.InputTokens)
 		}
 
-		// Apply turn limit pruning (rolling window) after each response
-		o.applyTurnLimitPruning()
+		// Apply threshold-based pruning after each response
+		o.applyTurnPruning()
+
+		// Emit session turn telemetry
+		if resp != nil && o.onSessionTurn != nil {
+			if adapter, ok := o.session.(*llm.SessionAdapter); ok {
+				stats := adapter.GetSession().MessageStats()
+				o.onSessionTurn(protocol.SessionTurnData{
+					Model:                     o.modelName,
+					InputTokens:              resp.Usage.InputTokens,
+					OutputTokens:             resp.Usage.OutputTokens,
+					CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+					CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+					CachedTokens:             resp.Usage.CachedTokens,
+					UserMessages:             stats.UserCount,
+					AssistantMessages:        stats.AssistantCount,
+					SystemMessages:           stats.SystemCount,
+					PayloadBytes:             stats.PayloadBytes,
+					TurnDurationMs:           time.Since(llmStart).Milliseconds(),
+				})
+			}
+		}
 
 		if o.eventLogger != nil {
 			eventData := map[string]any{
@@ -230,14 +232,11 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 		actionInput := parser.GetActionInput()
 
-		// Extract and strip pruning parameters from action input
-		cleanInput, pruneParams := o.extractPruneParams(action, actionInput)
-
 		// Log with placeholder version (secrets not exposed in logs)
-		o.streamer.CallingTool(action, cleanInput)
+		o.streamer.CallingTool(action, actionInput)
 
 		// Inject secrets before tool execution
-		injectedInput, secretErr := o.secretInjector.Inject(cleanInput)
+		injectedInput, secretErr := o.secretInjector.Inject(actionInput)
 		if secretErr != nil {
 			errMsg := fmt.Sprintf("Error: %v", secretErr)
 			o.streamer.ToolComplete(action, errMsg)
@@ -273,7 +272,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 		// Persist tool result for auditing
 		if o.sessionLogger != nil && o.sessionID != "" {
-			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, action, cleanInput, result, toolStart, time.Now())
+			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, action, actionInput, result, toolStart, time.Now())
 		}
 
 		// Format observation (may intercept/truncate large results)
@@ -281,12 +280,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		currentTextInput, currentImageInput, observationContent = o.formatObservation(action, result)
 		o.streamer.ToolComplete(action, observationContent)
 
-		// Store pending prune params - will be applied after next SendStream
-		o.pendingPrune = pruneParams
 	}
-
-	// Apply any remaining pending prune from the last tool call so it's not lost
-	o.applyPendingPrune()
 
 	return ChatResult{Answer: finalAnswer, Complete: finalAnswer != ""}, nil
 }
@@ -299,53 +293,6 @@ func (o *orchestrator) getSessionMessages() []llm.Message {
 	return nil
 }
 
-// extractPruneParams extracts and strips pruning parameters from tool input JSON.
-// For prunable tools, always returns a pendingPrune (with 0 overrides if LLM didn't specify).
-// For excluded tools, returns nil pendingPrune.
-func (o *orchestrator) extractPruneParams(toolName, actionInput string) (string, *pendingPrune) {
-	if o.pruningManager == nil {
-		return actionInput, nil
-	}
-
-	// Skip tools that should never be pruned
-	if pruneToolExclusions[toolName] {
-		return actionInput, nil
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal([]byte(actionInput), &parsed); err != nil {
-		// Not valid JSON - still register for pruning with defaults
-		return actionInput, &pendingPrune{toolName: toolName}
-	}
-
-	// Extract pruning override parameters
-	var toolRecency, msgRecency int
-	changed := false
-	if v, ok := parsed["single_tool_limit"].(float64); ok {
-		toolRecency = int(v)
-		delete(parsed, "single_tool_limit")
-		changed = true
-	}
-	if v, ok := parsed["all_tool_limit"].(float64); ok {
-		msgRecency = int(v)
-		delete(parsed, "all_tool_limit")
-		changed = true
-	}
-
-	// Re-serialize only if we stripped params
-	cleanInput := actionInput
-	if changed {
-		if b, err := json.Marshal(parsed); err == nil {
-			cleanInput = string(b)
-		}
-	}
-
-	return cleanInput, &pendingPrune{
-		toolName:            toolName,
-		overrideToolRecency: toolRecency,
-		overrideMsgRecency:  msgRecency,
-	}
-}
 
 // checkAndCompact checks if compaction is needed and performs it if so
 func (o *orchestrator) checkAndCompact(inputTokens int) {
@@ -379,34 +326,20 @@ func (o *orchestrator) checkAndCompact(inputTokens int) {
 	}
 }
 
-// applyTurnLimitPruning applies rolling window pruning if configured
-func (o *orchestrator) applyTurnLimitPruning() {
+// applyTurnPruning applies threshold-based pruning if configured
+func (o *orchestrator) applyTurnPruning() {
 	if o.pruningManager == nil {
 		return
 	}
 
-	dropped := o.pruningManager.ApplyTurnLimit()
+	dropped := o.pruningManager.ApplyTurnPruning()
 	if dropped > 0 && o.eventLogger != nil {
-		o.eventLogger.LogEvent("turn_limit_prune", map[string]any{
+		o.eventLogger.LogEvent("turn_prune", map[string]any{
 			"messages_dropped": dropped,
 		})
 	}
 }
 
-// applyPendingPrune applies any pending pruning from the previous tool call
-func (o *orchestrator) applyPendingPrune() {
-	if o.pendingPrune == nil || o.pruningManager == nil {
-		return
-	}
-
-	o.pruningManager.RegisterAndPrune(
-		o.pendingPrune.toolName,
-		o.pendingPrune.overrideToolRecency,
-		o.pendingPrune.overrideMsgRecency,
-	)
-
-	o.pendingPrune = nil
-}
 
 // lookupTool finds a tool by name
 func (o *orchestrator) lookupTool(name string) aitools.Tool {

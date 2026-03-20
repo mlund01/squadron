@@ -283,6 +283,12 @@ func (h *StoringMissionHandler) Compaction(taskName string, entity string, input
 	h.inner.Compaction(taskName, entity, inputTokens, tokenLimit, messagesCompacted, turnRetention)
 }
 
+func (h *StoringMissionHandler) SessionTurn(data protocol.SessionTurnData) {
+	sessionKey := data.TaskName + ":" + data.Entity
+	h.storeEvent(protocol.EventSessionTurn, &data.TaskName, &sessionKey, nil, data)
+	h.inner.SessionTurn(data)
+}
+
 func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string) {
 	sessionKey := taskName + ":" + agentName
 	h.storeEvent(protocol.EventAgentStarted, &taskName, &sessionKey, nil, protocol.AgentStartedData{

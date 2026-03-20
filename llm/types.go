@@ -31,12 +31,11 @@ type ContentBlock struct {
 	ImageData *ImageBlock // Used when Type == ContentTypeImage
 }
 
-// MessageMetadata holds tracking information for message pruning
+// MessageMetadata holds tracking information for messages
 type MessageMetadata struct {
 	MessageID    string // Unique identifier for this message
 	ToolName     string // Tool that produced this result (empty for non-tool messages)
 	MessageIndex int    // Position in message history when added
-	IsPrunable   bool   // Whether this message can be pruned (true for tool results)
 }
 
 // Message represents a conversation message with optional multimodal content
@@ -95,11 +94,13 @@ type StreamChunk struct {
 }
 
 type ChatRequest struct {
-	Model         string
-	Messages      []Message
-	MaxTokens     int
-	Temperature   float64
-	StopSequences []string
+	Model               string
+	Messages            []Message
+	MaxTokens           int
+	Temperature         float64
+	StopSequences       []string
+	PromptCaching       bool // Cache system prompts
+	ConversationCaching bool // Cache conversation history (last user message breakpoint)
 }
 
 type ChatResponse struct {

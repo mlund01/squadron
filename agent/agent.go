@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mlund01/squadron-sdk/protocol"
+
 	"squadron/agent/internal/prompts"
 	"squadron/aitools"
 	"squadron/config"
@@ -38,6 +40,7 @@ type Agent struct {
 	secretInfos    []SecretInfo      // Secret names and descriptions (for prompts)
 	secretValues   map[string]string // Actual secret values (for tool call injection)
 	onCompaction   func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
+	onSessionTurn  func(protocol.SessionTurnData)
 	sessionLogger  SessionLogger    // Optional session logger for tool result auditing
 	sessionID      string           // Session ID for tool result auditing
 	taskID         string           // Task ID for tool result auditing
@@ -75,6 +78,8 @@ type Options struct {
 	FolderStore aitools.FolderStore
 	// OnCompaction is called when context compaction occurs (optional, mission context only)
 	OnCompaction func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
+	// OnSessionTurn is called after each LLM turn with telemetry data (optional)
+	OnSessionTurn func(data protocol.SessionTurnData)
 }
 
 // New creates a new agent from config
@@ -191,6 +196,8 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 
 	// Create session
 	session := llm.NewSession(provider, actualModelName, systemPrompts...)
+	conversationCaching := modelConfig.IsPromptCachingEnabled() && (agentCfg.GetPruneOn() == 0 || (agentCfg.GetPruneOn()-agentCfg.GetPruneTo()) >= 3)
+	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
 	// Set stop sequences to prevent LLM from hallucinating observations
 	session.SetStopSequences([]string{"___STOP___"})
@@ -205,9 +212,8 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	// Create pruning manager tied to this session
 	pruningManager := llm.NewPruningManager(
 		session,
-		agentCfg.GetSingleToolLimit(),
-		agentCfg.GetAllToolLimit(),
-		agentCfg.GetTurnLimit(),
+		agentCfg.GetPruneOn(),
+		agentCfg.GetPruneTo(),
 	)
 
 	// Extract compaction settings from config (if present)
@@ -241,6 +247,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		compaction:     compaction,
 		eventLogger:    opts.EventLogger,
 		onCompaction:   opts.OnCompaction,
+		onSessionTurn:  opts.OnSessionTurn,
 		turnLogger:     turnLogger,
 		secretInfos:    opts.SecretInfos,
 		secretValues:   opts.SecretValues,
@@ -282,6 +289,8 @@ func (a *Agent) Resume(ctx context.Context, streamer streamers.ChatHandler) (Cha
 	sessionAdapter := llm.NewSessionAdapter(a.session)
 	orch := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
 	orch.onCompaction = a.onCompaction
+	orch.onSessionTurn = a.onSessionTurn
+	orch.modelName = a.ModelName
 	orch.sessionLogger = a.sessionLogger
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID
@@ -327,6 +336,8 @@ func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatH
 	sessionAdapter := llm.NewSessionAdapter(a.session)
 	orch := newOrchestrator(sessionAdapter, streamer, a.tools, a.interceptor, a.pruningManager, a.eventLogger, a.turnLogger, a.secretValues, a.compaction)
 	orch.onCompaction = a.onCompaction
+	orch.onSessionTurn = a.onSessionTurn
+	orch.modelName = a.ModelName
 	orch.sessionLogger = a.sessionLogger
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID

@@ -38,9 +38,8 @@ agent "pruned" {
   role        = "Pruning tester"
   tools       = [plugins.bash.bash]
   pruning {
-    single_tool_limit = 2
-    all_tool_limit    = 5
-    turn_limit        = 10
+    prune_on = 20
+    prune_to = 10
   }
 }
 `
@@ -48,9 +47,8 @@ agent "pruned" {
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Agents[0].Pruning).NotTo(BeNil())
-			Expect(cfg.Agents[0].GetSingleToolLimit()).To(Equal(2))
-			Expect(cfg.Agents[0].GetAllToolLimit()).To(Equal(5))
-			Expect(cfg.Agents[0].GetTurnLimit()).To(Equal(10))
+			Expect(cfg.Agents[0].GetPruneOn()).To(Equal(20))
+			Expect(cfg.Agents[0].GetPruneTo()).To(Equal(10))
 		})
 
 		It("parses an agent with compaction block", func() {
@@ -100,9 +98,8 @@ agent "no_pruning" {
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Agents[0].Pruning).To(BeNil())
-			Expect(cfg.Agents[0].GetSingleToolLimit()).To(Equal(0))
-			Expect(cfg.Agents[0].GetAllToolLimit()).To(Equal(0))
-			Expect(cfg.Agents[0].GetTurnLimit()).To(Equal(0))
+			Expect(cfg.Agents[0].GetPruneOn()).To(Equal(0))
+			Expect(cfg.Agents[0].GetPruneTo()).To(Equal(0))
 		})
 	})
 

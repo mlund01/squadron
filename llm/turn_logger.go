@@ -58,7 +58,6 @@ type metadataSnapshot struct {
 	ToolName     string `json:"tool_name"`
 	MessageID    string `json:"message_id"`
 	MessageIndex int    `json:"message_index"`
-	IsPrunable   bool   `json:"is_prunable"`
 }
 
 // LogTurn snapshots the full message list and writes one JSONL line.
@@ -107,7 +106,6 @@ func (tl *TurnLogger) LogTurn(action string, messages []Message) {
 				ToolName:     msg.Metadata.ToolName,
 				MessageID:    msg.Metadata.MessageID,
 				MessageIndex: msg.Metadata.MessageIndex,
-				IsPrunable:   msg.Metadata.IsPrunable,
 			}
 		}
 

@@ -88,13 +88,10 @@ type Compaction struct {
 
 // Pruning configures context pruning for an agent
 type Pruning struct {
-	// SingleToolLimit: keep only the last N results from each tool (0 = disabled)
-	SingleToolLimit int `hcl:"single_tool_limit,optional"`
-	// AllToolLimit: prune tool results older than N messages ago (0 = disabled)
-	AllToolLimit int `hcl:"all_tool_limit,optional"`
-	// TurnLimit: rolling window - drop messages older than N turns (0 = disabled)
-	// Unlike other pruning, this removes messages entirely (no replacement text)
-	TurnLimit int `hcl:"turn_limit,optional"`
+	// PruneOn: trigger pruning when conversation reaches this many turns (0 = disabled)
+	PruneOn int `hcl:"prune_on,optional"`
+	// PruneTo: when pruning triggers, reduce conversation to this many turns
+	PruneTo int `hcl:"prune_to,optional"`
 }
 
 // Agent represents an AI agent configuration
@@ -112,28 +109,20 @@ type Agent struct {
 	Compaction *Compaction `hcl:"compaction,block"`
 }
 
-// GetSingleToolLimit returns the single tool limit (0 = disabled)
-func (a *Agent) GetSingleToolLimit() int {
+// GetPruneOn returns the prune_on threshold (0 = disabled)
+func (a *Agent) GetPruneOn() int {
 	if a.Pruning == nil {
 		return 0
 	}
-	return a.Pruning.SingleToolLimit
+	return a.Pruning.PruneOn
 }
 
-// GetAllToolLimit returns the all tool limit (0 = disabled)
-func (a *Agent) GetAllToolLimit() int {
+// GetPruneTo returns the prune_to target (0 = disabled)
+func (a *Agent) GetPruneTo() int {
 	if a.Pruning == nil {
 		return 0
 	}
-	return a.Pruning.AllToolLimit
-}
-
-// GetTurnLimit returns the turn limit for rolling window pruning (0 = disabled)
-func (a *Agent) GetTurnLimit() int {
-	if a.Pruning == nil {
-		return 0
-	}
-	return a.Pruning.TurnLimit
+	return a.Pruning.PruneTo
 }
 
 // Validate checks that the agent configuration is valid

@@ -420,6 +420,10 @@ func (s *SQLiteSessionStore) CompleteSession(id string, err error) {
 	)
 }
 
+func (s *SQLiteSessionStore) ReopenSession(id string) {
+	s.db.Exec(`UPDATE sessions SET status = 'running', finished_at = NULL WHERE id = ?`, id)
+}
+
 func (s *SQLiteSessionStore) AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error {
 	_, err := s.db.Exec(
 		`INSERT INTO session_messages (session_id, role, content, created_at, completed_at) VALUES (?, ?, ?, ?, ?)`,

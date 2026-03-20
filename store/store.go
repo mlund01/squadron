@@ -112,6 +112,7 @@ type Subtask struct {
 type SessionStore interface {
 	CreateSession(taskID, role, agentName, model string, iterationIndex *int) (id string, err error)
 	CompleteSession(id string, err error)
+	ReopenSession(id string)
 	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
 	GetMessages(sessionID string) ([]SessionMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)

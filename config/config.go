@@ -765,6 +765,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			},
 			Blocks: []hcl.BlockHeaderSchema{
 				{Type: "compaction"},
+				{Type: "pruning"},
 			},
 		})
 		if cmdDiags.HasErrors() {
@@ -782,21 +783,28 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			Model: modelVal.AsString(),
 		}
 
-		// Parse optional compaction sub-block
-		for _, compBlock := range cmdContent.Blocks {
-			if compBlock.Type != "compaction" {
-				continue
+		// Parse optional compaction and pruning sub-blocks
+		for _, subBlock := range cmdContent.Blocks {
+			switch subBlock.Type {
+			case "compaction":
+				var comp Compaction
+				compDiags := gohcl.DecodeBody(subBlock.Body, ctx, &comp)
+				if compDiags.HasErrors() {
+					return nil, fmt.Errorf("mission '%s' commander compaction: %w", missionName, compDiags)
+				}
+				// Default turn_retention to 10 when compaction is enabled
+				if comp.TurnRetention <= 0 {
+					comp.TurnRetention = 10
+				}
+				missionCommander.Compaction = &comp
+			case "pruning":
+				var pruning CommanderPruning
+				pruningDiags := gohcl.DecodeBody(subBlock.Body, ctx, &pruning)
+				if pruningDiags.HasErrors() {
+					return nil, fmt.Errorf("mission '%s' commander pruning: %w", missionName, pruningDiags)
+				}
+				missionCommander.Pruning = &pruning
 			}
-			var comp Compaction
-			compDiags := gohcl.DecodeBody(compBlock.Body, ctx, &comp)
-			if compDiags.HasErrors() {
-				return nil, fmt.Errorf("mission '%s' commander compaction: %w", missionName, compDiags)
-			}
-			// Default turn_retention to 10 when compaction is enabled
-			if comp.TurnRetention <= 0 {
-				comp.TurnRetention = 10
-			}
-			missionCommander.Compaction = &comp
 		}
 	}
 	if missionCommander == nil {
@@ -1355,7 +1363,7 @@ func parsePluginBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Plugin, error) {
 	// Parse the plugin block content
 	pluginContent, remainBody, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
-			{Name: "source", Required: true},
+			{Name: "source"},
 			{Name: "version", Required: true},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
@@ -1366,10 +1374,14 @@ func parsePluginBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Plugin, error) {
 		return nil, fmt.Errorf("plugin '%s': %w", pluginName, diags)
 	}
 
-	// Get source
-	sourceVal, diags := pluginContent.Attributes["source"].Expr.Value(ctx)
-	if diags.HasErrors() {
-		return nil, fmt.Errorf("plugin '%s': %w", pluginName, diags)
+	// Get source (optional for local plugins)
+	var source string
+	if attr, ok := pluginContent.Attributes["source"]; ok {
+		sourceVal, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("plugin '%s': %w", pluginName, diags)
+		}
+		source = sourceVal.AsString()
 	}
 
 	// Get version
@@ -1380,7 +1392,7 @@ func parsePluginBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Plugin, error) {
 
 	p := &Plugin{
 		Name:     pluginName,
-		Source:   sourceVal.AsString(),
+		Source:   source,
 		Version:  versionVal.AsString(),
 		Settings: make(map[string]string),
 	}

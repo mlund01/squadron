@@ -45,6 +45,10 @@ type Client struct {
 	chatMu       sync.Mutex
 	chatSessions map[string]*chatSession // sessionID → session
 
+	// Running missions (for stop/cancel)
+	missionMu       sync.Mutex
+	runningMissions map[string]context.CancelFunc // missionID → cancel
+
 	// Lifecycle
 	done chan struct{}
 	ctx  context.Context
@@ -70,7 +74,8 @@ func NewClient(cfg *config.Config, configPath string, stores *store.Bundle, vers
 		send:         make(chan []byte, 256),
 		pending:      make(map[string]chan *protocol.Envelope),
 		handlers:     make(map[protocol.MessageType]RequestHandler),
-		chatSessions: make(map[string]*chatSession),
+		chatSessions:    make(map[string]*chatSession),
+		runningMissions: make(map[string]context.CancelFunc),
 		done:         make(chan struct{}),
 		ctx:        ctx,
 		stop:       stop,

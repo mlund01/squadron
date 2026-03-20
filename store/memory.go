@@ -312,6 +312,15 @@ func (s *MemorySessionStore) CompleteSession(id string, err error) {
 	}
 }
 
+func (s *MemorySessionStore) ReopenSession(id string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if sess, ok := s.sessions[id]; ok {
+		sess.info.Status = "running"
+		sess.info.FinishedAt = nil
+	}
+}
+
 func (s *MemorySessionStore) AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

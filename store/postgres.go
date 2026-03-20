@@ -620,6 +620,10 @@ func (s *PgSessionStore) CompleteSession(id string, err error) {
 	)
 }
 
+func (s *PgSessionStore) ReopenSession(id string) {
+	s.db.Exec(`UPDATE sessions SET status = 'running', finished_at = NULL WHERE id = $1`, id)
+}
+
 func (s *PgSessionStore) AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error {
 	_, err := s.db.Exec(
 		`INSERT INTO session_messages (session_id, role, content, created_at, completed_at) VALUES ($1, $2, $3, $4, $5)`,

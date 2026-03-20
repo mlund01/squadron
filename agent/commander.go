@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mlund01/squadron-sdk/protocol"
 	"github.com/zclconf/go-cty/cty"
 
 	"squadron/agent/internal/prompts"
@@ -68,6 +69,10 @@ type CommanderOptions struct {
 	FolderStore aitools.FolderStore
 	// Compaction settings for the commander session (nil if disabled)
 	Compaction *CompactionConfig
+	// PruneOn triggers pruning when conversation reaches this many turns (0 = disabled)
+	PruneOn int
+	// PruneTo reduces conversation to this many turns when pruning triggers
+	PruneTo int
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -142,6 +147,9 @@ type CommanderToolCallbacks struct {
 	// OnAgentCompaction is called when an agent's context is compacted.
 	// Receives taskName, agentName, and compaction metrics.
 	OnAgentCompaction func(taskName, agentName string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
+
+	// OnAgentSessionTurn is called after each agent LLM turn with telemetry data.
+	OnAgentSessionTurn func(taskName, agentName string, data protocol.SessionTurnData)
 
 	// Subtask management callbacks (optional). When set, the commander gets
 	// set_subtasks, get_subtasks, and complete_subtask tools.
@@ -232,6 +240,7 @@ type AggregateResult struct {
 type SessionLogger interface {
 	CreateSession(taskID, role, agentName, model string, iterationIndex *int) (id string, err error)
 	CompleteSession(id string, err error)
+	ReopenSession(id string)
 	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
 	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
 }
@@ -243,6 +252,7 @@ type CommanderStreamer interface {
 	CallingTool(name, input string)
 	ToolComplete(name string, result string)
 	Compaction(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
+	SessionTurn(data protocol.SessionTurnData)
 }
 
 // completedAgent stores a completed agent instance for follow-up queries
@@ -285,6 +295,8 @@ type Commander struct {
 	subtasksSet        bool                   // Whether set_subtasks has been called
 	folderStore        aitools.FolderStore    // Folder access for missions (nil if not configured)
 	compaction         *CompactionConfig      // Compaction settings (nil if disabled)
+	pruneOn            int                    // Trigger pruning at this many turns (0 = disabled)
+	pruneTo            int                    // Prune down to this many turns
 }
 
 // NewCommander creates a new commander for a mission task
@@ -339,6 +351,10 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 
 	// Create session
 	session := llm.NewSession(provider, actualModelName, systemPrompts...)
+	// Conversation caching is disabled when pruning is active since the shifting
+	// message window invalidates the cache every turn, wasting cache creation tokens.
+	conversationCaching := modelConfig.IsPromptCachingEnabled() && (opts.PruneOn == 0 || (opts.PruneOn-opts.PruneTo) >= 3)
+	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
 	// Set stop sequences to prevent LLM from hallucinating observations
 	session.SetStopSequences([]string{"___STOP___"})
@@ -371,6 +387,8 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		secretInfos:     opts.SecretInfos,
 		secretValues:    opts.SecretValues,
 		compaction:      opts.Compaction,
+		pruneOn:         opts.PruneOn,
+		pruneTo:         opts.PruneTo,
 	}
 
 	// Add result tools to commander's tool map
@@ -927,6 +945,14 @@ func (s *Commander) AddRestoredActiveAgent(agentName string, a *Agent, sessionID
 	a.sessionLogger = s.sessionLogger
 	a.sessionID = sessionID
 	a.taskID = s.callbacksTaskID
+	// Wire up telemetry callback so resumed agents emit session_turn events
+	if s.callbacks != nil && s.callbacks.OnAgentSessionTurn != nil {
+		taskName := s.TaskName
+		cb := s.callbacks.OnAgentSessionTurn
+		a.onSessionTurn = func(data protocol.SessionTurnData) {
+			cb(taskName, agentName, data)
+		}
+	}
 }
 
 // runLoop is the core execution loop shared by ExecuteTask and ResumeTask.
@@ -998,6 +1024,27 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		// Check if compaction is needed after response
 		if resp != nil {
 			s.checkAndCompact(resp.Usage.InputTokens, streamer)
+		}
+
+		// Apply turn limit pruning after compaction
+		s.applyTurnPruning(streamer)
+
+		// Emit session turn telemetry
+		if resp != nil {
+			stats := s.session.MessageStats()
+			streamer.SessionTurn(protocol.SessionTurnData{
+				Model:                     s.ModelName,
+				InputTokens:              resp.Usage.InputTokens,
+				OutputTokens:             resp.Usage.OutputTokens,
+				CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+				CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+				CachedTokens:             resp.Usage.CachedTokens,
+				UserMessages:             stats.UserCount,
+				AssistantMessages:        stats.AssistantCount,
+				SystemMessages:           stats.SystemCount,
+				PayloadBytes:             stats.PayloadBytes,
+				TurnDurationMs:           time.Since(llmStart).Milliseconds(),
+			})
 		}
 
 		parser.Finish()
@@ -1149,6 +1196,31 @@ func (s *Commander) buildCompactionContext() string {
 	}
 
 	return sb.String()
+}
+
+// applyTurnPruning drops old messages when the conversation reaches the prune_on threshold,
+// reducing it down to prune_to turns.
+func (s *Commander) applyTurnPruning(streamer CommanderStreamer) {
+	if s.pruneOn <= 0 {
+		return
+	}
+	pruneOnMessages := s.pruneOn * 2
+	if s.session.MessageCount() < pruneOnMessages {
+		return
+	}
+
+	pruneToMessages := s.pruneTo * 2
+	dropped := s.session.DropOldMessages(pruneToMessages)
+	if dropped > 0 {
+		streamer.Compaction(0, 0, dropped, s.pruneTo)
+		if s.debugLogger != nil {
+			s.debugLogger.LogEvent("commander_pruning", map[string]any{
+				"messages_dropped": dropped,
+				"prune_on":        s.pruneOn,
+				"prune_to":        s.pruneTo,
+			})
+		}
+	}
 }
 
 // AnswerQuestion handles a follow-up question from another commander (via ask_commander)
@@ -1624,6 +1696,12 @@ func (t *callAgentTool) Call(input string) string {
 
 	// Get existing session or create new one
 	a, exists := t.commander.agentSessions[params.Name]
+	if exists {
+		// Reopen the session so the UI shows the agent as active again
+		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
+			t.commander.sessionLogger.ReopenSession(agentSID)
+		}
+	}
 	if !exists {
 		mode := config.ModeMission
 
@@ -1644,16 +1722,28 @@ func (t *callAgentTool) Call(input string) string {
 			}
 		}
 
+		// Build OnSessionTurn callback for agent → mission handler
+		var onSessionTurn func(protocol.SessionTurnData)
+		if t.commander.callbacks != nil && t.commander.callbacks.OnAgentSessionTurn != nil {
+			taskName := t.commander.TaskName
+			agentName := agentCfg.Name
+			cb := t.commander.callbacks.OnAgentSessionTurn
+			onSessionTurn = func(data protocol.SessionTurnData) {
+				cb(taskName, agentName, data)
+			}
+		}
+
 		var err error
 		a, err = New(ctx, Options{
-			ConfigPath:   t.commander.configPath,
-			AgentName:    agentCfg.Name,
-			Mode:         &mode,
-			DatasetStore: datasetStore,
-			SecretInfos:  t.commander.secretInfos,
-			SecretValues: t.commander.secretValues,
-			FolderStore:  t.commander.folderStore,
-			OnCompaction: onCompaction,
+			ConfigPath:    t.commander.configPath,
+			AgentName:     agentCfg.Name,
+			Mode:          &mode,
+			DatasetStore:  datasetStore,
+			SecretInfos:   t.commander.secretInfos,
+			SecretValues:  t.commander.secretValues,
+			FolderStore:   t.commander.folderStore,
+			OnCompaction:  onCompaction,
+			OnSessionTurn: onSessionTurn,
 		})
 		if err != nil {
 			return fmt.Sprintf("Error creating agent '%s': %v", params.Name, err)

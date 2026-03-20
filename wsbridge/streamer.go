@@ -217,6 +217,10 @@ func (h *WSMissionHandler) Compaction(taskName string, entity string, inputToken
 	})
 }
 
+func (h *WSMissionHandler) SessionTurn(data protocol.SessionTurnData) {
+	h.sendEvent(protocol.EventSessionTurn, data)
+}
+
 func (h *WSMissionHandler) AgentStarted(taskName string, agentName string) {
 	h.sendEvent(protocol.EventAgentStarted, protocol.AgentStartedData{
 		TaskName:  taskName,

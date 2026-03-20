@@ -17,6 +17,8 @@ type Session struct {
 	messages      []Message
 	debugFile     *os.File
 	stopSequences []string
+	promptCaching        bool
+	conversationCaching  bool // Whether to cache conversation history (disabled when pruning is active)
 }
 
 func NewSession(provider Provider, model string, systemPrompts ...string) *Session {
@@ -26,6 +28,15 @@ func NewSession(provider Provider, model string, systemPrompts ...string) *Sessi
 		systemPrompts: systemPrompts,
 		messages:      []Message{},
 	}
+}
+
+// SetPromptCaching enables or disables prompt caching for this session.
+// When conversationCaching is true, a cache breakpoint is also set on conversation
+// history (last user message). Disable this when pruning is active since the
+// shifting message window invalidates the cache every turn.
+func (s *Session) SetPromptCaching(enabled bool, conversationCaching bool) {
+	s.promptCaching = enabled
+	s.conversationCaching = conversationCaching
 }
 
 // EnableDebug opens a debug file for logging all messages
@@ -155,7 +166,6 @@ func (s *Session) Clone() *Session {
 				MessageID:    msg.Metadata.MessageID,
 				ToolName:     msg.Metadata.ToolName,
 				MessageIndex: msg.Metadata.MessageIndex,
-				IsPrunable:   msg.Metadata.IsPrunable,
 			}
 		}
 	}
@@ -203,6 +213,8 @@ func (s *Session) Send(ctx context.Context, userMessage string) (*ChatResponse, 
 		Model:         s.model,
 		Messages:      s.buildMessages(userMessage),
 		StopSequences: s.stopSequences,
+		PromptCaching:       s.promptCaching,
+		ConversationCaching: s.conversationCaching,
 	}
 
 	resp, err := s.provider.Chat(ctx, req)
@@ -228,6 +240,8 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 		Model:         s.model,
 		Messages:      s.buildMessages(userMessage),
 		StopSequences: s.stopSequences,
+		PromptCaching:       s.promptCaching,
+		ConversationCaching: s.conversationCaching,
 	}
 
 	stream, err := s.provider.ChatStream(ctx, req)
@@ -285,6 +299,8 @@ func (s *Session) ContinueStream(ctx context.Context, onChunk func(StreamChunk))
 		Model:         s.model,
 		Messages:      s.buildCurrentMessages(),
 		StopSequences: s.stopSequences,
+		PromptCaching:       s.promptCaching,
+		ConversationCaching: s.conversationCaching,
 	}
 
 	stream, err := s.provider.ChatStream(ctx, req)
@@ -344,6 +360,52 @@ func (s *Session) buildCurrentMessages() []Message {
 type CompactSettings struct {
 	TokenLimit    int // Trigger compaction when input tokens exceed this
 	TurnRetention int // Keep this many recent turns uncompacted
+}
+
+// MessageStatsResult holds aggregate statistics about session messages.
+type MessageStatsResult struct {
+	UserCount      int
+	AssistantCount int
+	SystemCount    int
+	PayloadBytes   int
+}
+
+// MessageStats computes message counts by role and total byte size of the conversation.
+func (s *Session) MessageStats() MessageStatsResult {
+	var r MessageStatsResult
+	for _, m := range s.messages {
+		switch m.Role {
+		case RoleUser:
+			r.UserCount++
+		case RoleAssistant:
+			r.AssistantCount++
+		case RoleSystem:
+			r.SystemCount++
+		}
+		r.PayloadBytes += len(m.GetTextContent())
+	}
+	for _, sp := range s.systemPrompts {
+		r.SystemCount++
+		r.PayloadBytes += len(sp)
+	}
+	return r
+}
+
+// MessageCount returns the number of conversation messages (excluding system prompts).
+func (s *Session) MessageCount() int {
+	return len(s.messages)
+}
+
+// DropOldMessages drops the oldest messages, keeping only the last `keep` messages.
+// System prompts are never affected (they are stored separately).
+// Returns the number of messages dropped.
+func (s *Session) DropOldMessages(keep int) int {
+	if len(s.messages) <= keep {
+		return 0
+	}
+	dropCount := len(s.messages) - keep
+	s.messages = s.messages[dropCount:]
+	return dropCount
 }
 
 // Compact summarizes older conversation turns to reduce context size.
@@ -552,6 +614,8 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 		Model:         s.model,
 		Messages:      s.buildMessagesWithMessage(userMsg),
 		StopSequences: s.stopSequences,
+		PromptCaching:       s.promptCaching,
+		ConversationCaching: s.conversationCaching,
 	}
 
 	stream, err := s.provider.ChatStream(ctx, req)

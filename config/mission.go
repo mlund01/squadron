@@ -75,10 +75,19 @@ func (mf *MissionFolder) Validate() error {
 	return nil
 }
 
+// CommanderPruning configures context pruning for a commander
+type CommanderPruning struct {
+	// PruneOn: trigger pruning when conversation reaches this many turns (0 = disabled)
+	PruneOn int `hcl:"prune_on"`
+	// PruneTo: when pruning triggers, reduce conversation to this many turns
+	PruneTo int `hcl:"prune_to"`
+}
+
 // MissionCommander holds configuration for the mission's commander LLM
 type MissionCommander struct {
-	Model      string      `json:"model"`
-	Compaction *Compaction `json:"compaction,omitempty"`
+	Model      string            `json:"model"`
+	Compaction *Compaction       `json:"compaction,omitempty"`
+	Pruning    *CommanderPruning `json:"pruning,omitempty"`
 }
 
 // Mission represents a mission configuration with multiple tasks
@@ -124,6 +133,19 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 	if w.Commander.Compaction != nil {
 		if w.Commander.Compaction.TokenLimit <= 0 {
 			return fmt.Errorf("commander compaction token_limit must be > 0")
+		}
+	}
+
+	// Validate pruning settings if present
+	if w.Commander.Pruning != nil {
+		if w.Commander.Pruning.PruneOn <= 0 {
+			return fmt.Errorf("commander pruning prune_on must be > 0")
+		}
+		if w.Commander.Pruning.PruneTo <= 0 {
+			return fmt.Errorf("commander pruning prune_to must be > 0")
+		}
+		if w.Commander.Pruning.PruneTo >= w.Commander.Pruning.PruneOn {
+			return fmt.Errorf("commander pruning prune_to must be less than prune_on")
 		}
 	}
 

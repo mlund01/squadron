@@ -5,6 +5,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/mlund01/squadron-sdk/protocol"
 	"squadron/streamers"
 )
 
@@ -100,6 +101,10 @@ func (s *MissionHandler) Compaction(taskName string, entity string, inputTokens 
 	defer s.mu.Unlock()
 	fmt.Printf("%s[%s] Context compacted (%s): %d tokens > %d limit, %d messages compacted%s\n",
 		ColorYellow, taskName, entity, inputTokens, tokenLimit, messagesCompacted, ColorReset)
+}
+
+func (s *MissionHandler) SessionTurn(data protocol.SessionTurnData) {
+	// No-op for CLI — telemetry is primarily for the web UI
 }
 
 // Task iteration events

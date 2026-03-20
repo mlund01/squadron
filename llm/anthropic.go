@@ -17,7 +17,7 @@ func NewAnthropicProvider(apiKey string) *AnthropicProvider {
 }
 
 func (p *AnthropicProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
-	msgs, systemPrompts := p.convertMessages(req.Messages)
+	msgs, systemPrompts := p.convertMessages(req.Messages, req.PromptCaching, req.ConversationCaching)
 
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens == 0 {
@@ -64,7 +64,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRe
 }
 
 func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
-	msgs, systemPrompts := p.convertMessages(req.Messages)
+	msgs, systemPrompts := p.convertMessages(req.Messages, req.PromptCaching, req.ConversationCaching)
 
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens == 0 {
@@ -133,7 +133,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 	return chunks, nil
 }
 
-func (p *AnthropicProvider) convertMessages(messages []Message) ([]anthropic.MessageParam, []anthropic.TextBlockParam) {
+func (p *AnthropicProvider) convertMessages(messages []Message, promptCaching bool, conversationCaching bool) ([]anthropic.MessageParam, []anthropic.TextBlockParam) {
 	var msgs []anthropic.MessageParam
 	var systemPrompts []anthropic.TextBlockParam
 
@@ -150,6 +150,28 @@ func (p *AnthropicProvider) convertMessages(messages []Message) ([]anthropic.Mes
 		case RoleAssistant:
 			contentBlocks := p.buildContentBlocks(m)
 			msgs = append(msgs, anthropic.NewAssistantMessage(contentBlocks...))
+		}
+	}
+
+	if promptCaching {
+		// Set cache_control on the last system prompt
+		if len(systemPrompts) > 0 {
+			systemPrompts[len(systemPrompts)-1].CacheControl = anthropic.CacheControlEphemeralParam{Type: "ephemeral"}
+		}
+	}
+
+	if conversationCaching {
+		// Set cache_control on the last content block of the last user message
+		// so that conversation history up to this point is cached across turns.
+		// Disabled when pruning is active since the shifting window invalidates cache every turn.
+		for i := len(msgs) - 1; i >= 0; i-- {
+			if msgs[i].Role == anthropic.MessageParamRoleUser && len(msgs[i].Content) > 0 {
+				lastBlock := &msgs[i].Content[len(msgs[i].Content)-1]
+				if cc := lastBlock.GetCacheControl(); cc != nil {
+					*cc = anthropic.CacheControlEphemeralParam{Type: "ephemeral"}
+				}
+				break
+			}
 		}
 	}
 

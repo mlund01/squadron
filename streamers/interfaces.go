@@ -1,5 +1,7 @@
 package streamers
 
+import "github.com/mlund01/squadron-sdk/protocol"
+
 // ChatHandler defines the interface for handling chat I/O
 // Different implementations can handle stdout/stdin, SSE, websocket, etc.
 type ChatHandler interface {
@@ -68,6 +70,9 @@ type MissionHandler interface {
 
 	// Compaction events (context window compacted)
 	Compaction(taskName string, entity string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
+
+	// Session turn telemetry
+	SessionTurn(data protocol.SessionTurnData)
 
 	// Agent execution events (for streaming agent output during call_agent)
 	AgentStarted(taskName string, agentName string)

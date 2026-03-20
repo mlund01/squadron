@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/mlund01/squadron-sdk/protocol"
 	"github.com/zclconf/go-cty/cty"
 
 	"squadron/agent"
@@ -399,7 +400,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	for len(completed) < len(sortedTasks) {
 		select {
 		case <-ctx.Done():
-			r.stores.Missions.UpdateMissionStatus(missionID, "failed")
+			r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
 			return ctx.Err()
 		default:
 		}
@@ -442,7 +443,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 					return err
 				}
 			case <-ctx.Done():
-				r.stores.Missions.UpdateMissionStatus(missionID, "failed")
+				r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
 				return ctx.Err()
 			}
 			continue
@@ -610,6 +611,8 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			IsIteration:      isIterated,
 			FolderStore:      r.folderStore,
 			Compaction:       r.commanderCompaction(),
+			PruneOn:          r.commanderPruneOn(),
+		PruneTo:          r.commanderPruneTo(),
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -869,6 +872,8 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		DebugFile:        debugFile,
 		FolderStore:      r.folderStore,
 		Compaction:       r.commanderCompaction(),
+		PruneOn:          r.commanderPruneOn(),
+		PruneTo:          r.commanderPruneTo(),
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -913,7 +918,8 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 				})
 			}
 		},
-		OnAgentCompaction: agentCompactionCallback(streamer),
+		OnAgentCompaction:  agentCompactionCallback(streamer),
+		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
@@ -1136,10 +1142,25 @@ func (s *commanderStreamerAdapter) Compaction(inputTokens int, tokenLimit int, m
 	s.streamer.Compaction(s.taskName, "commander", inputTokens, tokenLimit, messagesCompacted, turnRetention)
 }
 
+func (s *commanderStreamerAdapter) SessionTurn(data protocol.SessionTurnData) {
+	data.TaskName = s.taskName
+	data.Entity = "commander"
+	s.streamer.SessionTurn(data)
+}
+
 // agentCompactionCallback returns a callback for agent compaction events that routes to the streamer.
 func agentCompactionCallback(streamer streamers.MissionHandler) func(string, string, int, int, int, int) {
 	return func(taskName, agentName string, inputTokens, tokenLimit, messagesCompacted, turnRetention int) {
 		streamer.Compaction(taskName, agentName, inputTokens, tokenLimit, messagesCompacted, turnRetention)
+	}
+}
+
+// agentSessionTurnCallback returns a callback for agent session turn telemetry that routes to the streamer.
+func agentSessionTurnCallback(streamer streamers.MissionHandler) func(string, string, protocol.SessionTurnData) {
+	return func(taskName, agentName string, data protocol.SessionTurnData) {
+		data.TaskName = taskName
+		data.Entity = agentName
+		streamer.SessionTurn(data)
 	}
 }
 
@@ -1152,6 +1173,22 @@ func (r *Runner) commanderCompaction() *agent.CompactionConfig {
 		TokenLimit:    r.mission.Commander.Compaction.TokenLimit,
 		TurnRetention: r.mission.Commander.Compaction.TurnRetention,
 	}
+}
+
+// commanderPruneOn returns the prune_on threshold from mission pruning config, or 0 if not set.
+func (r *Runner) commanderPruneOn() int {
+	if r.mission.Commander == nil || r.mission.Commander.Pruning == nil {
+		return 0
+	}
+	return r.mission.Commander.Pruning.PruneOn
+}
+
+// commanderPruneTo returns the prune_to target from mission pruning config, or 0 if not set.
+func (r *Runner) commanderPruneTo() int {
+	if r.mission.Commander == nil || r.mission.Commander.Pruning == nil {
+		return 0
+	}
+	return r.mission.Commander.Pruning.PruneTo
 }
 
 // missionSnapshot returns a JSON-friendly representation of the mission config.
@@ -1461,6 +1498,8 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		SequentialDataset: items, // Pass all items for sequential processing
 		FolderStore:       r.folderStore,
 		Compaction:        r.commanderCompaction(),
+		PruneOn:           r.commanderPruneOn(),
+		PruneTo:           r.commanderPruneTo(),
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -1502,7 +1541,8 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 				})
 			}
 		},
-		OnAgentCompaction: agentCompactionCallback(streamer),
+		OnAgentCompaction:  agentCompactionCallback(streamer),
+		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
@@ -1891,6 +1931,8 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		SequentialDataset: remainingItems,
 		FolderStore:       r.folderStore,
 		Compaction:        r.commanderCompaction(),
+		PruneOn:           r.commanderPruneOn(),
+		PruneTo:           r.commanderPruneTo(),
 	})
 	if err != nil {
 		return append(iterations, IterationResult{
@@ -1927,7 +1969,8 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		OnAgentComplete: func(taskName, agentName string) {
 			streamer.AgentCompleted(taskName, agentName)
 		},
-		OnAgentCompaction: agentCompactionCallback(streamer),
+		OnAgentCompaction:  agentCompactionCallback(streamer),
+		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
@@ -2113,6 +2156,8 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		DebugFile:              debugFile,
 		FolderStore:            r.folderStore,
 		Compaction:             r.commanderCompaction(),
+		PruneOn:                r.commanderPruneOn(),
+		PruneTo:                r.commanderPruneTo(),
 	})
 	if err != nil {
 		streamer.IterationFailed(task.Name, index, err)
@@ -2159,7 +2204,8 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 				})
 			}
 		},
-		OnAgentCompaction: agentCompactionCallback(streamer),
+		OnAgentCompaction:  agentCompactionCallback(streamer),
+		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
 		DebugLogger:    r.debugLogger,
@@ -2335,6 +2381,12 @@ func (s *iterationStreamerAdapter) ToolComplete(name string, result string) {
 
 func (s *iterationStreamerAdapter) Compaction(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
 	s.streamer.Compaction(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), "commander", inputTokens, tokenLimit, messagesCompacted, turnRetention)
+}
+
+func (s *iterationStreamerAdapter) SessionTurn(data protocol.SessionTurnData) {
+	data.TaskName = fmt.Sprintf("%s[%d]", s.taskName, s.getIndex())
+	data.Entity = "commander"
+	s.streamer.SessionTurn(data)
 }
 
 // =============================================================================

@@ -10,17 +10,21 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mlund01/squadron-sdk/protocol"
 
 	"squadron/agent"
 	"squadron/config"
 	"squadron/mission"
+	"squadron/store"
 	"squadron/streamers"
 )
 
 func (c *Client) registerHandlers() {
 	c.handlers[protocol.TypeGetConfig] = c.handleGetConfig
 	c.handlers[protocol.TypeRunMission] = c.handleRunMission
+	c.handlers[protocol.TypeStopMission] = c.handleStopMission
+	c.handlers[protocol.TypeResumeMission] = c.handleResumeMission
 	c.handlers[protocol.TypeGetMissions] = c.handleGetMissions
 	c.handlers[protocol.TypeGetMission] = c.handleGetMission
 	c.handlers[protocol.TypeGetTaskDetail] = c.handleGetTaskDetail
@@ -105,19 +109,32 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 	wsHandler := NewWSMissionHandler(c)
 	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
 
-	// Run mission in background
+	// Run mission in background with cancellable context
+	missionCtx, missionCancel := context.WithCancel(context.Background())
 	go func() {
-		if err := runner.Run(context.Background(), storingHandler); err != nil {
+		err := runner.Run(missionCtx, storingHandler)
+
+		// Clean up from running missions map
+		mid := wsHandler.MissionID()
+		c.missionMu.Lock()
+		delete(c.runningMissions, mid)
+		c.missionMu.Unlock()
+
+		if err != nil {
 			log.Printf("Mission %q failed: %v", payload.MissionName, err)
+			status := "failed"
+			if missionCtx.Err() != nil {
+				status = "stopped"
+			}
 			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
-				MissionID: wsHandler.MissionID(),
-				Status:    "failed",
+				MissionID: mid,
+				Status:    status,
 				Error:     err.Error(),
 			})
 			c.SendEvent(completeEnv)
 		} else {
 			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
-				MissionID: wsHandler.MissionID(),
+				MissionID: mid,
 				Status:    "completed",
 			})
 			c.SendEvent(completeEnv)
@@ -127,16 +144,191 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 	// Wait for the mission ID (set when Runner calls MissionStarted after creating the mission in the DB)
 	missionID, err := wsHandler.WaitForMissionID(30 * time.Second)
 	if err != nil {
+		missionCancel()
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
 			Accepted: false,
 			Reason:   fmt.Sprintf("mission failed to start: %v", err),
 		})
 	}
 
+	// Track the running mission for stop/cancel
+	c.missionMu.Lock()
+	c.runningMissions[missionID] = missionCancel
+	c.missionMu.Unlock()
+
 	return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
 		Accepted:  true,
 		MissionID: missionID,
 	})
+}
+
+func (c *Client) handleStopMission(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.StopMissionPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode stop_mission: %w", err)
+	}
+
+	c.missionMu.Lock()
+	cancel, exists := c.runningMissions[payload.MissionID]
+	c.missionMu.Unlock()
+
+	if !exists {
+		// Mission not running in this process — update DB status directly for stale runs
+		if err := c.stores.Missions.UpdateMissionStatus(payload.MissionID, "stopped"); err != nil {
+			return protocol.NewResponse(env.RequestID, protocol.TypeStopMissionAck, &protocol.StopMissionAckPayload{
+				Accepted: false,
+				Reason:   fmt.Sprintf("mission %q not running and failed to update status: %v", payload.MissionID, err),
+			})
+		}
+		c.emitMissionLifecycleEvent(payload.MissionID, protocol.EventMissionStopped, protocol.MissionStoppedData{
+			MissionID: payload.MissionID,
+		})
+		return protocol.NewResponse(env.RequestID, protocol.TypeStopMissionAck, &protocol.StopMissionAckPayload{
+			Accepted: true,
+		})
+	}
+
+	// Store and emit mission_stopped event BEFORE cancel to avoid racing with store.Close()
+	c.emitMissionLifecycleEvent(payload.MissionID, protocol.EventMissionStopped, protocol.MissionStoppedData{
+		MissionID: payload.MissionID,
+	})
+
+	// Cancel the context — the runner will detect ctx.Done() and clean up
+	cancel()
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeStopMissionAck, &protocol.StopMissionAckPayload{
+		Accepted: true,
+	})
+}
+
+func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.ResumeMissionPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode resume_mission: %w", err)
+	}
+
+	// Snapshot config
+	cfg := c.getConfig()
+
+	// Validate mission exists in config
+	var missionCfg *config.Mission
+	for i := range cfg.Missions {
+		if cfg.Missions[i].Name == payload.MissionName {
+			missionCfg = &cfg.Missions[i]
+			break
+		}
+	}
+	if missionCfg == nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeResumeMissionAck, &protocol.ResumeMissionAckPayload{
+			Accepted: false,
+			Reason:   fmt.Sprintf("mission %q not found in config", payload.MissionName),
+		})
+	}
+
+	// Create runner with resume option
+	debugLogger, _ := mission.NewDebugLogger("")
+	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, nil,
+		mission.WithDebugLogger(debugLogger),
+		mission.WithResume(payload.MissionID),
+	)
+	if err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeResumeMissionAck, &protocol.ResumeMissionAckPayload{
+			Accepted: false,
+			Reason:   err.Error(),
+		})
+	}
+
+	wsHandler := NewWSMissionHandler(c)
+	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+
+	missionCtx, missionCancel := context.WithCancel(context.Background())
+	go func() {
+		err := runner.Run(missionCtx, storingHandler)
+
+		mid := payload.MissionID
+		c.missionMu.Lock()
+		delete(c.runningMissions, mid)
+		c.missionMu.Unlock()
+
+		if err != nil {
+			log.Printf("Resumed mission %q failed: %v", payload.MissionName, err)
+			status := "failed"
+			if missionCtx.Err() != nil {
+				status = "stopped"
+			}
+			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
+				MissionID: mid,
+				Status:    status,
+				Error:     err.Error(),
+			})
+			c.SendEvent(completeEnv)
+		} else {
+			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
+				MissionID: mid,
+				Status:    "completed",
+			})
+			c.SendEvent(completeEnv)
+		}
+	}()
+
+	// For resume, the mission ID is already known
+	c.missionMu.Lock()
+	c.runningMissions[payload.MissionID] = missionCancel
+	c.missionMu.Unlock()
+
+	// Still wait for runner to emit MissionStarted (it does so even on resume)
+	if _, err := wsHandler.WaitForMissionID(30 * time.Second); err != nil {
+		missionCancel()
+		return protocol.NewResponse(env.RequestID, protocol.TypeResumeMissionAck, &protocol.ResumeMissionAckPayload{
+			Accepted: false,
+			Reason:   fmt.Sprintf("mission failed to resume: %v", err),
+		})
+	}
+
+	// Store and emit mission_resumed event
+	c.emitMissionLifecycleEvent(payload.MissionID, protocol.EventMissionResumed, protocol.MissionResumedData{
+		MissionID: payload.MissionID,
+	})
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeResumeMissionAck, &protocol.ResumeMissionAckPayload{
+		Accepted:  true,
+		MissionID: payload.MissionID,
+	})
+}
+
+// emitMissionLifecycleEvent stores a mission-level event in the DB and sends it via WebSocket
+// so the commander hub can fan it out to SSE subscribers.
+func (c *Client) emitMissionLifecycleEvent(missionID string, eventType protocol.MissionEventType, data interface{}) {
+	dataJSON, err := json.Marshal(data)
+	if err != nil {
+		log.Printf("emitMissionLifecycleEvent: marshal: %v", err)
+		return
+	}
+
+	event := store.MissionEvent{
+		ID:        uuid.NewString(),
+		MissionID: missionID,
+		EventType: string(eventType),
+		DataJSON:  string(dataJSON),
+		CreatedAt: time.Now(),
+	}
+	if err := c.stores.Events.StoreEvent(event); err != nil {
+		log.Printf("emitMissionLifecycleEvent: store: %v", err)
+	}
+
+	// Also send via WebSocket for live SSE
+	env, err := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
+		MissionID: missionID,
+		EventType: eventType,
+		Data:      data,
+	})
+	if err != nil {
+		log.Printf("emitMissionLifecycleEvent: create envelope: %v", err)
+		return
+	}
+	if err := c.SendEvent(env); err != nil {
+		log.Printf("emitMissionLifecycleEvent: send: %v", err)
+	}
 }
 
 func (c *Client) handleGetMissions(env *protocol.Envelope) (*protocol.Envelope, error) {

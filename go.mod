@@ -5,6 +5,7 @@ go 1.25.4
 require (
 	github.com/anthropics/anthropic-sdk-go v1.19.0
 	github.com/charmbracelet/glamour v0.10.0
+	github.com/databricks/databricks-sql-go v1.10.0
 	github.com/google/generative-ai-go v0.20.1
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
@@ -13,7 +14,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/mattn/go-sqlite3 v1.14.34
-	github.com/mlund01/squadron-sdk v0.0.22
+	github.com/mlund01/squadron-sdk v0.0.24
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
 	github.com/openai/openai-go v1.12.0
@@ -48,7 +49,6 @@ require (
 	github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf // indirect
 	github.com/charmbracelet/x/term v0.2.1 // indirect
 	github.com/coreos/go-oidc/v3 v3.5.0 // indirect
-	github.com/databricks/databricks-sql-go v1.10.0 // indirect
 	github.com/deckarep/golang-set/v2 v2.7.0 // indirect
 	github.com/dlclark/regexp2 v1.11.0 // indirect
 	github.com/dnephin/pflag v1.0.7 // indirect

@@ -140,7 +140,7 @@ func upgradeCC() error {
 		fmt.Printf("Installing command center %s...\n", release.TagName)
 	}
 
-	downloadURL, err := findAssetURL(release, ccBinaryName)
+	downloadURL, err := findAssetURL(release, ccBinaryName())
 	if err != nil {
 		return err
 	}
@@ -151,7 +151,7 @@ func upgradeCC() error {
 	}
 	defer os.Remove(archivePath)
 
-	extractedPath, err := extractBinaryFromArchive(archivePath, ccBinaryName)
+	extractedPath, err := extractBinaryFromArchive(archivePath, ccBinaryName())
 	if err != nil {
 		return fmt.Errorf("extraction failed: %w", err)
 	}
@@ -163,7 +163,7 @@ func upgradeCC() error {
 		return err
 	}
 
-	binPath := filepath.Join(versionDir, ccBinaryName)
+	binPath := filepath.Join(versionDir, ccBinaryName())
 	if err := os.Rename(extractedPath, binPath); err != nil {
 		os.Remove(extractedPath)
 		return err

@@ -28,12 +28,18 @@ var (
 )
 
 const (
-	ccGitHubOwner = "mlund01"
-	ccGitHubRepo  = "squadron-command-center"
-	ccBinaryName  = "command-center"
-	ccKeepAlive   = 30 // seconds
+	ccGitHubOwner  = "mlund01"
+	ccGitHubRepo   = "squadron-command-center"
+	ccKeepAlive    = 30 // seconds
 	ccPingInterval = 10 * time.Second
 )
+
+func ccBinaryName() string {
+	if runtime.GOOS == "windows" {
+		return "command-center.exe"
+	}
+	return "command-center"
+}
 
 var serveCmd = &cobra.Command{
 	Use:   "serve",
@@ -236,7 +242,7 @@ func ensureCommandCenter() (string, error) {
 	currentFile := filepath.Join(baseDir, "current")
 	if data, err := os.ReadFile(currentFile); err == nil {
 		version := strings.TrimSpace(string(data))
-		binPath := filepath.Join(baseDir, version, ccBinaryName)
+		binPath := filepath.Join(baseDir, version, ccBinaryName())
 		if _, err := os.Stat(binPath); err == nil {
 			return binPath, nil
 		}
@@ -249,7 +255,7 @@ func ensureCommandCenter() (string, error) {
 		return "", fmt.Errorf("failed to fetch release: %w", err)
 	}
 
-	downloadURL, err := findAssetURL(release, ccBinaryName)
+	downloadURL, err := findAssetURL(release, ccBinaryName())
 	if err != nil {
 		return "", err
 	}
@@ -260,7 +266,7 @@ func ensureCommandCenter() (string, error) {
 	}
 	defer os.Remove(archivePath)
 
-	extractedPath, err := extractBinaryFromArchive(archivePath, ccBinaryName)
+	extractedPath, err := extractBinaryFromArchive(archivePath, ccBinaryName())
 	if err != nil {
 		return "", fmt.Errorf("extraction failed: %w", err)
 	}
@@ -273,7 +279,7 @@ func ensureCommandCenter() (string, error) {
 		return "", err
 	}
 
-	binPath := filepath.Join(versionDir, ccBinaryName)
+	binPath := filepath.Join(versionDir, ccBinaryName())
 	if err := os.Rename(extractedPath, binPath); err != nil {
 		os.Remove(extractedPath)
 		return "", err

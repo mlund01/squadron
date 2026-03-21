@@ -135,10 +135,15 @@ CREATE INDEX IF NOT EXISTS idx_mission_events_type ON mission_events(mission_id,
 
 // NewSQLiteBundle creates a Bundle backed by SQLite at the given path
 func NewSQLiteBundle(dbPath string) (*Bundle, error) {
-	db, err := sql.Open("sqlite", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := sql.Open("sqlite", dbPath+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
+
+	// SQLite only supports one writer at a time; limit the pool to a single
+	// connection so concurrent goroutines serialize through database/sql
+	// instead of getting SQLITE_BUSY.
+	db.SetMaxOpenConns(1)
 
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()

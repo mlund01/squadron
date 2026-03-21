@@ -148,12 +148,6 @@ var _ = Describe("EventStore", func() {
 		})
 	}
 
-	Context("Memory backend", func() {
-		runEventStoreTests(func() (*store.Bundle, func()) {
-			return store.NewMemoryBundle(), func() {}
-		})
-	})
-
 	Context("SQLite backend", func() {
 		runEventStoreTests(func() (*store.Bundle, func()) {
 			dir, err := os.MkdirTemp("", "store-test-*")

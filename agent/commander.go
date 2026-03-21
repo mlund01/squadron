@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -472,7 +473,9 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 			s.sessionID = callbacks.ExistingSessionID
 		} else {
 			// Create new session
-			if id, err := callbacks.SessionLogger.CreateSession(callbacks.TaskID, "commander", "", s.ModelName, callbacks.IterationIndex); err == nil {
+			if id, err := callbacks.SessionLogger.CreateSession(callbacks.TaskID, "commander", "", s.ModelName, callbacks.IterationIndex); err != nil {
+				log.Printf("Commander %s: failed to create session: %v", s.TaskName, err)
+			} else {
 				s.sessionID = id
 				if callbacks.OnSessionCreated != nil {
 					callbacks.OnSessionCreated(s.TaskName, "commander", id)

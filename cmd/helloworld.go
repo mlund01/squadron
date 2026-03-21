@@ -22,7 +22,11 @@ func init() {
 	helloworldCmd.Flags().StringVarP(&helloworldOutput, "output", "o", "helloworld.hcl", "Output file path")
 }
 
-const helloworldHCL = `variable "anthropic_api_key" {
+const helloworldHCL = `storage {
+  backend = "sqlite"
+}
+
+variable "anthropic_api_key" {
   secret = true
 }
 

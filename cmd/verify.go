@@ -32,6 +32,11 @@ var verifyCmd = &cobra.Command{
 		}
 
 		fmt.Printf("Configuration is valid!\n")
+		fmt.Printf("Storage: %s", cfg.Storage.Backend)
+		if cfg.Storage.Backend == "sqlite" {
+			fmt.Printf(" (%s)", cfg.Storage.Path)
+		}
+		fmt.Println()
 		fmt.Printf("Found %d model(s)\n", len(cfg.Models))
 		for _, m := range cfg.Models {
 			fmt.Printf("  - %s (provider: %s, models: %v)\n", m.Name, m.Provider, m.AllowedModels)

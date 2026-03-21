@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -234,7 +235,7 @@ func (h *StoringMissionHandler) IterationAnswer(taskName string, index int, cont
 
 func (h *StoringMissionHandler) CommanderReasoning(taskName string, content string) {
 	sessionKey := taskName + ":commander"
-	h.storeEvent(protocol.EventCommanderReasoning, &taskName, &sessionKey, nil, protocol.CommanderReasoningData{
+	h.storeEvent(protocol.EventCommanderReasoning, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderReasoningData{
 		TaskName: taskName,
 		Content:  content,
 	})
@@ -243,7 +244,7 @@ func (h *StoringMissionHandler) CommanderReasoning(taskName string, content stri
 
 func (h *StoringMissionHandler) CommanderAnswer(taskName string, content string) {
 	sessionKey := taskName + ":commander"
-	h.storeEvent(protocol.EventCommanderAnswer, &taskName, &sessionKey, nil, protocol.CommanderAnswerData{
+	h.storeEvent(protocol.EventCommanderAnswer, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderAnswerData{
 		TaskName: taskName,
 		Content:  content,
 	})
@@ -252,7 +253,7 @@ func (h *StoringMissionHandler) CommanderAnswer(taskName string, content string)
 
 func (h *StoringMissionHandler) CommanderCallingTool(taskName string, toolName string, input string) {
 	sessionKey := taskName + ":commander"
-	h.storeEvent(protocol.EventCommanderCallingTool, &taskName, &sessionKey, nil, protocol.CommanderCallingToolData{
+	h.storeEvent(protocol.EventCommanderCallingTool, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderCallingToolData{
 		TaskName: taskName,
 		ToolName: toolName,
 		Input:    input,
@@ -262,7 +263,7 @@ func (h *StoringMissionHandler) CommanderCallingTool(taskName string, toolName s
 
 func (h *StoringMissionHandler) CommanderToolComplete(taskName string, toolName string, result string) {
 	sessionKey := taskName + ":commander"
-	h.storeEvent(protocol.EventCommanderToolComplete, &taskName, &sessionKey, nil, protocol.CommanderToolCompleteData{
+	h.storeEvent(protocol.EventCommanderToolComplete, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderToolCompleteData{
 		TaskName: taskName,
 		ToolName: toolName,
 		Result:   result,
@@ -272,7 +273,7 @@ func (h *StoringMissionHandler) CommanderToolComplete(taskName string, toolName 
 
 func (h *StoringMissionHandler) Compaction(taskName string, entity string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
 	sessionKey := taskName + ":" + entity
-	h.storeEvent(protocol.EventCompaction, &taskName, &sessionKey, nil, protocol.CompactionData{
+	h.storeEvent(protocol.EventCompaction, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CompactionData{
 		TaskName:          taskName,
 		Entity:            entity,
 		InputTokens:       inputTokens,
@@ -285,13 +286,13 @@ func (h *StoringMissionHandler) Compaction(taskName string, entity string, input
 
 func (h *StoringMissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	sessionKey := data.TaskName + ":" + data.Entity
-	h.storeEvent(protocol.EventSessionTurn, &data.TaskName, &sessionKey, nil, data)
+	h.storeEvent(protocol.EventSessionTurn, &data.TaskName, &sessionKey, extractIterationIndex(data.TaskName), data)
 	h.inner.SessionTurn(data)
 }
 
 func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string) {
 	sessionKey := taskName + ":" + agentName
-	h.storeEvent(protocol.EventAgentStarted, &taskName, &sessionKey, nil, protocol.AgentStartedData{
+	h.storeEvent(protocol.EventAgentStarted, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.AgentStartedData{
 		TaskName:  taskName,
 		AgentName: agentName,
 	})
@@ -312,7 +313,7 @@ func (h *StoringMissionHandler) AgentHandler(taskName string, agentName string) 
 
 func (h *StoringMissionHandler) AgentCompleted(taskName string, agentName string) {
 	sessionKey := taskName + ":" + agentName
-	h.storeEvent(protocol.EventAgentCompleted, &taskName, &sessionKey, nil, protocol.AgentCompletedData{
+	h.storeEvent(protocol.EventAgentCompleted, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.AgentCompletedData{
 		TaskName:  taskName,
 		AgentName: agentName,
 	})
@@ -355,7 +356,7 @@ func (c *storingChatHandler) Thinking() {
 }
 
 func (c *storingChatHandler) CallingTool(toolName string, payload string) {
-	c.parent.storeEvent(protocol.EventAgentCallingTool, &c.taskName, &c.sessionKey, nil, protocol.AgentCallingToolData{
+	c.parent.storeEvent(protocol.EventAgentCallingTool, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentCallingToolData{
 		TaskName:  c.taskName,
 		AgentName: c.agentName,
 		ToolName:  toolName,
@@ -365,7 +366,7 @@ func (c *storingChatHandler) CallingTool(toolName string, payload string) {
 }
 
 func (c *storingChatHandler) ToolComplete(toolName string, result string) {
-	c.parent.storeEvent(protocol.EventAgentToolComplete, &c.taskName, &c.sessionKey, nil, protocol.AgentToolCompleteData{
+	c.parent.storeEvent(protocol.EventAgentToolComplete, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentToolCompleteData{
 		TaskName:  c.taskName,
 		AgentName: c.agentName,
 		ToolName:  toolName,
@@ -381,7 +382,7 @@ func (c *storingChatHandler) PublishReasoningChunk(chunk string) {
 
 func (c *storingChatHandler) FinishReasoning() {
 	if c.reasoningBuf.Len() > 0 {
-		c.parent.storeEvent(protocol.EventAgentThinking, &c.taskName, &c.sessionKey, nil, protocol.AgentThinkingData{
+		c.parent.storeEvent(protocol.EventAgentThinking, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentThinkingData{
 			TaskName:  c.taskName,
 			AgentName: c.agentName,
 			Content:   c.reasoningBuf.String(),
@@ -398,7 +399,7 @@ func (c *storingChatHandler) PublishAnswerChunk(chunk string) {
 
 func (c *storingChatHandler) FinishAnswer() {
 	if c.answerBuf.Len() > 0 {
-		c.parent.storeEvent(protocol.EventAgentAnswer, &c.taskName, &c.sessionKey, nil, protocol.AgentAnswerData{
+		c.parent.storeEvent(protocol.EventAgentAnswer, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentAnswerData{
 			TaskName:  c.taskName,
 			AgentName: c.agentName,
 			Content:   c.answerBuf.String(),
@@ -414,4 +415,21 @@ func (c *storingChatHandler) FinishAnswer() {
 
 func generateEventID() string {
 	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UnixNano()%100000)
+}
+
+// extractIterationIndex parses an iteration index from a task name like "greet[2]".
+func extractIterationIndex(taskName string) *int {
+	idx := strings.LastIndex(taskName, "[")
+	if idx == -1 {
+		return nil
+	}
+	end := strings.LastIndex(taskName, "]")
+	if end <= idx {
+		return nil
+	}
+	n, err := strconv.Atoi(taskName[idx+1 : end])
+	if err != nil {
+		return nil
+	}
+	return &n
 }

@@ -338,7 +338,7 @@ When `--resume <missionID>` is used:
 | `SessionStore` | `store/store.go` | Session/message persistence |
 | `DatasetStore` | `store/store.go` | Dataset item persistence |
 | `SQLiteStore` | `store/sqlite.go` | SQLite implementation of all stores |
-| `MemoryBundle` | `store/memory.go` | In-memory implementation (testing) |
+
 
 ---
 

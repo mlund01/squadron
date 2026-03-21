@@ -286,15 +286,20 @@ func loadFromFiles(files []string) (*Config, error) {
 	// Build vars context
 	varsCtx, resolvedVars := buildVarsContext(allVars)
 
-	// Parse storage block (singleton, no dependencies)
+	// Parse storage block (required)
 	var storageConfig StorageConfig
+	hasStorage := false
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Storage {
+			hasStorage = true
 			diags := gohcl.DecodeBody(block.Body, varsCtx, &storageConfig)
 			if diags.HasErrors() {
 				return nil, fmt.Errorf("storage: %w", diags)
 			}
 		}
+	}
+	if !hasStorage {
+		return nil, fmt.Errorf("a storage block is required in the configuration, e.g.:\n\n  storage {\n    backend = \"sqlite\"\n  }\n")
 	}
 	storageConfig.Defaults()
 

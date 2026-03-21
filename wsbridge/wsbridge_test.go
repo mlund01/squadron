@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +17,21 @@ import (
 	"squadron/store"
 	"squadron/wsbridge"
 )
+
+func newTestBundle(t *testing.T) *store.Bundle {
+	t.Helper()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	bundle, err := store.NewSQLiteBundle(dbPath)
+	if err != nil {
+		t.Fatalf("create test bundle: %v", err)
+	}
+	t.Cleanup(func() {
+		bundle.Close()
+		os.RemoveAll(dir)
+	})
+	return bundle
+}
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
@@ -119,8 +136,8 @@ func testConfig(wsURL string) *config.Config {
 func TestClientConnectAndRegister(t *testing.T) {
 	mc := newMockCommander(t)
 	cfg := testConfig(mc.wsURL())
-	stores := store.NewMemoryBundle()
-	defer stores.Close()
+	stores := newTestBundle(t)
+
 
 	client := wsbridge.NewClient(cfg, ".", stores, "1.0.0")
 
@@ -181,8 +198,8 @@ func TestClientConnectAndRegister(t *testing.T) {
 func TestClientHandlesGetConfig(t *testing.T) {
 	mc := newMockCommander(t)
 	cfg := testConfig(mc.wsURL())
-	stores := store.NewMemoryBundle()
-	defer stores.Close()
+	stores := newTestBundle(t)
+
 
 	client := wsbridge.NewClient(cfg, ".", stores, "1.0.0")
 
@@ -234,8 +251,8 @@ func TestClientHandlesGetConfig(t *testing.T) {
 func TestClientHandlesHeartbeat(t *testing.T) {
 	mc := newMockCommander(t)
 	cfg := testConfig(mc.wsURL())
-	stores := store.NewMemoryBundle()
-	defer stores.Close()
+	stores := newTestBundle(t)
+
 
 	client := wsbridge.NewClient(cfg, ".", stores, "1.0.0")
 
@@ -267,8 +284,8 @@ func TestClientHandlesHeartbeat(t *testing.T) {
 func TestClientHandlesGetMissions(t *testing.T) {
 	mc := newMockCommander(t)
 	cfg := testConfig(mc.wsURL())
-	stores := store.NewMemoryBundle()
-	defer stores.Close()
+	stores := newTestBundle(t)
+
 
 	// Create some mission records in the store
 	stores.Missions.CreateMission("search-mission", `{"query": "test"}`, `{}`)

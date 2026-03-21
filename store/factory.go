@@ -10,10 +10,6 @@ import (
 
 // NewBundle creates a store Bundle based on the storage configuration
 func NewBundle(cfg *config.StorageConfig) (*Bundle, error) {
-	if cfg == nil {
-		return NewMemoryBundle(), nil
-	}
-
 	switch cfg.Backend {
 	case "sqlite":
 		// Ensure directory exists
@@ -29,10 +25,7 @@ func NewBundle(cfg *config.StorageConfig) (*Bundle, error) {
 		}
 		return NewPostgresBundle(cfg.ConnString)
 
-	case "memory":
-		return NewMemoryBundle(), nil
-
 	default:
-		return nil, fmt.Errorf("unknown storage backend: %s (expected 'memory', 'sqlite', or 'postgres')", cfg.Backend)
+		return nil, fmt.Errorf("unknown storage backend: %s (expected 'sqlite' or 'postgres')", cfg.Backend)
 	}
 }

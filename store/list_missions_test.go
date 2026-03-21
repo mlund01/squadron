@@ -109,12 +109,6 @@ var _ = Describe("ListMissions", func() {
 		})
 	}
 
-	Context("Memory backend", func() {
-		runListMissionsTests(func() (*store.Bundle, func()) {
-			return store.NewMemoryBundle(), func() {}
-		})
-	})
-
 	Context("SQLite backend", func() {
 		runListMissionsTests(func() (*store.Bundle, func()) {
 			dir, err := os.MkdirTemp("", "store-test-*")

@@ -52,58 +52,57 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	// 2. Check if already up to date
 	currentVersion := strings.TrimPrefix(Version, "v")
 	if currentVersion == targetVersion {
-		fmt.Printf("Already up to date (v%s)\n", targetVersion)
-		return nil
+		fmt.Printf("Squadron already up to date (v%s)\n", targetVersion)
+	} else {
+		if Version == "dev" {
+			fmt.Println("Warning: current version is a dev build. Upgrading to release version.")
+		}
+
+		fmt.Printf("Upgrading squadron: %s → v%s\n", Version, targetVersion)
+
+		// 3. Find the right asset
+		downloadURL, err := findAssetURL(release, "squadron")
+		if err != nil {
+			return err
+		}
+
+		// 4. Download archive to temp file
+		fmt.Println("Downloading...")
+		archivePath, err := downloadToTemp(downloadURL)
+		if err != nil {
+			return fmt.Errorf("download failed: %w", err)
+		}
+		defer os.Remove(archivePath)
+
+		// 5. Extract binary from archive
+		binaryName := "squadron"
+		if runtime.GOOS == "windows" {
+			binaryName = "squadron.exe"
+		}
+		binaryPath, err := extractBinaryFromArchive(archivePath, binaryName)
+		if err != nil {
+			return fmt.Errorf("extraction failed: %w", err)
+		}
+		defer os.Remove(binaryPath)
+
+		// 6. Replace current binary
+		execPath, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("could not determine current binary path: %w", err)
+		}
+		execPath, err = filepath.EvalSymlinks(execPath)
+		if err != nil {
+			return fmt.Errorf("could not resolve binary path: %w", err)
+		}
+
+		if err := replaceBinary(execPath, binaryPath); err != nil {
+			return err
+		}
+
+		fmt.Printf("Successfully upgraded squadron to v%s\n", targetVersion)
 	}
 
-	if Version == "dev" {
-		fmt.Println("Warning: current version is a dev build. Upgrading to release version.")
-	}
-
-	fmt.Printf("Upgrading: %s → v%s\n", Version, targetVersion)
-
-	// 3. Find the right asset
-	downloadURL, err := findAssetURL(release, "squadron")
-	if err != nil {
-		return err
-	}
-
-	// 4. Download archive to temp file
-	fmt.Println("Downloading...")
-	archivePath, err := downloadToTemp(downloadURL)
-	if err != nil {
-		return fmt.Errorf("download failed: %w", err)
-	}
-	defer os.Remove(archivePath)
-
-	// 5. Extract binary from archive
-	binaryName := "squadron"
-	if runtime.GOOS == "windows" {
-		binaryName = "squadron.exe"
-	}
-	binaryPath, err := extractBinaryFromArchive(archivePath, binaryName)
-	if err != nil {
-		return fmt.Errorf("extraction failed: %w", err)
-	}
-	defer os.Remove(binaryPath)
-
-	// 6. Replace current binary
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("could not determine current binary path: %w", err)
-	}
-	execPath, err = filepath.EvalSymlinks(execPath)
-	if err != nil {
-		return fmt.Errorf("could not resolve binary path: %w", err)
-	}
-
-	if err := replaceBinary(execPath, binaryPath); err != nil {
-		return err
-	}
-
-	fmt.Printf("Successfully upgraded to v%s\n", targetVersion)
-
-	// Also upgrade command center if installed
+	// Also upgrade command center
 	if err := upgradeCC(); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to upgrade command center: %v\n", err)
 	}

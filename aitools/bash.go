@@ -3,6 +3,7 @@ package aitools
 import (
 	"encoding/json"
 	"os/exec"
+	"runtime"
 )
 
 // BashTool executes bash commands and returns the output
@@ -48,7 +49,12 @@ func (t *BashTool) Call(params string) string {
 		return "Error: command is required"
 	}
 
-	cmd := exec.Command("bash", "-c", p.Command)
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/C", p.Command)
+	} else {
+		cmd = exec.Command("bash", "-c", p.Command)
+	}
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return string(output) + "\nError: " + err.Error()

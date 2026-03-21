@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -25,7 +24,7 @@ func Execute() {
 
 	// Also clean up plugins on signals (SIGKILL can't be caught, but SIGINT/SIGTERM can)
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		<-sigCh
 		plugin.CloseAll()

@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
@@ -66,7 +67,11 @@ func fetchReleaseFromURL(url string) (githubRelease, error) {
 
 // findAssetURL finds the download URL for a platform-specific asset in a release.
 func findAssetURL(release githubRelease, projectName string) (string, error) {
-	assetName := fmt.Sprintf("%s_%s_%s.tar.gz", projectName, runtime.GOOS, runtime.GOARCH)
+	ext := "tar.gz"
+	if runtime.GOOS == "windows" {
+		ext = "zip"
+	}
+	assetName := fmt.Sprintf("%s_%s_%s.%s", projectName, runtime.GOOS, runtime.GOARCH, ext)
 	for _, a := range release.Assets {
 		if a.Name == assetName {
 			return a.BrowserDownloadURL, nil
@@ -91,7 +96,11 @@ func downloadToTemp(url string) (string, error) {
 		return "", fmt.Errorf("download returned %d", resp.StatusCode)
 	}
 
-	tmp, err := os.CreateTemp("", "squadron-download-*.tar.gz")
+	suffix := ".tar.gz"
+	if strings.HasSuffix(url, ".zip") {
+		suffix = ".zip"
+	}
+	tmp, err := os.CreateTemp("", "squadron-download-*"+suffix)
 	if err != nil {
 		return "", err
 	}
@@ -105,8 +114,11 @@ func downloadToTemp(url string) (string, error) {
 	return tmp.Name(), nil
 }
 
-// extractBinaryFromArchive extracts a named binary from a tar.gz archive.
+// extractBinaryFromArchive extracts a named binary from a tar.gz or zip archive.
 func extractBinaryFromArchive(archivePath, binaryName string) (string, error) {
+	if strings.HasSuffix(archivePath, ".zip") {
+		return extractBinaryFromZip(archivePath, binaryName)
+	}
 	f, err := os.Open(archivePath)
 	if err != nil {
 		return "", err
@@ -152,4 +164,46 @@ func extractBinaryFromArchive(archivePath, binaryName string) (string, error) {
 	}
 
 	return "", fmt.Errorf("binary '%s' not found in archive", binaryName)
+}
+
+// extractBinaryFromZip extracts a named binary from a zip archive.
+func extractBinaryFromZip(archivePath, binaryName string) (string, error) {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return "", fmt.Errorf("not a valid zip archive: %w", err)
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		if filepath.Base(f.Name) == binaryName {
+			rc, err := f.Open()
+			if err != nil {
+				return "", err
+			}
+
+			tmp, err := os.CreateTemp("", binaryName+"-*")
+			if err != nil {
+				rc.Close()
+				return "", err
+			}
+
+			if _, err := io.Copy(tmp, rc); err != nil {
+				tmp.Close()
+				rc.Close()
+				os.Remove(tmp.Name())
+				return "", err
+			}
+			tmp.Close()
+			rc.Close()
+
+			if err := os.Chmod(tmp.Name(), 0755); err != nil {
+				os.Remove(tmp.Name())
+				return "", err
+			}
+
+			return tmp.Name(), nil
+		}
+	}
+
+	return "", fmt.Errorf("binary '%s' not found in zip archive", binaryName)
 }

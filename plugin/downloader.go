@@ -2,6 +2,7 @@ package plugin
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
@@ -21,7 +22,11 @@ func DownloadPlugin(source, version, destDir string) error {
 	}
 
 	// Build download URLs
-	archiveName := fmt.Sprintf("%s_%s_%s.tar.gz", repo, runtime.GOOS, runtime.GOARCH)
+	ext := "tar.gz"
+	if runtime.GOOS == "windows" {
+		ext = "zip"
+	}
+	archiveName := fmt.Sprintf("%s_%s_%s.%s", repo, runtime.GOOS, runtime.GOARCH, ext)
 	archiveURL := fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/%s",
 		owner, repo, version, archiveName)
 	checksumURL := fmt.Sprintf("https://github.com/%s/%s/releases/download/%s/checksums.txt",
@@ -46,8 +51,14 @@ func DownloadPlugin(source, version, destDir string) error {
 	}
 
 	// Extract to destination
-	if err := extractTarGz(tmpFile, destDir); err != nil {
-		return fmt.Errorf("failed to extract archive: %w", err)
+	var extractErr error
+	if strings.HasSuffix(archiveName, ".zip") {
+		extractErr = extractZip(tmpFile, destDir)
+	} else {
+		extractErr = extractTarGz(tmpFile, destDir)
+	}
+	if extractErr != nil {
+		return fmt.Errorf("failed to extract archive: %w", extractErr)
 	}
 
 	return nil
@@ -158,12 +169,17 @@ func extractTarGz(archivePath, destDir string) error {
 			return err
 		}
 
-		// Only extract the binary named "plugin"
-		if header.Name == "plugin" || strings.HasSuffix(header.Name, "/plugin") {
+		// Only extract the binary named "plugin" (or "plugin.exe" on Windows)
+		baseName := filepath.Base(header.Name)
+		if baseName == "plugin" || baseName == "plugin.exe" {
 			if err := os.MkdirAll(destDir, 0755); err != nil {
 				return err
 			}
-			outPath := filepath.Join(destDir, "plugin")
+			outName := "plugin"
+			if runtime.GOOS == "windows" {
+				outName = "plugin.exe"
+			}
+			outPath := filepath.Join(destDir, outName)
 			outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY, 0755)
 			if err != nil {
 				return err
@@ -177,4 +193,49 @@ func extractTarGz(archivePath, destDir string) error {
 		}
 	}
 	return fmt.Errorf("plugin binary not found in archive")
+}
+
+// extractZip extracts the plugin binary from a .zip archive
+func extractZip(archivePath, destDir string) error {
+	r, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	outName := "plugin"
+	if runtime.GOOS == "windows" {
+		outName = "plugin.exe"
+	}
+
+	for _, f := range r.File {
+		baseName := filepath.Base(f.Name)
+		if baseName == "plugin" || baseName == "plugin.exe" {
+			if err := os.MkdirAll(destDir, 0755); err != nil {
+				return err
+			}
+			outPath := filepath.Join(destDir, outName)
+
+			rc, err := f.Open()
+			if err != nil {
+				return err
+			}
+
+			outFile, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY, 0755)
+			if err != nil {
+				rc.Close()
+				return err
+			}
+
+			if _, err := io.Copy(outFile, rc); err != nil {
+				outFile.Close()
+				rc.Close()
+				return err
+			}
+			outFile.Close()
+			rc.Close()
+			return nil
+		}
+	}
+	return fmt.Errorf("plugin binary not found in zip archive")
 }

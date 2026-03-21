@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 
 	"github.com/hashicorp/go-hclog"
@@ -41,7 +42,11 @@ func GetPluginPath(name, version string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(pluginsDir, name, version, "plugin"), nil
+	binaryName := "plugin"
+	if runtime.GOOS == "windows" {
+		binaryName = "plugin.exe"
+	}
+	return filepath.Join(pluginsDir, name, version, binaryName), nil
 }
 
 // GetPluginDir returns the directory for a specific plugin version

@@ -26,6 +26,20 @@ curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_li
 sudo mv squadron /usr/local/bin/
 ```
 
+### Windows
+
+Download the zip from [GitHub Releases](https://github.com/mlund01/squadron/releases) and extract it. In PowerShell:
+
+```powershell
+# Download and extract
+Invoke-WebRequest -Uri https://github.com/mlund01/squadron/releases/latest/download/squadron_windows_amd64.zip -OutFile squadron.zip
+Expand-Archive squadron.zip -DestinationPath .
+Remove-Item squadron.zip
+
+# Move to a directory in your PATH
+Move-Item squadron.exe C:\Windows\System32\
+```
+
 ## Upgrade
 
 ```bash

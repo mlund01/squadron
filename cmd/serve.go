@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -124,7 +123,7 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	// Graceful shutdown
 	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(stop, os.Interrupt)
 
 	go func() {
 		if err := client.Run(); err != nil {
@@ -133,10 +132,10 @@ func runServe(cmd *cobra.Command, args []string) {
 				log.Println("Attempting to reconnect...")
 				if err := connectWithRetry(client, cfg.Commander); err != nil {
 					log.Printf("Reconnect failed: %v", err)
-					stop <- syscall.SIGTERM
+					stop <- os.Interrupt
 				}
 			} else {
-				stop <- syscall.SIGTERM
+				stop <- os.Interrupt
 			}
 		}
 	}()
@@ -150,7 +149,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		close(pingDone)
 	}
 	if ccProc != nil && ccProc.Process != nil {
-		ccProc.Process.Signal(syscall.SIGTERM)
+		ccProc.Process.Signal(os.Interrupt)
 		done := make(chan error, 1)
 		go func() { done <- ccProc.Wait() }()
 		select {
@@ -332,6 +331,8 @@ func openBrowser(url string) {
 		cmd = exec.Command("open", url)
 	case "linux":
 		cmd = exec.Command("xdg-open", url)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", url)
 	default:
 		return
 	}

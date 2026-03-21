@@ -125,14 +125,20 @@ func upgradeCC() error {
 
 	// Check if already up to date
 	currentFile := filepath.Join(baseDir, "current")
+	installed := false
 	if data, err := os.ReadFile(currentFile); err == nil {
+		installed = true
 		if strings.TrimSpace(string(data)) == release.TagName {
 			fmt.Printf("Command center already up to date (%s)\n", release.TagName)
 			return nil
 		}
 	}
 
-	fmt.Printf("Upgrading command center to %s...\n", release.TagName)
+	if installed {
+		fmt.Printf("Upgrading command center to %s...\n", release.TagName)
+	} else {
+		fmt.Printf("Installing command center %s...\n", release.TagName)
+	}
 
 	downloadURL, err := findAssetURL(release, ccBinaryName)
 	if err != nil {

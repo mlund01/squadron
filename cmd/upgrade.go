@@ -19,8 +19,8 @@ var upgradeVersion string
 
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
-	Short: "Upgrade squadron to the latest version",
-	Long:  `Download and install the latest squadron binary from GitHub releases. Use --version to install a specific version.`,
+	Short: "Upgrade squadron and command center to the latest version",
+	Long:  `Download and install the latest squadron binary and command center from GitHub releases. Use --version to install a specific squadron version.`,
 	RunE:  runUpgrade,
 }
 
@@ -102,6 +102,70 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("Successfully upgraded to v%s\n", targetVersion)
+
+	// Also upgrade command center if installed
+	if err := upgradeCC(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to upgrade command center: %v\n", err)
+	}
+
+	return nil
+}
+
+func upgradeCC() error {
+	baseDir, err := commandCenterDir()
+	if err != nil {
+		return err
+	}
+
+	// Fetch latest release
+	release, err := fetchLatestRelease(ccGitHubOwner, ccGitHubRepo)
+	if err != nil {
+		return fmt.Errorf("failed to fetch release: %w", err)
+	}
+
+	// Check if already up to date
+	currentFile := filepath.Join(baseDir, "current")
+	if data, err := os.ReadFile(currentFile); err == nil {
+		if strings.TrimSpace(string(data)) == release.TagName {
+			fmt.Printf("Command center already up to date (%s)\n", release.TagName)
+			return nil
+		}
+	}
+
+	fmt.Printf("Upgrading command center to %s...\n", release.TagName)
+
+	downloadURL, err := findAssetURL(release, ccBinaryName)
+	if err != nil {
+		return err
+	}
+
+	archivePath, err := downloadToTemp(downloadURL)
+	if err != nil {
+		return fmt.Errorf("download failed: %w", err)
+	}
+	defer os.Remove(archivePath)
+
+	extractedPath, err := extractBinaryFromArchive(archivePath, ccBinaryName)
+	if err != nil {
+		return fmt.Errorf("extraction failed: %w", err)
+	}
+
+	// Install to versioned directory
+	versionDir := filepath.Join(baseDir, release.TagName)
+	if err := os.MkdirAll(versionDir, 0755); err != nil {
+		os.Remove(extractedPath)
+		return err
+	}
+
+	binPath := filepath.Join(versionDir, ccBinaryName)
+	if err := os.Rename(extractedPath, binPath); err != nil {
+		os.Remove(extractedPath)
+		return err
+	}
+
+	os.WriteFile(currentFile, []byte(release.TagName), 0644)
+
+	fmt.Printf("Successfully upgraded command center to %s\n", release.TagName)
 	return nil
 }
 

@@ -4,11 +4,26 @@ title: Installation
 
 # Installation
 
-## Homebrew (macOS)
+## Download Binary
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/mlund01/squadron/releases), extract it, and move the binary to your PATH:
 
 ```bash
-brew tap mlund01/squadron
-brew install --cask mlund01/squadron/squadron
+# macOS (Apple Silicon)
+curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_darwin_arm64.tar.gz | tar xz
+sudo mv squadron /usr/local/bin/
+
+# macOS (Intel)
+curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_darwin_amd64.tar.gz | tar xz
+sudo mv squadron /usr/local/bin/
+
+# Linux (amd64)
+curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_linux_amd64.tar.gz | tar xz
+sudo mv squadron /usr/local/bin/
+
+# Linux (arm64)
+curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_linux_arm64.tar.gz | tar xz
+sudo mv squadron /usr/local/bin/
 ```
 
 ## Upgrade
@@ -20,7 +35,7 @@ squadron upgrade
 Or install a specific version:
 
 ```bash
-squadron upgrade --version v0.0.13
+squadron upgrade --version v0.0.28
 ```
 
 ## Build from Source

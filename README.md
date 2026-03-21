@@ -34,34 +34,23 @@ cd squadron
 go build -o squadron ./cmd/cli
 ```
 
-## Quick Start
-
-Create `config/models.hcl`:
-
-```hcl
-variable "anthropic_api_key" {
-  secret = true
-}
-
-model "anthropic" {
-  provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4"]
-  api_key        = vars.anthropic_api_key
-}
-
-agent "assistant" {
-  model       = models.anthropic.claude_sonnet_4
-  personality = "Helpful and concise"
-  role        = "General assistant"
-  tools       = [plugins.bash.bash, plugins.http.get]
-}
-```
-
-Set your API key and chat:
+## Getting Started
 
 ```bash
+# See available commands
+squadron help
+
+# Generate a sample workflow
+squadron helloworld
+
+# Set your Anthropic API key
 squadron vars set anthropic_api_key sk-ant-...
-squadron chat -c ./config assistant
+
+# Validate the configuration
+squadron verify
+
+# Run with the command center UI
+squadron serve -w
 ```
 
 ## Missions

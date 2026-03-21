@@ -13,9 +13,12 @@ var verifyCmd = &cobra.Command{
 	Use:   "verify [path]",
 	Short: "Verify that the configuration is valid",
 	Long:  `Verify parses and validates the HCL configuration files. Path can be a file or directory.`,
-	Args:  cobra.ExactArgs(1),
+	Args:  cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		configPath := args[0]
+		configPath := "."
+		if len(args) > 0 {
+			configPath = args[0]
+		}
 		cfg, err := config.LoadAndValidate(configPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

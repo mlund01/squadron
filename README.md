@@ -20,6 +20,15 @@ curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_li
 sudo mv squadron /usr/local/bin/
 ```
 
+**Windows (PowerShell):**
+
+```powershell
+Invoke-WebRequest -Uri https://github.com/mlund01/squadron/releases/latest/download/squadron_windows_amd64.zip -OutFile squadron.zip
+Expand-Archive squadron.zip -DestinationPath .
+Move-Item squadron.exe C:\Windows\System32\
+Remove-Item squadron.zip
+```
+
 Upgrade to the latest version:
 
 ```bash
@@ -37,6 +46,9 @@ go build -o squadron ./cmd/cli
 ## Getting Started
 
 ```bash
+# Create a new project directory
+mkdir my-workflow && cd my-workflow
+
 # See available commands
 squadron help
 

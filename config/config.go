@@ -186,7 +186,7 @@ func LoadDir(dir string) (*Config, error) {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+		if d.IsDir() && d.Name() != "." && strings.HasPrefix(d.Name(), ".") {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".hcl") {

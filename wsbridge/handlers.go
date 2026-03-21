@@ -892,7 +892,7 @@ func (c *Client) handleValidateConfig(env *protocol.Envelope) (*protocol.Envelop
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+		if d.IsDir() && d.Name() != "." && strings.HasPrefix(d.Name(), ".") {
 			return filepath.SkipDir
 		}
 		if !d.IsDir() && strings.HasSuffix(d.Name(), ".hcl") {
@@ -962,7 +962,7 @@ func (c *Client) handleListConfigFiles(env *protocol.Envelope) (*protocol.Envelo
 		return nil, fmt.Errorf("stat config path: %w", err)
 	}
 
-	var files []protocol.ConfigFileInfo
+	files := []protocol.ConfigFileInfo{}
 	var configDir string
 
 	if info.IsDir() {
@@ -971,8 +971,8 @@ func (c *Client) handleListConfigFiles(env *protocol.Envelope) (*protocol.Envelo
 			if err != nil {
 				return nil
 			}
-			// Skip hidden directories
-			if d.IsDir() && strings.HasPrefix(d.Name(), ".") {
+			// Skip hidden directories (but not "." itself)
+			if d.IsDir() && d.Name() != "." && strings.HasPrefix(d.Name(), ".") {
 				return filepath.SkipDir
 			}
 			if d.IsDir() {

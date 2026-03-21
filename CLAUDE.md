@@ -14,6 +14,10 @@ go build -o squadron ./cmd/cli              # Build the CLI
 ./squadron vars set <name> <value>         # Set a variable
 ./squadron vars get <name>                 # Get a variable
 ./squadron vars list                       # List all variables
+./squadron serve -c <path>                 # Connect to commander server (requires commander block)
+./squadron serve -c <path> -w              # Launch local command center + connect
+./squadron serve -c <path> -w --cc-port 9090  # Custom command center port
+./squadron serve -c <path> -w --no-browser # Launch without opening browser
 ./squadron upgrade                         # Upgrade to latest release
 ./squadron upgrade --version v0.0.13       # Upgrade to specific version
 ./squadron version                         # Print current version

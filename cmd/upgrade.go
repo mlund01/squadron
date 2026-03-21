@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -75,8 +76,12 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 	}
 	defer os.Remove(archivePath)
 
-	// 5. Extract binary from tar.gz
-	binaryPath, err := extractBinaryFromArchive(archivePath, "squadron")
+	// 5. Extract binary from archive
+	binaryName := "squadron"
+	if runtime.GOOS == "windows" {
+		binaryName = "squadron.exe"
+	}
+	binaryPath, err := extractBinaryFromArchive(archivePath, binaryName)
 	if err != nil {
 		return fmt.Errorf("extraction failed: %w", err)
 	}

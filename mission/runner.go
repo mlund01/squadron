@@ -1282,6 +1282,9 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 		return nil, fmt.Errorf("load dataset '%s': %w", datasetName, err)
 	}
 
+	// Lock the dataset — no mutations allowed after iteration begins
+	r.stores.Datasets.LockDataset(dsID)
+
 	// Create or reuse task record in store
 	var taskID string
 	if existingTaskID != "" {
@@ -2626,6 +2629,13 @@ func (r *Runner) SetDataset(name string, items []cty.Value) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	dsID, ok := r.datasetIDs[name]
+	if ok {
+		if locked, err := r.stores.Datasets.IsDatasetLocked(dsID); err == nil && locked {
+			return fmt.Errorf("dataset '%s' is locked and cannot be modified — a downstream task is already iterating over it. Datasets become immutable once iteration begins. If you need to store new data, use a different dataset", name)
+		}
+	}
+
 	// Find the dataset definition
 	var ds *config.Dataset
 	for i := range r.mission.Datasets {
@@ -2646,7 +2656,6 @@ func (r *Runner) SetDataset(name string, items []cty.Value) error {
 	}
 
 	// Write to persistent store
-	dsID, ok := r.datasetIDs[name]
 	if !ok {
 		return fmt.Errorf("dataset '%s' not initialized", name)
 	}
@@ -2661,6 +2670,13 @@ func (r *Runner) SetDataset(name string, items []cty.Value) error {
 func (r *Runner) AppendDataset(name string, items []cty.Value) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
+	dsID, ok := r.datasetIDs[name]
+	if ok {
+		if locked, err := r.stores.Datasets.IsDatasetLocked(dsID); err == nil && locked {
+			return fmt.Errorf("dataset '%s' is locked and cannot be modified — a downstream task is already iterating over it. Datasets become immutable once iteration begins. If you need to store new data, use a different dataset", name)
+		}
+	}
 
 	var ds *config.Dataset
 	for i := range r.mission.Datasets {
@@ -2679,7 +2695,6 @@ func (r *Runner) AppendDataset(name string, items []cty.Value) error {
 		}
 	}
 
-	dsID, ok := r.datasetIDs[name]
 	if !ok {
 		return fmt.Errorf("dataset '%s' not initialized", name)
 	}

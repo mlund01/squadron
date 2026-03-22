@@ -177,6 +177,8 @@ type DatasetStore interface {
 	GetDatasetByName(missionID, name string) (id string, err error)
 	ListDatasets(missionID string) ([]DatasetInfo, error)
 	GetItemsRaw(datasetID string, offset, limit int) ([]string, error)
+	LockDataset(datasetID string) error
+	IsDatasetLocked(datasetID string) (bool, error)
 }
 
 // EventStore persists mission execution events for history/audit

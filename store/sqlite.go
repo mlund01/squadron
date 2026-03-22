@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS datasets (
     name TEXT NOT NULL,
     description TEXT,
     item_count INTEGER DEFAULT 0,
+    locked INTEGER DEFAULT 0,
     created_at TEXT,
     UNIQUE(mission_id, name)
 );
@@ -771,6 +772,20 @@ func (s *SQLiteDatasetStore) ListDatasets(missionID string) ([]DatasetInfo, erro
 		infos = append(infos, info)
 	}
 	return infos, nil
+}
+
+func (s *SQLiteDatasetStore) LockDataset(datasetID string) error {
+	_, err := s.db.Exec(`UPDATE datasets SET locked = 1 WHERE id = ?`, datasetID)
+	return err
+}
+
+func (s *SQLiteDatasetStore) IsDatasetLocked(datasetID string) (bool, error) {
+	var locked int
+	err := s.db.QueryRow(`SELECT locked FROM datasets WHERE id = ?`, datasetID).Scan(&locked)
+	if err != nil {
+		return false, err
+	}
+	return locked == 1, nil
 }
 
 func (s *SQLiteDatasetStore) GetItemsRaw(datasetID string, offset, limit int) ([]string, error) {

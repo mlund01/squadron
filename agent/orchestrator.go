@@ -164,9 +164,8 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 					Model:                     o.modelName,
 					InputTokens:              resp.Usage.InputTokens,
 					OutputTokens:             resp.Usage.OutputTokens,
-					CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
-					CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
-					CachedTokens:             resp.Usage.CachedTokens,
+					CacheWriteTokens: resp.Usage.CacheWriteTokens,
+					CacheReadTokens:  resp.Usage.CacheReadTokens,
 					UserMessages:             stats.UserCount,
 					AssistantMessages:        stats.AssistantCount,
 					SystemMessages:           stats.SystemCount,
@@ -183,15 +182,11 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			if resp != nil {
 				eventData["input_tokens"] = resp.Usage.InputTokens
 				eventData["output_tokens"] = resp.Usage.OutputTokens
-				// Include cache-related tokens if present
-				if resp.Usage.CacheCreationInputTokens > 0 {
-					eventData["cache_creation_input_tokens"] = resp.Usage.CacheCreationInputTokens
+				if resp.Usage.CacheWriteTokens > 0 {
+					eventData["cache_write_tokens"] = resp.Usage.CacheWriteTokens
 				}
-				if resp.Usage.CacheReadInputTokens > 0 {
-					eventData["cache_read_input_tokens"] = resp.Usage.CacheReadInputTokens
-				}
-				if resp.Usage.CachedTokens > 0 {
-					eventData["cached_tokens"] = resp.Usage.CachedTokens
+				if resp.Usage.CacheReadTokens > 0 {
+					eventData["cache_read_tokens"] = resp.Usage.CacheReadTokens
 				}
 			}
 			o.eventLogger.LogEvent("agent_llm_end", eventData)

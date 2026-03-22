@@ -68,9 +68,12 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		InputTokens:  int(resp.Usage.PromptTokens),
 		OutputTokens: int(resp.Usage.CompletionTokens),
 	}
-	// Capture cached tokens if available
+	// OpenAI includes cached tokens within prompt_tokens (subset), but our Usage
+	// convention treats cache tokens as separate (like Anthropic). Normalize by
+	// subtracting cached from input so totals are consistent across providers.
 	if resp.Usage.PromptTokensDetails.CachedTokens > 0 {
-		usage.CachedTokens = int(resp.Usage.PromptTokensDetails.CachedTokens)
+		usage.CacheReadTokens = int(resp.Usage.PromptTokensDetails.CachedTokens)
+		usage.InputTokens -= usage.CacheReadTokens
 	}
 
 	return &ChatResponse{
@@ -123,9 +126,9 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 			if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
 				finalUsage.InputTokens = int(chunk.Usage.PromptTokens)
 				finalUsage.OutputTokens = int(chunk.Usage.CompletionTokens)
-				// Capture cached tokens if available
 				if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
-					finalUsage.CachedTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
+					finalUsage.CacheReadTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
+					finalUsage.InputTokens -= finalUsage.CacheReadTokens
 				}
 			}
 

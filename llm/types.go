@@ -114,10 +114,8 @@ type Usage struct {
 	InputTokens  int
 	OutputTokens int
 
-	// Cache-related fields (provider-specific, may be zero if not supported)
-	CacheCreationInputTokens int // Anthropic: tokens used to create new cache entry
-	CacheReadInputTokens     int // Anthropic: tokens read from existing cache
-	CachedTokens             int // OpenAI: tokens served from cache (prompt_tokens_details.cached_tokens)
+	CacheWriteTokens int // Tokens written to cache (Anthropic: cache_creation_input_tokens)
+	CacheReadTokens  int // Tokens read from cache (Anthropic: cache_read_input_tokens, OpenAI: cached_tokens)
 }
 
 type Provider interface {

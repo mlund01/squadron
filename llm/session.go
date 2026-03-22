@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -37,6 +38,56 @@ func NewSession(provider Provider, model string, systemPrompts ...string) *Sessi
 func (s *Session) SetPromptCaching(enabled bool, conversationCaching bool) {
 	s.promptCaching = enabled
 	s.conversationCaching = conversationCaching
+}
+
+// retryableStatusCodes are HTTP status codes that indicate a transient error
+// worth retrying: rate limits (429), server errors (5xx), and Anthropic
+// overloaded (529).
+var retryableStatusCodes = []string{"429", "500", "502", "503", "504", "529"}
+
+// isRetryableError checks if an LLM provider error is transient and may
+// succeed on retry. Works across providers by checking the error message
+// for HTTP status codes (both OpenAI and Anthropic SDKs include them).
+func isRetryableError(err error) bool {
+	msg := err.Error()
+	for _, code := range retryableStatusCodes {
+		if strings.Contains(msg, code) {
+			return true
+		}
+	}
+	return false
+}
+
+// chatStreamWithRetry wraps provider.ChatStream with exponential backoff for
+// transient errors (429, 5xx). Retries for up to ~10 minutes before giving up.
+func (s *Session) chatStreamWithRetry(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
+	backoff := 5 * time.Second
+	maxBackoff := 2 * time.Minute
+	deadline := time.Now().Add(10 * time.Minute)
+
+	for {
+		stream, err := s.provider.ChatStream(ctx, req)
+		if err == nil {
+			return stream, nil
+		}
+
+		if !isRetryableError(err) || time.Now().Add(backoff).After(deadline) {
+			return nil, err
+		}
+
+		log.Printf("[LLM] Retryable error (%v), retrying in %s...", err, backoff)
+
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		backoff = backoff * 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
 }
 
 // EnableDebug opens a debug file for logging all messages
@@ -244,7 +295,7 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.provider.ChatStream(ctx, req)
+	stream, err := s.chatStreamWithRetry(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -303,7 +354,7 @@ func (s *Session) ContinueStream(ctx context.Context, onChunk func(StreamChunk))
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.provider.ChatStream(ctx, req)
+	stream, err := s.chatStreamWithRetry(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -618,7 +669,7 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.provider.ChatStream(ctx, req)
+	stream, err := s.chatStreamWithRetry(ctx, req)
 	if err != nil {
 		return nil, err
 	}

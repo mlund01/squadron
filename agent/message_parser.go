@@ -134,7 +134,7 @@ func (p *MessageParser) processBuffer() {
 			}
 			if idx := strings.Index(content, "<ASK_COMMANDER>"); idx != -1 {
 				p.state = StateAskCommander
-				content = content[idx+10:] // len("<ASK_COMMANDER>") = 10
+				content = content[idx+15:] // len("<ASK_COMMANDER>") = 15
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
@@ -253,14 +253,14 @@ func (p *MessageParser) processBuffer() {
 				finalContent := strings.TrimRight(content[:idx], "\n")
 				p.askCommanderText.WriteString(finalContent)
 				p.state = StateNone
-				content = content[idx+11:] // len("</ASK_COMMANDER>") = 11
+				content = content[idx+16:] // len("</ASK_COMMANDER>") = 16
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
 			}
 			// No closing tag yet - accumulate but keep buffer for split tag detection
-			if len(content) > 11 {
-				safeLen := len(content) - 11 // Keep last 11 chars in buffer
+			if len(content) > 16 {
+				safeLen := len(content) - 16 // Keep last 16 chars in buffer
 				p.askCommanderText.WriteString(content[:safeLen])
 				content = content[safeLen:]
 				p.buffer.Reset()

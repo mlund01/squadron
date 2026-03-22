@@ -742,14 +742,17 @@ func (c *Client) handleGetChatMessages(env *protocol.Envelope) (*protocol.Envelo
 		return nil, fmt.Errorf("get messages: %w", err)
 	}
 
-	messages := make([]protocol.ChatMessageInfo, len(msgs))
-	for i, m := range msgs {
-		messages[i] = protocol.ChatMessageInfo{
+	var messages []protocol.ChatMessageInfo
+	for _, m := range msgs {
+		if m.Role == "system" {
+			continue
+		}
+		messages = append(messages, protocol.ChatMessageInfo{
 			ID:        m.ID,
 			Role:      m.Role,
 			Content:   m.Content,
 			CreatedAt: m.CreatedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
-		}
+		})
 	}
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetChatMessagesResult, &protocol.GetChatMessagesResultPayload{

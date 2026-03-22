@@ -738,8 +738,8 @@ func (s *PgSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, erro
 func (s *PgSessionStore) CreateChatSession(agentName, model string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO sessions (id, role, agent_name, model) VALUES ($1, 'chat', $2, $3)`,
-		id, agentName, model,
+		`INSERT INTO sessions (id, role, agent_name, model, started_at) VALUES ($1, 'chat', $2, $3, $4)`,
+		id, agentName, model, tsNow(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create chat session: %w", err)
@@ -784,12 +784,14 @@ func (s *PgSessionStore) ListChatSessions(agentName string, limit, offset int) (
 	for rows.Next() {
 		var si SessionInfo
 		var agName sql.NullString
-		var startedAtStr string
+		var startedAtStr sql.NullString
 		var finishedAtStr sql.NullString
 		if err := rows.Scan(&si.ID, &si.Role, &agName, &si.Model, &si.Status, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, 0, err
 		}
-		si.StartedAt, _ = tsParse(startedAtStr)
+		if t, _ := tsParseNull(startedAtStr); t != nil {
+			si.StartedAt = *t
+		}
 		if agName.Valid {
 			si.AgentName = agName.String
 		}

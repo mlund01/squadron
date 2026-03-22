@@ -303,6 +303,12 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 	storageConfig.Defaults()
 
+	// Resolve relative SQLite path against config directory
+	if storageConfig.Backend == "sqlite" && !filepath.IsAbs(storageConfig.Path) && len(files) > 0 {
+		configDir := filepath.Dir(files[0])
+		storageConfig.Path = filepath.Join(configDir, storageConfig.Path)
+	}
+
 	// Parse commander block (optional singleton, with vars context)
 	var commanderConfig *CommanderConfig
 	for _, pb := range allParsedBlocks {

@@ -384,10 +384,12 @@ func (c *Client) handleGetMission(env *protocol.Envelope) (*protocol.Envelope, e
 	}
 
 	missionInfo := protocol.MissionRecordInfo{
-		ID:        record.ID,
-		Name:      record.MissionName,
-		Status:    record.Status,
-		StartedAt: record.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+		ID:         record.ID,
+		Name:       record.MissionName,
+		Status:     record.Status,
+		InputsJSON: record.InputValuesJSON,
+		ConfigJSON: record.ConfigJSON,
+		StartedAt:  record.StartedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 	}
 	if record.FinishedAt != nil {
 		s := record.FinishedAt.UTC().Format("2006-01-02T15:04:05.000Z")

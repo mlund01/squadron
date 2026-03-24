@@ -99,9 +99,6 @@ var verifyCmd = &cobra.Command{
 			}
 		}
 
-		// Add plugin warnings to the warnings list
-		warnings = append(warnings, cfg.PluginWarnings...)
-
 		if len(warnings) > 0 {
 			fmt.Printf("\nWarnings:\n")
 			for _, w := range warnings {

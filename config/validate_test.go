@@ -159,8 +159,8 @@ agent "bad_agent" {
 		})
 	})
 
-	Context("plugin warnings with valid config", func() {
-		It("succeeds but populates PluginWarnings", func() {
+	Context("plugin load failure", func() {
+		It("returns error when plugin cannot be loaded", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + minimalAgentHCL() + `
 plugin "missing_plugin" {
   source  = "github.com/fake/plugin"
@@ -168,10 +168,9 @@ plugin "missing_plugin" {
 }
 `
 			dir, _ := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadAndValidate(dir)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.PluginWarnings).NotTo(BeEmpty())
-			Expect(cfg.PluginWarnings[0]).To(ContainSubstring("missing_plugin"))
+			_, err := config.LoadAndValidate(dir)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("missing_plugin"))
 		})
 	})
 

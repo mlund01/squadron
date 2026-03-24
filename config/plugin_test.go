@@ -10,7 +10,7 @@ import (
 var _ = Describe("Plugin", func() {
 
 	Describe("parsing", func() {
-		It("parses a plugin block with source and version", func() {
+		It("returns error when plugin binary is not found", func() {
 			hcl := minimalVarsHCL() + `
 plugin "myplugin" {
   source  = "github.com/example/myplugin"
@@ -18,17 +18,12 @@ plugin "myplugin" {
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Plugins).To(HaveLen(1))
-			Expect(cfg.Plugins[0].Name).To(Equal("myplugin"))
-			Expect(cfg.Plugins[0].Source).To(Equal("github.com/example/myplugin"))
-			Expect(cfg.Plugins[0].Version).To(Equal("v1.0.0"))
-			// Plugin binary won't exist, so expect a warning
-			Expect(cfg.PluginWarnings).NotTo(BeEmpty())
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("myplugin"))
 		})
 
-		It("parses plugin settings block", func() {
+		It("returns error when configured plugin binary is not found", func() {
 			hcl := minimalVarsHCL() + `
 plugin "configured" {
   source  = "github.com/example/configured"
@@ -41,10 +36,9 @@ plugin "configured" {
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Plugins[0].Settings).To(HaveKeyWithValue("headless", "false"))
-			Expect(cfg.Plugins[0].Settings).To(HaveKeyWithValue("port", "8080"))
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("configured"))
 		})
 	})
 

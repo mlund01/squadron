@@ -189,7 +189,7 @@ storage { backend = "sqlite" }
 	})
 
 	Describe("Plugin loading", func() {
-		It("populates PluginWarnings when plugin binary is not found", func() {
+		It("returns error when plugin binary is not found", func() {
 			hcl := minimalVarsHCL() + `
 plugin "nonexistent" {
   source  = "github.com/example/nonexistent"
@@ -197,25 +197,9 @@ plugin "nonexistent" {
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.PluginWarnings).NotTo(BeEmpty())
-			Expect(cfg.LoadedPlugins).To(BeEmpty())
-		})
-
-		It("still loads other config even when plugin fails", func() {
-			hcl := minimalVarsHCL() + minimalModelHCL() + `
-plugin "ghost" {
-  source  = "github.com/example/ghost"
-  version = "v2.0.0"
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Variables).To(HaveLen(1))
-			Expect(cfg.Models).To(HaveLen(1))
-			Expect(cfg.PluginWarnings).NotTo(BeEmpty())
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("nonexistent"))
 		})
 	})
 })

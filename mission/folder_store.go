@@ -8,6 +8,7 @@ import (
 
 	"squadron/aitools"
 	"squadron/config"
+	"squadron/internal/paths"
 )
 
 // missionFolderStore provides folder access for a mission.
@@ -42,7 +43,7 @@ func buildFolderStore(mission *config.Mission, sharedFolders []config.SharedFold
 		if !ok {
 			return nil, fmt.Errorf("shared folder %q not found", name)
 		}
-		absPath, err := filepath.Abs(sf.Path)
+		absPath, err := paths.ResolveFolderPath(sf.Path)
 		if err != nil {
 			return nil, fmt.Errorf("shared folder %q: invalid path: %w", name, err)
 		}
@@ -59,7 +60,7 @@ func buildFolderStore(mission *config.Mission, sharedFolders []config.SharedFold
 
 	// Add dedicated mission folder
 	if mission.Folder != nil {
-		absPath, err := filepath.Abs(mission.Folder.Path)
+		absPath, err := paths.ResolveFolderPath(mission.Folder.Path)
 		if err != nil {
 			return nil, fmt.Errorf("mission folder: invalid path: %w", err)
 		}

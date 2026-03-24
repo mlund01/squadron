@@ -6,14 +6,16 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"squadron/internal/paths"
 )
 
 func GetVarsFilePath() (string, error) {
-	home, err := os.UserHomeDir()
+	sqHome, err := paths.SquadronHome()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".squadron", "vars.txt"), nil
+	return filepath.Join(sqHome, "vars.txt"), nil
 }
 
 func ensureVarsDir() error {

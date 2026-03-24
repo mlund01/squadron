@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/zclconf/go-cty/cty"
 
+	"squadron/internal/paths"
 	"squadron/plugin"
 )
 
@@ -34,8 +35,6 @@ type Config struct {
 
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
-	// PluginWarnings holds warnings for plugins that could not be loaded
-	PluginWarnings []string `hcl:"-"`
 	// ResolvedVars holds the resolved variable values for runtime use
 	ResolvedVars map[string]cty.Value `hcl:"-"`
 }
@@ -43,6 +42,9 @@ type Config struct {
 func Load(path string) (*Config, error) {
 	info, err := os.Stat(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("config path %q does not exist — create a directory with .hcl config files or pass a valid path with -c", path)
+		}
 		return nil, err
 	}
 
@@ -203,6 +205,9 @@ func LoadDir(dir string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	if len(files) == 0 {
+		return nil, fmt.Errorf("no .hcl config files found in %q — add at least one .hcl file with your configuration", dir)
+	}
 	return loadFromFiles(files)
 }
 
@@ -309,6 +314,13 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 	storageConfig.Defaults()
 
+	// When SQUADRON_HOME is set, default SQLite path goes there instead of config dir
+	if storageConfig.Path == ".squadron/store.db" {
+		if sqHome, err := paths.SquadronHome(); err == nil && os.Getenv("SQUADRON_HOME") != "" {
+			storageConfig.Path = filepath.Join(sqHome, "store.db")
+		}
+	}
+
 	// Resolve relative SQLite path against config directory
 	if storageConfig.Backend == "sqlite" && !filepath.IsAbs(storageConfig.Path) && len(files) > 0 {
 		configDir := filepath.Dir(files[0])
@@ -345,7 +357,6 @@ func loadFromFiles(files []string) (*Config, error) {
 
 	// Stage 1.5: Load plugins (with vars context - plugins are simple, load early so tools can reference them)
 	var allPlugins []Plugin
-	var pluginWarnings []string
 	loadedPlugins := make(map[string]*plugin.PluginClient)
 
 	for _, pb := range allParsedBlocks {
@@ -356,21 +367,19 @@ func loadFromFiles(files []string) (*Config, error) {
 			}
 			allPlugins = append(allPlugins, *p)
 
-			// Try to load the plugin (passes source for auto-download if not found locally)
+			// Load the plugin (passes source for auto-download if not found locally)
 			client, err := plugin.LoadPlugin(p.Name, p.Version, p.Source)
 			if err != nil {
-				pluginWarnings = append(pluginWarnings, fmt.Sprintf("plugin '%s' (version %s): %v", p.Name, p.Version, err))
-			} else {
-				// Configure the plugin with settings if any
-				if len(p.Settings) > 0 {
-					if err := client.Configure(p.Settings); err != nil {
-						pluginWarnings = append(pluginWarnings, fmt.Sprintf("plugin '%s' configure: %v", p.Name, err))
-						client.Close()
-						continue
-					}
-				}
-				loadedPlugins[p.Name] = client
+				return nil, fmt.Errorf("plugin '%s' (version %s) failed to load: %w", p.Name, p.Version, err)
 			}
+			// Configure the plugin with settings if any
+			if len(p.Settings) > 0 {
+				if err := client.Configure(p.Settings); err != nil {
+					client.Close()
+					return nil, fmt.Errorf("plugin '%s' failed to configure: %w", p.Name, err)
+				}
+			}
+			loadedPlugins[p.Name] = client
 		}
 	}
 
@@ -478,7 +487,6 @@ func loadFromFiles(files []string) (*Config, error) {
 		Commander:      commanderConfig,
 		SharedFolders:   allSharedFolders,
 		LoadedPlugins:  loadedPlugins,
-		PluginWarnings: pluginWarnings,
 		ResolvedVars:   resolvedVars,
 	}, nil
 }

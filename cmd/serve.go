@@ -16,6 +16,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"squadron/config"
+	"squadron/internal/paths"
 	"squadron/store"
 	"squadron/wsbridge"
 )
@@ -293,11 +294,11 @@ func ensureCommandCenter() (string, error) {
 }
 
 func commandCenterDir() (string, error) {
-	home, err := os.UserHomeDir()
+	sqHome, err := paths.SquadronHome()
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(home, ".squadron", "command-center")
+	dir := filepath.Join(sqHome, "command-center")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}

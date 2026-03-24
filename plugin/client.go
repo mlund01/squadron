@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-plugin"
 
 	"squadron/aitools"
+	"squadron/internal/paths"
 )
 
 // Global plugin registry - plugins are shared across all config loads
@@ -29,11 +30,11 @@ type PluginClient struct {
 
 // GetPluginsDir returns the base directory for plugins
 func GetPluginsDir() (string, error) {
-	home, err := os.UserHomeDir()
+	sqHome, err := paths.SquadronHome()
 	if err != nil {
-		return "", fmt.Errorf("failed to get home directory: %w", err)
+		return "", fmt.Errorf("failed to get squadron home: %w", err)
 	}
-	return filepath.Join(home, ".squadron", "plugins"), nil
+	return filepath.Join(sqHome, "plugins"), nil
 }
 
 // GetPluginPath returns the path to a plugin executable
@@ -122,7 +123,7 @@ func LoadPlugin(name, version, source string) (*PluginClient, error) {
 	provider, err := DispenseToolProvider(client)
 	if err != nil {
 		client.Kill()
-		return nil, fmt.Errorf("failed to dispense plugin: %w", err)
+		return nil, fmt.Errorf("plugin %q (version %s) failed to start at %s: %w\n\nThis can happen if the plugin binary is incompatible with the current platform (e.g., built with glibc but running on Alpine/musl). Try rebuilding the plugin with CGO_ENABLED=0.", name, version, pluginPath, err)
 	}
 
 	pc := &PluginClient{

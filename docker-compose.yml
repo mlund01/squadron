@@ -1,0 +1,14 @@
+services:
+  squadron:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - ./../workflows:/config
+      - squadron-data:/data/squadron
+    command: ["serve", "-c", "/config", "-w", "--cc-port", "8080", "--no-browser"]
+    ports:
+      - "8080:8080"
+
+volumes:
+  squadron-data:

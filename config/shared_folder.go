@@ -3,7 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"squadron/internal/paths"
 )
 
 type SharedFolder struct {
@@ -18,7 +19,7 @@ func (fb *SharedFolder) Validate() error {
 	if fb.Path == "" {
 		return fmt.Errorf("path is required")
 	}
-	absPath, err := filepath.Abs(fb.Path)
+	absPath, err := paths.ResolveFolderPath(fb.Path)
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}

@@ -4,7 +4,7 @@ title: Plugins
 
 # Plugins
 
-Plugins extend Squadron with additional tools via gRPC.
+Plugins extend Squadron with additional tools.
 
 ## Loading Plugins
 
@@ -57,8 +57,6 @@ Squadron includes these built-in plugins (always available):
 | `http` | `get`, `post`, `put`, `patch`, `delete` |
 
 ## Creating Plugins
-
-Plugins use [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) over gRPC.
 
 Use the [squadron-sdk](https://github.com/mlund01/squadron-sdk) to build plugins:
 

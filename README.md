@@ -74,7 +74,7 @@ squadron mission data_pipeline -c ./config
 - **Persistence and resume** — resume interrupted missions from where they failed
 - **Command center** — web UI for running missions, DAG visualization, live monitoring
 - **Multi-provider** — Anthropic, OpenAI, Google Gemini
-- **Plugin system** — extend with gRPC plugins for browser automation, APIs, and custom integrations
+- **Plugin system** — extend with plugins for browser automation, APIs, and custom integrations
 
 ## Providers
 

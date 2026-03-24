@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/mlund01/squadron-sdk/protocol"
+	"github.com/mlund01/squadron-wire/protocol"
 
 	"squadron/config"
 )

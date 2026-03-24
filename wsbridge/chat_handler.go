@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/mlund01/squadron-sdk/protocol"
+	"github.com/mlund01/squadron-wire/protocol"
 )
 
 // WSChatHandler implements streamers.ChatHandler by streaming every chunk

@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/mlund01/squadron-sdk/protocol"
+	"github.com/mlund01/squadron-wire/protocol"
 	"github.com/zclconf/go-cty/cty"
 
 	"squadron/agent/internal/prompts"

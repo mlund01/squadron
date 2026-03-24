@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/mlund01/squadron-sdk/protocol"
+	"github.com/mlund01/squadron-wire/protocol"
 
 	"squadron/agent"
 	"squadron/config"

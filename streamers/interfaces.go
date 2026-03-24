@@ -1,6 +1,6 @@
 package streamers
 
-import "github.com/mlund01/squadron-sdk/protocol"
+import "github.com/mlund01/squadron-wire/protocol"
 
 // ChatHandler defines the interface for handling chat I/O
 // Different implementations can handle stdout/stdin, SSE, websocket, etc.

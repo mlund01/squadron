@@ -5,7 +5,7 @@ import (
 	"squadron/config"
 	"squadron/plugin"
 
-	"github.com/mlund01/squadron-sdk/protocol"
+	"github.com/mlund01/squadron-wire/protocol"
 )
 
 // ConfigToInstanceConfig converts squadron's HCL-based config into a JSON-safe protocol.InstanceConfig.

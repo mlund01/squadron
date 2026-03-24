@@ -11,7 +11,7 @@ import (
 
 	"squadron/store"
 
-	"github.com/mlund01/squadron-sdk/protocol"
+	"github.com/mlund01/squadron-wire/protocol"
 )
 
 // StoringMissionHandler is a MissionHandler decorator that persists every event

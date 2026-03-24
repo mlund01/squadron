@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/hcl/v2"
-	"github.com/mlund01/squadron-sdk/protocol"
+	"github.com/mlund01/squadron-wire/protocol"
 	"github.com/zclconf/go-cty/cty"
 
 	"squadron/agent"

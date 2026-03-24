@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mlund01/squadron-sdk/protocol"
+	"github.com/mlund01/squadron-wire/protocol"
 
 	"squadron/streamers"
 )

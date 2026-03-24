@@ -58,14 +58,14 @@ func (h *WSChatHandler) Thinking() {
 	h.sendChatEvent(protocol.ChatEventThinking, nil)
 }
 
-func (h *WSChatHandler) CallingTool(toolName string, payload string) {
+func (h *WSChatHandler) CallingTool(toolCallId string, toolName string, payload string) {
 	h.sendChatEvent(protocol.ChatEventCallingTool, protocol.ChatToolData{
 		ToolName: toolName,
 		Payload:  payload,
 	})
 }
 
-func (h *WSChatHandler) ToolComplete(toolName string, result string) {
+func (h *WSChatHandler) ToolComplete(toolCallId string, toolName string, result string) {
 	h.sendChatEvent(protocol.ChatEventToolComplete, protocol.ChatToolData{
 		ToolName: toolName,
 		Result:   result,

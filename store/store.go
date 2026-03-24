@@ -49,6 +49,10 @@ type MissionStore interface {
 	GetSubtasks(taskID, sessionID string, iterationIndex *int) ([]Subtask, error)
 	GetSubtasksByTask(taskID string) ([]Subtask, error)
 	CompleteSubtask(taskID, sessionID string, iterationIndex *int) error
+
+	// Route decisions
+	StoreRouteDecision(missionID, routerTask, targetTask, condition string) error
+	GetRouteDecisions(missionID string) ([]RouteDecision, error)
 }
 
 // MissionTask represents a task within a mission run
@@ -108,6 +112,16 @@ type Subtask struct {
 	CompletedAt    *time.Time `json:"completedAt,omitempty"`
 }
 
+// RouteDecision represents a routing decision made during mission execution
+type RouteDecision struct {
+	ID            string    `json:"id"`
+	MissionID     string    `json:"missionId"`
+	RouterTask    string    `json:"routerTask"`
+	TargetTask    string    `json:"targetTask"`
+	ConditionText string    `json:"conditionText"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
 // SessionStore tracks agent/commander sessions and their message history
 type SessionStore interface {
 	CreateSession(taskID, role, agentName, model string, iterationIndex *int) (id string, err error)
@@ -116,7 +130,7 @@ type SessionStore interface {
 	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
 	GetMessages(sessionID string) ([]SessionMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)
-	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
+	StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
 	GetToolResultsByTask(taskID string) ([]ToolResult, error)
 
 	// Chat-specific methods
@@ -142,6 +156,7 @@ type ToolResult struct {
 	ID          string    `json:"id"`
 	TaskID      string    `json:"taskId"`
 	SessionID   string    `json:"sessionId"`
+	ToolCallId  string    `json:"toolCallId"`
 	ToolName    string    `json:"toolName"`
 	InputParams string    `json:"inputParams"`
 	RawData     string    `json:"rawData"`

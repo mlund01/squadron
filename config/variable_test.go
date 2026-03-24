@@ -11,7 +11,7 @@ var _ = Describe("Variable", func() {
 
 	Describe("parsing", func() {
 		It("parses a variable with a default value", func() {
-			_, f := writeFixture("vars.hcl", `variable "app_name" { default = "squadron" }`)
+			_, f := writeFixture("vars.hcl", `variable "app_name" { default = "squadron" }`+minimalStorageHCL)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Variables).To(HaveLen(1))
@@ -21,7 +21,7 @@ var _ = Describe("Variable", func() {
 		})
 
 		It("parses a secret variable without a default", func() {
-			_, f := writeFixture("vars.hcl", `variable "api_key" { secret = true }`)
+			_, f := writeFixture("vars.hcl", `variable "api_key" { secret = true }`+minimalStorageHCL)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Variables).To(HaveLen(1))
@@ -30,7 +30,7 @@ var _ = Describe("Variable", func() {
 		})
 
 		It("parses a variable with no attributes", func() {
-			_, f := writeFixture("vars.hcl", `variable "bare" {}`)
+			_, f := writeFixture("vars.hcl", `variable "bare" {}`+minimalStorageHCL)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Variables[0].Name).To(Equal("bare"))
@@ -43,7 +43,7 @@ var _ = Describe("Variable", func() {
 variable "a" { default = "alpha" }
 variable "b" { default = "beta" }
 variable "c" { secret = true }
-`
+` + minimalStorageHCL
 			_, f := writeFixture("vars.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
@@ -58,7 +58,7 @@ variable "bad_secret" {
   secret  = true
   default = "oops"
 }
-`
+` + minimalStorageHCL
 			_, f := writeFixture("vars.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
@@ -69,7 +69,7 @@ variable "bad_secret" {
 		})
 
 		It("accepts non-secret variable with a default", func() {
-			hcl := `variable "ok_var" { default = "hello" }`
+			hcl := `variable "ok_var" { default = "hello" }` + minimalStorageHCL
 			_, f := writeFixture("vars.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
@@ -77,7 +77,7 @@ variable "bad_secret" {
 		})
 
 		It("accepts secret variable without a default", func() {
-			hcl := `variable "good_secret" { secret = true }`
+			hcl := `variable "good_secret" { secret = true }` + minimalStorageHCL
 			_, f := writeFixture("vars.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())

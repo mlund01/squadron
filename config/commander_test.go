@@ -18,6 +18,10 @@ commander {
   auto_reconnect     = true
   reconnect_interval = 10
 }
+
+storage {
+  backend = "sqlite"
+}
 `
 			_, f := writeFixture("commander.hcl", hcl)
 			cfg, err := config.LoadFile(f)
@@ -34,6 +38,10 @@ commander {
 commander {
   url           = "ws://localhost:8080/ws"
   instance_name = "my-instance"
+}
+
+storage {
+  backend = "sqlite"
 }
 `
 			_, f := writeFixture("commander.hcl", hcl)
@@ -62,6 +70,10 @@ commander {
   url           = vars.commander_url
   instance_name = "staging-worker"
 }
+
+storage {
+  backend = "sqlite"
+}
 `
 			_, f := writeFixture("commander-vars.hcl", hcl)
 			cfg, err := config.LoadFile(f)
@@ -76,6 +88,10 @@ commander {
 			hcl := `
 commander {
   instance_name = "test"
+}
+
+storage {
+  backend = "sqlite"
 }
 `
 			_, f := writeFixture("bad-commander.hcl", hcl)
@@ -92,6 +108,10 @@ commander {
 commander {
   url = "ws://localhost:8080/ws"
 }
+
+storage {
+  backend = "sqlite"
+}
 `
 			_, f := writeFixture("bad-commander.hcl", hcl)
 			cfg, err := config.LoadFile(f)
@@ -107,6 +127,10 @@ commander {
 commander {
   url           = "ws://localhost:8080/ws"
   instance_name = "valid-instance"
+}
+
+storage {
+  backend = "sqlite"
 }
 `
 			_, f := writeFixture("good-commander.hcl", hcl)

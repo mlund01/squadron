@@ -590,6 +590,38 @@ func (s *PgMissionStore) CompleteSubtask(taskID, sessionID string, iterationInde
 	return tx.Commit()
 }
 
+func (s *PgMissionStore) StoreRouteDecision(missionID, routerTask, targetTask, condition string) error {
+	id := generateID()
+	_, err := s.db.Exec(
+		`INSERT INTO route_decisions (id, mission_id, router_task, target_task, condition_text, created_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, missionID, routerTask, targetTask, condition, time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	return err
+}
+
+func (s *PgMissionStore) GetRouteDecisions(missionID string) ([]RouteDecision, error) {
+	rows, err := s.db.Query(
+		`SELECT id, mission_id, router_task, target_task, condition_text, created_at FROM route_decisions WHERE mission_id = $1 ORDER BY created_at`,
+		missionID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var decisions []RouteDecision
+	for rows.Next() {
+		var d RouteDecision
+		var createdAt string
+		if err := rows.Scan(&d.ID, &d.MissionID, &d.RouterTask, &d.TargetTask, &d.ConditionText, &createdAt); err != nil {
+			return nil, err
+		}
+		d.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		decisions = append(decisions, d)
+	}
+	return decisions, rows.Err()
+}
+
 // =============================================================================
 // PgSessionStore
 // =============================================================================
@@ -699,18 +731,18 @@ func (s *PgSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, error)
 	return sessions, nil
 }
 
-func (s *PgSessionStore) StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error {
+func (s *PgSessionStore) StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO tool_results (id, task_id, session_id, tool_name, input_params, raw_data, started_at, finished_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		id, taskID, sessionID, toolName, inputParams, rawData, tsFrom(startedAt), tsFrom(finishedAt),
+		`INSERT INTO tool_results (id, task_id, session_id, tool_call_id, tool_name, input_params, raw_data, started_at, finished_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		id, taskID, sessionID, toolCallId, toolName, inputParams, rawData, tsFrom(startedAt), tsFrom(finishedAt),
 	)
 	return err
 }
 
 func (s *PgSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task_id, session_id, tool_name, input_params, raw_data, started_at, finished_at FROM tool_results WHERE task_id = $1 ORDER BY started_at`,
+		`SELECT id, task_id, session_id, COALESCE(tool_call_id, ''), tool_name, input_params, raw_data, started_at, finished_at FROM tool_results WHERE task_id = $1 ORDER BY started_at`,
 		taskID,
 	)
 	if err != nil {
@@ -723,7 +755,7 @@ func (s *PgSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, erro
 		var tr ToolResult
 		var inputParams, rawData sql.NullString
 		var startedAtStr, finishedAtStr string
-		if err := rows.Scan(&tr.ID, &tr.TaskID, &tr.SessionID, &tr.ToolName, &inputParams, &rawData, &startedAtStr, &finishedAtStr); err != nil {
+		if err := rows.Scan(&tr.ID, &tr.TaskID, &tr.SessionID, &tr.ToolCallId, &tr.ToolName, &inputParams, &rawData, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, err
 		}
 		tr.InputParams = inputParams.String

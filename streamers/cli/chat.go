@@ -67,12 +67,12 @@ func (s *ChatHandler) Thinking() {
 	s.spinner.Start("", "Thinking...")
 }
 
-func (s *ChatHandler) CallingTool(toolName string, payload string) {
+func (s *ChatHandler) CallingTool(toolCallId string, toolName string, payload string) {
 	s.spinner.Stop()
 	s.spinner.Start("", fmt.Sprintf("Calling %s%s%s...", ColorBold, toolName, ColorReset))
 }
 
-func (s *ChatHandler) ToolComplete(toolName string, result string) {
+func (s *ChatHandler) ToolComplete(toolCallId string, toolName string, result string) {
 	s.spinner.Stop()
 	fmt.Printf("%s✓%s %s%s%s called\n\n", ColorGray, ColorReset, ColorBold, toolName, ColorReset)
 }

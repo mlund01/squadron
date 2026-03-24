@@ -22,8 +22,8 @@ func (m *mockStreamer) AwaitClientAnswer() (string, error)  { return "", nil }
 func (m *mockStreamer) Goodbye()                            {}
 func (m *mockStreamer) Error(err error)                     { m.errors = append(m.errors, err) }
 func (m *mockStreamer) Thinking()                           { m.thinkingCalled = true }
-func (m *mockStreamer) CallingTool(name, payload string)    { m.toolCalls = append(m.toolCalls, name) }
-func (m *mockStreamer) ToolComplete(name, result string) {
+func (m *mockStreamer) CallingTool(toolCallId, name, payload string) { m.toolCalls = append(m.toolCalls, name) }
+func (m *mockStreamer) ToolComplete(toolCallId, name, result string) {
 	m.toolResults = append(m.toolResults, name)
 }
 func (m *mockStreamer) PublishReasoningChunk(chunk string) {

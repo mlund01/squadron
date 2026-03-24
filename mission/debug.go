@@ -236,4 +236,5 @@ const (
 	EventAgentLLMEnd         = "agent_llm_end"
 	EventAgentToolCall       = "agent_tool_call"
 	EventAgentToolResult     = "agent_tool_result"
+	EventRouteChosen         = "route_chosen"
 )

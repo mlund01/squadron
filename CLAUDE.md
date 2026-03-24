@@ -111,6 +111,144 @@ mission "example" {
 }
 ```
 
+### Task Connectivity: depends_on, router, and send_to
+
+There are three ways tasks connect to each other. Each serves a different purpose, but they share a common execution model built around the distinction between **static** and **dynamic** task activation.
+
+#### Static activation: `depends_on` (pull)
+
+`depends_on` is the standard way to sequence tasks. A task with `depends_on` waits until **all** listed dependencies complete before it starts. These tasks are part of the **static DAG** — the runner knows about them upfront via topological sort and schedules them automatically.
+
+```hcl
+task "fetch" { objective = "Fetch data" }
+task "process" {
+  depends_on = [tasks.fetch]
+  objective  = "Process fetched data"
+}
+```
+
+- The dependent task **pulls** from its predecessors — it says "I need these done first"
+- Multiple `depends_on` entries are an AND gate: all must complete
+- When a task starts, the runner queries each ancestor's commander for context, giving the new task access to what its predecessors learned
+
+#### Dynamic activation: `router` (conditional push)
+
+A `router` block lets the LLM decide which branch to activate after a task completes. The commander evaluates the route conditions and picks one (or none). This is the **if/else for DAGs**.
+
+```hcl
+task "classify" {
+  objective = "Classify the request"
+  router {
+    route {
+      target    = tasks.handle_billing
+      condition = "The request is about billing"
+    }
+    route {
+      target    = tasks.handle_support
+      condition = "The request is technical support"
+    }
+  }
+}
+task "handle_billing" { objective = "Process billing request" }
+task "handle_support" { objective = "Handle support ticket" }
+```
+
+**Cross-mission routing:** Route targets can reference other missions via `missions.foo` instead of `tasks.foo`. When a mission route is chosen, the current mission completes and the target mission launches as a new instance. The commander provides any required inputs for the target mission via `mission_inputs` in the `task_complete` call. A mission can even route to itself (creates a new instance).
+
+```hcl
+route {
+  target    = missions.escalation_mission
+  condition = "The complaint is severe and needs escalation"
+}
+```
+
+**How it works at runtime (`task_complete` two-phase flow):**
+1. Commander calls `task_complete` → tool returns route options as a JSON list (plus "none"). Mission targets include `required_inputs`.
+2. Commander evaluates options (can call agents for more info first)
+3. Commander calls `task_complete` again with `route` parameter to select a route. For mission targets, also provides `mission_inputs`.
+4. The chosen route's target task is activated (or target mission is launched); unchosen branches never execute
+
+#### Dynamic activation: `send_to` (unconditional push)
+
+`send_to` unconditionally activates target tasks when the source completes. No LLM decision — all targets fire immediately. This is useful for fan-out patterns where every branch should always run.
+
+```hcl
+task "fetch" {
+  objective = "Fetch data"
+  send_to   = [tasks.process_a, tasks.process_b]
+}
+task "process_a" { objective = "Process path A" }
+task "process_b" { objective = "Process path B" }
+```
+
+#### The static/dynamic divide
+
+This is the critical design constraint: tasks are either **statically scheduled** (part of the initial topological sort) or **dynamically activated** (only run when a `router` or `send_to` fires). These two worlds do not mix.
+
+**A dynamically activated task is the root of its own sub-DAG.** It cannot participate in the static dependency graph because:
+
+1. **Dynamic targets cannot have `depends_on`.** If a task is reachable via `router` or `send_to`, it cannot also declare `depends_on`. It starts when activated, not when some other set of tasks completes.
+
+2. **No task can `depends_on` a dynamic target.** If task D declared `depends_on = [tasks.B]` and B is a `send_to` target, D would be in the static topological sort waiting for B. But B only runs if its source completes and activates it — if B is never activated, D hangs forever. So this is a validation error.
+
+3. **`router` and `send_to` are mutually exclusive on a task.** A task pushes work either conditionally (router) or unconditionally (send_to), not both.
+
+**Why this matters:** The graph is a collection of sub-DAGs. The static DAG runs from topological sort. Each `router` or `send_to` edge is a bridge that spawns a new sub-DAG at runtime. These sub-DAGs are independent — they can chain further via their own `router` or `send_to`, but nothing in the static graph can wait on them.
+
+#### First-one-wins
+
+A dynamic target can be referenced by **multiple** routers or send_to sources. The first activation wins — once a task starts or completes, subsequent activations are silently ignored. This is safe because tasks run at most once.
+
+```hcl
+# Both classifiers can route to shared_handler — whichever fires first activates it
+task "classify_a" {
+  objective = "Classify stream A"
+  router {
+    route { target = tasks.shared_handler; condition = "Needs handling" }
+  }
+}
+task "classify_b" {
+  objective = "Classify stream B"
+  router {
+    route { target = tasks.shared_handler; condition = "Needs handling" }
+  }
+}
+task "shared_handler" { objective = "Handle the request" }
+```
+
+#### Ancestor context for dynamic tasks
+
+When a dynamically activated task starts, the runner treats the activating task as its parent for context purposes. The `getDependencyChain()` function follows `routerParents` links, so a routed-to task gets access to the **full ancestry** of the task that activated it — the same depth of context as if it had `depends_on`.
+
+#### Validation summary
+
+| Rule | Enforced in |
+|------|-------------|
+| No cycles (depends_on + router + send_to edges combined) | `ValidateDAG()` |
+| Dynamic targets cannot have `depends_on` | `Mission.Validate()` |
+| No task can `depends_on` a dynamic target | `Mission.Validate()` |
+| `router` and `send_to` mutually exclusive | `Task.Validate()` |
+| No self-routing / self-send | `Task.Validate()` |
+| No duplicate targets within a router or send_to | `Task.Validate()` |
+| Router targets must exist (task or mission) | `Task.Validate()` |
+| Mission route targets must reference valid missions | `Task.Validate()` |
+| Send_to targets must exist | `Task.Validate()` |
+| Parallel iterators cannot have a router | `Task.Validate()` |
+| At least one task can start (no deps, not router-only) | `Mission.Validate()` |
+
+#### Iterator interaction
+
+- **Parallel iterators** cannot have a `router` (each iteration is independent — there's no single decision point)
+- **Sequential iterators** can have a `router` — the route is evaluated after the final iteration completes
+- Both parallel and sequential iterators can use `send_to` — targets activate after the iteration completes
+
+#### Persistence and resume
+
+Route decisions (both `router` choices and `send_to` activations) are persisted to the `route_decisions` table. On resume:
+1. Route decisions are loaded to reconstruct `routerParents` (which task activated which)
+2. Incomplete dynamic targets are re-queued for execution
+3. The activating task's commander is resaturated so the dynamic target can query it for context
+
 ---
 
 ## LLM Provider Abstraction (llm/)
@@ -198,19 +336,22 @@ Missions orchestrate multi-agent task execution with dependency management.
 
 ### Execution Flow
 
-1. **Runner** resolves task dependencies (topological sort)
-2. **Tasks** execute in parallel when dependencies are satisfied
+1. **Runner** resolves task dependencies (topological sort), filtering out dynamically-activated tasks (router/send_to targets with no `depends_on`)
+2. **Static tasks** execute in parallel when all `depends_on` dependencies are satisfied
 3. **Commander** manages each task:
-   - Queries ancestor commanders for context (`queryAncestorsForContext`)
+   - Queries ancestor commanders for context (`queryAncestorsForContext`) — ancestors include `depends_on` parents and the `routerParent` that activated it
    - Delegates work to agents via `call_agent` tool
    - Produces structured output via `<OUTPUT>` blocks
-4. **Agents** execute ReAct loops:
+   - If task has a `router`, `task_complete` triggers two-phase route selection
+4. **Dynamic activation**: After a task completes, its `send_to` targets are immediately queued. If it chose a route, the route target is queued. (See "Task Connectivity" in HCL Config section for full rules.)
+5. **Agents** execute ReAct loops:
    - Reason → Act (tool call) → Observe (tool result) → Repeat
    - Return final answer or ask commander for input (`ASK_COMMANDER`)
 
 ### Task Dependencies & Context Passing
 
-- Tasks declare `depends_on = [tasks.previous_task]`
+- Static dependencies: `depends_on = [tasks.previous_task]` — task waits for all listed tasks
+- Dynamic dependencies: `router`/`send_to` targets get the activating task as their ancestor
 - When a task starts, Runner queries each ancestor commander with the new task's objective
 - Ancestors provide targeted context based on what they learned
 - Structured outputs are stored in KnowledgeStore for `query_task_output` queries
@@ -247,6 +388,7 @@ task "process" {
 | `ask_agent` | Query a completed agent for follow-up information |
 | `ask_commander` | Query a dependency task's commander for more context |
 | `query_task_output` | Access structured outputs from completed tasks |
+| `task_complete` | Signal task completion; triggers routing flow if task has a router |
 | `list_commander_questions` | See questions asked by other iterations (parallel dedup) |
 | `get_commander_answer` | Get cached answer from shared question store |
 
@@ -309,6 +451,7 @@ Creates a debug directory: `debug/<mission>_<timestamp>/`
 - `iteration_started`, `iteration_completed`
 - `agent_started`, `agent_completed`
 - `tool_call`, `tool_result`
+- `route_chosen`
 
 ---
 
@@ -320,15 +463,17 @@ Mission state is persisted to SQLite (`.squadron/store.db`) during execution:
 - **Tasks**: Status, output JSON, summaries
 - **Sessions**: Commander and agent LLM conversation histories
 - **Datasets**: Items stored for resume
+- **Route decisions**: Router task, target task, condition (for resume)
 
 ### Resume Flow
 
 When `--resume <missionID>` is used:
 
 1. Runner loads the stored mission record and identifies completed/pending tasks
-2. Completed tasks are "resaturated" — their commanders are rebuilt from stored sessions so downstream tasks can query them via `ask_commander`
-3. Pending/failed tasks resume from stored session state using `ContinueStream` (if LLM was interrupted) or by re-executing the interrupted tool call
-4. Agent sessions are healed via `HealSessionMessages()` — if the last message was an in-flight tool call, a placeholder observation is injected
+2. Route decisions are loaded from store to reconstruct `routerParents` and re-queue pending router-activated tasks
+3. Completed tasks are "resaturated" — their commanders are rebuilt from stored sessions so downstream tasks can query them via `ask_commander`
+4. Pending/failed tasks resume from stored session state using `ContinueStream` (if LLM was interrupted) or by re-executing the interrupted tool call
+5. Agent sessions are healed via `HealSessionMessages()` — if the last message was an in-flight tool call, a placeholder observation is injected
 
 ### Key Types
 

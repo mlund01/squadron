@@ -46,6 +46,9 @@ model "anthropic" {
   allowed_models = ["claude_sonnet_4"]
   api_key        = vars.key
 }
+storage {
+  backend = "sqlite"
+}
 `
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
@@ -60,6 +63,9 @@ model "test" {
   provider       = "openai"
   allowed_models = ["gpt_4o"]
   api_key        = vars.mykey
+}
+storage {
+  backend = "sqlite"
 }
 `
 			_, f := writeFixture("config.hcl", hcl)

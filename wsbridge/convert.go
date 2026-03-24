@@ -70,6 +70,7 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 				Name:      t.Name,
 				Objective: t.RawObjective,
 				DependsOn: t.DependsOn,
+				SendTo:    t.SendTo,
 			}
 			if len(t.Agents) > 0 {
 				ti.Agent = t.Agents[0]
@@ -81,6 +82,17 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 					MaxRetries:       t.Iterator.MaxRetries,
 					ConcurrencyLimit: t.Iterator.ConcurrencyLimit,
 				}
+			}
+			if t.Router != nil {
+				ri := &protocol.TaskRouterInfo{}
+				for _, route := range t.Router.Routes {
+					ri.Routes = append(ri.Routes, protocol.TaskRouteInfo{
+						Target:    route.Target,
+						Condition: route.Condition,
+						IsMission: route.IsMission,
+					})
+				}
+				ti.Router = ri
 			}
 			mi.Tasks = append(mi.Tasks, ti)
 		}

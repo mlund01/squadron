@@ -251,24 +251,26 @@ func (h *StoringMissionHandler) CommanderAnswer(taskName string, content string)
 	h.inner.CommanderAnswer(taskName, content)
 }
 
-func (h *StoringMissionHandler) CommanderCallingTool(taskName string, toolName string, input string) {
+func (h *StoringMissionHandler) CommanderCallingTool(taskName string, toolCallId string, toolName string, input string) {
 	sessionKey := taskName + ":commander"
 	h.storeEvent(protocol.EventCommanderCallingTool, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderCallingToolData{
-		TaskName: taskName,
-		ToolName: toolName,
-		Input:    input,
+		TaskName:   taskName,
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+		Input:      input,
 	})
-	h.inner.CommanderCallingTool(taskName, toolName, input)
+	h.inner.CommanderCallingTool(taskName, toolCallId, toolName, input)
 }
 
-func (h *StoringMissionHandler) CommanderToolComplete(taskName string, toolName string, result string) {
+func (h *StoringMissionHandler) CommanderToolComplete(taskName string, toolCallId string, toolName string, result string) {
 	sessionKey := taskName + ":commander"
 	h.storeEvent(protocol.EventCommanderToolComplete, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderToolCompleteData{
-		TaskName: taskName,
-		ToolName: toolName,
-		Result:   result,
+		TaskName:   taskName,
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+		Result:     result,
 	})
-	h.inner.CommanderToolComplete(taskName, toolName, result)
+	h.inner.CommanderToolComplete(taskName, toolCallId, toolName, result)
 }
 
 func (h *StoringMissionHandler) Compaction(taskName string, entity string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
@@ -320,6 +322,16 @@ func (h *StoringMissionHandler) AgentCompleted(taskName string, agentName string
 	h.inner.AgentCompleted(taskName, agentName)
 }
 
+func (h *StoringMissionHandler) RouteChosen(routerTask string, targetTask string, condition string, isMission bool) {
+	h.storeEvent(protocol.EventRouteChosen, nil, nil, nil, protocol.RouteChosenData{
+		RouterTask: routerTask,
+		TargetTask: targetTask,
+		Condition:  condition,
+		IsMission:  isMission,
+	})
+	h.inner.RouteChosen(routerTask, targetTask, condition, isMission)
+}
+
 // =============================================================================
 // storingChatHandler — wraps ChatHandler for agent-level events
 // =============================================================================
@@ -355,24 +367,26 @@ func (c *storingChatHandler) Thinking() {
 	c.inner.Thinking()
 }
 
-func (c *storingChatHandler) CallingTool(toolName string, payload string) {
+func (c *storingChatHandler) CallingTool(toolCallId string, toolName string, payload string) {
 	c.parent.storeEvent(protocol.EventAgentCallingTool, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentCallingToolData{
-		TaskName:  c.taskName,
-		AgentName: c.agentName,
-		ToolName:  toolName,
-		Payload:   payload,
+		TaskName:   c.taskName,
+		AgentName:  c.agentName,
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+		Payload:    payload,
 	})
-	c.inner.CallingTool(toolName, payload)
+	c.inner.CallingTool(toolCallId, toolName, payload)
 }
 
-func (c *storingChatHandler) ToolComplete(toolName string, result string) {
+func (c *storingChatHandler) ToolComplete(toolCallId string, toolName string, result string) {
 	c.parent.storeEvent(protocol.EventAgentToolComplete, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentToolCompleteData{
-		TaskName:  c.taskName,
-		AgentName: c.agentName,
-		ToolName:  toolName,
-		Result:    result,
+		TaskName:   c.taskName,
+		AgentName:  c.agentName,
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+		Result:     result,
 	})
-	c.inner.ToolComplete(toolName, result)
+	c.inner.ToolComplete(toolCallId, toolName, result)
 }
 
 func (c *storingChatHandler) PublishReasoningChunk(chunk string) {

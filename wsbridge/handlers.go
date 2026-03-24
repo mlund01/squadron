@@ -112,33 +112,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 	// Run mission in background with cancellable context
 	missionCtx, missionCancel := context.WithCancel(context.Background())
 	go func() {
-		err := runner.Run(missionCtx, storingHandler)
-
-		// Clean up from running missions map
-		mid := wsHandler.MissionID()
-		c.missionMu.Lock()
-		delete(c.runningMissions, mid)
-		c.missionMu.Unlock()
-
-		if err != nil {
-			log.Printf("Mission %q failed: %v", payload.MissionName, err)
-			status := "failed"
-			if missionCtx.Err() != nil {
-				status = "stopped"
-			}
-			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
-				MissionID: mid,
-				Status:    status,
-				Error:     err.Error(),
-			})
-			c.SendEvent(completeEnv)
-		} else {
-			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
-				MissionID: mid,
-				Status:    "completed",
-			})
-			c.SendEvent(completeEnv)
-		}
+		c.runMissionChain(missionCtx, missionCancel, runner, storingHandler, wsHandler, payload.MissionName)
 	}()
 
 	// Wait for the mission ID (set when Runner calls MissionStarted after creating the mission in the DB)
@@ -510,6 +484,7 @@ func (c *Client) handleGetTaskDetail(env *protocol.Envelope) (*protocol.Envelope
 		toolResultInfos[i] = protocol.ToolResultDTO{
 			ID:          tr.ID,
 			SessionID:   tr.SessionID,
+			ToolCallId:  tr.ToolCallId,
 			ToolName:    tr.ToolName,
 			InputParams: tr.InputParams,
 			Output:      tr.RawData,
@@ -1193,4 +1168,73 @@ func (c *Client) handleDeleteVariable(env *protocol.Envelope) (*protocol.Envelop
 	return protocol.NewResponse(env.RequestID, protocol.TypeDeleteVariableResult, &protocol.DeleteVariableResultPayload{
 		Success: true,
 	})
+}
+
+// runMissionChain runs a mission and, if it routes to another mission, chains into that mission.
+func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc, runner *mission.Runner, storingHandler *streamers.StoringMissionHandler, wsHandler *WSMissionHandler, missionName string) {
+	for {
+		err := runner.Run(ctx, storingHandler)
+
+		mid := wsHandler.MissionID()
+		c.missionMu.Lock()
+		delete(c.runningMissions, mid)
+		c.missionMu.Unlock()
+
+		if err != nil {
+			log.Printf("Mission %q failed: %v", missionName, err)
+			status := "failed"
+			if ctx.Err() != nil {
+				status = "stopped"
+			}
+			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
+				MissionID: mid,
+				Status:    status,
+				Error:     err.Error(),
+			})
+			c.SendEvent(completeEnv)
+			return
+		}
+
+		// Send completion for this mission
+		completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
+			MissionID: mid,
+			Status:    "completed",
+		})
+		c.SendEvent(completeEnv)
+
+		// Check for cross-mission routing
+		nextMission := runner.NextMission()
+		if nextMission == "" {
+			return
+		}
+
+		// Chain into the next mission
+		log.Printf("Mission %q routed to mission %q", missionName, nextMission)
+		missionName = nextMission
+		inputs := runner.NextMissionInputs()
+
+		cfg := c.getConfig()
+		debugLogger, _ := mission.NewDebugLogger("")
+		var newErr error
+		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, mission.WithDebugLogger(debugLogger))
+		if newErr != nil {
+			log.Printf("Failed to create runner for chained mission %q: %v", nextMission, newErr)
+			return
+		}
+
+		wsHandler = NewWSMissionHandler(c)
+		storingHandler = streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+
+		// Wait for mission ID in a separate goroutine — we need it to track the running mission
+		go func() {
+			chainedMID, err := wsHandler.WaitForMissionID(30 * time.Second)
+			if err != nil {
+				log.Printf("Chained mission %q failed to start: %v", nextMission, err)
+				return
+			}
+			c.missionMu.Lock()
+			c.runningMissions[chainedMID] = cancel
+			c.missionMu.Unlock()
+		}()
+	}
 }

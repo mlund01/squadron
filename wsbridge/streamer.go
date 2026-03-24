@@ -190,19 +190,21 @@ func (h *WSMissionHandler) CommanderAnswer(taskName string, content string) {
 	})
 }
 
-func (h *WSMissionHandler) CommanderCallingTool(taskName string, toolName string, input string) {
+func (h *WSMissionHandler) CommanderCallingTool(taskName string, toolCallId string, toolName string, input string) {
 	h.sendEvent(protocol.EventCommanderCallingTool, protocol.CommanderCallingToolData{
-		TaskName: taskName,
-		ToolName: toolName,
-		Input:    input,
+		TaskName:   taskName,
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+		Input:      input,
 	})
 }
 
-func (h *WSMissionHandler) CommanderToolComplete(taskName string, toolName string, result string) {
+func (h *WSMissionHandler) CommanderToolComplete(taskName string, toolCallId string, toolName string, result string) {
 	h.sendEvent(protocol.EventCommanderToolComplete, protocol.CommanderToolCompleteData{
-		TaskName: taskName,
-		ToolName: toolName,
-		Result:   result,
+		TaskName:   taskName,
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+		Result:     result,
 	})
 }
 
@@ -243,6 +245,15 @@ func (h *WSMissionHandler) AgentCompleted(taskName string, agentName string) {
 	})
 }
 
+func (h *WSMissionHandler) RouteChosen(routerTask string, targetTask string, condition string, isMission bool) {
+	h.sendEvent(protocol.EventRouteChosen, protocol.RouteChosenData{
+		RouterTask: routerTask,
+		TargetTask: targetTask,
+		Condition:  condition,
+		IsMission:  isMission,
+	})
+}
+
 // =============================================================================
 // wsChatHandler — WebSocket ChatHandler for agent events
 // =============================================================================
@@ -270,21 +281,23 @@ func (c *wsChatHandler) Thinking() {
 	})
 }
 
-func (c *wsChatHandler) CallingTool(toolName string, payload string) {
+func (c *wsChatHandler) CallingTool(toolCallId string, toolName string, payload string) {
 	c.parent.sendEvent(protocol.EventAgentCallingTool, protocol.AgentCallingToolData{
-		TaskName:  c.taskName,
-		AgentName: c.agentName,
-		ToolName:  toolName,
-		Payload:   payload,
+		TaskName:   c.taskName,
+		AgentName:  c.agentName,
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+		Payload:    payload,
 	})
 }
 
-func (c *wsChatHandler) ToolComplete(toolName string, result string) {
+func (c *wsChatHandler) ToolComplete(toolCallId string, toolName string, result string) {
 	c.parent.sendEvent(protocol.EventAgentToolComplete, protocol.AgentToolCompleteData{
-		TaskName:  c.taskName,
-		AgentName: c.agentName,
-		ToolName:  toolName,
-		Result:    result,
+		TaskName:   c.taskName,
+		AgentName:  c.agentName,
+		ToolCallId: toolCallId,
+		ToolName:   toolName,
+		Result:     result,
 	})
 }
 

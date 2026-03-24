@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mlund01/squadron-sdk/protocol"
 
 	"squadron/aitools"
@@ -228,13 +229,14 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		actionInput := parser.GetActionInput()
 
 		// Log with placeholder version (secrets not exposed in logs)
-		o.streamer.CallingTool(action, actionInput)
+		tcID := uuid.New().String()
+		o.streamer.CallingTool(tcID, action, actionInput)
 
 		// Inject secrets before tool execution
 		injectedInput, secretErr := o.secretInjector.Inject(actionInput)
 		if secretErr != nil {
 			errMsg := fmt.Sprintf("Error: %v", secretErr)
-			o.streamer.ToolComplete(action, errMsg)
+			o.streamer.ToolComplete(tcID, action, errMsg)
 			currentTextInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
 			continue
 		}
@@ -243,7 +245,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		tool := o.lookupTool(action)
 		if tool == nil {
 			errMsg := fmt.Sprintf("Error: Tool '%s' not found", action)
-			o.streamer.ToolComplete(action, errMsg)
+			o.streamer.ToolComplete(tcID, action, errMsg)
 			currentTextInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
 			continue
 		}
@@ -267,13 +269,13 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 		// Persist tool result for auditing
 		if o.sessionLogger != nil && o.sessionID != "" {
-			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, action, actionInput, result, toolStart, time.Now())
+			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, tcID, action, actionInput, result, toolStart, time.Now())
 		}
 
 		// Format observation (may intercept/truncate large results)
 		var observationContent string
 		currentTextInput, currentImageInput, observationContent = o.formatObservation(action, result)
-		o.streamer.ToolComplete(action, observationContent)
+		o.streamer.ToolComplete(tcID, action, observationContent)
 
 	}
 

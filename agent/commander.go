@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/mlund01/squadron-sdk/protocol"
 	"github.com/zclconf/go-cty/cty"
 
@@ -74,6 +75,8 @@ type CommanderOptions struct {
 	PruneOn int
 	// PruneTo reduces conversation to this many turns when pruning triggers
 	PruneTo int
+	// Routes contains conditional routing options for this task (nil if no router)
+	Routes []aitools.RouteOption
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -243,15 +246,15 @@ type SessionLogger interface {
 	CompleteSession(id string, err error)
 	ReopenSession(id string)
 	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
-	StoreToolResult(taskID, sessionID, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
+	StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
 }
 
 // CommanderStreamer is the interface for streaming commander events
 type CommanderStreamer interface {
 	Reasoning(content string)
 	Answer(content string)
-	CallingTool(name, input string)
-	ToolComplete(name string, result string)
+	CallingTool(toolCallId, name, input string)
+	ToolComplete(toolCallId, name string, result string)
 	Compaction(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 	SessionTurn(data protocol.SessionTurnData)
 }
@@ -434,7 +437,9 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	}
 
 	// Register task_complete tool (always available)
-	sup.taskComplete = &aitools.TaskCompleteTool{}
+	sup.taskComplete = &aitools.TaskCompleteTool{
+		Routes: opts.Routes,
+	}
 	sup.tools["task_complete"] = sup.taskComplete
 
 	// If there's previous iteration output (sequential iterations), inject it
@@ -777,6 +782,21 @@ func (s *Commander) TaskFailureReason() string {
 	return s.taskComplete.FailureReason()
 }
 
+// ChosenRoute returns the route chosen by the commander, or "" if none.
+func (s *Commander) ChosenRoute() string {
+	return s.taskComplete.ChosenRoute()
+}
+
+// IsMissionRoute returns true if the chosen route targets a mission.
+func (s *Commander) IsMissionRoute() bool {
+	return s.taskComplete.IsMissionRoute()
+}
+
+// MissionInputs returns the inputs provided for a mission route, or nil.
+func (s *Commander) MissionInputs() map[string]string {
+	return s.taskComplete.MissionInputs()
+}
+
 // HasSequentialDataset returns true if this commander is processing a sequential dataset
 func (s *Commander) HasSequentialDataset() bool {
 	return s.datasetCursor != nil
@@ -891,16 +911,17 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 		if tool == nil {
 			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found.\n</OBSERVATION>", action)
 		} else {
-			streamer.CallingTool(action, actionInput)
+			tcID := uuid.New().String()
+			streamer.CallingTool(tcID, action, actionInput)
 			toolStart := time.Now()
 			result := tool.Call(actionInput)
 
 			var observationContent string
 			currentInput, observationContent = s.formatObservation(action, result)
-			streamer.ToolComplete(action, observationContent)
+			streamer.ToolComplete(tcID, action, observationContent)
 
 			if s.sessionLogger != nil && s.sessionID != "" {
-				s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result, toolStart, time.Now())
+				s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, tcID, action, actionInput, result, toolStart, time.Now())
 			}
 		}
 	} else {
@@ -1069,7 +1090,8 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		}
 
 		actionInput := parser.GetActionInput()
-		streamer.CallingTool(action, actionInput)
+		tcID := uuid.New().String()
+		streamer.CallingTool(tcID, action, actionInput)
 
 		// Log tool call event
 		if s.debugLogger != nil {
@@ -1084,7 +1106,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		tool := s.tools[action]
 		if tool == nil {
 			errMsg := fmt.Sprintf("Error: Tool '%s' not found. Available tools: call_agent, ask_agent", action)
-			streamer.ToolComplete(action, errMsg)
+			streamer.ToolComplete(tcID, action, errMsg)
 			currentInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
 			continue
 		}
@@ -1096,7 +1118,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		// Format observation (may intercept/truncate large results)
 		var observationContent string
 		currentInput, observationContent = s.formatObservation(action, result)
-		streamer.ToolComplete(action, observationContent)
+		streamer.ToolComplete(tcID, action, observationContent)
 
 		// Log tool result event
 		if s.debugLogger != nil {
@@ -1110,7 +1132,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 		// Persist tool result for auditing
 		if s.sessionLogger != nil && s.sessionID != "" {
-			s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, action, actionInput, result, toolStart, time.Now())
+			s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, tcID, action, actionInput, result, toolStart, time.Now())
 		}
 
 		// Check if task_complete was called

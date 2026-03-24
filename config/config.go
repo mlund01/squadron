@@ -157,9 +157,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Build mission names set for cross-mission route validation
+	allMissionNames := make(map[string]bool, len(c.Missions))
+	for _, m := range c.Missions {
+		allMissionNames[m.Name] = true
+	}
+
 	// Validate missions
 	for _, w := range c.Missions {
-		if err := w.Validate(c.Models, c.Agents, c.SharedFolders); err != nil {
+		if err := w.Validate(c.Models, c.Agents, c.SharedFolders, allMissionNames); err != nil {
 			return fmt.Errorf("mission '%s': %w", w.Name, err)
 		}
 	}
@@ -430,10 +436,30 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 
 	// Stage 5: Load missions (with vars + models + tools + agents + shared_folders context)
+	// First pass: collect all mission names so router targets can reference missions.*
+	missionNames := make(map[string]cty.Value)
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.Missions {
+			if len(block.Labels) > 0 {
+				missionNames[block.Labels[0]] = cty.StringVal(block.Labels[0])
+			}
+		}
+	}
+	missionsCtx := &hcl.EvalContext{
+		Variables: make(map[string]cty.Value),
+	}
+	for k, v := range agentsCtx.Variables {
+		missionsCtx.Variables[k] = v
+	}
+	if len(missionNames) > 0 {
+		missionsCtx.Variables["missions"] = cty.ObjectVal(missionNames)
+	}
+
+	// Second pass: parse missions with missions context available
 	var allMissions []Mission
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Missions {
-			mission, err := parseMissionBlock(block, agentsCtx)
+			mission, err := parseMissionBlock(block, missionsCtx)
 			if err != nil {
 				return nil, err
 			}
@@ -1243,10 +1269,12 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			{Name: "objective", Required: true},
 			{Name: "agents"},    // Optional - uses mission-level agents if not specified
 			{Name: "depends_on"},
+			{Name: "send_to"},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "iterator"},
 			{Type: "output"},
+			{Type: "router"},
 		},
 	})
 	if diags.HasErrors() {
@@ -1290,6 +1318,19 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		}
 	}
 
+	// Get send_to (optional array of task references)
+	var sendTo []string
+	if sendToAttr, ok := taskContent.Attributes["send_to"]; ok {
+		sendToVal, diags := sendToAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s': %w", taskName, diags)
+		}
+		for it := sendToVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			sendTo = append(sendTo, v.AsString())
+		}
+	}
+
 	// Parse iterator block if present
 	var iterator *TaskIterator
 	for _, iterBlock := range taskContent.Blocks {
@@ -1316,6 +1357,19 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		}
 	}
 
+	// Parse router block if present
+	var router *TaskRouter
+	for _, routerBlock := range taskContent.Blocks {
+		if routerBlock.Type == "router" {
+			r, err := parseRouterBlock(routerBlock, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("task '%s': %w", taskName, err)
+			}
+			router = r
+			break
+		}
+	}
+
 	// Validate: sequential iterator tasks must not reference `item` in their objective.
 	// The commander receives item data via the dataset_next tool, not through the objective.
 	if iterator != nil && !iterator.Parallel {
@@ -1332,8 +1386,10 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		RawObjective:  rawObjective,
 		Agents:        agents,
 		DependsOn:     dependsOn,
+		SendTo:        sendTo,
 		Iterator:      iterator,
 		Output:        output,
+		Router:        router,
 	}, nil
 }
 
@@ -1365,6 +1421,60 @@ func parseOutputBlock(block *hcl.Block) (*OutputSchema, error) {
 		})
 	}
 	return output, nil
+}
+
+// parseRouterBlock parses a router block containing route sub-blocks
+func parseRouterBlock(block *hcl.Block, ctx *hcl.EvalContext) (*TaskRouter, error) {
+	routerContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "route"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("router: %w", diags)
+	}
+
+	router := &TaskRouter{}
+	for _, routeBlock := range routerContent.Blocks {
+		if routeBlock.Type != "route" {
+			continue
+		}
+		routeContent, _, diags := routeBlock.Body.PartialContent(&hcl.BodySchema{
+			Attributes: []hcl.AttributeSchema{
+				{Name: "target", Required: true},
+				{Name: "condition", Required: true},
+			},
+		})
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("route: %w", diags)
+		}
+
+		targetVal, diags := routeContent.Attributes["target"].Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("route target: %w", diags)
+		}
+		conditionVal, diags := routeContent.Attributes["condition"].Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("route condition: %w", diags)
+		}
+
+		// Detect if the target references a mission (missions.foo) vs a task (tasks.foo)
+		isMission := false
+		for _, traversal := range routeContent.Attributes["target"].Expr.Variables() {
+			if traversal.RootName() == "missions" {
+				isMission = true
+				break
+			}
+		}
+
+		router.Routes = append(router.Routes, TaskRoute{
+			Target:    targetVal.AsString(),
+			Condition: conditionVal.AsString(),
+			IsMission: isMission,
+		})
+	}
+
+	return router, nil
 }
 
 // parsePluginBlock parses a plugin block with optional settings

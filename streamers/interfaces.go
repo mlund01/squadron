@@ -21,10 +21,10 @@ type ChatHandler interface {
 	Thinking()
 
 	// CallingTool is called when the agent invokes a tool
-	CallingTool(toolName string, payload string)
+	CallingTool(toolCallId string, toolName string, payload string)
 
 	// ToolComplete is called when a tool finishes execution, with the observation result fed to the LLM
-	ToolComplete(toolName string, result string)
+	ToolComplete(toolCallId string, toolName string, result string)
 
 	// PublishReasoningChunk is called for each chunk of the REASONING as it streams
 	PublishReasoningChunk(chunk string)
@@ -65,8 +65,8 @@ type MissionHandler interface {
 	// Commander events
 	CommanderReasoning(taskName string, content string)
 	CommanderAnswer(taskName string, content string)
-	CommanderCallingTool(taskName string, toolName string, input string)
-	CommanderToolComplete(taskName string, toolName string, result string)
+	CommanderCallingTool(taskName string, toolCallId string, toolName string, input string)
+	CommanderToolComplete(taskName string, toolCallId string, toolName string, result string)
 
 	// Compaction events (context window compacted)
 	Compaction(taskName string, entity string, inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
@@ -78,6 +78,9 @@ type MissionHandler interface {
 	AgentStarted(taskName string, agentName string)
 	AgentHandler(taskName string, agentName string) ChatHandler
 	AgentCompleted(taskName string, agentName string)
+
+	// Routing events
+	RouteChosen(routerTask string, targetTask string, condition string, isMission bool)
 }
 
 // IDRegistrar is an optional interface that MissionHandler implementations can

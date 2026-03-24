@@ -13,7 +13,9 @@ var _ = Describe("Config Loading", func() {
 
 	Describe("Load", func() {
 		It("routes to LoadFile for a file path", func() {
-			_, f := writeFixture("vars.hcl", `variable "x" { default = "val" }`)
+			_, f := writeFixture("vars.hcl", `variable "x" { default = "val" }
+storage { backend = "sqlite" }
+`)
 			cfg, err := config.Load(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Variables).To(HaveLen(1))
@@ -65,7 +67,9 @@ model "test" {
 	Describe("LoadDir", func() {
 		It("loads all .hcl files from the directory", func() {
 			dir := writeFixtures(map[string]string{
-				"variables.hcl": `variable "v1" { default = "a" }`,
+				"variables.hcl": `variable "v1" { default = "a" }
+storage { backend = "sqlite" }
+`,
 				"models.hcl": `
 variable "k" { default = "key" }
 model "m1" {
@@ -82,25 +86,24 @@ model "m1" {
 
 		It("ignores non-.hcl files", func() {
 			dir := writeFixtures(map[string]string{
-				"config.hcl":    `variable "x" { default = "y" }`,
-				"readme.txt":    `This is not HCL`,
-				"data.json":     `{"key": "value"}`,
+				"config.hcl": `variable "x" { default = "y" }
+storage { backend = "sqlite" }
+`,
+				"readme.txt": `This is not HCL`,
+				"data.json":  `{"key": "value"}`,
 			})
 			cfg, err := config.LoadDir(dir)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Variables).To(HaveLen(1))
 		})
 
-		It("returns empty config for directory with no .hcl files", func() {
+		It("returns error for directory with no .hcl files", func() {
 			dir := GinkgoT().TempDir()
 			// Write a non-HCL file so the dir isn't completely empty
 			err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("hello"), 0644)
 			Expect(err).NotTo(HaveOccurred())
-			cfg, err := config.LoadDir(dir)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Variables).To(BeEmpty())
-			Expect(cfg.Models).To(BeEmpty())
-			Expect(cfg.Agents).To(BeEmpty())
+			_, err = config.LoadDir(dir)
+			Expect(err).To(HaveOccurred())
 		})
 	})
 
@@ -108,6 +111,7 @@ model "m1" {
 		It("resolves variable references in model blocks", func() {
 			hcl := `
 variable "my_key" { default = "resolved-api-key" }
+storage { backend = "sqlite" }
 model "test" {
   provider       = "anthropic"
   allowed_models = ["claude_sonnet_4"]
@@ -173,7 +177,9 @@ mission "m" {
 
 	Describe("ResolvedVars", func() {
 		It("populates ResolvedVars map from variable defaults", func() {
-			hcl := `variable "app_name" { default = "myapp" }`
+			hcl := `variable "app_name" { default = "myapp" }
+storage { backend = "sqlite" }
+`
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())

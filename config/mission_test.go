@@ -291,7 +291,7 @@ mission "no_commander" {
 				m := config.Mission{Name: "empty", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Agents: []string{"a"}}
 				models := []config.Model{{Provider: "anthropic", AllowedModels: []string{"claude_sonnet_4"}}}
 				agents := []config.Agent{{Name: "a"}}
-				err := m.Validate(models, agents, nil)
+				err := m.Validate(models, agents, nil, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("at least one task"))
 			})
@@ -642,6 +642,378 @@ mission "diamond" {
 				_, f := writeFixture("config.hcl", hcl)
 				_, err := config.LoadAndValidate(f)
 				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("Router validation", func() {
+			It("accepts valid router with routes", func() {
+				hcl := fullBaseHCL() + `
+mission "valid_router" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "classify" {
+    objective = "Classify input"
+    router {
+      route {
+        target    = tasks.handle_a
+        condition = "Input is type A"
+      }
+      route {
+        target    = tasks.handle_b
+        condition = "Input is type B"
+      }
+    }
+  }
+  task "handle_a" { objective = "Handle A" }
+  task "handle_b" { objective = "Handle B" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("rejects router target with depends_on", func() {
+				hcl := fullBaseHCL() + `
+mission "bad_router" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "start" { objective = "Start" }
+  task "classify" {
+    objective  = "Classify"
+    depends_on = [tasks.start]
+    router {
+      route {
+        target    = tasks.handle_a
+        condition = "Type A"
+      }
+    }
+  }
+  task "handle_a" {
+    objective  = "Handle A"
+    depends_on = [tasks.start]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("dynamically activated tasks cannot have depends_on"))
+			})
+
+			It("rejects task depending on a router target", func() {
+				hcl := fullBaseHCL() + `
+mission "dep_on_dynamic" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "classify" {
+    objective = "Classify"
+    router {
+      route {
+        target    = tasks.handle_a
+        condition = "Type A"
+      }
+    }
+  }
+  task "handle_a" { objective = "Handle A" }
+  task "after" {
+    objective  = "Runs after handle_a"
+    depends_on = [tasks.handle_a]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("cannot depend on 'handle_a'"))
+				Expect(err.Error()).To(ContainSubstring("dynamically activated"))
+			})
+
+			It("rejects router that creates a cycle", func() {
+				hcl := fullBaseHCL() + `
+mission "router_cycle" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "a" {
+    objective = "A"
+    router {
+      route {
+        target    = tasks.b
+        condition = "Go to B"
+      }
+    }
+  }
+  task "b" {
+    objective = "B"
+    router {
+      route {
+        target    = tasks.a
+        condition = "Go back to A"
+      }
+    }
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("cycle"))
+			})
+
+			It("rejects router with self-route", func() {
+				hcl := fullBaseHCL() + `
+mission "self_route" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "loop" {
+    objective = "Loop"
+    router {
+      route {
+        target    = tasks.loop
+        condition = "Route to self"
+      }
+    }
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("route to itself"))
+			})
+
+			It("rejects router on parallel iterator", func() {
+				hcl := fullBaseHCL() + `
+mission "par_router" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  dataset "items" { description = "Items" }
+  task "work" {
+    objective = "Work"
+    iterator {
+      dataset  = datasets.items
+      parallel = true
+    }
+    router {
+      route {
+        target    = tasks.next
+        condition = "Continue"
+      }
+    }
+  }
+  task "next" { objective = "Next" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("parallel iterators cannot have a router"))
+			})
+
+			It("allows multiple routers targeting the same task", func() {
+				hcl := fullBaseHCL() + `
+mission "multi_router" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "classify_a" {
+    objective = "Classify A"
+    router {
+      route {
+        target    = tasks.shared_handler
+        condition = "Needs shared handling"
+      }
+    }
+  }
+  task "classify_b" {
+    objective = "Classify B"
+    router {
+      route {
+        target    = tasks.shared_handler
+        condition = "Also needs shared handling"
+      }
+    }
+  }
+  task "shared_handler" { objective = "Handle both" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("send_to validation", func() {
+			It("accepts valid send_to", func() {
+				hcl := fullBaseHCL() + `
+mission "valid_sendto" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "start" {
+    objective = "Start"
+    send_to   = [tasks.next_a, tasks.next_b]
+  }
+  task "next_a" { objective = "A" }
+  task "next_b" { objective = "B" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("rejects send_to with self-reference", func() {
+				hcl := fullBaseHCL() + `
+mission "self_send" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "loop" {
+    objective = "Loop"
+    send_to   = [tasks.loop]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("send to itself"))
+			})
+
+			It("rejects send_to combined with router", func() {
+				hcl := fullBaseHCL() + `
+mission "both" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "start" {
+    objective = "Start"
+    send_to   = [tasks.next]
+    router {
+      route {
+        target    = tasks.other
+        condition = "Go other"
+      }
+    }
+  }
+  task "next"  { objective = "Next" }
+  task "other" { objective = "Other" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("both send_to and router"))
+			})
+
+			It("rejects send_to target with depends_on", func() {
+				hcl := fullBaseHCL() + `
+mission "sendto_dep" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "first"  { objective = "First" }
+  task "sender" {
+    objective  = "Sender"
+    depends_on = [tasks.first]
+    send_to    = [tasks.target]
+  }
+  task "target" {
+    objective  = "Target"
+    depends_on = [tasks.first]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("dynamically activated tasks cannot have depends_on"))
+			})
+
+			It("rejects task depending on a send_to target", func() {
+				hcl := fullBaseHCL() + `
+mission "dep_on_sendto" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "sender" {
+    objective = "Send"
+    send_to   = [tasks.dynamic]
+  }
+  task "dynamic" { objective = "Dynamic" }
+  task "bad" {
+    objective  = "Depends on dynamic"
+    depends_on = [tasks.dynamic]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("cannot depend on 'dynamic'"))
+				Expect(err.Error()).To(ContainSubstring("dynamically activated"))
+			})
+
+			It("rejects send_to that creates a cycle", func() {
+				hcl := fullBaseHCL() + `
+mission "sendto_cycle" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "a" {
+    objective = "A"
+    send_to   = [tasks.b]
+  }
+  task "b" {
+    objective = "B"
+    send_to   = [tasks.a]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("cycle"))
 			})
 		})
 	})

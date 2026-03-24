@@ -94,6 +94,12 @@ func (m *mockMissionStore) GetSubtasksByTask(taskID string) ([]store.Subtask, er
 func (m *mockMissionStore) CompleteSubtask(taskID, sessionID string, iterationIndex *int) error {
 	return nil
 }
+func (m *mockMissionStore) StoreRouteDecision(missionID, routerTask, targetTask, condition string) error {
+	return nil
+}
+func (m *mockMissionStore) GetRouteDecisions(missionID string) ([]store.RouteDecision, error) {
+	return nil, nil
+}
 
 // --- Helpers ---
 

@@ -61,6 +61,20 @@ type Runner struct {
 
 	// Folder access for mission
 	folderStore aitools.FolderStore
+
+	// Conditional routing state
+	routerPending []routerActivation   // queue of tasks activated by routers
+	routerParents map[string]string    // taskName → routerTaskName that activated it
+
+	// Cross-mission routing result (set when a router chooses a mission target)
+	nextMission       string            // mission name to launch, or ""
+	nextMissionInputs map[string]string // inputs for the next mission
+}
+
+// routerActivation represents a task activated by a router
+type routerActivation struct {
+	TaskName    string
+	ActivatedBy string
 }
 
 // askCommanderStore holds questions and answers shared across parallel iterations
@@ -95,9 +109,12 @@ func WithResume(missionID string) RunnerOption {
 
 // TaskResult holds the outcome of a completed task
 type TaskResult struct {
-	TaskName string
-	Success  bool
-	Error    error
+	TaskName       string
+	Success        bool
+	Error          error
+	ChosenRoute    string            // non-empty if a route was chosen (task name or mission name)
+	IsMissionRoute bool              // true if ChosenRoute is a mission name
+	MissionInputs  map[string]string // inputs for the mission route (nil for task routes)
 }
 
 // IterationResult holds the outcome of a single iteration
@@ -149,6 +166,7 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		askCommanderStore: &askCommanderStore{
 			questions: make(map[string][]*questionEntry),
 		},
+		routerParents: make(map[string]string),
 	}
 
 	// Apply options (must happen before input/dataset resolution so resumeMissionID is set)
@@ -247,6 +265,16 @@ func (r *Runner) EventStore() store.EventStore {
 	return r.stores.Events
 }
 
+// NextMission returns the mission name to launch as a result of cross-mission routing, or "".
+func (r *Runner) NextMission() string {
+	return r.nextMission
+}
+
+// NextMissionInputs returns the inputs for the next mission to launch, or nil.
+func (r *Runner) NextMissionInputs() map[string]string {
+	return r.nextMissionInputs
+}
+
 // Run executes the mission
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
 	defer r.stores.Close()
@@ -325,6 +353,22 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 			}
 		}
 
+		// Load route decisions to reconstruct router state
+		routeDecisions, err := r.stores.Missions.GetRouteDecisions(missionID)
+		if err != nil {
+			return fmt.Errorf("resume: loading route decisions: %w", err)
+		}
+		for _, rd := range routeDecisions {
+			r.routerParents[rd.TargetTask] = rd.RouterTask
+			// If the routed-to task hasn't completed yet, re-queue it
+			if !completed[rd.TargetTask] {
+				r.routerPending = append(r.routerPending, routerActivation{
+					TaskName:    rd.TargetTask,
+					ActivatedBy: rd.RouterTask,
+				})
+			}
+		}
+
 		// Resaturate commanders for completed tasks (topological order)
 		sortedTasks := r.mission.TopologicalSort()
 		var completedNames []string
@@ -384,8 +428,14 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		})
 	}
 
-	// Get tasks in topological order
-	sortedTasks := r.mission.TopologicalSort()
+	// Get tasks in topological order, excluding router-only tasks
+	allSorted := r.mission.TopologicalSort()
+	var sortedTasks []config.Task
+	for _, t := range allSorted {
+		if !r.mission.IsRouterOnlyTask(t.Name) {
+			sortedTasks = append(sortedTasks, t)
+		}
+	}
 
 	var inFlightMu sync.Mutex
 	inFlight := make(map[string]bool)
@@ -396,8 +446,37 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	// Error channel to collect errors from goroutines
 	errChan := make(chan error, len(sortedTasks))
 
+	// Track total expected tasks (static + dynamically activated via routing)
+	expectedTasks := make(map[string]bool)
+	for _, t := range sortedTasks {
+		expectedTasks[t.Name] = true
+	}
+	// Include already-activated router targets (from resume or prior route decisions)
+	for _, activation := range r.routerPending {
+		expectedTasks[activation.TaskName] = true
+	}
+	// Include already-completed router targets (from resume)
+	for target := range r.routerParents {
+		if completed[target] {
+			expectedTasks[target] = true
+		}
+	}
+
+	// isLoopDone returns true when all expected tasks are completed and no router-activated tasks are pending
+	isLoopDone := func() bool {
+		inFlightMu.Lock()
+		anyInFlight := len(inFlight) > 0
+		inFlightMu.Unlock()
+		for name := range expectedTasks {
+			if !completed[name] {
+				return false
+			}
+		}
+		return !anyInFlight && len(r.routerPending) == 0
+	}
+
 	// Process tasks, launching parallel tasks when their dependencies are met
-	for len(completed) < len(sortedTasks) {
+	for !isLoopDone() {
 		select {
 		case <-ctx.Done():
 			r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
@@ -431,6 +510,26 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 
 			if depsReady {
 				readyTasks = append(readyTasks, task)
+			}
+		}
+
+		// Also check router-activated tasks
+		var pendingCopy []routerActivation
+		pendingCopy = append(pendingCopy, r.routerPending...)
+		r.routerPending = nil
+		for _, activation := range pendingCopy {
+			if completed[activation.TaskName] {
+				continue
+			}
+			inFlightMu.Lock()
+			isInFlight := inFlight[activation.TaskName]
+			inFlightMu.Unlock()
+			if isInFlight {
+				continue
+			}
+			task := r.mission.GetTaskByName(activation.TaskName)
+			if task != nil {
+				readyTasks = append(readyTasks, *task)
 			}
 		}
 
@@ -478,7 +577,95 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 					return
 				}
 
-				_ = result // task status already persisted via UpdateTaskStatus
+				// Handle route activation
+				if task.Router != nil && (result.ChosenRoute == "" || result.ChosenRoute == "none") {
+					// Router chose "none" — emit event so UI can show terminal state
+					streamer.RouteChosen(task.Name, "none", "No route applies", false)
+					if r.debugLogger != nil {
+						r.debugLogger.LogEvent(EventRouteChosen, map[string]any{
+							"router_task": task.Name,
+							"target_task": "none",
+							"condition":   "No route applies",
+						})
+					}
+				}
+				if result.ChosenRoute != "" && result.ChosenRoute != "none" {
+					// Find the route condition for the event
+					var condition string
+					if task.Router != nil {
+						for _, route := range task.Router.Routes {
+							if route.Target == result.ChosenRoute {
+								condition = route.Condition
+								break
+							}
+						}
+					}
+
+					streamer.RouteChosen(task.Name, result.ChosenRoute, condition, result.IsMissionRoute)
+					if r.debugLogger != nil {
+						r.debugLogger.LogEvent(EventRouteChosen, map[string]any{
+							"router_task": task.Name,
+							"target_task": result.ChosenRoute,
+							"condition":   condition,
+							"is_mission":  result.IsMissionRoute,
+						})
+					}
+
+					// Persist the route decision
+					r.stores.Missions.StoreRouteDecision(missionID, task.Name, result.ChosenRoute, condition)
+
+					if result.IsMissionRoute {
+						// Cross-mission route: store the target for the caller to launch
+						r.nextMission = result.ChosenRoute
+						r.nextMissionInputs = result.MissionInputs
+					} else {
+						// Local task route: activate the target task
+						// First-one-wins: only activate if target isn't already completed or in-flight
+						inFlightMu.Lock()
+						alreadyActive := completed[result.ChosenRoute] || inFlight[result.ChosenRoute]
+						inFlightMu.Unlock()
+
+						if !alreadyActive {
+							// Record the router parent and activate the target task
+							r.routerParents[result.ChosenRoute] = task.Name
+							r.routerPending = append(r.routerPending, routerActivation{
+								TaskName:    result.ChosenRoute,
+								ActivatedBy: task.Name,
+							})
+							expectedTasks[result.ChosenRoute] = true
+						}
+					}
+				}
+
+				// Handle send_to activation (unconditional push to targets)
+				if len(task.SendTo) > 0 {
+					for _, target := range task.SendTo {
+						streamer.RouteChosen(task.Name, target, "send_to", false)
+						if r.debugLogger != nil {
+							r.debugLogger.LogEvent(EventRouteChosen, map[string]any{
+								"router_task": task.Name,
+								"target_task": target,
+								"condition":   "send_to",
+							})
+						}
+
+						r.stores.Missions.StoreRouteDecision(missionID, task.Name, target, "send_to")
+
+						// First-one-wins: only activate if target isn't already completed or in-flight
+						inFlightMu.Lock()
+						alreadyActive := completed[target] || inFlight[target]
+						inFlightMu.Unlock()
+
+						if !alreadyActive {
+							r.routerParents[target] = task.Name
+							r.routerPending = append(r.routerPending, routerActivation{
+								TaskName:    target,
+								ActivatedBy: task.Name,
+							})
+							expectedTasks[target] = true
+						}
+					}
+				}
 
 				// Mark as completed
 				inFlightMu.Lock()
@@ -874,6 +1061,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		Compaction:       r.commanderCompaction(),
 		PruneOn:          r.commanderPruneOn(),
 		PruneTo:          r.commanderPruneTo(),
+		Routes:           r.routeOptionsForTask(task),
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -993,12 +1181,12 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		}
 		updateTaskDone(false, nil, &errStr)
 		sup.Close()
-		streamer.TaskFailed(task.Name, fmt.Errorf(errStr))
+		streamer.TaskFailed(task.Name, fmt.Errorf("%s", errStr))
 		return &TaskResult{
 			TaskName: task.Name,
 			Success:  false,
-			Error:    fmt.Errorf(errStr),
-		}, fmt.Errorf(errStr)
+			Error:    fmt.Errorf("%s", errStr),
+		}, fmt.Errorf("%s", errStr)
 	}
 
 	// Store commander for ask_commander queries from dependent tasks
@@ -1019,12 +1207,17 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 
 	streamer.TaskCompleted(task.Name)
 	return &TaskResult{
-		TaskName: task.Name,
-		Success:  true,
+		TaskName:       task.Name,
+		Success:        true,
+		ChosenRoute:    sup.ChosenRoute(),
+		IsMissionRoute: sup.IsMissionRoute(),
+		MissionInputs:  sup.MissionInputs(),
 	}, nil
 }
 
-// getDependencyChain returns all tasks this task depends on (including transitive dependencies)
+// getDependencyChain returns all tasks this task depends on (including transitive dependencies).
+// For router-activated tasks (no depends_on), the routing task is treated as a virtual dependency,
+// giving the routed-to task access to the full DAG ancestry of the router.
 func (r *Runner) getDependencyChain(taskName string) []string {
 	task := r.mission.GetTaskByName(taskName)
 	if task == nil {
@@ -1037,6 +1230,11 @@ func (r *Runner) getDependencyChain(taskName string) []string {
 	queue := make([]string, len(task.DependsOn))
 	copy(queue, task.DependsOn)
 
+	// Include the router parent as a virtual dependency
+	if routerParent, ok := r.routerParents[taskName]; ok {
+		queue = append(queue, routerParent)
+	}
+
 	for len(queue) > 0 {
 		dep := queue[0]
 		queue = queue[1:]
@@ -1048,8 +1246,12 @@ func (r *Runner) getDependencyChain(taskName string) []string {
 
 		depTask := r.mission.GetTaskByName(dep)
 		if depTask != nil {
-			// Add this task's dependencies to the queue
 			queue = append(queue, depTask.DependsOn...)
+		}
+
+		// Also follow router parent links
+		if routerParent, ok := r.routerParents[dep]; ok {
+			queue = append(queue, routerParent)
 		}
 
 		result = append(result, dep)
@@ -1130,12 +1332,12 @@ func (s *commanderStreamerAdapter) Answer(content string) {
 	s.streamer.CommanderAnswer(s.taskName, content)
 }
 
-func (s *commanderStreamerAdapter) CallingTool(name, input string) {
-	s.streamer.CommanderCallingTool(s.taskName, name, input)
+func (s *commanderStreamerAdapter) CallingTool(toolCallId, name, input string) {
+	s.streamer.CommanderCallingTool(s.taskName, toolCallId, name, input)
 }
 
-func (s *commanderStreamerAdapter) ToolComplete(name string, result string) {
-	s.streamer.CommanderToolComplete(s.taskName, name, result)
+func (s *commanderStreamerAdapter) ToolComplete(toolCallId, name string, result string) {
+	s.streamer.CommanderToolComplete(s.taskName, toolCallId, name, result)
 }
 
 func (s *commanderStreamerAdapter) Compaction(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {
@@ -1164,7 +1366,39 @@ func agentSessionTurnCallback(streamer streamers.MissionHandler) func(string, st
 	}
 }
 
-// commanderCompaction returns CompactionConfig from mission config, or nil if not set.
+// routeOptionsForTask converts a task's router config into RouteOption slice for the commander.
+// For mission route targets, it populates IsMission and the target mission's input info.
+func (r *Runner) routeOptionsForTask(task config.Task) []aitools.RouteOption {
+	if task.Router == nil {
+		return nil
+	}
+	opts := make([]aitools.RouteOption, len(task.Router.Routes))
+	for i, route := range task.Router.Routes {
+		opts[i] = aitools.RouteOption{
+			Target:    route.Target,
+			Condition: route.Condition,
+			IsMission: route.IsMission,
+		}
+		if route.IsMission {
+			// Look up the target mission's inputs
+			for _, m := range r.cfg.Missions {
+				if m.Name == route.Target {
+					for _, inp := range m.Inputs {
+						opts[i].Inputs = append(opts[i].Inputs, aitools.RouteInput{
+							Name:        inp.Name,
+							Type:        inp.Type,
+							Description: inp.Description,
+							Required:    inp.Default == nil && !inp.Secret,
+						})
+					}
+					break
+				}
+			}
+		}
+	}
+	return opts
+}
+
 func (r *Runner) commanderCompaction() *agent.CompactionConfig {
 	if r.mission.Commander == nil || r.mission.Commander.Compaction == nil {
 		return nil
@@ -1239,7 +1473,10 @@ func (r *Runner) missionSnapshot() map[string]any {
 
 	var tasks []map[string]any
 	for _, task := range r.mission.Tasks {
-		objective, _ := task.ResolvedObjective(r.varsValues, r.inputValues)
+		objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
+		if err != nil || objective == "" {
+			objective = task.RawObjective
+		}
 		tasks = append(tasks, taskSnapshot(task, objective))
 	}
 	snap["tasks"] = tasks
@@ -1264,6 +1501,12 @@ func taskSnapshot(task config.Task, resolvedObjective string) map[string]any {
 	}
 	if task.Output != nil {
 		snap["output"] = task.Output
+	}
+	if task.Router != nil {
+		snap["router"] = task.Router
+	}
+	if len(task.SendTo) > 0 {
+		snap["sendTo"] = task.SendTo
 	}
 	return snap
 }
@@ -1438,9 +1681,28 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	streamer.TaskIterationCompleted(task.Name, len(iterations))
 	streamer.TaskCompleted(task.Name)
 
+	// For sequential iterators with a router, get the chosen route from the commander
+	var chosenRoute string
+	var isMissionRoute bool
+	var missionInputs map[string]string
+	if task.Router != nil && !task.Iterator.Parallel {
+		r.mu.RLock()
+		if iterSups, ok := r.iterationCommanders[task.Name]; ok {
+			if sup, ok := iterSups[0]; ok {
+				chosenRoute = sup.ChosenRoute()
+				isMissionRoute = sup.IsMissionRoute()
+				missionInputs = sup.MissionInputs()
+			}
+		}
+		r.mu.RUnlock()
+	}
+
 	return &TaskResult{
-		TaskName: task.Name,
-		Success:  true,
+		TaskName:       task.Name,
+		Success:        true,
+		ChosenRoute:    chosenRoute,
+		IsMissionRoute: isMissionRoute,
+		MissionInputs:  missionInputs,
 	}, nil
 }
 
@@ -1503,6 +1765,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		Compaction:        r.commanderCompaction(),
 		PruneOn:           r.commanderPruneOn(),
 		PruneTo:           r.commanderPruneTo(),
+		Routes:            r.routeOptionsForTask(task),
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -1619,7 +1882,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		return []IterationResult{{
 			Index:   0,
 			Success: false,
-			Error:   fmt.Errorf(failMsg),
+			Error:   fmt.Errorf("%s", failMsg),
 		}}
 	}
 
@@ -2052,7 +2315,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		iterations = append(iterations, IterationResult{
 			Index:   completedCount,
 			Success: false,
-			Error:   fmt.Errorf(failMsg),
+			Error:   fmt.Errorf("%s", failMsg),
 		})
 		return iterations
 	}
@@ -2283,7 +2546,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 			failMsg = reason
 		}
 		sup.Close()
-		failErr := fmt.Errorf(failMsg)
+		failErr := fmt.Errorf("%s", failMsg)
 		streamer.IterationFailed(task.Name, index, failErr)
 		return IterationResult{
 			Index:   index,
@@ -2374,12 +2637,12 @@ func (s *iterationStreamerAdapter) Answer(content string) {
 	s.streamer.CommanderAnswer(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), content)
 }
 
-func (s *iterationStreamerAdapter) CallingTool(name, input string) {
-	s.streamer.CommanderCallingTool(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), name, input)
+func (s *iterationStreamerAdapter) CallingTool(toolCallId, name, input string) {
+	s.streamer.CommanderCallingTool(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), toolCallId, name, input)
 }
 
-func (s *iterationStreamerAdapter) ToolComplete(name string, result string) {
-	s.streamer.CommanderToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), name, result)
+func (s *iterationStreamerAdapter) ToolComplete(toolCallId, name string, result string) {
+	s.streamer.CommanderToolComplete(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), toolCallId, name, result)
 }
 
 func (s *iterationStreamerAdapter) Compaction(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int) {

@@ -112,10 +112,24 @@ type Task struct {
 	DependsOn     []string       `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
 	Iterator      *TaskIterator  `json:"iterator,omitempty"`
 	Output        *OutputSchema  `json:"output,omitempty"`
+	Router        *TaskRouter    `json:"router,omitempty"`
+	SendTo        []string       `json:"sendTo,omitempty"`
+}
+
+// TaskRouter defines conditional routing after task completion
+type TaskRouter struct {
+	Routes []TaskRoute `json:"routes"`
+}
+
+// TaskRoute defines a single conditional route
+type TaskRoute struct {
+	Target    string `json:"target"`    // task name or mission name
+	Condition string `json:"condition"` // natural language condition for the LLM to evaluate
+	IsMission bool   `json:"isMission"` // true if target is a mission reference (missions.foo)
 }
 
 // Validate checks that the mission configuration is valid
-func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []SharedFolder) error {
+func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []SharedFolder, allMissionNames map[string]bool) error {
 	if w.Name == "" {
 		return fmt.Errorf("mission name is required")
 	}
@@ -230,12 +244,47 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 
 	// Validate each task
 	for _, t := range w.Tasks {
-		if err := t.Validate(taskNames, agentNames, datasetNames, w.Agents); err != nil {
+		if err := t.Validate(taskNames, agentNames, datasetNames, w.Agents, allMissionNames); err != nil {
 			return fmt.Errorf("task '%s': %w", t.Name, err)
 		}
 	}
 
-	// Validate DAG (no cycles)
+	// Validate router constraints at mission level
+	routerTargets := w.GetRouterTargets()
+
+	// Routed-to tasks cannot have depends_on
+	for targetName := range routerTargets {
+		target := w.GetTaskByName(targetName)
+		if target != nil && len(target.DependsOn) > 0 {
+			return fmt.Errorf("task '%s': dynamically activated tasks cannot have depends_on", targetName)
+		}
+	}
+
+	// No task can depend on a dynamically activated task (router/send_to targets
+	// are the roots of their own sub-DAGs and cannot be depended on)
+	for _, t := range w.Tasks {
+		for _, dep := range t.DependsOn {
+			if _, isDynamic := routerTargets[dep]; isDynamic {
+				return fmt.Errorf("task '%s': cannot depend on '%s' because it is dynamically activated (via router/send_to)", t.Name, dep)
+			}
+		}
+	}
+
+	// Validate at least one task can start (has no depends_on and is not router-only)
+	if len(routerTargets) > 0 {
+		hasStartTask := false
+		for _, t := range w.Tasks {
+			if len(t.DependsOn) == 0 && !w.IsRouterOnlyTask(t.Name) {
+				hasStartTask = true
+				break
+			}
+		}
+		if !hasStartTask {
+			return fmt.Errorf("mission must have at least one task that can start (no depends_on and not only reachable via router)")
+		}
+	}
+
+	// Validate DAG (no cycles — includes router edges)
 	if err := w.ValidateDAG(); err != nil {
 		return err
 	}
@@ -468,7 +517,7 @@ func isValidModelRef(modelRef string, models []Model) bool {
 
 // Validate checks that the task configuration is valid
 // missionAgents are the agents defined at the mission level
-func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, datasetNames map[string]bool, missionAgents []string) error {
+func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, datasetNames map[string]bool, missionAgents []string, allMissionNames map[string]bool) error {
 	if t.Name == "" {
 		return fmt.Errorf("task name is required")
 	}
@@ -509,6 +558,64 @@ func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, d
 		}
 	}
 
+	// send_to and router are mutually exclusive
+	if len(t.SendTo) > 0 && t.Router != nil {
+		return fmt.Errorf("task cannot have both send_to and router")
+	}
+
+	// Validate send_to if present
+	if len(t.SendTo) > 0 {
+		seen := make(map[string]bool)
+		for _, target := range t.SendTo {
+			if target == t.Name {
+				return fmt.Errorf("send_to: task cannot send to itself")
+			}
+			if !taskNames[target] {
+				return fmt.Errorf("send_to: task '%s' not found", target)
+			}
+			if seen[target] {
+				return fmt.Errorf("send_to: duplicate target '%s'", target)
+			}
+			seen[target] = true
+		}
+	}
+
+	// Validate router if present
+	if t.Router != nil {
+		if len(t.Router.Routes) == 0 {
+			return fmt.Errorf("router must have at least one route")
+		}
+		// Cannot have router with parallel iterator
+		if t.Iterator != nil && t.Iterator.Parallel {
+			return fmt.Errorf("parallel iterators cannot have a router")
+		}
+		seenTargets := make(map[string]bool)
+		for i, route := range t.Router.Routes {
+			if route.Target == "" {
+				return fmt.Errorf("route %d: target is required", i+1)
+			}
+			if route.Condition == "" {
+				return fmt.Errorf("route %d: condition is required", i+1)
+			}
+			if route.Target == t.Name {
+				return fmt.Errorf("route %d: task cannot route to itself", i+1)
+			}
+			if seenTargets[route.Target] {
+				return fmt.Errorf("route %d: duplicate target '%s'", i+1, route.Target)
+			}
+			seenTargets[route.Target] = true
+			if route.IsMission {
+				if !allMissionNames[route.Target] {
+					return fmt.Errorf("route %d: mission '%s' not found", i+1, route.Target)
+				}
+			} else {
+				if !taskNames[route.Target] {
+					return fmt.Errorf("route %d: task '%s' not found", i+1, route.Target)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -527,12 +634,61 @@ func (t *Task) ResolvedObjective(vars map[string]cty.Value, inputs map[string]ct
 	return val.AsString(), nil
 }
 
+// GetRouterTargets returns a map of target task name → list of task names that target it
+// (via router routes or send_to). Mission route targets are excluded since they are not local tasks.
+func (w *Mission) GetRouterTargets() map[string][]string {
+	targets := make(map[string][]string)
+	for _, t := range w.Tasks {
+		if t.Router != nil {
+			for _, route := range t.Router.Routes {
+				if !route.IsMission {
+					targets[route.Target] = append(targets[route.Target], t.Name)
+				}
+			}
+		}
+		for _, target := range t.SendTo {
+			targets[target] = append(targets[target], t.Name)
+		}
+	}
+	return targets
+}
+
+// IsRouterOnlyTask returns true if a task is only reachable via a router
+// (it is a router target and has no depends_on)
+func (w *Mission) IsRouterOnlyTask(name string) bool {
+	task := w.GetTaskByName(name)
+	if task == nil {
+		return false
+	}
+	if len(task.DependsOn) > 0 {
+		return false
+	}
+	targets := w.GetRouterTargets()
+	_, isTarget := targets[name]
+	return isTarget
+}
+
 // ValidateDAG checks that the task dependencies form a valid DAG (no cycles)
+// This includes both depends_on edges and router edges (task → route target)
 func (w *Mission) ValidateDAG() error {
-	// Build adjacency list
+	// Build adjacency list: depends_on edges (reversed: dep → dependent)
+	// plus router edges (router task → route target)
 	deps := make(map[string][]string)
 	for _, t := range w.Tasks {
-		deps[t.Name] = t.DependsOn
+		// depends_on edges
+		deps[t.Name] = append(deps[t.Name], t.DependsOn...)
+		// Router edges: the routing task points to its targets (local tasks only)
+		if t.Router != nil {
+			for _, route := range t.Router.Routes {
+				if !route.IsMission {
+					deps[t.Name] = append(deps[t.Name], route.Target)
+				}
+			}
+		}
+		// send_to edges: task points to its targets
+		for _, target := range t.SendTo {
+			deps[t.Name] = append(deps[t.Name], target)
+		}
 	}
 
 	// Track visit state: 0=unvisited, 1=visiting (in stack), 2=visited

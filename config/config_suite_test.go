@@ -33,11 +33,18 @@ func writeFixtures(files map[string]string) string {
 	return dir
 }
 
-// minimalVarsHCL returns HCL for a variable with a default (avoids needing ~/.squadron/vars.txt).
+// minimalStorageHCL is appended to inline HCL fixtures that don't use minimalVarsHCL,
+// so that LoadFile always receives a storage block.
+const minimalStorageHCL = "\nstorage {\n  backend = \"sqlite\"\n}\n"
+
+// minimalVarsHCL returns HCL for a variable with a default + storage block (the universal base for all tests).
 func minimalVarsHCL() string {
 	return `
 variable "test_api_key" {
   default = "test-key-123"
+}
+storage {
+  backend = "sqlite"
 }
 `
 }

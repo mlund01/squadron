@@ -714,6 +714,92 @@ var _ = Describe("SQLite SessionStore", func() {
 			Expect(sessions).To(BeEmpty())
 		})
 	})
+
+	// =========================================================================
+	// Tool Results
+	// =========================================================================
+	Describe("StoreToolResult / GetToolResultsByTask", func() {
+		It("stores and retrieves a tool result with toolCallId", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, err := bundle.Sessions.CreateSession(taskID, "agent", "scraper", "claude-3", nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			start := time.Now().UTC().Truncate(time.Millisecond)
+			end := start.Add(500 * time.Millisecond)
+
+			err = bundle.Sessions.StoreToolResult(taskID, sessionID, "tc-uuid-1", "browser_click", `{"selector":".btn"}`, `{"ok":true}`, start, end)
+			Expect(err).NotTo(HaveOccurred())
+
+			results, err := bundle.Sessions.GetToolResultsByTask(taskID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results).To(HaveLen(1))
+
+			tr := results[0]
+			Expect(tr.ID).NotTo(BeEmpty())
+			Expect(tr.TaskID).To(Equal(taskID))
+			Expect(tr.SessionID).To(Equal(sessionID))
+			Expect(tr.ToolCallId).To(Equal("tc-uuid-1"))
+			Expect(tr.ToolName).To(Equal("browser_click"))
+			Expect(tr.InputParams).To(Equal(`{"selector":".btn"}`))
+			Expect(tr.RawData).To(Equal(`{"ok":true}`))
+		})
+
+		It("returns empty toolCallId for legacy rows without it", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, err := bundle.Sessions.CreateSession(taskID, "agent", "a", "m", nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Store with empty toolCallId (simulates legacy data)
+			err = bundle.Sessions.StoreToolResult(taskID, sessionID, "", "some_tool", "{}", "{}", time.Now(), time.Now())
+			Expect(err).NotTo(HaveOccurred())
+
+			results, err := bundle.Sessions.GetToolResultsByTask(taskID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].ToolCallId).To(Equal(""))
+		})
+
+		It("returns multiple results ordered by start time", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, _ := bundle.Sessions.CreateSession(taskID, "agent", "a", "m", nil)
+
+			t1 := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+			t2 := time.Date(2026, 1, 1, 10, 0, 1, 0, time.UTC)
+			t3 := time.Date(2026, 1, 1, 10, 0, 2, 0, time.UTC)
+
+			// Insert out of order
+			Expect(bundle.Sessions.StoreToolResult(taskID, sessionID, "tc-3", "tool_c", "{}", "{}", t3, t3)).To(Succeed())
+			Expect(bundle.Sessions.StoreToolResult(taskID, sessionID, "tc-1", "tool_a", "{}", "{}", t1, t1)).To(Succeed())
+			Expect(bundle.Sessions.StoreToolResult(taskID, sessionID, "tc-2", "tool_b", "{}", "{}", t2, t2)).To(Succeed())
+
+			results, err := bundle.Sessions.GetToolResultsByTask(taskID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results).To(HaveLen(3))
+			Expect(results[0].ToolCallId).To(Equal("tc-1"))
+			Expect(results[1].ToolCallId).To(Equal("tc-2"))
+			Expect(results[2].ToolCallId).To(Equal("tc-3"))
+		})
+
+		It("isolates results by task ID", func() {
+			missionID, taskID1 := seedMissionAndTask(bundle)
+			taskID2, err := bundle.Missions.CreateTask(missionID, "other-task", "{}")
+			Expect(err).NotTo(HaveOccurred())
+
+			sess1, _ := bundle.Sessions.CreateSession(taskID1, "agent", "a", "m", nil)
+			sess2, _ := bundle.Sessions.CreateSession(taskID2, "agent", "a", "m", nil)
+
+			now := time.Now()
+			Expect(bundle.Sessions.StoreToolResult(taskID1, sess1, "tc-a", "tool_x", "{}", "{}", now, now)).To(Succeed())
+			Expect(bundle.Sessions.StoreToolResult(taskID2, sess2, "tc-b", "tool_y", "{}", "{}", now, now)).To(Succeed())
+
+			r1, _ := bundle.Sessions.GetToolResultsByTask(taskID1)
+			r2, _ := bundle.Sessions.GetToolResultsByTask(taskID2)
+			Expect(r1).To(HaveLen(1))
+			Expect(r1[0].ToolCallId).To(Equal("tc-a"))
+			Expect(r2).To(HaveLen(1))
+			Expect(r2[0].ToolCallId).To(Equal("tc-b"))
+		})
+	})
 })
 
 var _ = Describe("SQLite DatasetStore", func() {

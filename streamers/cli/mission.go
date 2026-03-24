@@ -64,13 +64,13 @@ func (s *MissionHandler) CommanderAnswer(taskName string, content string) {
 	fmt.Printf("[%s] Answer:\n%s\n", taskName, content)
 }
 
-func (s *MissionHandler) CommanderCallingTool(taskName string, toolName string, input string) {
+func (s *MissionHandler) CommanderCallingTool(taskName string, toolCallId string, toolName string, input string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("[%s] Calling: %s\n", taskName, toolName)
 }
 
-func (s *MissionHandler) CommanderToolComplete(taskName string, toolName string, result string) {
+func (s *MissionHandler) CommanderToolComplete(taskName string, toolCallId string, toolName string, result string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("[%s] %s complete\n", taskName, toolName)
@@ -105,6 +105,16 @@ func (s *MissionHandler) Compaction(taskName string, entity string, inputTokens 
 
 func (s *MissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	// No-op for CLI — telemetry is primarily for the web UI
+}
+
+func (s *MissionHandler) RouteChosen(routerTask string, targetTask string, condition string, isMission bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if isMission {
+		fmt.Printf("%s[%s] Route chosen → mission:%s (condition: %s)%s\n", ColorCyan, routerTask, targetTask, condition, ColorReset)
+	} else {
+		fmt.Printf("%s[%s] Route chosen → %s (condition: %s)%s\n", ColorCyan, routerTask, targetTask, condition, ColorReset)
+	}
 }
 
 // Task iteration events
@@ -206,13 +216,13 @@ func (s *agentHandler) Thinking() {
 	fmt.Printf("%s    [%s/%s] Thinking...%s\n", ColorLightBrown, s.taskName, s.agentName, ColorReset)
 }
 
-func (s *agentHandler) CallingTool(toolName, payload string) {
+func (s *agentHandler) CallingTool(toolCallId, toolName, payload string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("%s    [%s/%s] Calling %s...%s\n", ColorLightBrown, s.taskName, s.agentName, toolName, ColorReset)
 }
 
-func (s *agentHandler) ToolComplete(toolName string, result string) {
+func (s *agentHandler) ToolComplete(toolCallId string, toolName string, result string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("%s    [%s/%s] %s complete%s\n", ColorLightBrown, s.taskName, s.agentName, toolName, ColorReset)

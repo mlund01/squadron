@@ -55,6 +55,8 @@ agent "assistant" {
 | `tool` | Create custom tools |
 | `plugin` | Load external plugins |
 | `mission` | Define multi-task missions |
+| `commander` | Commander server connection config |
+| `shared_folder` | Shared file folders accessible to missions |
 
 ## Expressions
 

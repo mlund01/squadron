@@ -31,6 +31,8 @@ task "summarize" {
 | `depends_on` | list | Tasks that must complete first |
 | `agents` | list | Override mission-level agents (optional) |
 | `output` | block | Structured output schema (optional) |
+| `router` | block | Conditional routing — LLM picks a branch after task completes (optional) |
+| `send_to` | list | Unconditional routing — activate target tasks on completion (optional) |
 
 ## Dependencies
 
@@ -136,3 +138,46 @@ task "analyze_sales" {
 | `boolean` | True/false |
 
 Structured output is automatically captured and stored. Downstream tasks can query it using the `query_task_output` tool (see [Internal Tools](/missions/internal-tools)).
+
+## Routing
+
+Tasks can route to other tasks (or missions) after they complete. See [Routing](/missions/routing) for full details.
+
+### Conditional Routing
+
+A `router` block lets the LLM choose which branch to activate:
+
+```hcl
+task "classify" {
+  objective = "Classify the request"
+  router {
+    route {
+      target    = tasks.handle_billing
+      condition = "The request is about billing"
+    }
+    route {
+      target    = tasks.handle_support
+      condition = "The request is technical support"
+    }
+  }
+}
+```
+
+### Unconditional Routing
+
+`send_to` activates target tasks immediately — no LLM decision:
+
+```hcl
+task "fetch" {
+  objective = "Fetch data"
+  send_to   = [tasks.process_a, tasks.process_b]
+}
+```
+
+> **Note:** `router` and `send_to` are mutually exclusive on a task. Dynamic targets (tasks reachable via `router` or `send_to`) cannot have `depends_on`.
+
+## See Also
+
+- [Routing](/missions/routing) - Conditional and unconditional routing
+- [Missions Overview](/missions/overview) - Mission structure
+- [Internal Tools](/missions/internal-tools) - Commander and agent tools

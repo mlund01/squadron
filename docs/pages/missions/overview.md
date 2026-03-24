@@ -33,16 +33,56 @@ mission "data_pipeline" {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `commander` | string | Model for task commanders |
+| `directive` | string | High-level description of the mission's purpose |
+| `commander` | string or block | Model for task commanders (block form: `commander { model = ... }`) |
 | `agents` | list | Agents available to all tasks |
+| `input` | block | Mission input parameters (repeatable) |
+| `task` | block | Task definitions (repeatable) |
+| `dataset` | block | Dataset definitions (optional) |
+
+## Mission Inputs
+
+Missions can declare typed inputs that are passed at runtime:
+
+```hcl
+mission "report" {
+  input "topic" {
+    type        = "string"
+    description = "The topic to research"
+  }
+
+  input "format" {
+    type        = "string"
+    description = "Output format"
+    default     = "markdown"
+  }
+
+  task "research" {
+    objective = "Research ${inputs.topic} and output in ${inputs.format}"
+  }
+}
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `type` | string | Input type (`string`, `number`, `integer`, `boolean`) |
+| `description` | string | Human-readable description |
+| `default` | any | Default value (makes the input optional) |
+
+Inputs without a `default` are required. Pass them via CLI:
+
+```bash
+squadron mission report -c ./config --input topic="AI safety" --input format=html
+```
 
 ## How Missions Execute
 
-1. **Dependency Resolution** - Tasks are sorted topologically
+1. **Dependency Resolution** - Tasks are sorted topologically; dynamically activated tasks (router/send_to targets) are excluded from the initial sort
 2. **Parallel Execution** - Independent tasks run concurrently
 3. **Commander Creation** - Each task gets a commander
 4. **Agent Delegation** - Commanders delegate to agents via `call_agent`
-5. **Result Propagation** - Structured outputs are stored and queryable by downstream tasks
+5. **Dynamic Activation** - After a task completes, its `send_to` targets fire immediately; if it has a `router`, the commander picks a branch
+6. **Result Propagation** - Structured outputs are stored and queryable by downstream tasks
 
 ## Execution Flow
 
@@ -138,6 +178,8 @@ See [squadron mission](/cli/mission#resume) for details.
 
 ## See Also
 
-- [Tasks](/missions/tasks) - Task configuration
+- [Tasks](/missions/tasks) - Task configuration and dependencies
+- [Routing](/missions/routing) - Conditional and unconditional task routing
 - [Datasets](/missions/datasets) - Working with data collections
 - [Iteration](/missions/iteration) - Processing lists of items
+- [Internal Tools](/missions/internal-tools) - Commander and agent tools

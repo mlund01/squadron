@@ -62,6 +62,47 @@ Signal that the task is done. Call this when all subtasks are completed and all 
 {}
 ```
 
+**With routing:** If the task has a `router` block, `task_complete` triggers a two-phase routing flow instead of immediately completing:
+
+1. **First call** — returns route options:
+```json
+{
+  "status": "routing",
+  "message": "Choose the most appropriate route, or 'none'.",
+  "options": [
+    {"key": "handle_billing", "condition": "The request is about billing"},
+    {"key": "handle_support", "condition": "The request is technical support"},
+    {"key": "none", "condition": "No route applies"}
+  ]
+}
+```
+
+2. **Second call** — commander selects a route:
+```json
+{
+  "route": "handle_billing"
+}
+```
+
+For **cross-mission routes**, the options include `required_inputs` and the second call includes `mission_inputs`:
+
+```json
+{
+  "route": "escalation_mission",
+  "mission_inputs": {
+    "complaint_summary": "Customer demands refund for defective product",
+    "severity": "critical"
+  }
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `route` | string | Key of the chosen route, or `"none"` (optional — only for routing tasks) |
+| `mission_inputs` | object | Input values for mission route targets (optional — only for cross-mission routes) |
+
+See [Routing](/missions/routing) for full details.
+
 #### submit_output
 
 Submit structured output for the task. Only available when the task defines an `output` schema.

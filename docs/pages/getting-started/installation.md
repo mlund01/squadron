@@ -4,7 +4,27 @@ title: Installation
 
 # Installation
 
-## Download Binary
+## Quick Install
+
+The fastest way to install Squadron:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mlund01/squadron/main/install.sh | bash
+```
+
+This auto-detects your platform, downloads the latest release, verifies the checksum, and installs to `~/.local/bin`. To install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mlund01/squadron/main/install.sh | bash -s v0.0.43
+```
+
+You can override the install directory with `INSTALL_DIR`:
+
+```bash
+INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/mlund01/squadron/main/install.sh | bash
+```
+
+## Manual Download
 
 Download the latest release for your platform from [GitHub Releases](https://github.com/mlund01/squadron/releases), extract it, and move the binary to your PATH:
 

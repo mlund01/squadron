@@ -16,6 +16,7 @@ const navigation = [
       { title: 'verify', href: '/cli/verify' },
       { title: 'chat', href: '/cli/chat' },
       { title: 'mission', href: '/cli/mission' },
+      { title: 'serve', href: '/cli/serve' },
       { title: 'vars', href: '/cli/vars' },
     ],
   },
@@ -35,6 +36,7 @@ const navigation = [
     items: [
       { title: 'Overview', href: '/missions/overview' },
       { title: 'Tasks', href: '/missions/tasks' },
+      { title: 'Routing', href: '/missions/routing' },
       { title: 'Datasets', href: '/missions/datasets' },
       { title: 'Iteration', href: '/missions/iteration' },
       { title: 'Internal Tools', href: '/missions/internal-tools' },

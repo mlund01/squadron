@@ -1,101 +1,80 @@
 # Squadron
 
-HCL-based CLI for defining and running AI agents and multi-agent missions.
+AI agent workflows as configuration, not code.
+
+Squadron is a framework for defining and running multi-agent missions in HCL. You declare agents, tools, and task graphs in config files — Squadron handles orchestration, state management, branching, and recovery.
+
+**[Documentation](https://mlund01.github.io/squadron/)**
 
 ## Install
 
-Download the latest release for your platform from [GitHub Releases](https://github.com/mlund01/squadron/releases), extract it, and move the binary to your PATH:
-
 ```bash
-# macOS (Apple Silicon)
-curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_darwin_arm64.tar.gz | tar xz
-sudo mv squadron /usr/local/bin/
-
-# macOS (Intel)
-curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_darwin_amd64.tar.gz | tar xz
-sudo mv squadron /usr/local/bin/
-
-# Linux (amd64)
-curl -L https://github.com/mlund01/squadron/releases/latest/download/squadron_linux_amd64.tar.gz | tar xz
-sudo mv squadron /usr/local/bin/
+curl -fsSL https://raw.githubusercontent.com/mlund01/squadron/main/install.sh | bash
 ```
 
-**Windows (PowerShell):**
+Or download from [GitHub Releases](https://github.com/mlund01/squadron/releases). See the [installation docs](https://mlund01.github.io/squadron/getting-started/installation) for more options.
 
-```powershell
-Invoke-WebRequest -Uri https://github.com/mlund01/squadron/releases/latest/download/squadron_windows_amd64.zip -OutFile squadron.zip
-Expand-Archive squadron.zip -DestinationPath .
-Move-Item squadron.exe C:\Windows\System32\
-Remove-Item squadron.zip
-```
-
-Upgrade to the latest version:
+## Quick Start
 
 ```bash
-squadron upgrade
-```
-
-Or build from source:
-
-```bash
-git clone https://github.com/mlund01/squadron.git
-cd squadron
-go build -o squadron ./cmd/cli
-```
-
-## Getting Started
-
-```bash
-# Create a new project directory
-mkdir my-workflow && cd my-workflow
-
-# See available commands
-squadron help
-
 # Generate a sample workflow
-squadron helloworld
+squadron helloworld && cd helloworld
 
-# Set your Anthropic API key
+# Set your API key
 squadron vars set anthropic_api_key sk-ant-...
 
-# Validate the configuration
-squadron verify
-
-# Run with the command center UI
+# Launch the command center
 squadron serve -w
 ```
 
-## Missions
-
-Define multi-task pipelines:
+## Example Mission
 
 ```hcl
 mission "data_pipeline" {
   commander = models.anthropic.claude_sonnet_4
-  agents           = [agents.assistant]
+  agents    = [agents.assistant]
 
   task "fetch" {
     objective = "Fetch data from the API"
+    output {
+      field "records" { type = "string"; required = true }
+    }
   }
 
   task "process" {
-    objective  = "Process the data"
     depends_on = [tasks.fetch]
+    objective  = "Analyze the data and produce a summary"
+  }
+
+  task "review" {
+    depends_on = [tasks.process]
+    objective  = "Review the analysis"
+    router {
+      route {
+        target    = tasks.escalate
+        condition = "Issues were found that need human review"
+      }
+    }
+  }
+
+  task "escalate" {
+    objective = "Flag issues and prepare an escalation report"
   }
 }
 ```
-
-Run:
 
 ```bash
 squadron mission data_pipeline -c ./config
 ```
 
-Resume a failed mission:
+## Key Features
 
-```bash
-squadron mission data_pipeline -c ./config --resume <mission-id>
-```
+- **HCL configuration** — agents, tools, and missions defined as config files
+- **Mission orchestration** — task dependencies, LLM-driven routing, fan-out, cross-mission routing
+- **Persistence and resume** — resume interrupted missions from where they failed
+- **Command center** — web UI for running missions, DAG visualization, live monitoring
+- **Multi-provider** — Anthropic, OpenAI, Google Gemini
+- **Plugin system** — extend with gRPC plugins for browser automation, APIs, and custom integrations
 
 ## Providers
 
@@ -105,7 +84,7 @@ squadron mission data_pipeline -c ./config --resume <mission-id>
 
 ## Plugins
 
-Extend with gRPC plugins using the [squadron-sdk](https://github.com/mlund01/squadron-sdk).
+Build custom plugins with the [squadron-sdk](https://github.com/mlund01/squadron-sdk).
 
 ## License
 

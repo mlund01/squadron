@@ -64,7 +64,19 @@ commander {
 
 When using `-w` (local mode), no `commander` block is needed — Squadron starts its own server.
 
+## Docker
+
+Run the command center in a container:
+
+```bash
+docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
+  ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
+```
+
+The container's working directory is `/config`, so the `-c` flag is not needed. See the [Docker guide](/getting-started/docker) for full details.
+
 ## See Also
 
 - [Missions Overview](/missions/overview) - Mission structure
 - [mission](/cli/mission) - Run missions from the CLI
+- [Docker](/getting-started/docker) - Running in containers

@@ -67,6 +67,15 @@ mission "data_pipeline" {
 squadron mission data_pipeline -c ./config
 ```
 
+## Docker
+
+```bash
+docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
+  ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
+```
+
+Alpine (default) and Debian images are published to `ghcr.io/mlund01/squadron` on every release. See the [Docker docs](https://mlund01.github.io/squadron/getting-started/docker) for details.
+
 ## Key Features
 
 - **HCL configuration** — agents, tools, and missions defined as config files

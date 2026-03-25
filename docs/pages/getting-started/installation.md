@@ -72,6 +72,27 @@ Or install a specific version:
 squadron upgrade --version v0.0.28
 ```
 
+## Docker
+
+Squadron publishes Docker images to GitHub Container Registry on every release:
+
+```bash
+# Alpine (default, small image)
+docker pull ghcr.io/mlund01/squadron:latest
+
+# Debian (for plugins that need glibc)
+docker pull ghcr.io/mlund01/squadron:latest-debian
+```
+
+Run with your config mounted:
+
+```bash
+docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
+  ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
+```
+
+See the [Docker guide](/getting-started/docker) for full setup details including Docker Compose.
+
 ## Build from Source
 
 Requires Go 1.25+.

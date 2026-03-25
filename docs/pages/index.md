@@ -78,6 +78,7 @@ squadron serve -c ./config -w
 - **[Interactive chat](/cli/chat)** — chat directly with any configured agent from the terminal
 - **[Variables](/config/variables)** — manage API keys and configuration values with secret support
 - **[Self-upgrade](/cli/upgrade)** — update to the latest release with a single command
+- **[Docker support](/getting-started/docker)** — published Alpine and Debian images on every release, with multi-arch support
 - **Single binary** — one `curl` to install, no runtime dependencies
 
 ## Next Steps

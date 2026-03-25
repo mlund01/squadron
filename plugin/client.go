@@ -67,15 +67,23 @@ func GetPluginDir(name, version string) (string, error) {
 func LoadPlugin(name, version, source string) (*PluginClient, error) {
 	key := name + ":" + version
 
-	// Check if plugin is already loaded
+	// Check if plugin is already loaded and still alive
 	globalRegistryLock.RLock()
 	if existing, ok := globalRegistry[key]; ok {
+		if !existing.client.Exited() {
+			globalRegistryLock.RUnlock()
+			return existing, nil
+		}
+		// Plugin process died — will re-launch below
 		globalRegistryLock.RUnlock()
-		return existing, nil
+		globalRegistryLock.Lock()
+		delete(globalRegistry, key)
+		globalRegistryLock.Unlock()
+	} else {
+		globalRegistryLock.RUnlock()
 	}
-	globalRegistryLock.RUnlock()
 
-	// Not found, need to load it
+	// Not found (or evicted dead client), need to load it
 	globalRegistryLock.Lock()
 	defer globalRegistryLock.Unlock()
 

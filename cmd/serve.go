@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -63,39 +64,20 @@ func init() {
 }
 
 func runServe(cmd *cobra.Command, args []string) {
-	cfg, err := config.LoadAndValidate(serveConfigPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
-		os.Exit(1)
-	}
-
 	var ccProc *exec.Cmd
 	var ccPort int
 	var pingDone chan struct{}
+	var localCC bool
 
 	if serveCommandCenter {
-		// Launch a local command center
+		var err error
 		ccPort, ccProc, err = launchCommandCenter()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error launching command center: %v\n", err)
 			os.Exit(1)
 		}
+		localCC = true
 
-		// Override commander config to point at local instance
-		hostname, _ := os.Hostname()
-		instanceName := hostname
-		if cfg.Commander != nil && cfg.Commander.InstanceName != "" {
-			instanceName = cfg.Commander.InstanceName
-		}
-		cfg.Commander = &config.CommanderConfig{
-			URL:               fmt.Sprintf("ws://localhost:%d/ws", ccPort),
-			InstanceName:      instanceName,
-			AutoReconnect:     true,
-			ReconnectInterval: 3,
-		}
-		cfg.Commander.Defaults()
-
-		// Start keep-alive pinger
 		pingDone = make(chan struct{})
 		go keepAlivePinger(ccPort, pingDone)
 
@@ -104,46 +86,85 @@ func runServe(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	if cfg.Commander == nil {
-		fmt.Fprintln(os.Stderr, "Error: no commander block in config. Add a commander block with url and instance_name, or use --command-center (-w).")
-		os.Exit(1)
+	// Try loading config — use partial load so vars/plugins show up even if validation fails
+	cfg, cfgErr := config.LoadPartial(serveConfigPath)
+	if cfgErr != nil {
+		log.Printf("Config not ready: %v", cfgErr)
+		log.Println("Waiting for valid configuration (set variables or fix config files)...")
 	}
 
-	// Open store
-	stores, err := store.NewBundle(cfg.Storage)
+	// When using local command center, override commander config
+	if localCC {
+		cfg.Commander = localCommanderConfig(cfg, ccPort)
+	}
+
+	// Open store — use config storage if available, otherwise default
+	storageConfig := cfg.Storage
+	if storageConfig == nil {
+		storageConfig = config.DefaultStorageConfig(serveConfigPath)
+	}
+	stores, err := store.NewBundle(storageConfig)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error opening store: %v\n", err)
 		os.Exit(1)
 	}
 	defer stores.Close()
 
-	client := wsbridge.NewClient(cfg, serveConfigPath, stores, Version)
+	// Create client — cfgErr == nil means config is fully valid
+	client := wsbridge.NewClient(cfg, cfgErr == nil, serveConfigPath, stores, Version)
 
-	// Connect with retry
-	if err := connectWithRetry(client, cfg.Commander); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+	// When config loads/reloads, update commander override and re-register
+	client.OnConfigLoaded = func(newCfg *config.Config) {
+		if localCC {
+			newCfg.Commander = localCommanderConfig(newCfg, ccPort)
+			client.SetConfig(newCfg)
+		}
 	}
 
-	fmt.Printf("Connected to commander at %s (instance: %s, id: %s)\n",
-		cfg.Commander.URL, cfg.Commander.InstanceName, client.InstanceID())
+	// Connect immediately — even without valid config, the command center
+	// can show vars and config files so the user can fix things from the UI
+	if localCC {
+		commanderURL := fmt.Sprintf("ws://localhost:%d/ws", ccPort)
+		if err := connectWithRetry2(client, commanderURL, true); err != nil {
+			log.Printf("Connection failed: %v", err)
+		} else {
+			fmt.Printf("Connected to command center (instance: %s)\n", client.InstanceID())
+		}
+	} else if cfg.Commander != nil {
+		if err := connectWithRetry2(client, cfg.Commander.URL, cfg.Commander.AutoReconnect); err != nil {
+			log.Printf("Connection failed: %v (will retry when config changes)", err)
+		} else {
+			fmt.Printf("Connected to commander at %s (instance: %s, id: %s)\n",
+				cfg.Commander.URL, cfg.Commander.InstanceName, client.InstanceID())
+		}
+	}
+
+	// If config not fully valid, watch for changes to trigger reload
+	if cfgErr != nil {
+		go watchForConfigChanges(client, serveConfigPath)
+	}
 
 	// Graceful shutdown
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt)
 
 	go func() {
-		if err := client.Run(); err != nil {
-			log.Printf("Connection lost: %v", err)
-			if cfg.Commander.AutoReconnect {
-				log.Println("Attempting to reconnect...")
-				if err := connectWithRetry(client, cfg.Commander); err != nil {
-					log.Printf("Reconnect failed: %v", err)
-					stop <- os.Interrupt
+		for {
+			if err := client.Run(); err != nil {
+				log.Printf("Connection lost: %v", err)
+				cfg := client.GetConfig()
+				if cfg != nil && cfg.Commander != nil && cfg.Commander.AutoReconnect {
+					log.Println("Attempting to reconnect...")
+					if err := connectWithRetry(client, cfg.Commander); err != nil {
+						log.Printf("Reconnect failed: %v", err)
+						// Don't exit — wait for config changes
+						go watchForConfigChanges(client, serveConfigPath)
+						return
+					}
+					continue
 				}
-			} else {
-				stop <- os.Interrupt
 			}
+			return
 		}
 	}()
 
@@ -167,15 +188,108 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 }
 
+// localCommanderConfig creates a commander config pointing at the local command center.
+func localCommanderConfig(cfg *config.Config, ccPort int) *config.CommanderConfig {
+	hostname, _ := os.Hostname()
+	instanceName := hostname
+	if cfg != nil && cfg.Commander != nil && cfg.Commander.InstanceName != "" {
+		instanceName = cfg.Commander.InstanceName
+	}
+	cc := &config.CommanderConfig{
+		URL:               fmt.Sprintf("ws://localhost:%d/ws", ccPort),
+		InstanceName:      instanceName,
+		AutoReconnect:     true,
+		ReconnectInterval: 3,
+	}
+	cc.Defaults()
+	return cc
+}
+
+// watchForConfigChanges polls the config path and vars file for changes,
+// triggering a config reload when modifications are detected.
+func watchForConfigChanges(client *wsbridge.Client, configPath string) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	lastConfigMod := configDirModTime(configPath)
+	lastVarsMod := varsFileModTime()
+
+	for range ticker.C {
+		if client.IsConnected() && client.HasConfig() {
+			// Already connected with valid config — stop polling
+			return
+		}
+
+		changed := false
+		if t := configDirModTime(configPath); t.After(lastConfigMod) {
+			lastConfigMod = t
+			changed = true
+		}
+		if t := varsFileModTime(); t.After(lastVarsMod) {
+			lastVarsMod = t
+			changed = true
+		}
+
+		if changed {
+			log.Println("Detected changes, reloading config...")
+			if err := client.ReloadConfig(); err != nil {
+				log.Printf("Config still not ready: %v", err)
+			}
+		}
+	}
+}
+
+// configDirModTime returns the latest modification time across all .hcl files in a config path.
+func configDirModTime(configPath string) time.Time {
+	var latest time.Time
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return latest
+	}
+	if !info.IsDir() {
+		return info.ModTime()
+	}
+	entries, err := os.ReadDir(configPath)
+	if err != nil {
+		return latest
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".hcl") {
+			if fi, err := e.Info(); err == nil && fi.ModTime().After(latest) {
+				latest = fi.ModTime()
+			}
+		}
+	}
+	return latest
+}
+
+// varsFileModTime returns the modification time of the vars file.
+func varsFileModTime() time.Time {
+	path, err := config.GetVarsFilePath()
+	if err != nil {
+		return time.Time{}
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
 func connectWithRetry(client *wsbridge.Client, cmdCfg *config.CommanderConfig) error {
+	autoReconnect := cmdCfg.AutoReconnect
+	return connectWithRetry2(client, cmdCfg.URL, autoReconnect)
+}
+
+func connectWithRetry2(client *wsbridge.Client, url string, autoReconnect bool) error {
 	maxAttempts := 1
-	if cmdCfg.AutoReconnect {
+	if autoReconnect {
 		maxAttempts = 10
 	}
-	interval := time.Duration(cmdCfg.ReconnectInterval) * time.Second
+	interval := 3 * time.Second
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		err := client.Connect()
+		err := client.ConnectTo(url)
 		if err == nil {
 			return nil
 		}
@@ -281,7 +395,7 @@ func ensureCommandCenter() (string, error) {
 	}
 
 	binPath := filepath.Join(versionDir, ccBinaryName())
-	if err := os.Rename(extractedPath, binPath); err != nil {
+	if err := moveFile(extractedPath, binPath); err != nil {
 		os.Remove(extractedPath)
 		return "", err
 	}
@@ -329,6 +443,29 @@ func keepAlivePinger(port int, done chan struct{}) {
 			http.Post(url, "", nil)
 		}
 	}
+}
+
+// moveFile copies src to dst then removes src. Works across filesystem boundaries.
+func moveFile(src, dst string) error {
+	if err := os.Rename(src, dst); err == nil {
+		return nil
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	out.Close()
+	os.Remove(src)
+	return nil
 }
 
 func openBrowser(url string) {

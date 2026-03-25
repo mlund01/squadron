@@ -23,12 +23,10 @@ func (fb *SharedFolder) Validate() error {
 	if err != nil {
 		return fmt.Errorf("invalid path: %w", err)
 	}
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return fmt.Errorf("path does not exist: %w", err)
+	// Create the directory if it doesn't exist (common in container mode)
+	if err := os.MkdirAll(absPath, 0755); err != nil {
+		return fmt.Errorf("failed to create folder path: %w", err)
 	}
-	if !info.IsDir() {
-		return fmt.Errorf("path must be a directory")
-	}
+	fb.Path = absPath
 	return nil
 }

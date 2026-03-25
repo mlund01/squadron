@@ -54,6 +54,112 @@ func Load(path string) (*Config, error) {
 	return LoadFile(path)
 }
 
+// LoadPartial attempts a best-effort load of the config, returning whatever
+// could be parsed (variables, plugin definitions) even if full loading fails.
+// The returned Config is never nil. The error indicates whether the full load succeeded.
+func LoadPartial(path string) (*Config, error) {
+	cfg, err := LoadAndValidate(path)
+	if err == nil {
+		return cfg, nil
+	}
+
+	// Full load failed — try to extract variables and plugin defs from the HCL
+	partial := &Config{}
+	files, fileErr := resolveConfigFiles(path)
+	if fileErr != nil {
+		return partial, err // can't even find files, return original error
+	}
+
+	parser := hclparse.NewParser()
+	for _, file := range files {
+		hclFile, diags := parser.ParseHCLFile(file)
+		if diags.HasErrors() {
+			continue // skip unparseable files
+		}
+		content, _, diags := hclFile.Body.PartialContent(&hcl.BodySchema{
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "variable", LabelNames: []string{"name"}},
+				{Type: "plugin", LabelNames: []string{"name"}},
+			},
+		})
+		if diags.HasErrors() {
+			continue
+		}
+		for _, block := range content.Blocks {
+			switch block.Type {
+			case "variable":
+				var v Variable
+				v.Name = block.Labels[0]
+				if diags := gohcl.DecodeBody(block.Body, nil, &v); !diags.HasErrors() {
+					partial.Variables = append(partial.Variables, v)
+				}
+			case "plugin":
+				p := Plugin{Name: block.Labels[0]}
+				// Use PartialContent to extract source/version while allowing settings block
+				pluginContent, _, _ := block.Body.PartialContent(&hcl.BodySchema{
+					Attributes: []hcl.AttributeSchema{
+						{Name: "source"},
+						{Name: "version"},
+					},
+					Blocks: []hcl.BlockHeaderSchema{
+						{Type: "settings"},
+					},
+				})
+				if pluginContent != nil {
+					if attr, ok := pluginContent.Attributes["source"]; ok {
+						if val, diags := attr.Expr.Value(nil); !diags.HasErrors() {
+							p.Source = val.AsString()
+						}
+					}
+					if attr, ok := pluginContent.Attributes["version"]; ok {
+						if val, diags := attr.Expr.Value(nil); !diags.HasErrors() {
+							p.Version = val.AsString()
+						}
+					}
+				}
+				partial.Plugins = append(partial.Plugins, p)
+			}
+		}
+	}
+
+	// Best-effort: try loading plugin binaries so their tools are visible
+	partial.LoadedPlugins = make(map[string]*plugin.PluginClient)
+	for _, p := range partial.Plugins {
+		if p.Version == "" {
+			continue
+		}
+		client, loadErr := plugin.LoadPlugin(p.Name, p.Version, p.Source)
+		if loadErr != nil {
+			continue
+		}
+		partial.LoadedPlugins[p.Name] = client
+	}
+
+	return partial, err
+}
+
+// resolveConfigFiles returns the list of .hcl files for a given path.
+func resolveConfigFiles(path string) ([]string, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return []string{path}, nil
+	}
+	var files []string
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".hcl") {
+			files = append(files, filepath.Join(path, e.Name()))
+		}
+	}
+	return files, nil
+}
+
 // LoadAndValidate loads the config and validates all components
 func LoadAndValidate(path string) (*Config, error) {
 	cfg, err := Load(path)
@@ -372,14 +478,27 @@ func loadFromFiles(files []string) (*Config, error) {
 			if err != nil {
 				return nil, fmt.Errorf("plugin '%s' (version %s) failed to load: %w", p.Name, p.Version, err)
 			}
+			// Add to loaded plugins first — even if Configure fails,
+			// the plugin binary is running and ListTools works for metadata
+			loadedPlugins[p.Name] = client
+
 			// Configure the plugin with settings if any
 			if len(p.Settings) > 0 {
+				// Check for empty settings before calling Configure — plugins may
+				// crash on invalid input, killing the gRPC connection
+				var emptySettings []string
+				for k, v := range p.Settings {
+					if v == "" {
+						emptySettings = append(emptySettings, k)
+					}
+				}
+				if len(emptySettings) > 0 {
+					return nil, fmt.Errorf("plugin '%s' failed to configure: settings %v are empty — check that the corresponding variables are set", p.Name, emptySettings)
+				}
 				if err := client.Configure(p.Settings); err != nil {
-					client.Close()
 					return nil, fmt.Errorf("plugin '%s' failed to configure: %w", p.Name, err)
 				}
 			}
-			loadedPlugins[p.Name] = client
 		}
 	}
 

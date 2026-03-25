@@ -1077,8 +1077,12 @@ func (c *Client) handleGetVariables(env *protocol.Envelope) (*protocol.Envelope,
 		})
 	}
 
-	details := make([]protocol.VariableDetail, 0, len(cfg.Variables))
-	for _, v := range cfg.Variables {
+	var cfgVars []config.Variable
+	if cfg != nil {
+		cfgVars = cfg.Variables
+	}
+	details := make([]protocol.VariableDetail, 0, len(cfgVars))
+	for _, v := range cfgVars {
 		detail := protocol.VariableDetail{
 			Name:   v.Name,
 			Secret: v.Secret,
@@ -1121,19 +1125,21 @@ func (c *Client) handleSetVariable(env *protocol.Envelope) (*protocol.Envelope, 
 		})
 	}
 
-	// Validate variable exists in config
+	// Validate variable exists in config (skip if config not yet loaded)
 	cfg := c.getConfig()
-	found := false
-	for _, v := range cfg.Variables {
-		if v.Name == payload.Name {
-			found = true
-			break
+	if cfg != nil {
+		found := false
+		for _, v := range cfg.Variables {
+			if v.Name == payload.Name {
+				found = true
+				break
+			}
 		}
-	}
-	if !found {
-		return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
-			Error: fmt.Sprintf("variable %q not defined in config", payload.Name),
-		})
+		if !found {
+			return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
+				Error: fmt.Sprintf("variable %q not defined in config", payload.Name),
+			})
+		}
 	}
 
 	if err := config.SetVar(payload.Name, payload.Value); err != nil {

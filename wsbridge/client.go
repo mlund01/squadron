@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"sync"
 	"time"
 
@@ -25,14 +26,16 @@ const (
 
 // Client manages the WebSocket connection from a squadron instance to commander.
 type Client struct {
-	cfg        *config.Config
-	cfgMu      sync.RWMutex
+	cfg      *config.Config // may be partial until full load succeeds
+	cfgReady bool          // true when config is fully loaded and validated
+	cfgMu    sync.RWMutex
 	configPath string
 	stores     *store.Bundle
 	version    string
 
-	ws   *websocket.Conn
-	send chan []byte
+	ws        *websocket.Conn
+	send      chan []byte
+	connected bool // true after successful Connect + register
 
 	mu         sync.Mutex
 	pending    map[string]chan *protocol.Envelope // requestID → response channel
@@ -53,6 +56,9 @@ type Client struct {
 	done chan struct{}
 	ctx  context.Context
 	stop context.CancelFunc
+
+	// Callback fired when config loads successfully for the first time (or reloads)
+	OnConfigLoaded func(cfg *config.Config)
 }
 
 // chatSession holds an active chat agent.
@@ -63,11 +69,13 @@ type chatSession struct {
 // RequestHandler processes an incoming request from commander and returns a response payload.
 type RequestHandler func(env *protocol.Envelope) (*protocol.Envelope, error)
 
-// NewClient creates a new wsbridge client.
-func NewClient(cfg *config.Config, configPath string, stores *store.Bundle, version string) *Client {
+// NewClient creates a new wsbridge client. cfgReady indicates whether the config
+// is fully loaded and validated (false = partial config with just vars/plugins).
+func NewClient(cfg *config.Config, cfgReady bool, configPath string, stores *store.Bundle, version string) *Client {
 	ctx, stop := context.WithCancel(context.Background())
 	c := &Client{
 		cfg:        cfg,
+		cfgReady:   cfgReady,
 		configPath: configPath,
 		stores:     stores,
 		version:    version,
@@ -84,9 +92,22 @@ func NewClient(cfg *config.Config, configPath string, stores *store.Bundle, vers
 	return c
 }
 
-// Connect dials the commander WebSocket endpoint, registers, and starts read/write pumps.
+// ConnectTo dials a specific commander URL, registers, and starts read/write pumps.
+// Used when the commander URL is known independently of config (e.g., local command center).
+func (c *Client) ConnectTo(commanderURL string) error {
+	return c.connectToURL(commanderURL)
+}
+
+// Connect dials the commander WebSocket endpoint from config, registers, and starts read/write pumps.
 func (c *Client) Connect() error {
-	url := c.getConfig().Commander.URL
+	cfg := c.getConfig()
+	if cfg == nil || cfg.Commander == nil {
+		return fmt.Errorf("config not loaded")
+	}
+	return c.connectToURL(cfg.Commander.URL)
+}
+
+func (c *Client) connectToURL(url string) error {
 	log.Printf("Connecting to commander at %s...", url)
 
 	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
@@ -94,6 +115,7 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("dial commander: %w", err)
 	}
 	c.ws = ws
+	c.done = make(chan struct{})
 
 	// Start pumps first — register() needs them to send/receive messages
 	go c.readPump()
@@ -105,14 +127,33 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("register: %w", err)
 	}
 
+	c.connected = true
 	log.Printf("Registered with commander (instanceID=%s)", c.instanceID)
 	return nil
 }
 
+// IsConnected returns whether the client has an active commander connection.
+func (c *Client) IsConnected() bool {
+	return c.connected
+}
+
+// HasConfig returns whether the client has a fully loaded and validated config.
+func (c *Client) HasConfig() bool {
+	c.cfgMu.RLock()
+	defer c.cfgMu.RUnlock()
+	return c.cfgReady
+}
+
 // Run blocks until the connection is closed or the context is cancelled.
 func (c *Client) Run() error {
+	if !c.connected {
+		// Not connected yet — just block until context is cancelled
+		<-c.ctx.Done()
+		return nil
+	}
 	select {
 	case <-c.done:
+		c.connected = false
 		return fmt.Errorf("connection closed")
 	case <-c.ctx.Done():
 		return nil
@@ -121,6 +162,7 @@ func (c *Client) Run() error {
 
 // Close shuts down the client.
 func (c *Client) Close() {
+	c.connected = false
 	c.stop()
 	if c.ws != nil {
 		c.ws.Close()
@@ -139,6 +181,18 @@ func (c *Client) getConfig() *config.Config {
 	return c.cfg
 }
 
+// GetConfig returns the current config (exported for use by serve command).
+func (c *Client) GetConfig() *config.Config {
+	return c.getConfig()
+}
+
+// SetConfig replaces the current config without reloading from disk.
+func (c *Client) SetConfig(cfg *config.Config) {
+	c.cfgMu.Lock()
+	c.cfg = cfg
+	c.cfgMu.Unlock()
+}
+
 // ReloadConfig re-reads the config from disk, validates it, and swaps it in.
 // On failure the old config stays active. The caller (commander) updates its
 // registry from the returned config — no re-register needed.
@@ -150,13 +204,22 @@ func (c *Client) ReloadConfig() error {
 
 	c.cfgMu.Lock()
 	oldCfg := c.cfg
+	wasReady := c.cfgReady
 	c.cfg = newCfg
+	c.cfgReady = true
 	c.cfgMu.Unlock()
 
 	// Close plugin clients that were removed in the new config
-	closeRemovedPlugins(oldCfg, newCfg)
+	if wasReady && oldCfg != nil {
+		closeRemovedPlugins(oldCfg, newCfg)
+	}
 
 	log.Println("Config reloaded successfully")
+
+	if c.OnConfigLoaded != nil {
+		c.OnConfigLoaded(newCfg)
+	}
+
 	return nil
 }
 
@@ -175,10 +238,18 @@ func closeRemovedPlugins(oldCfg, newCfg *config.Config) {
 
 func (c *Client) register() error {
 	cfg := c.getConfig()
-	instanceConfig := ConfigToInstanceConfig(cfg)
+	instanceConfig := ConfigToInstanceConfig(cfg) // handles nil cfg
+
+	instanceName := ""
+	if cfg != nil && cfg.Commander != nil {
+		instanceName = cfg.Commander.InstanceName
+	}
+	if instanceName == "" {
+		instanceName, _ = os.Hostname()
+	}
 
 	req, err := protocol.NewRequest(protocol.TypeRegister, &protocol.RegisterPayload{
-		InstanceName: cfg.Commander.InstanceName,
+		InstanceName: instanceName,
 		Version:      c.version,
 		Config:       instanceConfig,
 	})
@@ -276,6 +347,19 @@ func (c *Client) dispatch(env *protocol.Envelope) {
 		}
 	}
 
+	// Handlers that work without a loaded config
+	configFreeHandlers := map[protocol.MessageType]bool{
+		protocol.TypeReloadConfig:    true,
+		protocol.TypeGetConfig:       true,
+		protocol.TypeSetVariable:     true,
+		protocol.TypeDeleteVariable:  true,
+		protocol.TypeGetVariables:    true,
+		protocol.TypeListConfigFiles: true,
+		protocol.TypeGetConfigFile:   true,
+		protocol.TypeWriteConfigFile: true,
+		protocol.TypeValidateConfig:  true,
+	}
+
 	// Handle incoming requests from commander
 	switch env.Type {
 	case protocol.TypeHeartbeat:
@@ -285,6 +369,12 @@ func (c *Client) dispatch(env *protocol.Envelope) {
 		handler, ok := c.handlers[env.Type]
 		if !ok {
 			log.Printf("Unhandled message type from commander: %s", env.Type)
+			return
+		}
+		// Guard: most handlers need a fully loaded config
+		if !c.HasConfig() && !configFreeHandlers[env.Type] {
+			errResp, _ := protocol.NewError(env.RequestID, "config_not_ready", "configuration is not loaded yet — set required variables or fix config errors")
+			c.sendEnvelope(errResp)
 			return
 		}
 		resp, err := handler(env)

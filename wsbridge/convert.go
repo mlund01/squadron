@@ -11,6 +11,9 @@ import (
 // ConfigToInstanceConfig converts squadron's HCL-based config into a JSON-safe protocol.InstanceConfig.
 func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 	ic := protocol.InstanceConfig{}
+	if cfg == nil {
+		return ic
+	}
 
 	for _, m := range cfg.Models {
 		model := ""

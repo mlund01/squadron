@@ -1,12 +1,15 @@
-FROM debian:bookworm-slim
+FROM golang:1.25-alpine AS builder
+ARG VERSION=dev
+WORKDIR /build
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -ldflags="-s -w -X squadron/cmd.Version=${VERSION}" -o squadron ./cmd/cli
 
-ARG VERSION=latest
-
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl bash && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL https://raw.githubusercontent.com/mlund01/squadron/main/install.sh | bash -s ${VERSION}
-
+FROM alpine:latest
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /build/squadron /usr/local/bin/squadron
 ENV SQUADRON_HOME=/data/squadron
-ENV PATH="/root/.local/bin:${PATH}"
-VOLUME /data/squadron
-
+WORKDIR /config
+VOLUME ["/config", "/data/squadron"]
 ENTRYPOINT ["squadron"]

@@ -2,11 +2,11 @@ services:
   squadron:
     build:
       context: .
-      dockerfile: Dockerfile.dev
+      dockerfile: Dockerfile.debian
     volumes:
       - ./../workflows:/config
       - squadron-data:/data/squadron
-    command: ["serve", "-c", "/config", "-w", "--cc-port", "8080", "--no-browser"]
+    command: ["serve", "-w", "--cc-port", "8080", "--no-browser"]
     ports:
       - "8080:8080"
 

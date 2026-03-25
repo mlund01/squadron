@@ -17,7 +17,7 @@ const (
 )
 
 // ReservedPluginNamespaces are plugin names reserved for internal tools
-var ReservedPluginNamespaces = []string{"bash", "http", "dataset"}
+var ReservedPluginNamespaces = []string{"bash", "http", "dataset", "utils"}
 
 // InternalPluginTools maps internal plugin namespaces to their tools
 // These are accessed as plugins.bash.bash, plugins.http.get, etc.
@@ -25,6 +25,7 @@ var InternalPluginTools = map[string][]string{
 	"bash":    {"bash"},
 	"http":    {"get", "post", "put", "patch", "delete"},
 	"dataset": {"set", "sample", "count"},
+	"utils":   {"sleep"},
 }
 
 // InternalTools is the list of available internal tools (legacy format for backwards compatibility)

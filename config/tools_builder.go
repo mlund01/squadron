@@ -129,6 +129,8 @@ func GetInternalPluginTool(ref string, datasetStore aitools.DatasetStore) aitool
 		return &aitools.DatasetSampleTool{Store: datasetStore}
 	case "plugins.dataset.count":
 		return &aitools.DatasetCountTool{Store: datasetStore}
+	case "plugins.utils.sleep":
+		return &aitools.SleepTool{}
 	default:
 		return nil
 	}

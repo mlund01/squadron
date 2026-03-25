@@ -126,8 +126,9 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 	// Add external plugins
 	for _, p := range cfg.Plugins {
 		pi := protocol.PluginInfo{
-			Name: p.Name,
-			Path: p.Source,
+			Name:    p.Name,
+			Path:    p.Source,
+			Version: p.Version,
 		}
 		if client, ok := cfg.LoadedPlugins[p.Name]; ok {
 			if tools, err := client.ListTools(); err == nil {

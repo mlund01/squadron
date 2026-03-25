@@ -170,6 +170,8 @@ github.com/mlund01/squadron-sdk v0.0.28 h1:uCqXhXSyHxa4Qmd+zrwbLMn5uK7jvQnefvrkv
 github.com/mlund01/squadron-sdk v0.0.28/go.mod h1:sfa7zyvk2smddBZLGLqDj5e0Ofpn/dB3zVDkaqGUUos=
 github.com/mlund01/squadron-wire v0.0.29 h1:QEzGwfB9iCk97IyOfVLzWz8TI4vLtFpsXOe3Tf3iZvA=
 github.com/mlund01/squadron-wire v0.0.29/go.mod h1:BmgUAhEkibCiJ2Cre+qfLs/KjeqTmm4BkfcMu6M+jLU=
+github.com/mlund01/squadron-wire v0.0.30 h1:h75T/eeowIXhCLmCjI0bgpZCFmuFY/MbWFHLTfNFR7g=
+github.com/mlund01/squadron-wire v0.0.30/go.mod h1:BmgUAhEkibCiJ2Cre+qfLs/KjeqTmm4BkfcMu6M+jLU=
 github.com/muesli/reflow v0.3.0 h1:IFsN6K9NfGtjeggFP+68I4chLZV2yIKsXJFNZ+eWh6s=
 github.com/muesli/reflow v0.3.0/go.mod h1:pbwTDkVPibjO2kyvBQRBxTWEEGDGq0FlB1BIKtnHY/8=
 github.com/muesli/termenv v0.16.0 h1:S5AlUN9dENB57rsbnkPyfdGuWIlkmzJjbFf0Tf5FWUc=

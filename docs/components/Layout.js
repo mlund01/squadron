@@ -8,6 +8,7 @@ const navigation = [
       { title: 'Introduction', href: '/' },
       { title: 'Installation', href: '/getting-started/installation' },
       { title: 'Quick Start', href: '/getting-started/quickstart' },
+      { title: 'Docker', href: '/getting-started/docker' },
     ],
   },
   {

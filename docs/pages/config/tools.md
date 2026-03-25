@@ -13,7 +13,7 @@ Tools extend agent capabilities. Squadron provides built-in tools and supports c
 Execute shell commands:
 
 ```hcl
-tools = [plugins.bash.bash]
+tools = [builtins.bash.bash]
 ```
 
 ### HTTP
@@ -22,11 +22,11 @@ Make HTTP requests:
 
 ```hcl
 tools = [
-  plugins.http.get,
-  plugins.http.post,
-  plugins.http.put,
-  plugins.http.patch,
-  plugins.http.delete
+  builtins.http.get,
+  builtins.http.post,
+  builtins.http.put,
+  builtins.http.patch,
+  builtins.http.delete
 ]
 ```
 
@@ -38,7 +38,7 @@ Custom tools wrap built-in or plugin tools with custom schemas and transformatio
 
 ```hcl
 tool "weather" {
-  implements  = plugins.http.get
+  implements  = builtins.http.get
   description = "Get weather for a city"
 
   inputs {
@@ -57,7 +57,7 @@ tool "weather" {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `implements` | reference | The underlying tool to wrap (e.g., `plugins.http.get`) |
+| `implements` | reference | The underlying tool to wrap (e.g., `builtins.http.get`) |
 | `description` | string | Description shown to the agent |
 | `inputs` | block | Input schema definition |
 
@@ -81,7 +81,7 @@ Use `inputs.field_name` to reference input values in dynamic fields:
 
 ```hcl
 tool "create_todo" {
-  implements  = plugins.http.post
+  implements  = builtins.http.post
   description = "Create a new todo item"
 
   inputs {

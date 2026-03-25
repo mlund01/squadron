@@ -98,7 +98,7 @@ agent "test_agent" {
   model       = models.bad.llama_3
   personality = "Helpful"
   role        = "Test"
-  tools       = [plugins.bash.bash]
+  tools       = [builtins.bash.bash]
 }
 `
 			dir, _ := writeFixture("config.hcl", hcl)
@@ -142,7 +142,7 @@ agent "bad_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
   role        = "Test"
-  tools       = [plugins.bash.bash]
+  tools       = [builtins.bash.bash]
 }
 `
 			dir, _ := writeFixture("config.hcl", hcl)
@@ -178,7 +178,7 @@ plugin "missing_plugin" {
 		It("rejects a custom tool named after an internal tool", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 tool "weather" {
-  implements  = "plugins.http.get"
+  implements  = "builtins.http.get"
   description = "Get weather"
   url         = "https://api.weather.com"
 }
@@ -187,7 +187,7 @@ agent "test_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
   role        = "Test"
-  tools       = [plugins.bash.bash, tools.weather]
+  tools       = [builtins.bash.bash, tools.weather]
 }
 `
 			dir, _ := writeFixture("config.hcl", hcl)
@@ -197,7 +197,7 @@ agent "test_agent" {
 			// Rename the custom tool to conflict with an internal tool (bash, http_get, etc.)
 			// Also update the agent's tool ref so it doesn't fail on "unknown tool" first
 			cfg.CustomTools[0].Name = "bash"
-			cfg.Agents[0].Tools = []string{"plugins.bash.bash", "tools.bash"}
+			cfg.Agents[0].Tools = []string{"builtins.bash.bash", "tools.bash"}
 			err = cfg.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("conflicts with internal tool"))
@@ -208,7 +208,7 @@ agent "test_agent" {
 		It("handles vars, models, custom tools, agents, and missions together", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 tool "weather" {
-  implements  = "plugins.http.get"
+  implements  = "builtins.http.get"
   description = "Get weather data"
   url         = "https://api.weather.com/forecast"
 }
@@ -217,7 +217,7 @@ agent "researcher" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Research focused"
   role        = "Researcher"
-  tools       = [plugins.bash.bash, tools.weather]
+  tools       = [builtins.bash.bash, tools.weather]
 }
 
 mission "research_pipeline" {

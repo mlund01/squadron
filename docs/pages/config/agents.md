@@ -14,8 +14,8 @@ agent "assistant" {
   personality = "Friendly, helpful, and concise"
   role        = "General purpose assistant"
   tools       = [
-    plugins.bash.bash,
-    plugins.http.get,
+    builtins.bash.bash,
+    builtins.http.get,
     tools.weather
   ]
 }
@@ -34,16 +34,16 @@ agent "assistant" {
 
 Agents can use three types of tools:
 
-### Built-in Plugin Tools
+### Built-in Tools
 
 ```hcl
 tools = [
-  plugins.bash.bash,      # Shell commands
-  plugins.http.get,       # HTTP GET
-  plugins.http.post,      # HTTP POST
-  plugins.http.put,       # HTTP PUT
-  plugins.http.patch,     # HTTP PATCH
-  plugins.http.delete,    # HTTP DELETE
+  builtins.bash.bash,      # Shell commands
+  builtins.http.get,       # HTTP GET
+  builtins.http.post,      # HTTP POST
+  builtins.http.put,       # HTTP PUT
+  builtins.http.patch,     # HTTP PATCH
+  builtins.http.delete,    # HTTP DELETE
 ]
 ```
 
@@ -76,14 +76,14 @@ agent "coder" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Precise and methodical"
   role        = "Software development assistant"
-  tools       = [plugins.bash.bash]
+  tools       = [builtins.bash.bash]
 }
 
 agent "researcher" {
   model       = models.openai.gpt_4o
   personality = "Curious and thorough"
   role        = "Research and information gathering"
-  tools       = [plugins.http.get]
+  tools       = [builtins.http.get]
 }
 
 agent "writer" {

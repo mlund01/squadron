@@ -16,7 +16,7 @@ agent "helper" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Friendly and precise"
   role        = "General assistant"
-  tools       = [plugins.bash.bash, plugins.http.get]
+  tools       = [builtins.bash.bash, builtins.http.get]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
@@ -27,7 +27,7 @@ agent "helper" {
 			Expect(cfg.Agents[0].Model).To(Equal("claude_sonnet_4"))
 			Expect(cfg.Agents[0].Personality).To(Equal("Friendly and precise"))
 			Expect(cfg.Agents[0].Role).To(Equal("General assistant"))
-			Expect(cfg.Agents[0].Tools).To(ConsistOf("plugins.bash.bash", "plugins.http.get"))
+			Expect(cfg.Agents[0].Tools).To(ConsistOf("builtins.bash.bash", "builtins.http.get"))
 		})
 
 		It("parses an agent with pruning block", func() {
@@ -36,7 +36,7 @@ agent "pruned" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Efficient"
   role        = "Pruning tester"
-  tools       = [plugins.bash.bash]
+  tools       = [builtins.bash.bash]
   pruning {
     prune_on = 20
     prune_to = 10
@@ -91,7 +91,7 @@ agent "no_pruning" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Simple"
   role        = "Basic agent"
-  tools       = [plugins.bash.bash]
+  tools       = [builtins.bash.bash]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
@@ -110,7 +110,7 @@ agent "valid_tools" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helper"
   role        = "Tool user"
-  tools       = [plugins.bash.bash, plugins.http.get, plugins.http.post]
+  tools       = [builtins.bash.bash, builtins.http.get, builtins.http.post]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
@@ -125,7 +125,7 @@ agent "http_all" {
   model       = models.anthropic.claude_sonnet_4
   personality = "API master"
   role        = "API caller"
-  tools       = [plugins.http.get, plugins.http.post, plugins.http.put, plugins.http.patch, plugins.http.delete]
+  tools       = [builtins.http.get, builtins.http.post, builtins.http.put, builtins.http.patch, builtins.http.delete]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
@@ -134,19 +134,19 @@ agent "http_all" {
 			Expect(cfg.Agents[0].Tools).To(HaveLen(5))
 		})
 
-		It("accepts plugins.http.all reference", func() {
+		It("accepts builtins.http.all reference", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 agent "all_http" {
   model       = models.anthropic.claude_sonnet_4
   personality = "HTTP master"
   role        = "API caller"
-  tools       = [plugins.http.all]
+  tools       = [builtins.http.all]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadAndValidate(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Agents[0].Tools).To(ContainElement("plugins.http.all"))
+			Expect(cfg.Agents[0].Tools).To(ContainElement("builtins.http.all"))
 		})
 	})
 

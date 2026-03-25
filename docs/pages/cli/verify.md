@@ -37,7 +37,7 @@ Found 2 variable(s)
   - openai_api_key (secret, set)
   - anthropic_api_key (secret, set)
 Found 1 agent(s)
-  - assistant (tools: [plugins.bash.bash plugins.http.get])
+  - assistant (tools: [builtins.bash.bash builtins.http.get])
 Found 1 mission(s)
   - data_pipeline (commander: claude_sonnet_4, agents: [assistant], tasks: 3)
 ```
@@ -53,6 +53,6 @@ Error: agent 'assistant': model 'invalid_model' not found
 - HCL syntax
 - Variable references (`vars.name`)
 - Model references (`models.provider.model_key`)
-- Tool references (`plugins.namespace.tool`, `tools.name`)
+- Tool references (`builtins.namespace.tool`, `plugins.namespace.tool`, `tools.name`)
 - Mission task dependencies (no cycles)
 - Dataset schemas and bindings

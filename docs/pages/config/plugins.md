@@ -47,15 +47,6 @@ agent "browser" {
 
 Plugins are stored in `~/.squadron/plugins/<name>/<version>/plugin`.
 
-## Built-in Plugins
-
-Squadron includes these built-in plugins (always available):
-
-| Plugin | Tools |
-|--------|-------|
-| `bash` | `bash` - Execute shell commands |
-| `http` | `get`, `post`, `put`, `patch`, `delete` |
-
 ## Creating Plugins
 
 Use the [squadron-sdk](https://github.com/mlund01/squadron-sdk) to build plugins:

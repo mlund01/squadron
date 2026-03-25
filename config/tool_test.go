@@ -10,10 +10,10 @@ import (
 var _ = Describe("CustomTool", func() {
 
 	Describe("parsing", func() {
-		It("parses a tool implementing plugins.http.get with inputs and dynamic fields", func() {
+		It("parses a tool implementing builtins.http.get with inputs and dynamic fields", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 tool "weather" {
-  implements  = plugins.http.get
+  implements  = builtins.http.get
   description = "Get weather for a city"
   inputs {
     field "city" {
@@ -30,7 +30,7 @@ tool "weather" {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.CustomTools).To(HaveLen(1))
 			Expect(cfg.CustomTools[0].Name).To(Equal("weather"))
-			Expect(cfg.CustomTools[0].Implements).To(Equal("plugins.http.get"))
+			Expect(cfg.CustomTools[0].Implements).To(Equal("builtins.http.get"))
 			Expect(cfg.CustomTools[0].Description).To(Equal("Get weather for a city"))
 			Expect(cfg.CustomTools[0].Inputs).NotTo(BeNil())
 			Expect(cfg.CustomTools[0].Inputs.Fields).To(HaveLen(1))
@@ -43,7 +43,7 @@ tool "weather" {
 		It("parses a tool with http.post and body field", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 tool "create_todo" {
-  implements  = plugins.http.post
+  implements  = builtins.http.post
   description = "Create a todo"
   inputs {
     field "title" {
@@ -61,7 +61,7 @@ tool "create_todo" {
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.CustomTools[0].Implements).To(Equal("plugins.http.post"))
+			Expect(cfg.CustomTools[0].Implements).To(Equal("builtins.http.post"))
 			Expect(cfg.CustomTools[0].FieldExprs).To(HaveKey("url"))
 			Expect(cfg.CustomTools[0].FieldExprs).To(HaveKey("body"))
 		})
@@ -69,7 +69,7 @@ tool "create_todo" {
 		It("parses a tool with no inputs block", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 tool "hello" {
-  implements = plugins.bash.bash
+  implements = builtins.bash.bash
   command    = "echo hello"
 }
 `
@@ -83,11 +83,11 @@ tool "hello" {
 		It("parses multiple custom tools", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 tool "tool_a" {
-  implements = plugins.http.get
+  implements = builtins.http.get
   url = "https://example.com/a"
 }
 tool "tool_b" {
-  implements = plugins.http.get
+  implements = builtins.http.get
   url = "https://example.com/b"
 }
 `
@@ -100,7 +100,7 @@ tool "tool_b" {
 
 	Describe("Validate", func() {
 		It("accepts tool with plugins.* implements format", func() {
-			t := config.CustomTool{Name: "mytool", Implements: "plugins.http.get"}
+			t := config.CustomTool{Name: "mytool", Implements: "builtins.http.get"}
 			Expect(t.Validate()).To(Succeed())
 		})
 
@@ -115,7 +115,8 @@ tool "tool_b" {
 			t := config.CustomTool{Name: "mytool", Implements: "bash"}
 			err := t.Validate()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("plugins.{namespace}.{tool} format"))
+			Expect(err.Error()).To(ContainSubstring("builtins.{namespace}.{tool}"))
+
 		})
 
 		It("rejects tool with legacy format implements", func() {
@@ -127,7 +128,7 @@ tool "tool_b" {
 
 	Describe("IsPluginTool / GetPluginToolRef", func() {
 		It("returns true for plugins.* implements", func() {
-			t := config.CustomTool{Implements: "plugins.bash.bash"}
+			t := config.CustomTool{Implements: "builtins.bash.bash"}
 			Expect(t.IsPluginTool()).To(BeTrue())
 			pName, tName, ok := t.GetPluginToolRef()
 			Expect(ok).To(BeTrue())
@@ -136,7 +137,7 @@ tool "tool_b" {
 		})
 
 		It("parses http plugin tool ref correctly", func() {
-			t := config.CustomTool{Implements: "plugins.http.get"}
+			t := config.CustomTool{Implements: "builtins.http.get"}
 			pName, tName, ok := t.GetPluginToolRef()
 			Expect(ok).To(BeTrue())
 			Expect(pName).To(Equal("http"))
@@ -155,7 +156,7 @@ tool "tool_b" {
 		It("rejects a custom tool named 'bash'", func() {
 			cfg := &config.Config{
 				CustomTools: []config.CustomTool{
-					{Name: "bash", Implements: "plugins.http.get"},
+					{Name: "bash", Implements: "builtins.http.get"},
 				},
 			}
 			err := cfg.Validate()
@@ -168,7 +169,7 @@ tool "tool_b" {
 		It("validates tools.* references to defined custom tools", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 tool "weather" {
-  implements  = plugins.http.get
+  implements  = builtins.http.get
   description = "Weather lookup"
   inputs {
     field "city" {
@@ -182,7 +183,7 @@ agent "tooluser" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Test"
   role        = "Tester"
-  tools       = [plugins.bash.bash, tools.weather]
+  tools       = [builtins.bash.bash, tools.weather]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)

@@ -55,7 +55,7 @@ The config loading uses **staged evaluation** to support HCL expression referenc
 1. **Stage 1**: Load `variable` blocks (no context needed)
 2. **Stage 1.5**: Load `plugin` blocks with `vars` context
 3. **Stage 2**: Load `model` blocks with `vars` + `plugins` context → enables `api_key = vars.anthropic_api_key`
-4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `plugins` context → enables `implements = plugins.http.get`
+4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` context → enables `implements = builtins.http.get`
 5. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` context → enables `model = models.anthropic.claude_sonnet_4` and `tools = [plugins.playwright.all, tools.weather]`
 6. **Stage 5**: Load `mission` blocks with full context
 

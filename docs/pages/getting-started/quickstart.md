@@ -43,7 +43,7 @@ agent "assistant" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful and concise"
   role        = "General purpose assistant"
-  tools       = [plugins.bash.bash, plugins.http.get]
+  tools       = [builtins.bash.bash, builtins.http.get]
 }
 ```
 

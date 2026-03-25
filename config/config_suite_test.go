@@ -67,7 +67,7 @@ agent "test_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
   role        = "Test agent"
-  tools       = [plugins.bash.bash]
+  tools       = [builtins.bash.bash]
 }
 `
 }

@@ -225,17 +225,18 @@ func (c *Config) Validate() error {
 	}
 
 	// Build valid tool references for validation
-	// Format: plugins.{namespace}.{tool} for internal/external plugins
+	// Format: builtins.{namespace}.{tool} for built-in tools
+	//         plugins.{namespace}.{tool} for external plugins
 	//         tools.{name} for custom tools
 	validToolRefs := make(map[string]bool)
 
-	// Add internal plugin tools (plugins.bash.bash, plugins.http.get, etc.)
-	for namespace, tools := range InternalPluginTools {
+	// Add built-in tools (builtins.bash.bash, builtins.http.get, etc.)
+	for namespace, tools := range BuiltinTools {
 		for _, toolName := range tools {
-			validToolRefs[fmt.Sprintf("plugins.%s.%s", namespace, toolName)] = true
+			validToolRefs[fmt.Sprintf("builtins.%s.%s", namespace, toolName)] = true
 		}
-		// Add "all" marker for loading all tools from this plugin
-		validToolRefs[fmt.Sprintf("plugins.%s.all", namespace)] = true
+		// Add "all" marker for loading all tools from this builtin namespace
+		validToolRefs[fmt.Sprintf("builtins.%s.all", namespace)] = true
 	}
 
 	// Add external plugin tools
@@ -777,7 +778,7 @@ func buildModelsContext(ctx *hcl.EvalContext, models []Model) *hcl.EvalContext {
 }
 
 // buildToolsContext adds tools namespace to existing context (custom tools only)
-// Internal tools are now in the plugins namespace (plugins.bash.bash, plugins.http.get)
+// Built-in tools are in the builtins namespace (builtins.bash.bash, builtins.http.get)
 func buildToolsContext(ctx *hcl.EvalContext, customTools []CustomTool) *hcl.EvalContext {
 	toolsMap := make(map[string]cty.Value)
 
@@ -798,44 +799,44 @@ func buildToolsContext(ctx *hcl.EvalContext, customTools []CustomTool) *hcl.Eval
 	}
 }
 
-// buildPluginsContext adds plugins namespace to existing context
-// Creates plugins.{plugin_name}.{tool_name} references
-// Includes both internal tools (bash, http) and external plugins
+// buildPluginsContext adds builtins and plugins namespaces to existing context
+// Creates builtins.{namespace}.{tool} references for built-in tools
+// Creates plugins.{plugin_name}.{tool_name} references for external plugins
 func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.PluginClient) *hcl.EvalContext {
-	pluginsMap := make(map[string]cty.Value)
-
-	// Add internal plugin namespaces (bash, http)
-	for namespace, tools := range InternalPluginTools {
+	// Build builtins namespace (bash, http, dataset, utils)
+	builtinsMap := make(map[string]cty.Value)
+	for namespace, tools := range BuiltinTools {
 		toolsMap := make(map[string]cty.Value)
 		for _, toolName := range tools {
-			toolsMap[toolName] = cty.StringVal(fmt.Sprintf("plugins.%s.%s", namespace, toolName))
+			toolsMap[toolName] = cty.StringVal(fmt.Sprintf("builtins.%s.%s", namespace, toolName))
 		}
-		// Add "all" marker that expands to all tools from this plugin
-		toolsMap["all"] = cty.StringVal(fmt.Sprintf("plugins.%s.all", namespace))
-		pluginsMap[namespace] = cty.ObjectVal(toolsMap)
+		toolsMap["all"] = cty.StringVal(fmt.Sprintf("builtins.%s.all", namespace))
+		builtinsMap[namespace] = cty.ObjectVal(toolsMap)
 	}
 
-	// Add external plugins
+	// Build plugins namespace (external plugins only)
+	pluginsMap := make(map[string]cty.Value)
 	for pluginName, client := range loadedPlugins {
 		toolsMap := make(map[string]cty.Value)
 		tools, err := client.ListTools()
 		if err == nil {
 			for _, t := range tools {
-				// Value is "plugins.{plugin_name}.{tool_name}" to identify the source
 				toolsMap[t.Name] = cty.StringVal(fmt.Sprintf("plugins.%s.%s", pluginName, t.Name))
 			}
 		}
-		// Add "all" marker that expands to all tools from this plugin
 		toolsMap["all"] = cty.StringVal(fmt.Sprintf("plugins.%s.all", pluginName))
 		pluginsMap[pluginName] = cty.ObjectVal(toolsMap)
 	}
 
-	// Copy existing vars and add plugins
+	// Copy existing vars and add both namespaces
 	newVars := make(map[string]cty.Value)
 	for k, v := range ctx.Variables {
 		newVars[k] = v
 	}
-	newVars["plugins"] = cty.ObjectVal(pluginsMap)
+	newVars["builtins"] = cty.ObjectVal(builtinsMap)
+	if len(pluginsMap) > 0 {
+		newVars["plugins"] = cty.ObjectVal(pluginsMap)
+	}
 
 	return &hcl.EvalContext{
 		Variables: newVars,
@@ -845,8 +846,8 @@ func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.
 // GetPluginTool returns a plugin tool by its implements string (e.g., "plugins.pinger.echo")
 func (c *Config) GetPluginTool(implements string) (*plugin.PluginClient, string, error) {
 	parts := strings.Split(implements, ".")
-	if len(parts) != 3 || parts[0] != "plugins" {
-		return nil, "", fmt.Errorf("invalid plugin tool reference: %s", implements)
+	if len(parts) != 3 || (parts[0] != "plugins" && parts[0] != "builtins") {
+		return nil, "", fmt.Errorf("invalid tool reference: %s", implements)
 	}
 
 	pluginName := parts[1]

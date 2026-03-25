@@ -60,8 +60,8 @@ squadron chat -c ./my-config assistant --debug
 
 During chat, agents have access to the tools defined in their configuration. Common built-in tools:
 
-- `plugins.bash.bash` - Execute shell commands
-- `plugins.http.get` - Make HTTP GET requests
-- `plugins.http.post` - Make HTTP POST requests
+- `builtins.bash.bash` - Execute shell commands
+- `builtins.http.get` - Make HTTP GET requests
+- `builtins.http.post` - Make HTTP POST requests
 
 See [Tools](/config/tools) for more information.

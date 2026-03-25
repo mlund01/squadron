@@ -102,8 +102,8 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		ic.Missions = append(ic.Missions, mi)
 	}
 
-	// Add builtin plugins (dataset is internal-only, not user-facing)
-	for namespace, tools := range config.InternalPluginTools {
+	// Add builtin tools (dataset is internal-only, not user-facing)
+	for namespace, tools := range config.BuiltinTools {
 		if namespace == "dataset" {
 			continue
 		}
@@ -113,8 +113,8 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Builtin: true,
 		}
 		for _, toolName := range tools {
-			ref := "plugins." + namespace + "." + toolName
-			if tool := config.GetInternalPluginTool(ref, nil); tool != nil {
+			ref := "builtins." + namespace + "." + toolName
+			if tool := config.GetBuiltinTool(ref, nil); tool != nil {
 				ti := aitoolToProtocolToolInfo(tool)
 				ti.Name = toolName // Use config-level name, not legacy ToolName()
 				pi.Tools = append(pi.Tools, ti)

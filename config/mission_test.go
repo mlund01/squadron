@@ -244,13 +244,13 @@ agent "agent_a" {
   model       = models.anthropic.claude_sonnet_4
   personality = "A"
   role        = "Agent A"
-  tools       = [plugins.bash.bash]
+  tools       = [builtins.bash.bash]
 }
 agent "agent_b" {
   model       = models.anthropic.claude_sonnet_4
   personality = "B"
   role        = "Agent B"
-  tools       = [plugins.http.get]
+  tools       = [builtins.http.get]
 }
 mission "multi_agent" {
   commander {

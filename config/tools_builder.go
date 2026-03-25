@@ -9,7 +9,8 @@ import (
 
 // BuildToolsMap creates a map of tool name -> Tool implementation from the agent's tools list
 // Tools can be:
-//   - Plugin tools: plugins.bash.bash, plugins.http.get, plugins.pinger.echo
+//   - Builtin tools: builtins.bash.bash, builtins.http.get
+//   - Plugin tools: plugins.pinger.echo (external plugins)
 //   - Custom tools: tools.weather, tools.shout (defined in HCL)
 //
 // datasetStore is optional and provides access to mission datasets for dataset tools.
@@ -26,26 +27,34 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 	// Add tools from the agent's tools list
 	for _, toolRef := range agentTools {
 		// Skip dataset tools in agent list - they're auto-injected when in mission context
-		if strings.HasPrefix(toolRef, "plugins.dataset.") {
+		if strings.HasPrefix(toolRef, "builtins.dataset.") {
 			continue
 		}
 
-		// Check for "plugins.{name}.all" - expand to all tools from that plugin
-		if strings.HasPrefix(toolRef, "plugins.") && strings.HasSuffix(toolRef, ".all") {
+		// Check for "builtins.{name}.all" - expand to all tools from that builtin namespace
+		if strings.HasPrefix(toolRef, "builtins.") && strings.HasSuffix(toolRef, ".all") {
 			parts := strings.Split(toolRef, ".")
 			if len(parts) == 3 {
-				pluginName := parts[1]
-				// Check internal plugins first
-				if internalTools, ok := InternalPluginTools[pluginName]; ok {
-					for _, toolName := range internalTools {
-						ref := "plugins." + pluginName + "." + toolName
-						tool := GetInternalPluginTool(ref, datasetStore)
+				namespaceName := parts[1]
+				if builtinToolList, ok := BuiltinTools[namespaceName]; ok {
+					for _, toolName := range builtinToolList {
+						ref := "builtins." + namespaceName + "." + toolName
+						tool := GetBuiltinTool(ref, datasetStore)
 						if tool != nil {
 							tools[ref] = tool
 						}
 					}
-				} else if client, ok := loadedPlugins[pluginName]; ok {
-					// External plugin - get all tools
+				}
+			}
+			continue
+		}
+
+		// Check for "plugins.{name}.all" - expand to all tools from an external plugin
+		if strings.HasPrefix(toolRef, "plugins.") && strings.HasSuffix(toolRef, ".all") {
+			parts := strings.Split(toolRef, ".")
+			if len(parts) == 3 {
+				pluginName := parts[1]
+				if client, ok := loadedPlugins[pluginName]; ok {
 					pluginTools, err := client.ListTools()
 					if err == nil {
 						for _, t := range pluginTools {
@@ -60,10 +69,9 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 			continue
 		}
 
-		// Check if it's a plugin tool reference (plugins.{namespace}.{tool})
-		if IsInternalPluginTool(toolRef) {
-			// Internal plugin tool (bash, http)
-			tool := GetInternalPluginTool(toolRef, datasetStore)
+		// Check if it's a builtin tool reference (builtins.{namespace}.{tool})
+		if IsBuiltinTool(toolRef) {
+			tool := GetBuiltinTool(toolRef, datasetStore)
 			if tool != nil {
 				tools[toolRef] = tool
 			}
@@ -107,29 +115,29 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 	return tools
 }
 
-// GetInternalPluginTool returns the aitools.Tool for an internal plugin tool reference
+// GetBuiltinTool returns the aitools.Tool for a built-in tool reference
 // datasetStore is optional and required for dataset tools.
-func GetInternalPluginTool(ref string, datasetStore aitools.DatasetStore) aitools.Tool {
+func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore) aitools.Tool {
 	switch ref {
-	case "plugins.bash.bash":
+	case "builtins.bash.bash":
 		return &aitools.BashTool{}
-	case "plugins.http.get":
+	case "builtins.http.get":
 		return &aitools.HTTPGetTool{}
-	case "plugins.http.post":
+	case "builtins.http.post":
 		return &aitools.HTTPPostTool{}
-	case "plugins.http.put":
+	case "builtins.http.put":
 		return &aitools.HTTPPutTool{}
-	case "plugins.http.patch":
+	case "builtins.http.patch":
 		return &aitools.HTTPPatchTool{}
-	case "plugins.http.delete":
+	case "builtins.http.delete":
 		return &aitools.HTTPDeleteTool{}
-	case "plugins.dataset.set":
+	case "builtins.dataset.set":
 		return &aitools.SetDatasetTool{Store: datasetStore}
-	case "plugins.dataset.sample":
+	case "builtins.dataset.sample":
 		return &aitools.DatasetSampleTool{Store: datasetStore}
-	case "plugins.dataset.count":
+	case "builtins.dataset.count":
 		return &aitools.DatasetCountTool{Store: datasetStore}
-	case "plugins.utils.sleep":
+	case "builtins.utils.sleep":
 		return &aitools.SleepTool{}
 	default:
 		return nil

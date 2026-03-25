@@ -88,22 +88,28 @@ func (t *CustomTool) Validate() error {
 		return fmt.Errorf("tool '%s': implements is required", t.Name)
 	}
 
-	// All implements values must be in plugins.{namespace}.{tool} format
-	if !t.IsPluginTool() {
-		return fmt.Errorf("tool '%s': implements must be in plugins.{namespace}.{tool} format, got '%s'", t.Name, t.Implements)
+	// All implements values must be in builtins.{namespace}.{tool} or plugins.{namespace}.{tool} format
+	if !t.IsNamespacedTool() {
+		return fmt.Errorf("tool '%s': implements must be in builtins.{namespace}.{tool} or plugins.{namespace}.{tool} format, got '%s'", t.Name, t.Implements)
 	}
 
 	return nil
 }
 
-// IsPluginTool returns true if this tool implements a plugin tool
-func (t *CustomTool) IsPluginTool() bool {
-	return strings.HasPrefix(t.Implements, "plugins.")
+// IsNamespacedTool returns true if this tool implements a namespaced tool (builtins or plugins)
+func (t *CustomTool) IsNamespacedTool() bool {
+	return strings.HasPrefix(t.Implements, "builtins.") || strings.HasPrefix(t.Implements, "plugins.")
 }
 
-// GetPluginToolRef returns the plugin name and tool name if this is a plugin tool
-func (t *CustomTool) GetPluginToolRef() (pluginName, toolName string, ok bool) {
-	if !t.IsPluginTool() {
+// IsPluginTool returns true if this tool implements a plugin tool
+// Deprecated: Use IsNamespacedTool instead
+func (t *CustomTool) IsPluginTool() bool {
+	return t.IsNamespacedTool()
+}
+
+// GetToolRef returns the namespace and tool name from the implements reference
+func (t *CustomTool) GetToolRef() (namespace, toolName string, ok bool) {
+	if !t.IsNamespacedTool() {
 		return "", "", false
 	}
 	parts := strings.Split(t.Implements, ".")
@@ -113,25 +119,31 @@ func (t *CustomTool) GetPluginToolRef() (pluginName, toolName string, ok bool) {
 	return parts[1], parts[2], true
 }
 
-// GetImplementedTool returns an instance of the implemented tool (internal plugin tools only)
-// Handles plugins.bash.bash, plugins.http.get, etc.
+// GetPluginToolRef returns the plugin name and tool name if this is a plugin tool
+// Deprecated: Use GetToolRef instead
+func (t *CustomTool) GetPluginToolRef() (pluginName, toolName string, ok bool) {
+	return t.GetToolRef()
+}
+
+// GetImplementedTool returns an instance of the implemented tool (built-in tools only)
+// Handles builtins.bash.bash, builtins.http.get, etc.
 func (t *CustomTool) GetImplementedTool() aitools.Tool {
-	if !IsInternalPluginTool(t.Implements) {
+	if !IsBuiltinTool(t.Implements) {
 		return nil
 	}
 
 	switch t.Implements {
-	case "plugins.bash.bash":
+	case "builtins.bash.bash":
 		return &aitools.BashTool{}
-	case "plugins.http.get":
+	case "builtins.http.get":
 		return &aitools.HTTPGetTool{}
-	case "plugins.http.post":
+	case "builtins.http.post":
 		return &aitools.HTTPPostTool{}
-	case "plugins.http.put":
+	case "builtins.http.put":
 		return &aitools.HTTPPutTool{}
-	case "plugins.http.patch":
+	case "builtins.http.patch":
 		return &aitools.HTTPPatchTool{}
-	case "plugins.http.delete":
+	case "builtins.http.delete":
 		return &aitools.HTTPDeleteTool{}
 	default:
 		return nil
@@ -140,13 +152,13 @@ func (t *CustomTool) GetImplementedTool() aitools.Tool {
 
 // GetImplementedToolWithPlugins returns an instance of the implemented tool, including external plugin tools
 func (t *CustomTool) GetImplementedToolWithPlugins(loadedPlugins map[string]*plugin.PluginClient) aitools.Tool {
-	// Try internal plugin tool first (plugins.bash.bash, plugins.http.get)
+	// Try builtin tool first (builtins.bash.bash, builtins.http.get)
 	if tool := t.GetImplementedTool(); tool != nil {
 		return tool
 	}
 
 	// Try external plugin tool
-	pluginName, toolName, ok := t.GetPluginToolRef()
+	pluginName, toolName, ok := t.GetToolRef()
 	if !ok {
 		return nil
 	}

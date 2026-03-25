@@ -24,7 +24,7 @@ func (p *Plugin) Validate() error {
 	}
 
 	// Check for reserved plugin namespaces
-	if IsReservedPluginNamespace(p.Name) {
+	if IsReservedBuiltinNamespace(p.Name) {
 		return fmt.Errorf("plugin name '%s' is reserved for internal tools", p.Name)
 	}
 

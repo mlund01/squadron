@@ -395,9 +395,9 @@ func TestConfigConversion(t *testing.T) {
 		t.Errorf("expected agent 'agent1', got %q", ic.Missions[0].Tasks[0].Agent)
 	}
 
-	// 2 builtin plugins (bash, http) + 1 external plugin
-	if len(ic.Plugins) != 3 {
-		t.Fatalf("expected 3 plugins, got %d", len(ic.Plugins))
+	// 3 builtin tools (bash, http, utils) + 1 external plugin
+	if len(ic.Plugins) != 4 {
+		t.Fatalf("expected 4 plugins, got %d", len(ic.Plugins))
 	}
 
 	if len(ic.Variables) != 2 {

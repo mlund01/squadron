@@ -16,12 +16,12 @@ const (
 	ModeMission AgentMode = "mission"
 )
 
-// ReservedPluginNamespaces are plugin names reserved for internal tools
-var ReservedPluginNamespaces = []string{"bash", "http", "dataset", "utils"}
+// ReservedBuiltinNamespaces are names reserved for built-in tools (cannot be used as plugin names).
+var ReservedBuiltinNamespaces = []string{"bash", "http", "dataset", "utils"}
 
-// InternalPluginTools maps internal plugin namespaces to their tools
-// These are accessed as plugins.bash.bash, plugins.http.get, etc.
-var InternalPluginTools = map[string][]string{
+// BuiltinTools maps built-in namespaces to their tools.
+// These are accessed as builtins.bash.bash, builtins.http.get, etc.
+var BuiltinTools = map[string][]string{
 	"bash":    {"bash"},
 	"http":    {"get", "post", "put", "patch", "delete"},
 	"dataset": {"set", "sample", "count"},
@@ -29,7 +29,7 @@ var InternalPluginTools = map[string][]string{
 }
 
 // InternalTools is the list of available internal tools (legacy format for backwards compatibility)
-// Deprecated: Use InternalPluginTools instead
+// Deprecated: Use BuiltinTools instead
 var InternalTools = []string{
 	"bash",
 	"http_get",
@@ -39,9 +39,9 @@ var InternalTools = []string{
 	"http_delete",
 }
 
-// IsReservedPluginNamespace checks if a plugin name is reserved for internal tools
-func IsReservedPluginNamespace(name string) bool {
-	for _, n := range ReservedPluginNamespaces {
+// IsReservedBuiltinNamespace checks if a name is reserved for built-in tools (cannot be used as plugin name)
+func IsReservedBuiltinNamespace(name string) bool {
+	for _, n := range ReservedBuiltinNamespaces {
 		if n == name {
 			return true
 		}
@@ -49,16 +49,16 @@ func IsReservedPluginNamespace(name string) bool {
 	return false
 }
 
-// IsInternalPluginTool checks if a tool reference (e.g., "plugins.http.get") is an internal tool
-func IsInternalPluginTool(ref string) bool {
+// IsBuiltinTool checks if a tool reference (e.g., "builtins.http.get") is a built-in tool
+func IsBuiltinTool(ref string) bool {
 	parts := strings.Split(ref, ".")
-	if len(parts) != 3 || parts[0] != "plugins" {
+	if len(parts) != 3 || parts[0] != "builtins" {
 		return false
 	}
 	pluginName := parts[1]
 	toolName := parts[2]
 
-	tools, ok := InternalPluginTools[pluginName]
+	tools, ok := BuiltinTools[pluginName]
 	if !ok {
 		return false
 	}
@@ -71,7 +71,7 @@ func IsInternalPluginTool(ref string) bool {
 }
 
 // IsInternalTool checks if a tool name is a reserved internal tool (legacy format)
-// Deprecated: Use IsInternalPluginTool instead
+// Deprecated: Use IsBuiltinTool instead
 func IsInternalTool(name string) bool {
 	for _, t := range InternalTools {
 		if t == name {

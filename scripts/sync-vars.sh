@@ -1,14 +1,14 @@
 #!/bin/bash
-# Copies local squadron vars to the Docker container's squadron-data volume.
+# Copies local squadron vault to the Docker container's squadron-data volume.
 # Usage: scripts/sync-vars.sh
 
 set -e
 
-VARS_FILE="$HOME/.squadron/vars.txt"
+VAULT_FILE="$HOME/.squadron/vars.vault"
 CONTAINER="squadron-squadron-1"
 
-if [ ! -f "$VARS_FILE" ]; then
-  echo "No local vars file found at $VARS_FILE"
+if [ ! -f "$VAULT_FILE" ]; then
+  echo "No vault file found at $VAULT_FILE — run 'squadron init' first"
   exit 1
 fi
 
@@ -18,5 +18,5 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   exit 1
 fi
 
-docker cp "$VARS_FILE" "${CONTAINER}:/data/squadron/vars.txt"
-echo "Synced $(wc -l < "$VARS_FILE" | tr -d ' ') variables to container"
+docker cp "$VAULT_FILE" "${CONTAINER}:/data/squadron/vars.vault"
+echo "Synced encrypted vault to container"

@@ -92,8 +92,10 @@ agent "browser_navigator" {
 
 # missions.hcl
 mission "example" {
-  commander = models.anthropic.claude_sonnet_4
-  agents           = [agents.browser_navigator]
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.browser_navigator]
 
   task "login" {
     objective = "Log into the application"

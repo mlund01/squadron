@@ -10,8 +10,10 @@ Missions orchestrate multi-task pipelines using commanders and agents.
 
 ```hcl
 mission "data_pipeline" {
-  commander = models.anthropic.claude_sonnet_4
-  agents           = [agents.researcher, agents.writer]
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.researcher, agents.writer]
 
   task "fetch_data" {
     objective = "Fetch the latest data from the API"

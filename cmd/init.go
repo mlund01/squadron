@@ -84,8 +84,14 @@ func RunInit(passphraseFile string) error {
 
 	// Store in keyring (best effort — may fail in Docker/CI)
 	if storeErr := vault.StorePassphrase(passphrase); storeErr != nil {
-		// Not fatal — passphrase-file or Docker secret still works
-		fmt.Fprintf(os.Stderr, "Note: Could not store passphrase in OS keychain: %v\n", storeErr)
+		// If we auto-generated and can't persist it anywhere, fall back to
+		// the hardcoded passphrase so other processes can also resolve it.
+		if passphraseFile == "" {
+			if _, dockerErr := os.Stat(vault.DockerSecretPath); dockerErr != nil {
+				fmt.Fprintf(os.Stderr, "Note: No keychain available. Using default passphrase.\n")
+				passphrase = []byte(vault.FallbackPassphrase)
+			}
+		}
 	}
 
 	// Migrate existing vars.txt if present

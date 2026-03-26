@@ -6,6 +6,8 @@ title: Tools
 
 Tools extend agent capabilities. Squadron provides built-in tools and supports custom tool definitions.
 
+## Built-in Tools
+
 ### HTTP
 
 Make HTTP requests:
@@ -18,6 +20,14 @@ tools = [
   builtins.http.patch,
   builtins.http.delete
 ]
+```
+
+### Utils
+
+Utility tools:
+
+```hcl
+tools = [builtins.utils.sleep]
 ```
 
 ## Custom Tools

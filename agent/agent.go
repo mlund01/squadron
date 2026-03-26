@@ -126,7 +126,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	}
 
 	// Build tools map
-	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins)
+	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
 
 	// Create result store and interceptor for large results
 	resultStore := aitools.NewMemoryResultStore()
@@ -139,11 +139,8 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	tools["result_keys"] = &aitools.ResultKeysTool{Store: resultStore}
 	tools["result_chunk"] = &aitools.ResultChunkTool{Store: resultStore}
 
-	// Add dataset tools if DatasetStore is available (mission context)
+	// Add bridge tool if DatasetStore is available (mission context)
 	if opts.DatasetStore != nil {
-		tools["set_dataset"] = &aitools.SetDatasetTool{Store: opts.DatasetStore}
-		tools["dataset_sample"] = &aitools.DatasetSampleTool{Store: opts.DatasetStore}
-		tools["dataset_count"] = &aitools.DatasetCountTool{Store: opts.DatasetStore}
 		tools["result_to_dataset"] = &aitools.ResultToDatasetTool{
 			ResultStore:  resultStore,
 			DatasetStore: opts.DatasetStore,

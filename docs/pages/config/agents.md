@@ -14,7 +14,7 @@ agent "assistant" {
   personality = "Friendly, helpful, and concise"
   role        = "General purpose assistant"
   tools       = [
-    builtins.bash.bash,
+    plugins.shell.exec,
     builtins.http.get,
     tools.weather
   ]
@@ -38,7 +38,7 @@ Agents can use three types of tools:
 
 ```hcl
 tools = [
-  builtins.bash.bash,      # Shell commands
+  plugins.shell.exec,      # Shell commands
   builtins.http.get,       # HTTP GET
   builtins.http.post,      # HTTP POST
   builtins.http.put,       # HTTP PUT
@@ -76,7 +76,7 @@ agent "coder" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Precise and methodical"
   role        = "Software development assistant"
-  tools       = [builtins.bash.bash]
+  tools       = [plugins.shell.exec]
 }
 
 agent "researcher" {

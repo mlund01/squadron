@@ -6,14 +6,14 @@ title: Tools
 
 Tools extend agent capabilities. Squadron provides built-in tools and supports custom tool definitions.
 
-## Built-in Tools
+## Shell Plugin
 
-### Bash
+### Exec
 
 Execute shell commands:
 
 ```hcl
-tools = [builtins.bash.bash]
+tools = [plugins.shell.exec]
 ```
 
 ### HTTP

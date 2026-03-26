@@ -126,15 +126,13 @@ func (t *CustomTool) GetPluginToolRef() (pluginName, toolName string, ok bool) {
 }
 
 // GetImplementedTool returns an instance of the implemented tool (built-in tools only)
-// Handles builtins.bash.bash, builtins.http.get, etc.
+// Handles builtins.http.get, builtins.http.get, etc.
 func (t *CustomTool) GetImplementedTool() aitools.Tool {
 	if !IsBuiltinTool(t.Implements) {
 		return nil
 	}
 
 	switch t.Implements {
-	case "builtins.bash.bash":
-		return &aitools.BashTool{}
 	case "builtins.http.get":
 		return &aitools.HTTPGetTool{}
 	case "builtins.http.post":
@@ -152,7 +150,7 @@ func (t *CustomTool) GetImplementedTool() aitools.Tool {
 
 // GetImplementedToolWithPlugins returns an instance of the implemented tool, including external plugin tools
 func (t *CustomTool) GetImplementedToolWithPlugins(loadedPlugins map[string]*plugin.PluginClient) aitools.Tool {
-	// Try builtin tool first (builtins.bash.bash, builtins.http.get)
+	// Try builtin tool first (builtins.http.get, builtins.http.get)
 	if tool := t.GetImplementedTool(); tool != nil {
 		return tool
 	}

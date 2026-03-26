@@ -9,7 +9,7 @@ import (
 
 // BuildToolsMap creates a map of tool name -> Tool implementation from the agent's tools list
 // Tools can be:
-//   - Builtin tools: builtins.bash.bash, builtins.http.get
+//   - Builtin tools: builtins.http.get, builtins.http.get
 //   - Plugin tools: plugins.pinger.echo (external plugins)
 //   - Custom tools: tools.weather, tools.shout (defined in HCL)
 //
@@ -119,8 +119,6 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 // datasetStore is optional and required for dataset tools.
 func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore) aitools.Tool {
 	switch ref {
-	case "builtins.bash.bash":
-		return &aitools.BashTool{}
 	case "builtins.http.get":
 		return &aitools.HTTPGetTool{}
 	case "builtins.http.post":

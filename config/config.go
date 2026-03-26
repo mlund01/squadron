@@ -230,7 +230,7 @@ func (c *Config) Validate() error {
 	//         tools.{name} for custom tools
 	validToolRefs := make(map[string]bool)
 
-	// Add built-in tools (builtins.bash.bash, builtins.http.get, etc.)
+	// Add built-in tools (builtins.http.get, builtins.http.get, etc.)
 	for namespace, tools := range BuiltinTools {
 		for _, toolName := range tools {
 			validToolRefs[fmt.Sprintf("builtins.%s.%s", namespace, toolName)] = true
@@ -778,7 +778,7 @@ func buildModelsContext(ctx *hcl.EvalContext, models []Model) *hcl.EvalContext {
 }
 
 // buildToolsContext adds tools namespace to existing context (custom tools only)
-// Built-in tools are in the builtins namespace (builtins.bash.bash, builtins.http.get)
+// Built-in tools are in the builtins namespace (builtins.http.get, builtins.http.get)
 func buildToolsContext(ctx *hcl.EvalContext, customTools []CustomTool) *hcl.EvalContext {
 	toolsMap := make(map[string]cty.Value)
 

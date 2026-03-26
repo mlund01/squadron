@@ -51,7 +51,6 @@ plugin "configured" {
 					Expect(err).To(HaveOccurred())
 					Expect(err.Error()).To(ContainSubstring("reserved"))
 				},
-				Entry("bash", "bash"),
 				Entry("http", "http"),
 				Entry("dataset", "dataset"),
 			)

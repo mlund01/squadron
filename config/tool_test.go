@@ -69,15 +69,15 @@ tool "create_todo" {
 		It("parses a tool with no inputs block", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 tool "hello" {
-  implements = builtins.bash.bash
-  command    = "echo hello"
+  implements = builtins.http.get
+  url        = "https://example.com"
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.CustomTools[0].Inputs).To(BeNil())
-			Expect(cfg.CustomTools[0].FieldExprs).To(HaveKey("command"))
+			Expect(cfg.CustomTools[0].FieldExprs).To(HaveKey("url"))
 		})
 
 		It("parses multiple custom tools", func() {
@@ -112,7 +112,7 @@ tool "tool_b" {
 		})
 
 		It("rejects tool with non-plugins.* implements format", func() {
-			t := config.CustomTool{Name: "mytool", Implements: "bash"}
+			t := config.CustomTool{Name: "mytool", Implements: "http"}
 			err := t.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("builtins.{namespace}.{tool}"))
@@ -127,13 +127,13 @@ tool "tool_b" {
 	})
 
 	Describe("IsPluginTool / GetPluginToolRef", func() {
-		It("returns true for plugins.* implements", func() {
-			t := config.CustomTool{Implements: "builtins.bash.bash"}
+		It("returns true for builtins.* implements", func() {
+			t := config.CustomTool{Implements: "builtins.http.get"}
 			Expect(t.IsPluginTool()).To(BeTrue())
 			pName, tName, ok := t.GetPluginToolRef()
 			Expect(ok).To(BeTrue())
-			Expect(pName).To(Equal("bash"))
-			Expect(tName).To(Equal("bash"))
+			Expect(pName).To(Equal("http"))
+			Expect(tName).To(Equal("get"))
 		})
 
 		It("parses http plugin tool ref correctly", func() {
@@ -153,10 +153,10 @@ tool "tool_b" {
 	})
 
 	Describe("Config.Validate rejects internal tool name conflict", func() {
-		It("rejects a custom tool named 'bash'", func() {
+		It("rejects a custom tool named 'http_get'", func() {
 			cfg := &config.Config{
 				CustomTools: []config.CustomTool{
-					{Name: "bash", Implements: "builtins.http.get"},
+					{Name: "http_get", Implements: "builtins.http.get"},
 				},
 			}
 			err := cfg.Validate()
@@ -183,7 +183,7 @@ agent "tooluser" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Test"
   role        = "Tester"
-  tools       = [builtins.bash.bash, tools.weather]
+  tools       = [builtins.http.get, tools.weather]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)

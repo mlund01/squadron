@@ -9,13 +9,10 @@ import (
 
 // BuildToolsMap creates a map of tool name -> Tool implementation from the agent's tools list
 // Tools can be:
-//   - Builtin tools: builtins.http.get, builtins.http.get
+//   - Builtin tools: builtins.http.get, builtins.http.post
 //   - Plugin tools: plugins.pinger.echo (external plugins)
 //   - Custom tools: tools.weather, tools.shout (defined in HCL)
-//
-// datasetStore is optional and provides access to mission datasets for dataset tools.
-// When datasetStore is provided (mission context), dataset tools are automatically injected.
-func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient, datasetStore aitools.DatasetStore) map[string]aitools.Tool {
+func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient) map[string]aitools.Tool {
 	tools := make(map[string]aitools.Tool)
 
 	// Build a lookup map for custom tool definitions
@@ -26,11 +23,6 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 
 	// Add tools from the agent's tools list
 	for _, toolRef := range agentTools {
-		// Skip dataset tools in agent list - they're auto-injected when in mission context
-		if strings.HasPrefix(toolRef, "builtins.dataset.") {
-			continue
-		}
-
 		// Check for "builtins.{name}.all" - expand to all tools from that builtin namespace
 		if strings.HasPrefix(toolRef, "builtins.") && strings.HasSuffix(toolRef, ".all") {
 			parts := strings.Split(toolRef, ".")
@@ -39,7 +31,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 				if builtinToolList, ok := BuiltinTools[namespaceName]; ok {
 					for _, toolName := range builtinToolList {
 						ref := "builtins." + namespaceName + "." + toolName
-						tool := GetBuiltinTool(ref, datasetStore)
+						tool := GetBuiltinTool(ref)
 						if tool != nil {
 							tools[ref] = tool
 						}
@@ -71,7 +63,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 
 		// Check if it's a builtin tool reference (builtins.{namespace}.{tool})
 		if IsBuiltinTool(toolRef) {
-			tool := GetBuiltinTool(toolRef, datasetStore)
+			tool := GetBuiltinTool(toolRef)
 			if tool != nil {
 				tools[toolRef] = tool
 			}
@@ -105,19 +97,11 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 		}
 	}
 
-	// Auto-inject dataset tools when running in mission context
-	if datasetStore != nil {
-		tools["set_dataset"] = &aitools.SetDatasetTool{Store: datasetStore}
-		tools["dataset_sample"] = &aitools.DatasetSampleTool{Store: datasetStore}
-		tools["dataset_count"] = &aitools.DatasetCountTool{Store: datasetStore}
-	}
-
 	return tools
 }
 
 // GetBuiltinTool returns the aitools.Tool for a built-in tool reference
-// datasetStore is optional and required for dataset tools.
-func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore) aitools.Tool {
+func GetBuiltinTool(ref string) aitools.Tool {
 	switch ref {
 	case "builtins.http.get":
 		return &aitools.HTTPGetTool{}
@@ -129,12 +113,6 @@ func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore) aitools.Tool 
 		return &aitools.HTTPPatchTool{}
 	case "builtins.http.delete":
 		return &aitools.HTTPDeleteTool{}
-	case "builtins.dataset.set":
-		return &aitools.SetDatasetTool{Store: datasetStore}
-	case "builtins.dataset.sample":
-		return &aitools.DatasetSampleTool{Store: datasetStore}
-	case "builtins.dataset.count":
-		return &aitools.DatasetCountTool{Store: datasetStore}
 	case "builtins.utils.sleep":
 		return &aitools.SleepTool{}
 	default:

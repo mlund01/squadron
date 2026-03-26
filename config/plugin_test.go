@@ -52,7 +52,7 @@ plugin "configured" {
 					Expect(err.Error()).To(ContainSubstring("reserved"))
 				},
 				Entry("http", "http"),
-				Entry("dataset", "dataset"),
+				Entry("utils", "utils"),
 			)
 		})
 

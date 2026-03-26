@@ -126,7 +126,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	}
 
 	// Build tools map
-	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins)
 
 	// Create result store and interceptor for large results
 	resultStore := aitools.NewMemoryResultStore()

@@ -803,7 +803,7 @@ func buildToolsContext(ctx *hcl.EvalContext, customTools []CustomTool) *hcl.Eval
 // Creates builtins.{namespace}.{tool} references for built-in tools
 // Creates plugins.{plugin_name}.{tool_name} references for external plugins
 func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.PluginClient) *hcl.EvalContext {
-	// Build builtins namespace (bash, http, dataset, utils)
+	// Build builtins namespace (http, utils)
 	builtinsMap := make(map[string]cty.Value)
 	for namespace, tools := range BuiltinTools {
 		toolsMap := make(map[string]cty.Value)

@@ -36,8 +36,10 @@ Different models can fill different roles. A fast model can handle routing while
 
 ```hcl
 mission "research" {
-  commander = models.anthropic.claude_sonnet_4
-  agents    = [agents.researcher]
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.researcher]
 
   task "gather" {
     objective = "Research the topic and collect key findings"

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"squadron/config/vault"
 	"squadron/internal/paths"
 )
 
@@ -18,6 +19,24 @@ func GetVarsFilePath() (string, error) {
 	return filepath.Join(sqHome, "vars.txt"), nil
 }
 
+func GetVaultFilePath() (string, error) {
+	sqHome, err := paths.SquadronHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(sqHome, "vars.vault"), nil
+}
+
+// IsVaultInitialized returns true if the vault file exists.
+func IsVaultInitialized() bool {
+	path, err := GetVaultFilePath()
+	if err != nil {
+		return false
+	}
+	_, statErr := os.Stat(path)
+	return statErr == nil
+}
+
 func ensureVarsDir() error {
 	path, err := GetVarsFilePath()
 	if err != nil {
@@ -27,13 +46,42 @@ func ensureVarsDir() error {
 	return os.MkdirAll(dir, 0700)
 }
 
-func LoadVarsFromFile() (map[string]string, error) {
-	vars := make(map[string]string)
+// passphraseFile is set by CLI commands that accept --passphrase-file.
+var passphraseFile string
 
-	path, err := GetVarsFilePath()
+// SetPassphraseFile sets the passphrase file path for vault operations.
+func SetPassphraseFile(path string) {
+	passphraseFile = path
+}
+
+func LoadVarsFromFile() (map[string]string, error) {
+	// Check vault first
+	vaultPath, err := GetVaultFilePath()
 	if err != nil {
 		return nil, err
 	}
+
+	v := vault.Open(vaultPath)
+	if v.Exists() {
+		passphrase, err := vault.ResolvePassphrase(passphraseFile)
+		if err != nil {
+			return nil, fmt.Errorf("resolving passphrase: %w", err)
+		}
+		defer vault.ZeroBytes(passphrase)
+		return v.Load(passphrase)
+	}
+
+	// Fall back to plaintext vars.txt (legacy / pre-init)
+	varsPath, err := GetVarsFilePath()
+	if err != nil {
+		return nil, err
+	}
+	return LoadPlaintextVars(varsPath)
+}
+
+// LoadPlaintextVars reads a plaintext key=value file. Exported for migration use.
+func LoadPlaintextVars(path string) (map[string]string, error) {
+	vars := make(map[string]string)
 
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
@@ -60,6 +108,23 @@ func LoadVarsFromFile() (map[string]string, error) {
 }
 
 func SaveVarsToFile(vars map[string]string) error {
+	// If vault exists, save encrypted
+	vaultPath, err := GetVaultFilePath()
+	if err != nil {
+		return err
+	}
+
+	v := vault.Open(vaultPath)
+	if v.Exists() {
+		passphrase, err := vault.ResolvePassphrase(passphraseFile)
+		if err != nil {
+			return fmt.Errorf("resolving passphrase: %w", err)
+		}
+		defer vault.ZeroBytes(passphrase)
+		return v.Save(passphrase, vars)
+	}
+
+	// Legacy plaintext path
 	if err := ensureVarsDir(); err != nil {
 		return err
 	}
@@ -130,7 +195,7 @@ func ListVars() ([]string, error) {
 }
 
 // ResolveVariableValue returns the effective value for a variable
-// Priority: vars.txt file > default from config
+// Priority: vars file > default from config
 func ResolveVariableValue(v *Variable) (string, error) {
 	fileVars, err := LoadVarsFromFile()
 	if err != nil {
@@ -145,7 +210,7 @@ func ResolveVariableValue(v *Variable) (string, error) {
 }
 
 // ResolveVarRef resolves a variable reference (e.g., "var.openai_api_key")
-// Returns the resolved value from vars.txt
+// Returns the resolved value from vars file
 func ResolveVarRef(ref string) (string, error) {
 	if !strings.HasPrefix(ref, "var.") {
 		return ref, nil // Not a variable reference, return as-is

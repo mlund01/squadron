@@ -38,7 +38,7 @@ squadron vars set api_key sk-ant-...
 squadron vars set app_name production-app
 ```
 
-Values are stored in `~/.squadron/vars.txt`.
+Values are encrypted at rest in `~/.squadron/vars.vault`. You must run `squadron init` before using vars commands.
 
 ## Referencing Variables
 
@@ -56,7 +56,7 @@ agent "assistant" {
 
 ## Resolution Order
 
-1. Value set via `squadron vars set` (stored in `~/.squadron/vars.txt`)
+1. Value set via `squadron vars set` (encrypted in `~/.squadron/vars.vault`)
 2. Default value from `variable` block
 3. Error if neither exists
 

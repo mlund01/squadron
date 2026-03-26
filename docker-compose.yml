@@ -6,7 +6,7 @@ services:
     volumes:
       - ./../workflows:/config
       - squadron-data:/data/squadron
-    command: ["serve", "-w", "--cc-port", "8080", "--no-browser"]
+    command: ["serve", "--init", "-w", "--cc-port", "8080", "--no-browser"]
     ports:
       - "8080:8080"
 

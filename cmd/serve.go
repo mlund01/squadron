@@ -17,6 +17,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"squadron/config"
+	"squadron/config/vault"
 	"squadron/internal/paths"
 	"squadron/store"
 	"squadron/wsbridge"
@@ -27,6 +28,7 @@ var (
 	serveCommandCenter bool
 	serveCCPort        int
 	serveNoBrowser     bool
+	serveAutoInit bool
 )
 
 const (
@@ -61,9 +63,27 @@ func init() {
 	serveCmd.Flags().BoolVarP(&serveCommandCenter, "command-center", "w", false, "Launch a local command center instance")
 	serveCmd.Flags().IntVar(&serveCCPort, "cc-port", 8080, "Port for the command center")
 	serveCmd.Flags().BoolVar(&serveNoBrowser, "no-browser", false, "Don't auto-open browser")
+	serveCmd.Flags().BoolVar(&serveAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
 }
 
 func runServe(cmd *cobra.Command, args []string) {
+	// Init gate
+	if err := EnsureInitialized(serveAutoInit); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Cache passphrase for serve mode (resolved once, used for all var operations)
+	if config.IsVaultInitialized() {
+		passphrase, err := vault.ResolvePassphrase("")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving vault passphrase: %v\n", err)
+			os.Exit(1)
+		}
+		vault.CachePassphrase(passphrase)
+		vault.ZeroBytes(passphrase)
+	}
+
 	var ccProc *exec.Cmd
 	var ccPort int
 	var pingDone chan struct{}
@@ -263,8 +283,15 @@ func configDirModTime(configPath string) time.Time {
 	return latest
 }
 
-// varsFileModTime returns the modification time of the vars file.
+// varsFileModTime returns the modification time of the vars file (vault or plaintext).
 func varsFileModTime() time.Time {
+	// Check vault first
+	if vaultPath, err := config.GetVaultFilePath(); err == nil {
+		if info, err := os.Stat(vaultPath); err == nil {
+			return info.ModTime()
+		}
+	}
+	// Fall back to plaintext
 	path, err := config.GetVarsFilePath()
 	if err != nil {
 		return time.Time{}

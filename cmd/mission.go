@@ -19,6 +19,7 @@ import (
 var inputFlags []string
 var missionDebugMode bool
 var resumeMissionID string
+var missionAutoInit bool
 
 var missionCmd = &cobra.Command{
 	Use:   "mission [mission_name]",
@@ -26,6 +27,11 @@ var missionCmd = &cobra.Command{
 	Long:  `Execute a mission by name. The mission will run all tasks respecting their dependencies, executing independent tasks in parallel. Provide inputs with --input key=value flags.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := EnsureInitialized(missionAutoInit); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
 		missionName := args[0]
 		ctx := context.Background()
 
@@ -109,4 +115,5 @@ func init() {
 	missionCmd.Flags().StringArrayVarP(&inputFlags, "input", "i", nil, "Mission input in key=value format (can be repeated)")
 	missionCmd.Flags().BoolVarP(&missionDebugMode, "debug", "d", false, "Enable debug mode to capture LLM messages and events")
 	missionCmd.Flags().StringVar(&resumeMissionID, "resume", "", "Resume a previously failed mission by its ID")
+	missionCmd.Flags().BoolVar(&missionAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
 }

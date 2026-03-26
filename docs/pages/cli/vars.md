@@ -6,7 +6,7 @@ title: vars
 
 Manage configuration variables.
 
-Variables are stored in `~/.squadron/vars.txt` and can be referenced in HCL configs using `vars.name`.
+Variables are stored in an encrypted vault at `~/.squadron/vars.vault` and can be referenced in HCL configs using `vars.name`. You must run `squadron init` before using vars commands.
 
 ## Commands
 
@@ -55,6 +55,23 @@ openai_api_key = sk-*** (secret)
 app_name = myapp
 ```
 
+### vars change-passphrase
+
+Change the vault encryption passphrase.
+
+```bash
+squadron vars change-passphrase
+squadron vars change-passphrase --new-passphrase-file /path/to/new-passphrase
+```
+
+### vars export
+
+Export all variables as plaintext (use with caution).
+
+```bash
+squadron vars export
+```
+
 ## Using Variables in HCL
 
 Define a variable:
@@ -77,14 +94,8 @@ model "anthropic" {
 }
 ```
 
-## Storage
+## Encryption
 
-Variables are stored as key=value pairs in `~/.squadron/vars.txt`:
+Variables are encrypted at rest using AES-256-GCM with an Argon2id-derived key. The encryption passphrase is stored in your OS keychain (macOS Keychain, Linux Secret Service/KeyCtl, Windows Credential Manager) and never written to disk.
 
-```
-anthropic_api_key=sk-ant-api03-...
-openai_api_key=sk-...
-app_name=myapp
-```
-
-This file should be kept secure and not committed to version control.
+Run `squadron init` to set up encryption. See [squadron init](/cli/init) for details.

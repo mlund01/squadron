@@ -77,7 +77,9 @@ agent "assistant" {
 }
 
 mission "pipeline" {
-  commander = models.anthropic.claude_sonnet_4
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
 }
 ```
 

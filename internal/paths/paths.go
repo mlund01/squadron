@@ -21,6 +21,15 @@ func SquadronHome() (string, error) {
 	return filepath.Join(home, ".squadron"), nil
 }
 
+// EnsureHome creates the SQUADRON_HOME directory if it doesn't exist.
+func EnsureHome() error {
+	home, err := SquadronHome()
+	if err != nil {
+		return err
+	}
+	return os.MkdirAll(home, 0700)
+}
+
 // ResolveFolderPath resolves a folder path, respecting SQUADRON_HOME when set.
 // When SQUADRON_HOME is set (container mode):
 //   - Absolute paths are rooted at $SQUADRON_HOME/folders/

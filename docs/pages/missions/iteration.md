@@ -138,8 +138,10 @@ This helps when iterations need to populate shared caches before others start.
 
 ```hcl
 mission "midwest_weather" {
-  commander = models.anthropic.claude_sonnet_4
-  agents           = [agents.assistant]
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.assistant]
 
   dataset "city_list" {
     description = "Midwest cities to check"

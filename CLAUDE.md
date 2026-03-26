@@ -6,6 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 go build -o squadron ./cmd/cli              # Build the CLI
+./squadron init                            # Initialize encrypted vault
 ./squadron verify <path>                   # Validate HCL config
 ./squadron chat -c <path> <agent_name>     # Start chat with an agent
 ./squadron mission -c <path> <mission>     # Run a mission
@@ -91,8 +92,10 @@ agent "browser_navigator" {
 
 # missions.hcl
 mission "example" {
-  commander = models.anthropic.claude_sonnet_4
-  agents           = [agents.browser_navigator]
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.browser_navigator]
 
   task "login" {
     objective = "Log into the application"
@@ -489,7 +492,13 @@ When `--resume <missionID>` is used:
 
 ## Variable Storage
 
-Variables are stored in `~/.squadron/vars.txt` as `key=value` pairs. The config system merges these with defaults from `variable` blocks. Secret variables are stored but never displayed.
+Variables are encrypted at rest in `~/.squadron/vars.vault` using AES-256-GCM with an Argon2id-derived key. The encryption passphrase is stored in the OS keychain (macOS Keychain, Linux Secret Service/KeyCtl, Windows WinCred).
+
+Run `squadron init` before using vars commands. Commands `serve`, `chat`, and `mission` require init (or pass `--init` to auto-initialize).
+
+Passphrase resolution order: in-process cache → `--passphrase-file` flag → `/run/secrets/vault_passphrase` (Docker) → OS keyring → hardcoded fallback (with warning).
+
+Legacy plaintext `vars.txt` is still supported for backward compatibility but `squadron init` migrates it to the encrypted vault.
 
 ---
 

@@ -88,7 +88,7 @@ Run with your config mounted:
 
 ```bash
 docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
-  ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
+  ghcr.io/mlund01/squadron serve --init -w --cc-port 8080 --no-browser
 ```
 
 See the [Docker guide](/getting-started/docker) for full setup details including Docker Compose.
@@ -110,6 +110,16 @@ sudo mv squadron /usr/local/bin/
 squadron --help
 ```
 
+## Initialize
+
+Before using Squadron, initialize the encrypted vault for secret storage:
+
+```bash
+squadron init
+```
+
+This creates `~/.squadron/` and sets up an encrypted vault with a passphrase stored in your OS keychain.
+
 ## API Keys
 
 Set API keys for the providers you want to use:
@@ -120,4 +130,4 @@ squadron vars set openai_api_key sk-...
 squadron vars set gemini_api_key AIza...
 ```
 
-Variables are stored in `~/.squadron/vars.txt`.
+Variables are encrypted at rest in `~/.squadron/vars.vault`.

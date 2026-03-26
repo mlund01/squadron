@@ -9,10 +9,28 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var origSquadronHome string
+
 func TestConfig(t *testing.T) {
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Config Suite")
 }
+
+var _ = BeforeSuite(func() {
+	// Isolate all config tests from the real vault/keychain
+	origSquadronHome = os.Getenv("SQUADRON_HOME")
+	tmpHome, err := os.MkdirTemp("", "squadron-test-*")
+	Expect(err).NotTo(HaveOccurred())
+	os.Setenv("SQUADRON_HOME", tmpHome)
+})
+
+var _ = AfterSuite(func() {
+	if origSquadronHome != "" {
+		os.Setenv("SQUADRON_HOME", origSquadronHome)
+	} else {
+		os.Unsetenv("SQUADRON_HOME")
+	}
+})
 
 // writeFixture writes an HCL file to a temp directory and returns the dir and file paths.
 func writeFixture(filename, content string) (dir string, filePath string) {

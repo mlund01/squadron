@@ -139,8 +139,11 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	tools["result_keys"] = &aitools.ResultKeysTool{Store: resultStore}
 	tools["result_chunk"] = &aitools.ResultChunkTool{Store: resultStore}
 
-	// Add bridge tool if DatasetStore is available (mission context)
+	// Add dataset tools if DatasetStore is available (mission context)
 	if opts.DatasetStore != nil {
+		tools["set_dataset"] = &aitools.SetDatasetTool{Store: opts.DatasetStore}
+		tools["dataset_sample"] = &aitools.DatasetSampleTool{Store: opts.DatasetStore}
+		tools["dataset_count"] = &aitools.DatasetCountTool{Store: opts.DatasetStore}
 		tools["result_to_dataset"] = &aitools.ResultToDatasetTool{
 			ResultStore:  resultStore,
 			DatasetStore: opts.DatasetStore,

@@ -28,8 +28,7 @@ var (
 	serveCommandCenter bool
 	serveCCPort        int
 	serveNoBrowser     bool
-	serveAutoInit      bool
-	servePassphraseFile string
+	serveAutoInit bool
 )
 
 const (
@@ -65,20 +64,18 @@ func init() {
 	serveCmd.Flags().IntVar(&serveCCPort, "cc-port", 8080, "Port for the command center")
 	serveCmd.Flags().BoolVar(&serveNoBrowser, "no-browser", false, "Don't auto-open browser")
 	serveCmd.Flags().BoolVar(&serveAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
-	serveCmd.Flags().StringVar(&servePassphraseFile, "passphrase-file", "", "Path to file containing vault passphrase")
 }
 
 func runServe(cmd *cobra.Command, args []string) {
 	// Init gate
-	config.SetPassphraseFile(servePassphraseFile)
-	if err := EnsureInitialized(serveAutoInit, servePassphraseFile); err != nil {
+	if err := EnsureInitialized(serveAutoInit); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Cache passphrase for serve mode (resolved once, used for all var operations)
 	if config.IsVaultInitialized() {
-		passphrase, err := vault.ResolvePassphrase(servePassphraseFile)
+		passphrase, err := vault.ResolvePassphrase("")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error resolving vault passphrase: %v\n", err)
 			os.Exit(1)

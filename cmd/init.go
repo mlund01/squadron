@@ -126,7 +126,7 @@ func RunInit(passphraseFile string) error {
 
 // EnsureInitialized checks that squadron has been initialized.
 // If autoInit is true, runs init automatically.
-func EnsureInitialized(autoInit bool, passphraseFile string) error {
+func EnsureInitialized(autoInit bool) error {
 	if config.IsVaultInitialized() {
 		return nil
 	}
@@ -136,7 +136,7 @@ func EnsureInitialized(autoInit bool, passphraseFile string) error {
 	}
 
 	fmt.Println("Auto-initializing Squadron...")
-	return RunInit(passphraseFile)
+	return RunInit("")
 }
 
 // promptYesNo asks a yes/no question (unused for now, available for future use).

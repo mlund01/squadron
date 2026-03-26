@@ -21,7 +21,6 @@ var debugMode bool
 var missionMode bool
 var missionTask string
 var chatAutoInit bool
-var chatPassphraseFile string
 
 var chatCmd = &cobra.Command{
 	Use:   "chat [agent_name]",
@@ -29,8 +28,7 @@ var chatCmd = &cobra.Command{
 	Long:  `Start an interactive chat session with the specified agent.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		config.SetPassphraseFile(chatPassphraseFile)
-		if err := EnsureInitialized(chatAutoInit, chatPassphraseFile); err != nil {
+		if err := EnsureInitialized(chatAutoInit); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -122,5 +120,4 @@ func init() {
 	chatCmd.Flags().BoolVarP(&missionMode, "mission", "w", false, "Run in mission mode (non-interactive)")
 	chatCmd.Flags().StringVarP(&missionTask, "task", "t", "", "Task to run in mission mode (requires --mission)")
 	chatCmd.Flags().BoolVar(&chatAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
-	chatCmd.Flags().StringVar(&chatPassphraseFile, "passphrase-file", "", "Path to file containing vault passphrase")
 }

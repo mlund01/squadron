@@ -20,7 +20,6 @@ var inputFlags []string
 var missionDebugMode bool
 var resumeMissionID string
 var missionAutoInit bool
-var missionPassphraseFile string
 
 var missionCmd = &cobra.Command{
 	Use:   "mission [mission_name]",
@@ -28,8 +27,7 @@ var missionCmd = &cobra.Command{
 	Long:  `Execute a mission by name. The mission will run all tasks respecting their dependencies, executing independent tasks in parallel. Provide inputs with --input key=value flags.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		config.SetPassphraseFile(missionPassphraseFile)
-		if err := EnsureInitialized(missionAutoInit, missionPassphraseFile); err != nil {
+		if err := EnsureInitialized(missionAutoInit); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -118,5 +116,4 @@ func init() {
 	missionCmd.Flags().BoolVarP(&missionDebugMode, "debug", "d", false, "Enable debug mode to capture LLM messages and events")
 	missionCmd.Flags().StringVar(&resumeMissionID, "resume", "", "Resume a previously failed mission by its ID")
 	missionCmd.Flags().BoolVar(&missionAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
-	missionCmd.Flags().StringVar(&missionPassphraseFile, "passphrase-file", "", "Path to file containing vault passphrase")
 }

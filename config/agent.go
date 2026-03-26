@@ -17,12 +17,11 @@ const (
 )
 
 // ReservedBuiltinNamespaces are names reserved for built-in tools (cannot be used as plugin names).
-var ReservedBuiltinNamespaces = []string{"bash", "http", "dataset", "utils"}
+var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils"}
 
 // BuiltinTools maps built-in namespaces to their tools.
-// These are accessed as builtins.bash.bash, builtins.http.get, etc.
+// These are accessed as builtins.http.get, builtins.http.get, etc.
 var BuiltinTools = map[string][]string{
-	"bash":    {"bash"},
 	"http":    {"get", "post", "put", "patch", "delete"},
 	"dataset": {"set", "sample", "count"},
 	"utils":   {"sleep"},
@@ -31,7 +30,6 @@ var BuiltinTools = map[string][]string{
 // InternalTools is the list of available internal tools (legacy format for backwards compatibility)
 // Deprecated: Use BuiltinTools instead
 var InternalTools = []string{
-	"bash",
 	"http_get",
 	"http_post",
 	"http_put",

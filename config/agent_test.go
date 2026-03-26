@@ -16,7 +16,7 @@ agent "helper" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Friendly and precise"
   role        = "General assistant"
-  tools       = [builtins.bash.bash, builtins.http.get]
+  tools       = [builtins.http.get, builtins.http.post]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
@@ -27,7 +27,7 @@ agent "helper" {
 			Expect(cfg.Agents[0].Model).To(Equal("claude_sonnet_4"))
 			Expect(cfg.Agents[0].Personality).To(Equal("Friendly and precise"))
 			Expect(cfg.Agents[0].Role).To(Equal("General assistant"))
-			Expect(cfg.Agents[0].Tools).To(ConsistOf("builtins.bash.bash", "builtins.http.get"))
+			Expect(cfg.Agents[0].Tools).To(ConsistOf("builtins.http.get", "builtins.http.post"))
 		})
 
 		It("parses an agent with pruning block", func() {
@@ -36,7 +36,7 @@ agent "pruned" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Efficient"
   role        = "Pruning tester"
-  tools       = [builtins.bash.bash]
+  tools       = [builtins.http.get]
   pruning {
     prune_on = 20
     prune_to = 10
@@ -91,7 +91,7 @@ agent "no_pruning" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Simple"
   role        = "Basic agent"
-  tools       = [builtins.bash.bash]
+  tools       = [builtins.http.get]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
@@ -110,7 +110,7 @@ agent "valid_tools" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helper"
   role        = "Tool user"
-  tools       = [builtins.bash.bash, builtins.http.get, builtins.http.post]
+  tools       = [builtins.http.get, builtins.http.post, builtins.http.put]
 }
 `
 			_, f := writeFixture("config.hcl", hcl)

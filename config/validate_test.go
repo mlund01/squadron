@@ -98,7 +98,7 @@ agent "test_agent" {
   model       = models.bad.llama_3
   personality = "Helpful"
   role        = "Test"
-  tools       = [builtins.bash.bash]
+  tools       = [builtins.http.get]
 }
 `
 			dir, _ := writeFixture("config.hcl", hcl)
@@ -142,7 +142,7 @@ agent "bad_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
   role        = "Test"
-  tools       = [builtins.bash.bash]
+  tools       = [builtins.http.get]
 }
 `
 			dir, _ := writeFixture("config.hcl", hcl)
@@ -187,17 +187,17 @@ agent "test_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
   role        = "Test"
-  tools       = [builtins.bash.bash, tools.weather]
+  tools       = [builtins.http.get, tools.weather]
 }
 `
 			dir, _ := writeFixture("config.hcl", hcl)
 			cfg, err := config.Load(dir)
 			Expect(err).NotTo(HaveOccurred())
 
-			// Rename the custom tool to conflict with an internal tool (bash, http_get, etc.)
+			// Rename the custom tool to conflict with an internal tool
 			// Also update the agent's tool ref so it doesn't fail on "unknown tool" first
-			cfg.CustomTools[0].Name = "bash"
-			cfg.Agents[0].Tools = []string{"builtins.bash.bash", "tools.bash"}
+			cfg.CustomTools[0].Name = "http_get"
+			cfg.Agents[0].Tools = []string{"builtins.http.get", "tools.http_get"}
 			err = cfg.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("conflicts with internal tool"))
@@ -217,7 +217,7 @@ agent "researcher" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Research focused"
   role        = "Researcher"
-  tools       = [builtins.bash.bash, tools.weather]
+  tools       = [builtins.http.get, tools.weather]
 }
 
 mission "research_pipeline" {

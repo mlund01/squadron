@@ -244,7 +244,7 @@ agent "agent_a" {
   model       = models.anthropic.claude_sonnet_4
   personality = "A"
   role        = "Agent A"
-  tools       = [builtins.bash.bash]
+  tools       = [builtins.http.get]
 }
 agent "agent_b" {
   model       = models.anthropic.claude_sonnet_4

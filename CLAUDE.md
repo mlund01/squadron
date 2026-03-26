@@ -291,9 +291,9 @@ Example: `~/.squadron/plugins/playwright/local/plugin`
 ### Building a Plugin
 
 ```bash
-# Build a plugin to the correct path
-mkdir -p ~/.squadron/plugins/playwright/local
-go build -o ~/.squadron/plugins/playwright/local/plugin ./cmd/plugin_playwright
+# Build a plugin to the correct path (plugins are separate repos)
+squadron plugin build shell /path/to/plugin_shell
+squadron plugin build playwright /path/to/plugin_playwright
 ```
 
 ### Plugin Reference in HCL

@@ -37,7 +37,7 @@ Found 2 variable(s)
   - openai_api_key (secret, set)
   - anthropic_api_key (secret, set)
 Found 1 agent(s)
-  - assistant (tools: [builtins.bash.bash builtins.http.get])
+  - assistant (tools: [builtins.http.get])
 Found 1 mission(s)
   - data_pipeline (commander: claude_sonnet_4, agents: [assistant], tasks: 3)
 ```

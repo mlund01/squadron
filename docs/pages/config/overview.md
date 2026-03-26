@@ -41,7 +41,7 @@ model "anthropic" {
 
 agent "assistant" {
   model = models.anthropic.claude_sonnet_4  # Reference a model
-  tools = [builtins.bash.bash, tools.weather]  # Reference builtins and tools
+  tools = [tools.weather]
 }
 ```
 
@@ -71,7 +71,7 @@ api_key = vars.anthropic_api_key
 model = models.anthropic.claude_sonnet_4
 
 # Lists
-tools = [builtins.bash.bash, builtins.http.get]
+tools = [builtins.http.get]
 ```
 
 ## Validation

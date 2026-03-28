@@ -78,7 +78,11 @@ func (h *WSChatHandler) PublishReasoningChunk(chunk string) {
 	})
 }
 
-func (h *WSChatHandler) FinishReasoning() {
+func (h *WSChatHandler) ReasoningStarted() {
+	// Chat mode doesn't need this — the Thinking() spinner is the UI indicator
+}
+
+func (h *WSChatHandler) ReasoningCompleted() {
 	h.sendChatEvent(protocol.ChatEventReasoningDone, nil)
 }
 

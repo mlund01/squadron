@@ -1324,8 +1324,12 @@ type commanderStreamerAdapter struct {
 	streamer streamers.MissionHandler
 }
 
-func (s *commanderStreamerAdapter) Reasoning(content string) {
-	s.streamer.CommanderReasoning(s.taskName, content)
+func (s *commanderStreamerAdapter) ReasoningStarted() {
+	s.streamer.CommanderReasoningStarted(s.taskName)
+}
+
+func (s *commanderStreamerAdapter) ReasoningCompleted(content string) {
+	s.streamer.CommanderReasoningCompleted(s.taskName, content)
 }
 
 func (s *commanderStreamerAdapter) Answer(content string) {
@@ -2629,8 +2633,12 @@ func (s *iterationStreamerAdapter) getIndex() int {
 	return s.index
 }
 
-func (s *iterationStreamerAdapter) Reasoning(content string) {
-	s.streamer.CommanderReasoning(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), content)
+func (s *iterationStreamerAdapter) ReasoningStarted() {
+	s.streamer.CommanderReasoningStarted(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()))
+}
+
+func (s *iterationStreamerAdapter) ReasoningCompleted(content string) {
+	s.streamer.CommanderReasoningCompleted(fmt.Sprintf("%s[%d]", s.taskName, s.getIndex()), content)
 }
 
 func (s *iterationStreamerAdapter) Answer(content string) {

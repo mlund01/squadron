@@ -176,8 +176,14 @@ func (h *WSMissionHandler) IterationAnswer(taskName string, index int, content s
 	})
 }
 
-func (h *WSMissionHandler) CommanderReasoning(taskName string, content string) {
-	h.sendEvent(protocol.EventCommanderReasoning, protocol.CommanderReasoningData{
+func (h *WSMissionHandler) CommanderReasoningStarted(taskName string) {
+	h.sendEvent(protocol.EventCommanderReasoningStarted, protocol.CommanderReasoningStartedData{
+		TaskName: taskName,
+	})
+}
+
+func (h *WSMissionHandler) CommanderReasoningCompleted(taskName string, content string) {
+	h.sendEvent(protocol.EventCommanderReasoningCompleted, protocol.CommanderReasoningCompletedData{
 		TaskName: taskName,
 		Content:  content,
 	})
@@ -275,7 +281,11 @@ func (c *wsChatHandler) Goodbye() {}
 func (c *wsChatHandler) Error(err error) {}
 
 func (c *wsChatHandler) Thinking() {
-	c.parent.sendEvent(protocol.EventAgentThinking, protocol.AgentThinkingData{
+	// UI indicator only — reasoning_started is the event-driven signal
+}
+
+func (c *wsChatHandler) ReasoningStarted() {
+	c.parent.sendEvent(protocol.EventAgentReasoningStarted, protocol.AgentReasoningStartedData{
 		TaskName:  c.taskName,
 		AgentName: c.agentName,
 	})
@@ -305,7 +315,12 @@ func (c *wsChatHandler) PublishReasoningChunk(chunk string) {
 	// High-volume streaming chunks are not sent over WS individually
 }
 
-func (c *wsChatHandler) FinishReasoning() {}
+func (c *wsChatHandler) ReasoningCompleted() {
+	c.parent.sendEvent(protocol.EventAgentReasoningCompleted, protocol.AgentReasoningCompletedData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+	})
+}
 
 func (c *wsChatHandler) PublishAnswerChunk(chunk string) {
 	// High-volume streaming chunks are not sent over WS individually

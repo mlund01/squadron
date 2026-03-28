@@ -29,7 +29,8 @@ func (m *mockStreamer) ToolComplete(toolCallId, name, result string) {
 func (m *mockStreamer) PublishReasoningChunk(chunk string) {
 	m.reasoningChunks = append(m.reasoningChunks, chunk)
 }
-func (m *mockStreamer) FinishReasoning() { m.finishReasoningCount++ }
+func (m *mockStreamer) ReasoningStarted()   {}
+func (m *mockStreamer) ReasoningCompleted() { m.finishReasoningCount++ }
 func (m *mockStreamer) PublishAnswerChunk(chunk string) {
 	m.answerChunks = append(m.answerChunks, chunk)
 }

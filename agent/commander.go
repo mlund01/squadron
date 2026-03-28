@@ -251,7 +251,8 @@ type SessionLogger interface {
 
 // CommanderStreamer is the interface for streaming commander events
 type CommanderStreamer interface {
-	Reasoning(content string)
+	ReasoningStarted()
+	ReasoningCompleted(content string)
 	Answer(content string)
 	CallingTool(toolCallId, name, input string)
 	ToolComplete(toolCallId, name string, result string)
@@ -1559,6 +1560,7 @@ func (p *commanderParser) processBuffer() {
 		case commanderStateNone:
 			// Look for opening tags
 			if idx := strings.Index(content, "<REASONING>"); idx != -1 {
+				p.streamer.ReasoningStarted()
 				p.state = commanderStateReasoning
 				content = content[idx+11:]
 				p.buffer.Reset()
@@ -1597,7 +1599,7 @@ func (p *commanderParser) processBuffer() {
 					p.reasoningText.WriteString(finalContent)
 				}
 				if p.reasoningText.Len() > 0 {
-					p.streamer.Reasoning(p.reasoningText.String())
+					p.streamer.ReasoningCompleted(p.reasoningText.String())
 				}
 				p.reasoningText.Reset()
 				p.reasoningStarted = false

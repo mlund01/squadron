@@ -104,7 +104,7 @@ func (p *MessageParser) processBuffer() {
 		case StateNone:
 			// Look for opening tags
 			if idx := strings.Index(content, "<REASONING>"); idx != -1 {
-				// Thinking is already displayed on parser creation
+				p.streamer.ReasoningStarted()
 				p.state = StateReasoning
 				content = content[idx+11:] // len("<REASONING>") = 11
 				p.buffer.Reset()
@@ -159,7 +159,7 @@ func (p *MessageParser) processBuffer() {
 				if len(finalContent) > 0 {
 					p.streamer.PublishReasoningChunk(finalContent)
 				}
-				p.streamer.FinishReasoning()
+				p.streamer.ReasoningCompleted()
 				p.state = StateNone
 				content = content[idx+12:] // len("</REASONING>") = 12
 				p.buffer.Reset()

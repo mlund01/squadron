@@ -96,7 +96,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 	}
 
 	// Check concurrency limit
-	if !c.sched.NotifyMissionStarted(payload.MissionName) {
+	if !c.concurrency.NotifyMissionStarted(payload.MissionName) {
 		reason := fmt.Sprintf("mission %q is at max parallel capacity (%d)", payload.MissionName, missionCfg.MaxParallel)
 		skipEnv, _ := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
 			EventType: protocol.EventScheduleSkip,
@@ -117,7 +117,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 	debugLogger, _ := mission.NewDebugLogger("")
 	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger))
 	if err != nil {
-		c.sched.NotifyMissionDone(payload.MissionName)
+		c.concurrency.NotifyMissionDone(payload.MissionName)
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
 			Accepted: false,
 			Reason:   err.Error(),
@@ -1218,7 +1218,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		c.missionMu.Lock()
 		delete(c.runningMissions, mid)
 		c.missionMu.Unlock()
-		c.sched.NotifyMissionDone(missionName)
+		c.concurrency.NotifyMissionDone(missionName)
 
 		if err != nil {
 			log.Printf("Mission %q failed: %v", missionName, err)
@@ -1279,10 +1279,10 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 	}
 }
 
-// scheduledMission is called by the scheduler when a schedule fires.
+// RunScheduledMission is called by the scheduler when a schedule fires.
 // It creates a mission runner and runs it in the background, reusing the
 // same flow as handleRunMission but without a WebSocket request/response.
-func (c *Client) scheduledMission(missionName, source string, inputs map[string]string) {
+func (c *Client) RunScheduledMission(missionName, source string, inputs map[string]string) {
 	cfg := c.getConfig()
 	if cfg == nil {
 		log.Printf("scheduler: cannot run %q (%s): config not loaded", missionName, source)
@@ -1290,7 +1290,7 @@ func (c *Client) scheduledMission(missionName, source string, inputs map[string]
 	}
 
 	// Check concurrency via scheduler
-	if !c.sched.NotifyMissionStarted(missionName) {
+	if !c.concurrency.NotifyMissionStarted(missionName) {
 		reason := fmt.Sprintf("mission %q at capacity, skipping %s", missionName, source)
 		log.Printf("scheduler: %s", reason)
 		skipEnv, _ := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
@@ -1311,7 +1311,7 @@ func (c *Client) scheduledMission(missionName, source string, inputs map[string]
 	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger))
 	if err != nil {
 		log.Printf("scheduler: failed to create runner for %q: %v", missionName, err)
-		c.sched.NotifyMissionDone(missionName)
+		c.concurrency.NotifyMissionDone(missionName)
 		return
 	}
 

@@ -139,7 +139,7 @@ func TestClientConnectAndRegister(t *testing.T) {
 	stores := newTestBundle(t)
 
 
-	client := wsbridge.NewClient(cfg, true, ".", stores, "1.0.0")
+	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
 
 	// Handle registration in background (mock commander side)
 	go func() {
@@ -201,7 +201,7 @@ func TestClientHandlesGetConfig(t *testing.T) {
 	stores := newTestBundle(t)
 
 
-	client := wsbridge.NewClient(cfg, true, ".", stores, "1.0.0")
+	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
 
 	// Handle registration
 	go func() {
@@ -254,7 +254,7 @@ func TestClientHandlesHeartbeat(t *testing.T) {
 	stores := newTestBundle(t)
 
 
-	client := wsbridge.NewClient(cfg, true, ".", stores, "1.0.0")
+	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
 
 	go func() {
 		mc.waitForConnection()
@@ -290,7 +290,7 @@ func TestClientHandlesGetMissions(t *testing.T) {
 	// Create some mission records in the store
 	stores.Missions.CreateMission("search-mission", `{"query": "test"}`, `{}`)
 
-	client := wsbridge.NewClient(cfg, true, ".", stores, "1.0.0")
+	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
 
 	go func() {
 		mc.waitForConnection()

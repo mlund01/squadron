@@ -14,7 +14,6 @@ import (
 
 	"squadron/agent"
 	"squadron/config"
-	"squadron/scheduler"
 	"squadron/store"
 )
 
@@ -54,8 +53,8 @@ type Client struct {
 	missionMu       sync.Mutex
 	runningMissions map[string]context.CancelFunc // missionID → cancel
 
-	// Scheduler for time-based mission triggers
-	sched *scheduler.Scheduler
+	// Concurrency tracker for mission max_parallel enforcement
+	concurrency ConcurrencyTracker
 
 	// Lifecycle
 	done chan struct{}
@@ -70,6 +69,18 @@ type Client struct {
 type chatSession struct {
 	agent *agent.Agent
 }
+
+// ConcurrencyTracker manages mission concurrency limits (max_parallel).
+type ConcurrencyTracker interface {
+	NotifyMissionStarted(missionName string) bool
+	NotifyMissionDone(missionName string)
+}
+
+// noopConcurrency is the default tracker when none is configured — always allows.
+type noopConcurrency struct{}
+
+func (noopConcurrency) NotifyMissionStarted(string) bool { return true }
+func (noopConcurrency) NotifyMissionDone(string)         {}
 
 // RequestHandler processes an incoming request from commander and returns a response payload.
 type RequestHandler func(env *protocol.Envelope) (*protocol.Envelope, error)
@@ -91,15 +102,12 @@ func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath st
 		handlers:     make(map[protocol.MessageType]RequestHandler),
 		chatSessions:    make(map[string]*chatSession),
 		runningMissions: make(map[string]context.CancelFunc),
+		concurrency:     noopConcurrency{},
 		done:         make(chan struct{}),
 		ctx:        ctx,
 		stop:       stop,
 	}
 	c.registerHandlers()
-	c.sched = scheduler.New(c.scheduledMission)
-	if cfgReady && cfg != nil {
-		c.sched.UpdateConfig(cfg)
-	}
 	return c
 }
 
@@ -171,12 +179,14 @@ func (c *Client) Run() error {
 	}
 }
 
+// SetConcurrencyTracker sets the concurrency tracker used to enforce max_parallel.
+func (c *Client) SetConcurrencyTracker(ct ConcurrencyTracker) {
+	c.concurrency = ct
+}
+
 // Close shuts down the client.
 func (c *Client) Close() {
 	c.connected = false
-	if c.sched != nil {
-		c.sched.Stop()
-	}
 	c.stop()
 	if c.ws != nil {
 		c.ws.Close()
@@ -230,11 +240,6 @@ func (c *Client) ReloadConfig() error {
 	}
 
 	log.Println("Config reloaded successfully")
-
-	// Update scheduler with new config
-	if c.sched != nil {
-		c.sched.UpdateConfig(newCfg)
-	}
 
 	if c.OnConfigLoaded != nil {
 		c.OnConfigLoaded(newCfg)

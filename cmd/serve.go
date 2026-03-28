@@ -19,6 +19,7 @@ import (
 	"squadron/config"
 	"squadron/config/vault"
 	"squadron/internal/paths"
+	"squadron/scheduler"
 	"squadron/store"
 	"squadron/wsbridge"
 )
@@ -137,12 +138,20 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 	client := wsbridge.NewClient(cfg, cfgErr == nil, cfgErrMsg, serveConfigPath, stores, Version)
 
+	// Create scheduler — owns cron timers and concurrency tracking
+	sched := scheduler.New(client.RunScheduledMission)
+	client.SetConcurrencyTracker(sched)
+	if cfgErr == nil && cfg != nil {
+		sched.UpdateConfig(cfg)
+	}
+
 	// When config loads/reloads, update commander override and re-register
 	client.OnConfigLoaded = func(newCfg *config.Config) {
 		if localCC {
 			newCfg.CommandCenter = localCommandCenterConfig(newCfg, ccPort)
 			client.SetConfig(newCfg)
 		}
+		sched.UpdateConfig(newCfg)
 	}
 
 	// Connect immediately — even without valid config, the command center
@@ -194,6 +203,7 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	<-stop
 	fmt.Println("\nShutting down...")
+	sched.Stop()
 	client.Close()
 
 	// Clean up command center

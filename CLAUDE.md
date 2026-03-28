@@ -15,7 +15,7 @@ go build -o squadron ./cmd/cli              # Build the CLI
 ./squadron vars set <name> <value>         # Set a variable
 ./squadron vars get <name>                 # Get a variable
 ./squadron vars list                       # List all variables
-./squadron serve -c <path>                 # Connect to commander server (requires commander block)
+./squadron serve -c <path>                 # Connect to command center (requires command_center block)
 ./squadron serve -c <path> -w              # Launch local command center + connect
 ./squadron serve -c <path> -w --cc-port 9090  # Custom command center port
 ./squadron serve -c <path> -w --no-browser # Launch without opening browser
@@ -44,7 +44,9 @@ Squad is an HCL-based CLI for defining and running AI agents and multi-agent mis
 | `plugin/` | gRPC plugin system using hashicorp/go-plugin |
 | `mission/` | Mission runner, task execution, knowledge store |
 | `store/` | Persistence interfaces and SQLite implementation |
+| `scheduler/` | Cron-based mission scheduling and next-fire calculation |
 | `streamers/` | Output streaming interfaces for CLI/TUI |
+| `wsbridge/` | WebSocket bridge client for command center communication |
 | `cmd/` | CLI commands and plugin entry points |
 
 ---
@@ -113,6 +115,72 @@ mission "example" {
   }
 }
 ```
+
+### Schedules, Triggers, and Concurrency
+
+Missions can run automatically via schedules (cron-based timers) or triggers (webhooks). Both are defined inside the `mission` block and are active only in serve mode.
+
+#### Schedule Block
+
+Three mutually exclusive modes — `at` (daily at specific times), `every` (recurring interval), or `cron` (raw 5-field expression):
+
+```hcl
+mission "daily_report" {
+  max_parallel = 2   # Max concurrent instances (default: 3)
+
+  # Daily at 9am on weekdays
+  schedule {
+    at       = ["09:00"]
+    weekdays = ["mon", "tue", "wed", "thu", "fri"]
+    timezone = "America/Chicago"
+    inputs = {
+      report_type = "daily"
+    }
+  }
+
+  # Raw cron — Sunday midnight
+  schedule {
+    cron     = "0 0 * * 0"
+    timezone = "America/Chicago"
+  }
+
+  task "generate" { objective = "Generate the report" }
+}
+```
+
+Multiple `schedule` blocks per mission are allowed; each fires independently. Friendly fields (`at`/`every`/`weekdays`) compile to cron expressions via `ToCron()` in `config/mission.go`.
+
+**Field rules:**
+- `at` — time(s) of day in `HH:MM` 24h format. Implies daily. Cannot combine with `every` or `cron`.
+- `every` — interval: `"5m"`, `"15m"`, `"1h"`, `"2h"`, etc. Must divide evenly into 60 minutes (sub-hour) or 24 hours (hourly+). Cannot combine with `at` or `cron`.
+- `weekdays` — day filter: `["mon", "wed", "fri"]`. Works with `at` or `every`.
+- `cron` — standard 5-field cron expression. Mutually exclusive with `at`/`every`/`weekdays`.
+- `timezone` — IANA timezone (e.g. `"America/Chicago"`). Defaults to system local.
+- `inputs` — key-value map passed to the mission when the schedule fires.
+
+#### Trigger Block
+
+Webhooks are declared in squadron config but handled by the command center:
+
+```hcl
+mission "ingest" {
+  trigger {
+    webhook_path = "/ingest"       # Defaults to "/<mission_name>"
+    secret       = vars.hook_secret # Validates X-Webhook-Secret header
+  }
+  task "process" { objective = "Process incoming data" }
+}
+```
+
+The command center registers the route `POST /webhooks/<instance_name>/<webhook_path>` and dispatches to squadron via WebSocket when hit. One `trigger` block per mission max.
+
+#### Concurrency (`max_parallel`)
+
+`max_parallel` (default 3) limits concurrent instances of a mission across all sources — schedules, webhooks, and manual runs. When at capacity, new runs are skipped and a `schedule_skip` event is emitted.
+
+#### Architecture
+
+The scheduler lives in `scheduler/` but its lifecycle (creation, config updates, shutdown) is managed by `cmd/serve.go`, not wsbridge. The wsbridge client receives a `ConcurrencyTracker` interface for enforcing `max_parallel` on all mission starts. The cron library used is `robfig/cron/v3`.
 
 ### Task Connectivity: depends_on, router, and send_to
 

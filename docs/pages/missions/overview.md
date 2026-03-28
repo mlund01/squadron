@@ -41,6 +41,9 @@ mission "data_pipeline" {
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |
 | `dataset` | block | Dataset definitions (optional) |
+| `schedule` | block | Automatic run schedules (optional, repeatable) |
+| `trigger` | block | Webhook trigger (optional) |
+| `max_parallel` | number | Max concurrent instances (default: 3) |
 
 ## Mission Inputs
 
@@ -184,4 +187,5 @@ See [squadron mission](/squadron/cli/mission#resume) for details.
 - [Routing](/squadron/missions/routing) - Conditional and unconditional task routing
 - [Datasets](/squadron/missions/datasets) - Working with data collections
 - [Iteration](/squadron/missions/iteration) - Processing lists of items
+- [Schedules & Triggers](/squadron/missions/schedules) - Automatic scheduling and webhooks
 - [Internal Tools](/squadron/missions/internal-tools) - Commander and agent tools

@@ -73,6 +73,7 @@ squadron serve -c ./config -w
 - **[Conditional routing](/squadron/missions/routing)** — LLM-driven branching, unconditional fan-out, and cross-mission routing
 - **[Structured outputs](/squadron/missions/tasks)** — typed output schemas on tasks with downstream querying, filtering, and aggregation
 - **[Datasets and iteration](/squadron/missions/datasets)** — process collections in parallel or sequentially with concurrency controls and retries
+- **[Schedules & triggers](/squadron/missions/schedules)** — run missions on cron schedules or via webhook triggers with concurrency controls
 - **[Persistence and resume](/squadron/cli/mission)** — mission state is saved automatically; resume interrupted runs from where they failed
 - **[Command center](/squadron/cli/serve)** — web UI for running missions, viewing DAGs, and monitoring execution in real time
 - **[Plugin system](/squadron/config/plugins)** — extend agents with plugins for browser automation, APIs, and custom integrations

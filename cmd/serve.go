@@ -52,7 +52,7 @@ var serveCmd = &cobra.Command{
 The instance registers with commander, allowing remote config inspection,
 mission execution, and history queries.
 
-Requires a "commander" block in the config with url and instance_name,
+Requires a "command_center" block in the config with url and instance_name,
 or use --command-center (-w) to automatically launch a local command center.`,
 	Run: runServe,
 }
@@ -115,7 +115,7 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	// When using local command center, override commander config
 	if localCC {
-		cfg.Commander = localCommanderConfig(cfg, ccPort)
+		cfg.CommandCenter = localCommandCenterConfig(cfg, ccPort)
 	}
 
 	// Open store — use config storage if available, otherwise default
@@ -131,12 +131,16 @@ func runServe(cmd *cobra.Command, args []string) {
 	defer stores.Close()
 
 	// Create client — cfgErr == nil means config is fully valid
-	client := wsbridge.NewClient(cfg, cfgErr == nil, serveConfigPath, stores, Version)
+	cfgErrMsg := ""
+	if cfgErr != nil {
+		cfgErrMsg = cfgErr.Error()
+	}
+	client := wsbridge.NewClient(cfg, cfgErr == nil, cfgErrMsg, serveConfigPath, stores, Version)
 
 	// When config loads/reloads, update commander override and re-register
 	client.OnConfigLoaded = func(newCfg *config.Config) {
 		if localCC {
-			newCfg.Commander = localCommanderConfig(newCfg, ccPort)
+			newCfg.CommandCenter = localCommandCenterConfig(newCfg, ccPort)
 			client.SetConfig(newCfg)
 		}
 	}
@@ -150,12 +154,12 @@ func runServe(cmd *cobra.Command, args []string) {
 		} else {
 			fmt.Printf("Connected to command center (instance: %s)\n", client.InstanceID())
 		}
-	} else if cfg.Commander != nil {
-		if err := connectWithRetry2(client, cfg.Commander.URL, cfg.Commander.AutoReconnect); err != nil {
+	} else if cfg.CommandCenter != nil {
+		if err := connectWithRetry2(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {
 			log.Printf("Connection failed: %v (will retry when config changes)", err)
 		} else {
 			fmt.Printf("Connected to commander at %s (instance: %s, id: %s)\n",
-				cfg.Commander.URL, cfg.Commander.InstanceName, client.InstanceID())
+				cfg.CommandCenter.URL, cfg.CommandCenter.InstanceName, client.InstanceID())
 		}
 	}
 
@@ -173,9 +177,9 @@ func runServe(cmd *cobra.Command, args []string) {
 			if err := client.Run(); err != nil {
 				log.Printf("Connection lost: %v", err)
 				cfg := client.GetConfig()
-				if cfg != nil && cfg.Commander != nil && cfg.Commander.AutoReconnect {
+				if cfg != nil && cfg.CommandCenter != nil && cfg.CommandCenter.AutoReconnect {
 					log.Println("Attempting to reconnect...")
-					if err := connectWithRetry(client, cfg.Commander); err != nil {
+					if err := connectWithRetry(client, cfg.CommandCenter); err != nil {
 						log.Printf("Reconnect failed: %v", err)
 						// Don't exit — wait for config changes
 						go watchForConfigChanges(client, serveConfigPath)
@@ -208,14 +212,14 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 }
 
-// localCommanderConfig creates a commander config pointing at the local command center.
-func localCommanderConfig(cfg *config.Config, ccPort int) *config.CommanderConfig {
+// localCommandCenterConfig creates a command center config pointing at the local command center.
+func localCommandCenterConfig(cfg *config.Config, ccPort int) *config.CommandCenterConfig {
 	hostname, _ := os.Hostname()
 	instanceName := hostname
-	if cfg != nil && cfg.Commander != nil && cfg.Commander.InstanceName != "" {
-		instanceName = cfg.Commander.InstanceName
+	if cfg != nil && cfg.CommandCenter != nil && cfg.CommandCenter.InstanceName != "" {
+		instanceName = cfg.CommandCenter.InstanceName
 	}
-	cc := &config.CommanderConfig{
+	cc := &config.CommandCenterConfig{
 		URL:               fmt.Sprintf("ws://localhost:%d/ws", ccPort),
 		InstanceName:      instanceName,
 		AutoReconnect:     true,
@@ -303,7 +307,7 @@ func varsFileModTime() time.Time {
 	return info.ModTime()
 }
 
-func connectWithRetry(client *wsbridge.Client, cmdCfg *config.CommanderConfig) error {
+func connectWithRetry(client *wsbridge.Client, cmdCfg *config.CommandCenterConfig) error {
 	autoReconnect := cmdCfg.AutoReconnect
 	return connectWithRetry2(client, cmdCfg.URL, autoReconnect)
 }

@@ -113,7 +113,7 @@ func (mc *mockCommander) sendEnvelope(env *protocol.Envelope) {
 
 func testConfig(wsURL string) *config.Config {
 	return &config.Config{
-		Commander: &config.CommanderConfig{
+		CommandCenter: &config.CommandCenterConfig{
 			URL:                wsURL,
 			InstanceName:       "test-instance",
 			ReconnectInterval:  1,

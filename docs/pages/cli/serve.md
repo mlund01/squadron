@@ -54,15 +54,16 @@ The web UI includes:
 
 ## Configuration
 
-To connect to a remote commander, add a `commander` block to your config:
+To connect to a remote command center, add a `command_center` block to your config:
 
 ```hcl
-commander {
-  url = "ws://commander.example.com/ws"
+command_center {
+  url           = "ws://command-center.example.com/ws"
+  instance_name = "my-instance"
 }
 ```
 
-When using `-w` (local mode), no `commander` block is needed — Squadron starts its own server.
+When using `-w` (local mode), no `command_center` block is needed — Squadron starts its own server.
 
 ## Docker
 

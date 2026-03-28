@@ -14,6 +14,7 @@ import (
 
 	"squadron/agent"
 	"squadron/config"
+	"squadron/scheduler"
 	"squadron/store"
 )
 
@@ -28,6 +29,7 @@ const (
 type Client struct {
 	cfg      *config.Config // may be partial until full load succeeds
 	cfgReady bool          // true when config is fully loaded and validated
+	cfgError string        // non-empty when config failed to load
 	cfgMu    sync.RWMutex
 	configPath string
 	stores     *store.Bundle
@@ -52,6 +54,9 @@ type Client struct {
 	missionMu       sync.Mutex
 	runningMissions map[string]context.CancelFunc // missionID → cancel
 
+	// Scheduler for time-based mission triggers
+	sched *scheduler.Scheduler
+
 	// Lifecycle
 	done chan struct{}
 	ctx  context.Context
@@ -71,11 +76,13 @@ type RequestHandler func(env *protocol.Envelope) (*protocol.Envelope, error)
 
 // NewClient creates a new wsbridge client. cfgReady indicates whether the config
 // is fully loaded and validated (false = partial config with just vars/plugins).
-func NewClient(cfg *config.Config, cfgReady bool, configPath string, stores *store.Bundle, version string) *Client {
+// cfgError is the error message when config failed to load (empty if cfgReady is true).
+func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath string, stores *store.Bundle, version string) *Client {
 	ctx, stop := context.WithCancel(context.Background())
 	c := &Client{
 		cfg:        cfg,
 		cfgReady:   cfgReady,
+		cfgError:   cfgError,
 		configPath: configPath,
 		stores:     stores,
 		version:    version,
@@ -89,30 +96,34 @@ func NewClient(cfg *config.Config, cfgReady bool, configPath string, stores *sto
 		stop:       stop,
 	}
 	c.registerHandlers()
+	c.sched = scheduler.New(c.scheduledMission)
+	if cfgReady && cfg != nil {
+		c.sched.UpdateConfig(cfg)
+	}
 	return c
 }
 
-// ConnectTo dials a specific commander URL, registers, and starts read/write pumps.
-// Used when the commander URL is known independently of config (e.g., local command center).
+// ConnectTo dials a specific command center URL, registers, and starts read/write pumps.
+// Used when the URL is known independently of config (e.g., local command center).
 func (c *Client) ConnectTo(commanderURL string) error {
 	return c.connectToURL(commanderURL)
 }
 
-// Connect dials the commander WebSocket endpoint from config, registers, and starts read/write pumps.
+// Connect dials the command center WebSocket endpoint from config, registers, and starts read/write pumps.
 func (c *Client) Connect() error {
 	cfg := c.getConfig()
-	if cfg == nil || cfg.Commander == nil {
+	if cfg == nil || cfg.CommandCenter == nil {
 		return fmt.Errorf("config not loaded")
 	}
-	return c.connectToURL(cfg.Commander.URL)
+	return c.connectToURL(cfg.CommandCenter.URL)
 }
 
 func (c *Client) connectToURL(url string) error {
-	log.Printf("Connecting to commander at %s...", url)
+	log.Printf("Connecting to command center at %s...", url)
 
 	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
-		return fmt.Errorf("dial commander: %w", err)
+		return fmt.Errorf("dial command center: %w", err)
 	}
 	c.ws = ws
 	c.done = make(chan struct{})
@@ -163,6 +174,9 @@ func (c *Client) Run() error {
 // Close shuts down the client.
 func (c *Client) Close() {
 	c.connected = false
+	if c.sched != nil {
+		c.sched.Stop()
+	}
 	c.stop()
 	if c.ws != nil {
 		c.ws.Close()
@@ -207,6 +221,7 @@ func (c *Client) ReloadConfig() error {
 	wasReady := c.cfgReady
 	c.cfg = newCfg
 	c.cfgReady = true
+	c.cfgError = ""
 	c.cfgMu.Unlock()
 
 	// Close plugin clients that were removed in the new config
@@ -215,6 +230,11 @@ func (c *Client) ReloadConfig() error {
 	}
 
 	log.Println("Config reloaded successfully")
+
+	// Update scheduler with new config
+	if c.sched != nil {
+		c.sched.UpdateConfig(newCfg)
+	}
 
 	if c.OnConfigLoaded != nil {
 		c.OnConfigLoaded(newCfg)
@@ -241,16 +261,22 @@ func (c *Client) register() error {
 	instanceConfig := ConfigToInstanceConfig(cfg) // handles nil cfg
 
 	instanceName := ""
-	if cfg != nil && cfg.Commander != nil {
-		instanceName = cfg.Commander.InstanceName
+	if cfg != nil && cfg.CommandCenter != nil {
+		instanceName = cfg.CommandCenter.InstanceName
 	}
 	if instanceName == "" {
 		instanceName, _ = os.Hostname()
 	}
 
+	c.cfgMu.RLock()
+	cfgError := c.cfgError
+	c.cfgMu.RUnlock()
+
 	req, err := protocol.NewRequest(protocol.TypeRegister, &protocol.RegisterPayload{
 		InstanceName: instanceName,
 		Version:      c.version,
+		ConfigReady:  c.HasConfig(),
+		ConfigError:  cfgError,
 		Config:       instanceConfig,
 	})
 	if err != nil {

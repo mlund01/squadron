@@ -137,11 +137,11 @@ task "analyze_sales" {
 | `integer` | Whole number |
 | `boolean` | True/false |
 
-Structured output is automatically captured and stored. Downstream tasks can query it using the `query_task_output` tool (see [Internal Tools](/missions/internal-tools)).
+Structured output is automatically captured and stored. Downstream tasks can query it using the `query_task_output` tool (see [Internal Tools](/squadron/missions/internal-tools)).
 
 ## Routing
 
-Tasks can route to other tasks (or missions) after they complete. See [Routing](/missions/routing) for full details.
+Tasks can route to other tasks (or missions) after they complete. See [Routing](/squadron/missions/routing) for full details.
 
 ### Conditional Routing
 
@@ -178,6 +178,6 @@ task "fetch" {
 
 ## See Also
 
-- [Routing](/missions/routing) - Conditional and unconditional routing
-- [Missions Overview](/missions/overview) - Mission structure
-- [Internal Tools](/missions/internal-tools) - Commander and agent tools
+- [Routing](/squadron/missions/routing) - Conditional and unconditional routing
+- [Missions Overview](/squadron/missions/overview) - Mission structure
+- [Internal Tools](/squadron/missions/internal-tools) - Commander and agent tools

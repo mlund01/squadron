@@ -154,4 +154,4 @@ agent "notifier" {
 }
 ```
 
-See [Plugins](/config/plugins) for more information.
+See [Plugins](/squadron/config/plugins) for more information.

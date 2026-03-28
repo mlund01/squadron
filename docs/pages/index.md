@@ -67,25 +67,25 @@ squadron serve -c ./config -w
 
 ## Features
 
-- **[HCL configuration](/config/overview)** — declare agents, tools, and missions as version-controllable config files
-- **[Multi-provider](/config/models)** — Anthropic, OpenAI, and Google Gemini, with per-agent model assignment
-- **[Mission orchestration](/missions/overview)** — multi-task pipelines with dependency graphs, structured outputs, and commander-agent delegation
-- **[Conditional routing](/missions/routing)** — LLM-driven branching, unconditional fan-out, and cross-mission routing
-- **[Structured outputs](/missions/tasks)** — typed output schemas on tasks with downstream querying, filtering, and aggregation
-- **[Datasets and iteration](/missions/datasets)** — process collections in parallel or sequentially with concurrency controls and retries
-- **[Persistence and resume](/cli/mission)** — mission state is saved automatically; resume interrupted runs from where they failed
-- **[Command center](/cli/serve)** — web UI for running missions, viewing DAGs, and monitoring execution in real time
-- **[Plugin system](/config/plugins)** — extend agents with plugins for browser automation, APIs, and custom integrations
-- **[Custom tools](/config/tools)** — wrap any plugin capability with a typed schema and description
-- **[Interactive chat](/cli/chat)** — chat directly with any configured agent from the terminal
-- **[Variables](/config/variables)** — manage API keys and configuration values with secret support
-- **[Self-upgrade](/cli/upgrade)** — update to the latest release with a single command
-- **[Docker support](/getting-started/docker)** — published Alpine and Debian images on every release, with multi-arch support
+- **[HCL configuration](/squadron/config/overview)** — declare agents, tools, and missions as version-controllable config files
+- **[Multi-provider](/squadron/config/models)** — Anthropic, OpenAI, and Google Gemini, with per-agent model assignment
+- **[Mission orchestration](/squadron/missions/overview)** — multi-task pipelines with dependency graphs, structured outputs, and commander-agent delegation
+- **[Conditional routing](/squadron/missions/routing)** — LLM-driven branching, unconditional fan-out, and cross-mission routing
+- **[Structured outputs](/squadron/missions/tasks)** — typed output schemas on tasks with downstream querying, filtering, and aggregation
+- **[Datasets and iteration](/squadron/missions/datasets)** — process collections in parallel or sequentially with concurrency controls and retries
+- **[Persistence and resume](/squadron/cli/mission)** — mission state is saved automatically; resume interrupted runs from where they failed
+- **[Command center](/squadron/cli/serve)** — web UI for running missions, viewing DAGs, and monitoring execution in real time
+- **[Plugin system](/squadron/config/plugins)** — extend agents with plugins for browser automation, APIs, and custom integrations
+- **[Custom tools](/squadron/config/tools)** — wrap any plugin capability with a typed schema and description
+- **[Interactive chat](/squadron/cli/chat)** — chat directly with any configured agent from the terminal
+- **[Variables](/squadron/config/variables)** — manage API keys and configuration values with secret support
+- **[Self-upgrade](/squadron/cli/upgrade)** — update to the latest release with a single command
+- **[Docker support](/squadron/getting-started/docker)** — published Alpine and Debian images on every release, with multi-arch support
 - **Single binary** — one `curl` to install, no runtime dependencies
 
 ## Next Steps
 
-- [Installation](/getting-started/installation) — install Squadron in one command
-- [Quick Start](/getting-started/quickstart) — build your first agent in 5 minutes
-- [Configuration](/config/overview) — understand the config system
-- [Missions](/missions/overview) — build multi-step agent workflows
+- [Installation](/squadron/getting-started/installation) — install Squadron in one command
+- [Quick Start](/squadron/getting-started/quickstart) — build your first agent in 5 minutes
+- [Configuration](/squadron/config/overview) — understand the config system
+- [Missions](/squadron/missions/overview) — build multi-step agent workflows

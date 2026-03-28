@@ -74,10 +74,10 @@ docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
   ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
 ```
 
-The container's working directory is `/config`, so the `-c` flag is not needed. See the [Docker guide](/getting-started/docker) for full details.
+The container's working directory is `/config`, so the `-c` flag is not needed. See the [Docker guide](/squadron/getting-started/docker) for full details.
 
 ## See Also
 
-- [Missions Overview](/missions/overview) - Mission structure
-- [mission](/cli/mission) - Run missions from the CLI
-- [Docker](/getting-started/docker) - Running in containers
+- [Missions Overview](/squadron/missions/overview) - Mission structure
+- [mission](/squadron/cli/mission) - Run missions from the CLI
+- [Docker](/squadron/getting-started/docker) - Running in containers

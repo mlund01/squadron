@@ -173,6 +173,8 @@ github.com/mitchellh/go-wordwrap v1.0.1 h1:TLuKupo69TCn6TQSyGxwI1EblZZEsQ0vMlAFQ
 github.com/mitchellh/go-wordwrap v1.0.1/go.mod h1:R62XHJLzvMFRBbcrT7m7WgmE1eOyTSsCt+hzestvNj0=
 github.com/mlund01/squadron-sdk v0.0.28 h1:uCqXhXSyHxa4Qmd+zrwbLMn5uK7jvQnefvrkvgIeCNI=
 github.com/mlund01/squadron-sdk v0.0.28/go.mod h1:sfa7zyvk2smddBZLGLqDj5e0Ofpn/dB3zVDkaqGUUos=
+github.com/mlund01/squadron-wire v0.0.31 h1:H8FTIf32fmUtO+vxgp3Ew57HMwGTBk2jhgkO4vozhOI=
+github.com/mlund01/squadron-wire v0.0.31/go.mod h1:BmgUAhEkibCiJ2Cre+qfLs/KjeqTmm4BkfcMu6M+jLU=
 github.com/mtibben/percent v0.2.1 h1:5gssi8Nqo8QU/r2pynCm+hBQHpkB/uNK7BJCFogWdzs=
 github.com/mtibben/percent v0.2.1/go.mod h1:KG9uO+SZkUp+VkRHsCdYQV3XSZrrSpR3O9ibNBTZrns=
 github.com/muesli/reflow v0.3.0 h1:IFsN6K9NfGtjeggFP+68I4chLZV2yIKsXJFNZ+eWh6s=

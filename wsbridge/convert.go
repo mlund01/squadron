@@ -99,6 +99,29 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			}
 			mi.Tasks = append(mi.Tasks, ti)
 		}
+		// Map schedules
+		for i := range m.Schedules {
+			mi.Schedules = append(mi.Schedules, protocol.ScheduleInfo{
+				Expression: m.Schedules[i].ToCron(),
+				At:         m.Schedules[i].At,
+				Every:      m.Schedules[i].Every,
+				Weekdays:   m.Schedules[i].Weekdays,
+				Timezone:   m.Schedules[i].Timezone,
+				Inputs:     m.Schedules[i].Inputs,
+			})
+		}
+
+		// Map trigger
+		if m.Trigger != nil {
+			mi.Trigger = &protocol.TriggerInfo{
+				Type:        "webhook",
+				WebhookPath: m.Trigger.WebhookPath,
+				HasSecret:   m.Trigger.Secret != "",
+				Secret:      m.Trigger.Secret,
+			}
+		}
+
+		mi.MaxParallel = m.MaxParallel
 		ic.Missions = append(ic.Missions, mi)
 	}
 

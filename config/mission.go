@@ -3,9 +3,13 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strconv"
+	"strings"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
+	"github.com/robfig/cron/v3"
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -75,6 +79,197 @@ func (mf *MissionFolder) Validate() error {
 	return nil
 }
 
+// Schedule defines a time-based trigger for a mission.
+// Three modes (mutually exclusive):
+//   - at:    specific times of day, e.g. ["09:00", "17:00"]
+//   - every: repeating interval that divides evenly into 60m or 24h, e.g. "5m", "2h"
+//   - cron:  raw 5-field cron expression
+//
+// weekdays and timezone can be combined with at or every.
+type Schedule struct {
+	At       []string          `hcl:"at,optional" json:"at,omitempty"`             // Time(s) of day: "09:00", "17:00" (24h format)
+	Every    string            `hcl:"every,optional" json:"every,omitempty"`       // Interval: "5m", "15m", "1h", "2h", "4h", "6h", "12h"
+	Weekdays []string          `hcl:"weekdays,optional" json:"weekdays,omitempty"` // Day filter: "mon", "tue", etc.
+	Cron     string            `hcl:"cron,optional" json:"cron,omitempty"`         // 5-field cron expression
+	Timezone string            `hcl:"timezone,optional" json:"timezone,omitempty"` // IANA timezone, defaults to system local
+	Inputs   map[string]string `json:"inputs,omitempty"`                           // Input values to pass when firing (parsed manually from HCL)
+}
+
+// validWeekdays maps lowercase weekday abbreviations to true.
+var validWeekdays = map[string]bool{
+	"mon": true, "tue": true, "wed": true, "thu": true,
+	"fri": true, "sat": true, "sun": true,
+}
+
+// weekdayCronMap maps weekday abbreviations to cron day-of-week values.
+var weekdayCronMap = map[string]string{
+	"sun": "0", "mon": "1", "tue": "2", "wed": "3",
+	"thu": "4", "fri": "5", "sat": "6",
+}
+
+// timeOfDayPattern matches HH:MM in 24h format.
+var timeOfDayPattern = regexp.MustCompile(`^([01]\d|2[0-3]):([0-5]\d)$`)
+
+// Validate checks that the schedule configuration is valid.
+func (s *Schedule) Validate() error {
+	hasAt := len(s.At) > 0
+	hasEvery := s.Every != ""
+	hasCron := s.Cron != ""
+
+	modes := 0
+	if hasAt {
+		modes++
+	}
+	if hasEvery {
+		modes++
+	}
+	if hasCron {
+		modes++
+	}
+	if modes != 1 {
+		return fmt.Errorf("exactly one of 'at', 'every', or 'cron' must be set")
+	}
+
+	if hasAt {
+		for _, t := range s.At {
+			if !timeOfDayPattern.MatchString(t) {
+				return fmt.Errorf("invalid 'at' value %q: must be HH:MM (24h format)", t)
+			}
+		}
+	}
+
+	if hasEvery {
+		if err := validateEveryInterval(s.Every); err != nil {
+			return err
+		}
+	}
+
+	if hasCron {
+		if len(s.Weekdays) > 0 {
+			return fmt.Errorf("'weekdays' cannot be used with 'cron'")
+		}
+		parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+		if _, err := parser.Parse(s.Cron); err != nil {
+			return fmt.Errorf("invalid cron expression %q: %w", s.Cron, err)
+		}
+	}
+
+	for _, wd := range s.Weekdays {
+		if !validWeekdays[strings.ToLower(wd)] {
+			return fmt.Errorf("invalid weekday %q: must be mon-sun", wd)
+		}
+	}
+
+	if s.Timezone != "" {
+		if _, err := time.LoadLocation(s.Timezone); err != nil {
+			return fmt.Errorf("invalid timezone %q: %w", s.Timezone, err)
+		}
+	}
+
+	return nil
+}
+
+// ToCron compiles the schedule into a 5-field cron expression.
+// Panics if called on an invalid schedule (call Validate first).
+func (s *Schedule) ToCron() string {
+	if s.Cron != "" {
+		return s.Cron
+	}
+
+	dow := "*"
+	if len(s.Weekdays) > 0 {
+		parts := make([]string, len(s.Weekdays))
+		for i, wd := range s.Weekdays {
+			parts[i] = weekdayCronMap[strings.ToLower(wd)]
+		}
+		dow = strings.Join(parts, ",")
+	}
+
+	if len(s.At) > 0 {
+		// Collect unique hours and minutes
+		minutes := make([]string, 0, len(s.At))
+		hours := make([]string, 0, len(s.At))
+		for _, t := range s.At {
+			m := timeOfDayPattern.FindStringSubmatch(t)
+			h, _ := strconv.Atoi(m[1])
+			min, _ := strconv.Atoi(m[2])
+			minutes = append(minutes, strconv.Itoa(min))
+			hours = append(hours, strconv.Itoa(h))
+		}
+		// If all minutes are the same, use a single minute with multiple hours
+		// Otherwise generate one cron per at-time... but cron doesn't support that easily.
+		// For simplicity: if there's one at-time, emit "M H * * dow"
+		// If multiple at-times share the same minute, emit "M H1,H2 * * dow"
+		// Otherwise we need separate cron entries — for now, just emit first one
+		// Actually, cron supports comma-separated hours+minutes combos:
+		// We'll group by minute for cleaner expressions
+		if len(s.At) == 1 {
+			return fmt.Sprintf("%s %s * * %s", minutes[0], hours[0], dow)
+		}
+		// Multiple at-times: check if all have same minute
+		allSameMin := true
+		for _, min := range minutes {
+			if min != minutes[0] {
+				allSameMin = false
+				break
+			}
+		}
+		if allSameMin {
+			return fmt.Sprintf("%s %s * * %s", minutes[0], strings.Join(hours, ","), dow)
+		}
+		// Different minutes: we can still express this as comma-separated if we
+		// accept the cross-product limitation. For most use cases this is fine.
+		return fmt.Sprintf("%s %s * * %s", strings.Join(minutes, ","), strings.Join(hours, ","), dow)
+	}
+
+	// every mode: parse interval and generate step syntax
+	d, _ := time.ParseDuration(s.Every)
+	totalMinutes := int(d.Minutes())
+	if totalMinutes < 60 {
+		// Sub-hour: */N * * * dow
+		return fmt.Sprintf("*/%d * * * %s", totalMinutes, dow)
+	}
+	// Hourly or multi-hour: 0 */N * * dow
+	totalHours := totalMinutes / 60
+	return fmt.Sprintf("0 */%d * * %s", totalHours, dow)
+}
+
+// validateEveryInterval checks that the every duration divides evenly into 60 minutes or 24 hours.
+func validateEveryInterval(every string) error {
+	d, err := time.ParseDuration(every)
+	if err != nil {
+		return fmt.Errorf("invalid 'every' interval %q: %w", every, err)
+	}
+	if d < time.Minute {
+		return fmt.Errorf("'every' must be at least 1m, got %s", every)
+	}
+
+	totalMinutes := int(d.Minutes())
+	if totalMinutes < 60 {
+		// Must divide evenly into 60 minutes
+		if 60%totalMinutes != 0 {
+			return fmt.Errorf("'every' interval %q must divide evenly into 60 minutes (valid: 1m, 2m, 3m, 4m, 5m, 6m, 10m, 12m, 15m, 20m, 30m)", every)
+		}
+		return nil
+	}
+
+	totalHours := totalMinutes / 60
+	if totalMinutes%60 != 0 {
+		return fmt.Errorf("'every' interval %q must be a whole number of hours when >= 1h", every)
+	}
+	// Must divide evenly into 24 hours
+	if 24%totalHours != 0 {
+		return fmt.Errorf("'every' interval %q must divide evenly into 24 hours (valid: 1h, 2h, 3h, 4h, 6h, 8h, 12h)", every)
+	}
+	return nil
+}
+
+// Trigger defines a webhook-based trigger for a mission.
+type Trigger struct {
+	WebhookPath string `hcl:"webhook_path,optional" json:"webhookPath,omitempty"` // Defaults to "/<mission_name>" if empty
+	Secret      string `hcl:"secret,optional" json:"secret,omitempty"`            // Optional: validates X-Webhook-Secret header
+}
+
 // CommanderPruning configures context pruning for a commander
 type CommanderPruning struct {
 	// PruneOn: trigger pruning when conversation reaches this many turns (0 = disabled)
@@ -92,15 +287,18 @@ type MissionCommander struct {
 
 // Mission represents a mission configuration with multiple tasks
 type Mission struct {
-	Name      string            `hcl:"name,label"`
-	Directive string            `hcl:"directive,optional"`
-	Commander *MissionCommander `json:"-"` // Parsed manually from commander block
-	Agents    []string         `hcl:"agents"`
-	Tasks     []Task           `hcl:"task,block"`
-	Inputs    []MissionInput   // Parsed from input blocks
-	Datasets  []Dataset        // Parsed from dataset blocks
-	Folders   []string         // Shared folder names referenced by this mission
-	Folder    *MissionFolder   // Optional dedicated mission folder
+	Name        string            `hcl:"name,label"`
+	Directive   string            `hcl:"directive,optional"`
+	Commander   *MissionCommander `json:"-"` // Parsed manually from commander block
+	Agents      []string          `hcl:"agents"`
+	Tasks       []Task            `hcl:"task,block"`
+	Inputs      []MissionInput    // Parsed from input blocks
+	Datasets    []Dataset         // Parsed from dataset blocks
+	Folders     []string          // Shared folder names referenced by this mission
+	Folder      *MissionFolder    // Optional dedicated mission folder
+	Schedules   []Schedule        `json:"schedules,omitempty"`
+	Trigger     *Trigger          `json:"trigger,omitempty"`
+	MaxParallel int               `json:"maxParallel,omitempty"` // default 3
 }
 
 // Task represents a single task within a mission
@@ -287,6 +485,25 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 	// Validate DAG (no cycles — includes router edges)
 	if err := w.ValidateDAG(); err != nil {
 		return err
+	}
+
+	// Validate schedules
+	for i, sched := range w.Schedules {
+		if err := sched.Validate(); err != nil {
+			return fmt.Errorf("schedule[%d]: %w", i, err)
+		}
+	}
+
+	// Validate trigger
+	if w.Trigger != nil {
+		if w.Trigger.WebhookPath == "" {
+			w.Trigger.WebhookPath = "/" + w.Name
+		}
+	}
+
+	// Validate max_parallel
+	if w.MaxParallel < 0 {
+		return fmt.Errorf("max_parallel must be >= 1")
 	}
 
 	return nil

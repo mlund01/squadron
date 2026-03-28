@@ -41,6 +41,9 @@ mission "data_pipeline" {
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |
 | `dataset` | block | Dataset definitions (optional) |
+| `schedule` | block | Automatic run schedules (optional, repeatable) |
+| `trigger` | block | Webhook trigger (optional) |
+| `max_parallel` | number | Max concurrent instances (default: 3) |
 
 ## Mission Inputs
 
@@ -130,7 +133,7 @@ Commanders have access to special tools:
 - **dataset_next** - Get the next item in sequential dataset processing
 - **list_commander_questions** / **get_commander_answer** - Reuse answers from the shared question store (parallel dedup)
 
-See [Internal Tools](/missions/internal-tools) for full details.
+See [Internal Tools](/squadron/missions/internal-tools) for full details.
 
 ## Context Protection
 
@@ -142,7 +145,7 @@ When tools return large results (>8KB), Squadron automatically:
 
 This prevents context overflow while preserving full data access. Large arrays can be promoted to datasets using `result_to_dataset` for iteration.
 
-See [Datasets](/missions/datasets#large-result-handling) for details.
+See [Datasets](/squadron/missions/datasets#large-result-handling) for details.
 
 ## Structured Outputs
 
@@ -164,7 +167,7 @@ task "analyze" {
 }
 ```
 
-Downstream tasks can query this data using `query_task_output` with filtering and aggregation. See [Tasks](/missions/tasks#structured-output) for details.
+Downstream tasks can query this data using `query_task_output` with filtering and aggregation. See [Tasks](/squadron/missions/tasks#structured-output) for details.
 
 ## Persistence & Resume
 
@@ -176,12 +179,13 @@ squadron mission data_pipeline -c ./config --resume <mission-id>
 
 Resume skips completed tasks and picks up interrupted tasks from where they left off — including restoring LLM conversation state for commanders and agents.
 
-See [squadron mission](/cli/mission#resume) for details.
+See [squadron mission](/squadron/cli/mission#resume) for details.
 
 ## See Also
 
-- [Tasks](/missions/tasks) - Task configuration and dependencies
-- [Routing](/missions/routing) - Conditional and unconditional task routing
-- [Datasets](/missions/datasets) - Working with data collections
-- [Iteration](/missions/iteration) - Processing lists of items
-- [Internal Tools](/missions/internal-tools) - Commander and agent tools
+- [Tasks](/squadron/missions/tasks) - Task configuration and dependencies
+- [Routing](/squadron/missions/routing) - Conditional and unconditional task routing
+- [Datasets](/squadron/missions/datasets) - Working with data collections
+- [Iteration](/squadron/missions/iteration) - Processing lists of items
+- [Schedules & Triggers](/squadron/missions/schedules) - Automatic scheduling and webhooks
+- [Internal Tools](/squadron/missions/internal-tools) - Commander and agent tools

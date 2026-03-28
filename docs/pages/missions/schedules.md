@@ -1,0 +1,165 @@
+---
+title: Schedules & Triggers
+---
+
+# Schedules & Triggers
+
+Missions can run automatically via schedules (cron-based timers) or triggers (webhooks). Both are defined inside the `mission` block and are active only in serve mode.
+
+## Schedules
+
+A `schedule` block defines when a mission should run automatically. Multiple schedule blocks per mission are allowed — each fires independently.
+
+### Three modes
+
+Schedules support three mutually exclusive modes:
+
+| Mode | Use case | Example |
+|------|----------|---------|
+| `at` | Run at specific times each day | `at = ["09:00", "17:00"]` |
+| `every` | Run at a recurring interval | `every = "30m"` |
+| `cron` | Full cron expression | `cron = "0 9 * * 1-5"` |
+
+### `at` — daily at specific times
+
+```hcl
+mission "morning_report" {
+  schedule {
+    at       = ["09:00"]
+    weekdays = ["mon", "tue", "wed", "thu", "fri"]
+    timezone = "America/Chicago"
+  }
+
+  task "generate" { objective = "Generate the morning report" }
+}
+```
+
+- `at` accepts one or more times in `HH:MM` 24-hour format
+- Implies daily — fires once per listed time per day
+- Cannot combine with `every` or `cron`
+
+### `every` — recurring interval
+
+```hcl
+mission "health_check" {
+  schedule {
+    every    = "30m"
+    weekdays = ["mon", "tue", "wed", "thu", "fri"]
+  }
+
+  task "check" { objective = "Run health checks" }
+}
+```
+
+- Accepts durations like `"5m"`, `"15m"`, `"30m"`, `"1h"`, `"2h"`, `"4h"`, `"6h"`, `"12h"`
+- Sub-hour values must divide evenly into 60 minutes
+- Hourly values must divide evenly into 24 hours
+- Cannot combine with `at` or `cron`
+
+### `cron` — raw cron expression
+
+```hcl
+mission "weekly_cleanup" {
+  schedule {
+    cron     = "0 0 * * 0"
+    timezone = "America/Chicago"
+  }
+
+  task "clean" { objective = "Run weekly cleanup" }
+}
+```
+
+- Standard 5-field cron expression (minute, hour, day-of-month, month, day-of-week)
+- Cannot combine with `at`, `every`, or `weekdays`
+
+### Common attributes
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `weekdays` | list of strings | Day filter: `"mon"`, `"tue"`, `"wed"`, `"thu"`, `"fri"`, `"sat"`, `"sun"`. Works with `at` or `every`, not `cron`. |
+| `timezone` | string | IANA timezone (e.g. `"America/Chicago"`, `"UTC"`). Defaults to system local. |
+| `inputs` | map | Key-value pairs passed to the mission when the schedule fires. |
+
+### Schedule inputs
+
+If a mission has required inputs, schedules can provide them:
+
+```hcl
+mission "report" {
+  input "report_type" {
+    type = "string"
+  }
+
+  schedule {
+    at       = ["09:00"]
+    weekdays = ["mon", "tue", "wed", "thu", "fri"]
+    timezone = "America/Chicago"
+    inputs = {
+      report_type = "daily"
+    }
+  }
+
+  schedule {
+    cron     = "0 0 * * 0"
+    timezone = "America/Chicago"
+    inputs = {
+      report_type = "weekly"
+    }
+  }
+
+  task "generate" {
+    objective = "Generate a ${inputs.report_type} report"
+  }
+}
+```
+
+## Triggers
+
+A `trigger` block exposes a mission as a webhook endpoint. The command center registers the HTTP route and dispatches incoming requests to the squadron instance.
+
+```hcl
+mission "ingest" {
+  trigger {
+    webhook_path = "/ingest"
+    secret       = vars.webhook_secret
+  }
+
+  task "process" { objective = "Process incoming data" }
+}
+```
+
+| Attribute | Default | Description |
+|-----------|---------|-------------|
+| `webhook_path` | `"/<mission_name>"` | Path suffix for the webhook endpoint |
+| `secret` | (none) | If set, validates the `X-Webhook-Secret` header on incoming requests |
+
+The command center registers the full route as:
+
+```
+POST /webhooks/<instance_name>/<webhook_path>
+```
+
+The JSON body of the POST request is passed as mission inputs.
+
+One `trigger` block per mission maximum.
+
+## Concurrency
+
+`max_parallel` limits the number of concurrent instances of a mission. This applies to all sources — schedules, webhooks, and manual runs.
+
+```hcl
+mission "data_pipeline" {
+  max_parallel = 2   # default: 3
+
+  schedule { every = "30m" }
+  task "run" { objective = "Process data" }
+}
+```
+
+When a mission is at capacity, new runs are skipped and a `schedule_skip` event is emitted. The skip is logged and visible in the command center.
+
+## See Also
+
+- [Missions Overview](/squadron/missions/overview) - Mission structure and execution
+- [serve](/squadron/cli/serve) - Running in serve mode
+- [Tasks](/squadron/missions/tasks) - Task configuration

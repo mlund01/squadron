@@ -52,5 +52,5 @@ Creates a `debug/` folder with:
 
 ## See Also
 
-- [Missions Overview](/missions/overview)
-- [Tasks](/missions/tasks)
+- [Missions Overview](/squadron/missions/overview)
+- [Tasks](/squadron/missions/tasks)

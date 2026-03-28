@@ -95,10 +95,29 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 		})
 	}
 
+	// Check concurrency limit
+	if !c.concurrency.NotifyMissionStarted(payload.MissionName) {
+		reason := fmt.Sprintf("mission %q is at max parallel capacity (%d)", payload.MissionName, missionCfg.MaxParallel)
+		skipEnv, _ := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
+			EventType: protocol.EventScheduleSkip,
+			Data: protocol.ScheduleSkipData{
+				MissionName: payload.MissionName,
+				Source:      "manual",
+				Reason:      reason,
+			},
+		})
+		c.SendEvent(skipEnv)
+		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
+			Accepted: false,
+			Reason:   reason,
+		})
+	}
+
 	// Create mission runner with no-op debug logger
 	debugLogger, _ := mission.NewDebugLogger("")
 	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger))
 	if err != nil {
+		c.concurrency.NotifyMissionDone(payload.MissionName)
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
 			Accepted: false,
 			Reason:   err.Error(),
@@ -1150,9 +1169,16 @@ func (c *Client) handleSetVariable(env *protocol.Envelope) (*protocol.Envelope, 
 
 	_ = c.ReloadConfig()
 
-	return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
-		Success: true,
-	})
+	result := &protocol.SetVariableResultPayload{Success: true}
+	result.ConfigReady = c.HasConfig()
+	c.cfgMu.RLock()
+	result.ConfigError = c.cfgError
+	c.cfgMu.RUnlock()
+	if c.HasConfig() {
+		ic := ConfigToInstanceConfig(c.getConfig())
+		result.Config = &ic
+	}
+	return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, result)
 }
 
 func (c *Client) handleDeleteVariable(env *protocol.Envelope) (*protocol.Envelope, error) {
@@ -1171,9 +1197,16 @@ func (c *Client) handleDeleteVariable(env *protocol.Envelope) (*protocol.Envelop
 
 	_ = c.ReloadConfig()
 
-	return protocol.NewResponse(env.RequestID, protocol.TypeDeleteVariableResult, &protocol.DeleteVariableResultPayload{
-		Success: true,
-	})
+	result := &protocol.DeleteVariableResultPayload{Success: true}
+	result.ConfigReady = c.HasConfig()
+	c.cfgMu.RLock()
+	result.ConfigError = c.cfgError
+	c.cfgMu.RUnlock()
+	if c.HasConfig() {
+		ic := ConfigToInstanceConfig(c.getConfig())
+		result.Config = &ic
+	}
+	return protocol.NewResponse(env.RequestID, protocol.TypeDeleteVariableResult, result)
 }
 
 // runMissionChain runs a mission and, if it routes to another mission, chains into that mission.
@@ -1185,6 +1218,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		c.missionMu.Lock()
 		delete(c.runningMissions, mid)
 		c.missionMu.Unlock()
+		c.concurrency.NotifyMissionDone(missionName)
 
 		if err != nil {
 			log.Printf("Mission %q failed: %v", missionName, err)
@@ -1243,4 +1277,61 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 			c.missionMu.Unlock()
 		}()
 	}
+}
+
+// RunScheduledMission is called by the scheduler when a schedule fires.
+// It creates a mission runner and runs it in the background, reusing the
+// same flow as handleRunMission but without a WebSocket request/response.
+func (c *Client) RunScheduledMission(missionName, source string, inputs map[string]string) {
+	cfg := c.getConfig()
+	if cfg == nil {
+		log.Printf("scheduler: cannot run %q (%s): config not loaded", missionName, source)
+		return
+	}
+
+	// Check concurrency via scheduler
+	if !c.concurrency.NotifyMissionStarted(missionName) {
+		reason := fmt.Sprintf("mission %q at capacity, skipping %s", missionName, source)
+		log.Printf("scheduler: %s", reason)
+		skipEnv, _ := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
+			EventType: protocol.EventScheduleSkip,
+			Data: protocol.ScheduleSkipData{
+				MissionName: missionName,
+				Source:      source,
+				Reason:      reason,
+			},
+		})
+		c.SendEvent(skipEnv)
+		return
+	}
+
+	log.Printf("scheduler: starting mission %q (%s)", missionName, source)
+
+	debugLogger, _ := mission.NewDebugLogger("")
+	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger))
+	if err != nil {
+		log.Printf("scheduler: failed to create runner for %q: %v", missionName, err)
+		c.concurrency.NotifyMissionDone(missionName)
+		return
+	}
+
+	wsHandler := NewWSMissionHandler(c)
+	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+
+	missionCtx, missionCancel := context.WithCancel(context.Background())
+	go func() {
+		// Wait for mission ID to track it
+		go func() {
+			mid, err := wsHandler.WaitForMissionID(30 * time.Second)
+			if err != nil {
+				log.Printf("scheduler: mission %q failed to start: %v", missionName, err)
+				return
+			}
+			c.missionMu.Lock()
+			c.runningMissions[mid] = missionCancel
+			c.missionMu.Unlock()
+		}()
+
+		c.runMissionChain(missionCtx, missionCancel, runner, storingHandler, wsHandler, missionName)
+	}()
 }

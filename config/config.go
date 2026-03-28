@@ -27,8 +27,8 @@ type Config struct {
 	// Storage configuration (optional, defaults to memory backend)
 	Storage *StorageConfig `hcl:"-"`
 
-	// Commander configuration (optional, nil when absent = standalone mode)
-	Commander *CommanderConfig `hcl:"-"`
+	// CommandCenter configuration (optional, nil when absent = standalone mode)
+	CommandCenter *CommandCenterConfig `hcl:"-"`
 
 	// File browser configurations (optional)
 	SharedFolders []SharedFolder `hcl:"-"`
@@ -80,6 +80,7 @@ func LoadPartial(path string) (*Config, error) {
 			Blocks: []hcl.BlockHeaderSchema{
 				{Type: "variable", LabelNames: []string{"name"}},
 				{Type: "plugin", LabelNames: []string{"name"}},
+				{Type: "command_center"},
 			},
 		})
 		if diags.HasErrors() {
@@ -118,6 +119,14 @@ func LoadPartial(path string) (*Config, error) {
 					}
 				}
 				partial.Plugins = append(partial.Plugins, p)
+			case "command_center":
+				if partial.CommandCenter == nil {
+					var cc CommandCenterConfig
+					if diags := gohcl.DecodeBody(block.Body, nil, &cc); !diags.HasErrors() {
+						cc.Defaults()
+						partial.CommandCenter = &cc
+					}
+				}
 			}
 		}
 	}
@@ -188,9 +197,9 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.Commander != nil {
-		if err := c.Commander.Validate(); err != nil {
-			return fmt.Errorf("commander: %w", err)
+	if c.CommandCenter != nil {
+		if err := c.CommandCenter.Validate(); err != nil {
+			return fmt.Errorf("command_center: %w", err)
 		}
 	}
 
@@ -273,10 +282,23 @@ func (c *Config) Validate() error {
 	}
 
 	// Validate missions
-	for _, w := range c.Missions {
-		if err := w.Validate(c.Models, c.Agents, c.SharedFolders, allMissionNames); err != nil {
-			return fmt.Errorf("mission '%s': %w", w.Name, err)
+	for i := range c.Missions {
+		if err := c.Missions[i].Validate(c.Models, c.Agents, c.SharedFolders, allMissionNames); err != nil {
+			return fmt.Errorf("mission '%s': %w", c.Missions[i].Name, err)
 		}
+	}
+
+	// Validate webhook path uniqueness across all missions
+	webhookPaths := make(map[string]string) // path → mission name
+	for _, m := range c.Missions {
+		if m.Trigger == nil {
+			continue
+		}
+		path := m.Trigger.WebhookPath
+		if other, exists := webhookPaths[path]; exists {
+			return fmt.Errorf("mission '%s': webhook_path %q conflicts with mission '%s'", m.Name, path, other)
+		}
+		webhookPaths[path] = m.Name
 	}
 
 	return nil
@@ -327,7 +349,7 @@ type parsedBlocks struct {
 	Plugins   []*hcl.Block
 	Missions  []*hcl.Block
 	Storage      []*hcl.Block
-	Commander    []*hcl.Block
+	CommandCenter []*hcl.Block
 	SharedFolders []*hcl.Block
 }
 
@@ -353,7 +375,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "plugin", LabelNames: []string{"name"}},
 				{Type: "mission", LabelNames: []string{"name"}},
 				{Type: "storage"},
-				{Type: "commander"},
+				{Type: "command_center"},
 				{Type: "shared_folder", LabelNames: []string{"name"}},
 			},
 		})
@@ -378,8 +400,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.Missions = append(pb.Missions, block)
 			case "storage":
 				pb.Storage = append(pb.Storage, block)
-			case "commander":
-				pb.Commander = append(pb.Commander, block)
+			case "command_center":
+				pb.CommandCenter = append(pb.CommandCenter, block)
 			case "shared_folder":
 				pb.SharedFolders = append(pb.SharedFolders, block)
 			}
@@ -434,17 +456,17 @@ func loadFromFiles(files []string) (*Config, error) {
 		storageConfig.Path = filepath.Join(configDir, storageConfig.Path)
 	}
 
-	// Parse commander block (optional singleton, with vars context)
-	var commanderConfig *CommanderConfig
+	// Parse command_center block (optional singleton, with vars context)
+	var commandCenterConfig *CommandCenterConfig
 	for _, pb := range allParsedBlocks {
-		for _, block := range pb.Commander {
-			var cc CommanderConfig
+		for _, block := range pb.CommandCenter {
+			var cc CommandCenterConfig
 			diags := gohcl.DecodeBody(block.Body, varsCtx, &cc)
 			if diags.HasErrors() {
-				return nil, fmt.Errorf("commander: %w", diags)
+				return nil, fmt.Errorf("command_center: %w", diags)
 			}
 			cc.Defaults()
-			commanderConfig = &cc
+			commandCenterConfig = &cc
 		}
 	}
 
@@ -604,7 +626,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		Plugins:        allPlugins,
 		Missions:      allMissions,
 		Storage:        &storageConfig,
-		Commander:      commanderConfig,
+		CommandCenter:  commandCenterConfig,
 		SharedFolders:   allSharedFolders,
 		LoadedPlugins:  loadedPlugins,
 		ResolvedVars:   resolvedVars,
@@ -899,6 +921,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Name: "agents", Required: true},
 			{Name: "directive"},
 			{Name: "folders"},
+			{Name: "max_parallel"},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "commander"},
@@ -907,6 +930,8 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Type: "dataset", LabelNames: []string{"name"}},
 			{Type: "secret", LabelNames: []string{"name"}},
 			{Type: "folder"},
+			{Type: "schedule"},
+			{Type: "trigger"},
 		},
 	})
 	if diags.HasErrors() {
@@ -1028,13 +1053,58 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		missionFolder = &mf
 	}
 
+	// Parse schedule blocks (optional, multiple allowed)
+	var schedules []Schedule
+	for _, schedBlock := range missionContent.Blocks {
+		if schedBlock.Type != "schedule" {
+			continue
+		}
+		sched, err := parseScheduleBlock(schedBlock, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("mission '%s' schedule: %w", missionName, err)
+		}
+		schedules = append(schedules, *sched)
+	}
+
+	// Parse trigger block (optional, singleton)
+	var trigger *Trigger
+	for _, trigBlock := range missionContent.Blocks {
+		if trigBlock.Type != "trigger" {
+			continue
+		}
+		if trigger != nil {
+			return nil, fmt.Errorf("mission '%s': only one trigger block allowed", missionName)
+		}
+		var t Trigger
+		diags := gohcl.DecodeBody(trigBlock.Body, ctx, &t)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' trigger: %w", missionName, diags)
+		}
+		trigger = &t
+	}
+
+	// Parse max_parallel attribute (optional, default 3)
+	maxParallel := 3
+	if attr, ok := missionContent.Attributes["max_parallel"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' max_parallel: %w", missionName, diags)
+		}
+		bf := val.AsBigFloat()
+		mp, _ := bf.Int64()
+		maxParallel = int(mp)
+	}
+
 	mission := &Mission{
-		Name:      missionName,
-		Directive: directive,
-		Commander: missionCommander,
-		Agents:    missionAgents,
-		Folders:   missionFolders,
-		Folder:    missionFolder,
+		Name:        missionName,
+		Directive:   directive,
+		Commander:   missionCommander,
+		Agents:      missionAgents,
+		Folders:     missionFolders,
+		Folder:      missionFolder,
+		Schedules:   schedules,
+		Trigger:     trigger,
+		MaxParallel: maxParallel,
 	}
 
 	// Parse input blocks first
@@ -1111,6 +1181,47 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 	}
 
 	return mission, nil
+}
+
+// parseScheduleBlock parses a schedule block, extracting known fields via gohcl
+// and manually parsing the optional inputs map attribute.
+func parseScheduleBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Schedule, error) {
+	// Use PartialContent to extract the inputs attribute separately
+	content, remain, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "inputs"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	// Decode the remaining body (at, every, weekdays, cron, timezone) via gohcl
+	var sched Schedule
+	diags = gohcl.DecodeBody(remain, ctx, &sched)
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	// Parse inputs attribute if present
+	if attr, ok := content.Attributes["inputs"]; ok {
+		val, valDiags := attr.Expr.Value(ctx)
+		if valDiags.HasErrors() {
+			return nil, valDiags
+		}
+		if !val.Type().IsObjectType() && !val.Type().IsMapType() {
+			return nil, fmt.Errorf("'inputs' must be a map of strings")
+		}
+		sched.Inputs = make(map[string]string)
+		for k, v := range val.AsValueMap() {
+			if v.Type() != cty.String {
+				return nil, fmt.Errorf("schedule input %q must be a string value", k)
+			}
+			sched.Inputs[k] = v.AsString()
+		}
+	}
+
+	return &sched, nil
 }
 
 // parseMissionInputBlock parses an input block within a mission

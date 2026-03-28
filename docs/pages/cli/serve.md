@@ -54,15 +54,16 @@ The web UI includes:
 
 ## Configuration
 
-To connect to a remote commander, add a `commander` block to your config:
+To connect to a remote command center, add a `command_center` block to your config:
 
 ```hcl
-commander {
-  url = "ws://commander.example.com/ws"
+command_center {
+  url           = "ws://command-center.example.com/ws"
+  instance_name = "my-instance"
 }
 ```
 
-When using `-w` (local mode), no `commander` block is needed — Squadron starts its own server.
+When using `-w` (local mode), no `command_center` block is needed — Squadron starts its own server.
 
 ## Docker
 
@@ -73,10 +74,17 @@ docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
   ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
 ```
 
-The container's working directory is `/config`, so the `-c` flag is not needed. See the [Docker guide](/getting-started/docker) for full details.
+The container's working directory is `/config`, so the `-c` flag is not needed. See the [Docker guide](/squadron/getting-started/docker) for full details.
+
+## Schedules & Triggers
+
+In serve mode, missions with `schedule` blocks run automatically on their configured timers. Missions with a `trigger` block expose a webhook endpoint through the command center.
+
+See [Schedules & Triggers](/squadron/missions/schedules) for full configuration details.
 
 ## See Also
 
-- [Missions Overview](/missions/overview) - Mission structure
-- [mission](/cli/mission) - Run missions from the CLI
-- [Docker](/getting-started/docker) - Running in containers
+- [Missions Overview](/squadron/missions/overview) - Mission structure
+- [Schedules & Triggers](/squadron/missions/schedules) - Automatic scheduling and webhooks
+- [mission](/squadron/cli/mission) - Run missions from the CLI
+- [Docker](/squadron/getting-started/docker) - Running in containers

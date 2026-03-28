@@ -91,7 +91,7 @@ docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
   ghcr.io/mlund01/squadron serve --init -w --cc-port 8080 --no-browser
 ```
 
-See the [Docker guide](/getting-started/docker) for full setup details including Docker Compose.
+See the [Docker guide](/squadron/getting-started/docker) for full setup details including Docker Compose.
 
 ## Build from Source
 

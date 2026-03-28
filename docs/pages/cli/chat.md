@@ -63,4 +63,4 @@ During chat, agents have access to the tools defined in their configuration. Com
 - `builtins.http.get` - Make HTTP GET requests
 - `builtins.http.post` - Make HTTP POST requests
 
-See [Tools](/config/tools) for more information.
+See [Tools](/squadron/config/tools) for more information.

@@ -237,6 +237,6 @@ Route decisions are persisted to the database. On resume:
 
 ## See Also
 
-- [Tasks](/missions/tasks) - Task configuration and dependencies
-- [Internal Tools](/missions/internal-tools) - `task_complete` routing parameters
-- [Missions Overview](/missions/overview) - Mission structure and execution
+- [Tasks](/squadron/missions/tasks) - Task configuration and dependencies
+- [Internal Tools](/squadron/missions/internal-tools) - `task_complete` routing parameters
+- [Missions Overview](/squadron/missions/overview) - Mission structure and execution

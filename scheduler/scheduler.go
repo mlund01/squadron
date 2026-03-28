@@ -68,7 +68,12 @@ func (s *Scheduler) UpdateConfig(cfg *config.Config) {
 		return
 	}
 
-	// Build new schedules
+	// Register concurrency limits for all missions
+	for _, m := range cfg.Missions {
+		s.limits[m.Name] = m.MaxParallel
+	}
+
+	// Build schedules for missions that have them
 	for _, m := range cfg.Missions {
 		if len(m.Schedules) == 0 {
 			continue
@@ -86,7 +91,6 @@ func (s *Scheduler) UpdateConfig(cfg *config.Config) {
 
 		if len(ms.schedules) > 0 {
 			s.configs[m.Name] = ms
-			s.limits[m.Name] = m.MaxParallel
 			s.startTimersLocked(m.Name, ms)
 		}
 	}

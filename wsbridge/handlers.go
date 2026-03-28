@@ -95,10 +95,29 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 		})
 	}
 
+	// Check concurrency limit
+	if !c.sched.NotifyMissionStarted(payload.MissionName) {
+		reason := fmt.Sprintf("mission %q is at max parallel capacity (%d)", payload.MissionName, missionCfg.MaxParallel)
+		skipEnv, _ := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
+			EventType: protocol.EventScheduleSkip,
+			Data: protocol.ScheduleSkipData{
+				MissionName: payload.MissionName,
+				Source:      "manual",
+				Reason:      reason,
+			},
+		})
+		c.SendEvent(skipEnv)
+		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
+			Accepted: false,
+			Reason:   reason,
+		})
+	}
+
 	// Create mission runner with no-op debug logger
 	debugLogger, _ := mission.NewDebugLogger("")
 	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger))
 	if err != nil {
+		c.sched.NotifyMissionDone(payload.MissionName)
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
 			Accepted: false,
 			Reason:   err.Error(),
@@ -1272,7 +1291,17 @@ func (c *Client) scheduledMission(missionName, source string, inputs map[string]
 
 	// Check concurrency via scheduler
 	if !c.sched.NotifyMissionStarted(missionName) {
-		log.Printf("scheduler: mission %q at capacity, skipping %s", missionName, source)
+		reason := fmt.Sprintf("mission %q at capacity, skipping %s", missionName, source)
+		log.Printf("scheduler: %s", reason)
+		skipEnv, _ := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
+			EventType: protocol.EventScheduleSkip,
+			Data: protocol.ScheduleSkipData{
+				MissionName: missionName,
+				Source:      source,
+				Reason:      reason,
+			},
+		})
+		c.SendEvent(skipEnv)
 		return
 	}
 

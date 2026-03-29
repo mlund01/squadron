@@ -27,17 +27,21 @@ import (
 //	headers = map(string, "HTTP headers")
 //	counts  = map(number, "Counts by category")
 //
-// Objects — object(properties, description, required?) — schematic, fields defined:
+// Objects — object(properties, description?, required?) — always schematic:
 //
 //	coord = object({
 //	  lat = number("Latitude", true)
 //	  lon = number("Longitude", true)
 //	}, "Geographic coordinates", true)
 //
-//	items = list(object({
-//	  id    = integer("Item ID", true)
-//	  label = string("Item label")
-//	}), "Order items", true)
+// For free-form key-value data, use map() with any or any_primitive:
+//
+//	metadata = map(any, "Arbitrary data")
+//	headers  = map(any_primitive, "Flat key-value pairs")
+//
+// Type references: string, number, integer, bool, any, any_primitive
+//
+//	items = list(object({ id = integer("Item ID", true) }), "Order items", true)
 func SchemaFunctions() map[string]function.Function {
 	return map[string]function.Function{
 		"string":  makePrimitiveFunc("string"),
@@ -55,10 +59,12 @@ func SchemaFunctions() map[string]function.Function {
 // The same cty shape as a function call result but with empty description and required=false.
 func SchemaTypeVars() map[string]cty.Value {
 	return map[string]cty.Value{
-		"string":  typeRef("string"),
-		"number":  typeRef("number"),
-		"integer": typeRef("integer"),
-		"bool":    typeRef("bool"),
+		"string":        typeRef("string"),
+		"number":        typeRef("number"),
+		"integer":       typeRef("integer"),
+		"bool":          typeRef("bool"),
+		"any":           typeRef("any"),
+		"any_primitive": typeRef("any_primitive"),
 	}
 }
 
@@ -168,16 +174,17 @@ func makeMapFunc() function.Function {
 
 // makeObjectFunc creates the object() schema helper function.
 //
-// Signature: object(properties_object, [description, [bool_required | options_object]?]?)
+// object() always takes a properties object as its first argument — it is always schematic.
+// For free-form key-value data without a schema, use map() instead.
 //
-//	coords = object({
-//	  lat = number("Latitude", true)
-//	  lon = number("Longitude", true)
-//	}, "Geographic coordinates", true)
+// Signature: object(properties, [description, [bool_required | options_object]?]?)
 //
-// When used as a type reference inside list(), description and required may be omitted:
+//	address = object({ street = string("Street", true), city = string("City", true) }, "Shipping address", true)
+//	coords  = object({ lat = number("Lat"), lon = number("Lon") })
 //
-//	items = list(object({ name = string("Name", true) }), "Item list")
+// As a type reference inside list():
+//
+//	items = list(object({ id = integer("ID", true) }), "Order items")
 func makeObjectFunc() function.Function {
 	return function.New(&function.Spec{
 		Params: []function.Parameter{
@@ -192,20 +199,23 @@ func makeObjectFunc() function.Function {
 			props := args[0]
 			if !props.Type().IsObjectType() {
 				return cty.NilVal, fmt.Errorf(
-					"object(): first argument must be an object literal { key = type(...) }, got %s",
+					"object(): first argument must be a properties object { key = type(...) }, got %s; for free-form data use map() instead",
 					props.Type().FriendlyName(),
 				)
 			}
+
 			desc, required, extras, err := extractCompositeVarArgs(args[1:])
 			if err != nil {
 				return cty.NilVal, fmt.Errorf("object(): %w", err)
 			}
+
 			attrs := schemaNodeAttrs("object", desc, required, extras)
 			attrs["properties"] = props
 			return cty.ObjectVal(attrs), nil
 		},
 	})
 }
+
 
 // ── internal helpers ──────────────────────────────────────────────────────────
 

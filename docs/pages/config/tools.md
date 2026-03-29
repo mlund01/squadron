@@ -93,16 +93,29 @@ inputs = {
 
 Passing `true` as the second argument marks the field required. Pass an options object `{ default = ... }` to set a default value (making it optional).
 
+#### Type References
+
+Type references are used as the first argument to `list()` and `map()`:
+
+| Reference | Description |
+|-----------|-------------|
+| `string` | String values |
+| `number` | Floating-point numbers |
+| `integer` | Whole numbers |
+| `bool` | Boolean values |
+| `any` | Any type (strings, numbers, objects, arrays, etc.) |
+| `any_primitive` | Any primitive (strings, numbers, integers, booleans — no nested objects or arrays) |
+| `object({...})` | Nested object with defined properties |
+
 #### Lists — `list(inner_type, description, required?)`
 
 ```hcl
 inputs = {
   tags    = list(string, "Labels to apply")            # list of strings
   scores  = list(number, "Numeric scores", true)       # required list of numbers
+  mixed   = list(any, "Items of any type")             # heterogeneous list
 }
 ```
-
-The first argument is a type reference (`string`, `number`, `integer`, `bool`) or a nested `object({...})`.
 
 #### Maps — `map(value_type, description, required?)`
 
@@ -110,14 +123,16 @@ The first argument is a type reference (`string`, `number`, `integer`, `bool`) o
 
 ```hcl
 inputs = {
-  headers  = map(string, "HTTP headers to include")    # free-form string map
-  counts   = map(number, "Counts by category", true)   # required number map
+  headers  = map(string, "HTTP headers to include")        # string values only
+  counts   = map(number, "Counts by category", true)       # required, number values
+  config   = map(any_primitive, "Flat configuration data")  # any primitive value type
+  metadata = map(any, "Arbitrary data including nested")    # any value including objects
 }
 ```
 
-#### Objects — `object(properties, description, required?)`
+#### Objects — `object(properties, description?, required?)`
 
-`object` is schematic — the first argument defines the nested field layout:
+`object` is always schematic — it requires a properties definition as its first argument. For free-form key-value data without a defined schema, use `map()` instead.
 
 ```hcl
 inputs = {
@@ -126,10 +141,15 @@ inputs = {
     city   = string("City", true)
     zip    = string("ZIP code")
   }, "Shipping address", true)
+
+  coords = object({
+    lat = number("Latitude", true)
+    lon = number("Longitude", true)
+  })
 }
 ```
 
-Nest `object({...})` inside `list()` for lists of typed objects:
+As a type reference inside `list()`:
 
 ```hcl
 inputs = {
@@ -153,7 +173,7 @@ tool "process_order" {
     total      = number("Order total in USD", true)
     express    = bool("Use express shipping", { default = false })
     tags       = list(string, "Order labels")
-    metadata   = map(string, "Arbitrary order metadata")
+    metadata   = map(any_primitive, "Arbitrary order metadata")
     address    = object({
       street = string("Street address", true)
       city   = string("City", true)

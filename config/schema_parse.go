@@ -231,6 +231,9 @@ func schemaKindToInputType(kind string) string {
 	case "object", "map":
 		// JSON Schema uses "object" for both structured objects and free-form maps
 		return "object"
+	case "any", "any_primitive":
+		// Used as inner type refs for list/map — no JSON Schema type constraint
+		return kind
 	default:
 		return kind
 	}

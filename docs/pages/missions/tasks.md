@@ -137,6 +137,25 @@ task "analyze_sales" {
 | `integer` | Whole number |
 | `boolean` | True/false |
 
+### Shorthand Schema Syntax
+
+Instead of `field` blocks you can use a single `output = { ... }` attribute with schema helper functions:
+
+```hcl
+task "analyze_sales" {
+  objective  = "Analyze Q4 sales data"
+  depends_on = [tasks.fetch_sales]
+
+  output = {
+    total_revenue = number("Total revenue in USD", true)
+    top_product   = string("Best-selling product name", true)
+    growth_rate   = number("Growth rate as decimal")
+  }
+}
+```
+
+Available helper functions: `string`, `number`, `integer`, `bool`, `list`, `map`, `object`. Pass `true` as the second argument to mark a field as required. Both forms are fully equivalent.
+
 Structured output is automatically captured and stored. Downstream tasks can query it using the `query_task_output` tool (see [Internal Tools](/squadron/missions/internal-tools)).
 
 ## Routing

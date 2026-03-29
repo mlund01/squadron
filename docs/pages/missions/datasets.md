@@ -54,6 +54,23 @@ schema {
 }
 ```
 
+### Shorthand Schema Syntax
+
+Instead of `field` blocks you can use a `schema = { ... }` attribute with schema helper functions:
+
+```hcl
+dataset "city_list" {
+  description = "Cities to process"
+  schema = {
+    id       = integer("City ID", true)
+    name     = string("City name", true)
+    metadata = object("Additional data")
+  }
+}
+```
+
+Available helper functions: `string`, `number`, `integer`, `bool`, `list`, `map`, `object`. Pass `true` as the second argument to mark a field as required. Both forms are fully equivalent.
+
 ### Field Types
 
 - `string`

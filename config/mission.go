@@ -57,12 +57,16 @@ type OutputSchema struct {
 	Fields []OutputField `json:"fields"`
 }
 
-// OutputField represents a single output field definition
+// OutputField represents a single output field definition.
+// For list/map types, Items holds the element type descriptor.
+// For object types, Properties holds the nested field definitions.
 type OutputField struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`                  // string, number, integer, boolean
-	Description string `json:"description,omitempty"`
-	Required    bool   `json:"required,omitempty"`
+	Name        string        `json:"name"`
+	Type        string        `json:"type"`                  // string, number, integer, boolean, array, object
+	Description string        `json:"description,omitempty"`
+	Required    bool          `json:"required,omitempty"`
+	Items       *OutputField  `json:"items,omitempty"`
+	Properties  []OutputField `json:"properties,omitempty"`
 }
 
 // MissionFolder represents a dedicated folder for a mission

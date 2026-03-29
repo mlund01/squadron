@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/hcl/v2/hclparse"
 	"github.com/zclconf/go-cty/cty"
 
+	schemafunc "squadron/config/functions"
 	"squadron/internal/paths"
 	"squadron/plugin"
 )
@@ -546,10 +547,14 @@ func loadFromFiles(files []string) (*Config, error) {
 	modelsCtx := buildModelsContext(pluginsCtx, allModels)
 
 	// Stage 3: Load custom tools (with vars + models + plugins context, plus dynamic field parsing)
+	// Wrap with schema functions so tools can use inputs = { field = string(...) } shorthand.
+	toolSchemaCtx := modelsCtx.NewChild()
+	toolSchemaCtx.Variables = schemafunc.SchemaTypeVars()
+	toolSchemaCtx.Functions = schemafunc.SchemaFunctions()
 	var allTools []CustomTool
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Tools {
-			tool, err := parseToolBlock(block, modelsCtx, loadedPlugins)
+			tool, err := parseToolBlock(block, toolSchemaCtx, loadedPlugins)
 			if err != nil {
 				return nil, err
 			}
@@ -598,8 +603,14 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 	missionsCtx := &hcl.EvalContext{
 		Variables: make(map[string]cty.Value),
+		Functions: schemafunc.SchemaFunctions(),
 	}
 	for k, v := range agentsCtx.Variables {
+		missionsCtx.Variables[k] = v
+	}
+	// Schema type vars (string, number, etc.) must be in the Variables map so
+	// bare references like list(string, "desc") resolve correctly.
+	for k, v := range schemafunc.SchemaTypeVars() {
 		missionsCtx.Variables[k] = v
 	}
 	if len(missionNames) > 0 {
@@ -650,14 +661,15 @@ type inputsBlock struct {
 func parseToolBlock(block *hcl.Block, baseCtx *hcl.EvalContext, loadedPlugins map[string]*plugin.PluginClient) (*CustomTool, error) {
 	toolName := block.Labels[0]
 
-	// Parse the tool block content: static fields (implements, description) + inputs block + dynamic fields
+	// Parse the tool block content: static fields (implements, description) + inputs (block or attribute) + dynamic fields
 	toolContent, remainBody, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
 			{Name: "implements", Required: true},
 			{Name: "description"},
+			{Name: "inputs"}, // shorthand: inputs = { city = string("desc", true) }
 		},
 		Blocks: []hcl.BlockHeaderSchema{
-			{Type: "inputs"},
+			{Type: "inputs"}, // verbose: inputs { field "city" { ... } }
 		},
 	})
 	if diags.HasErrors() {
@@ -696,23 +708,36 @@ func parseToolBlock(block *hcl.Block, baseCtx *hcl.EvalContext, loadedPlugins ma
 		return nil, fmt.Errorf("tool '%s': unknown implemented tool '%s'", toolName, implements)
 	}
 
-	// Parse inputs block if present
-	for _, blk := range toolContent.Blocks {
-		if blk.Type == "inputs" {
-			var parsedInputs inputsBlock
-			diags := gohcl.DecodeBody(blk.Body, nil, &parsedInputs)
-			if diags.HasErrors() {
-				return nil, diags
-			}
-
-			tool.Inputs = &InputsSchema{}
-			for _, f := range parsedInputs.Fields {
-				tool.Inputs.Fields = append(tool.Inputs.Fields, InputField{
-					Name:        f.Name,
-					Type:        f.Type,
-					Description: f.Description,
-					Required:    f.Required,
-				})
+	// Parse inputs — accept either shorthand attribute or verbose block form.
+	if inputsAttr, ok := toolContent.Attributes["inputs"]; ok {
+		// Shorthand: inputs = { city = string("The target city", true) }
+		val, diags := inputsAttr.Expr.Value(baseCtx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("tool '%s': inputs: %w", toolName, diags)
+		}
+		fields, err := parseSchemaObject(val)
+		if err != nil {
+			return nil, fmt.Errorf("tool '%s': inputs: %w", toolName, err)
+		}
+		tool.Inputs = &InputsSchema{Fields: fields}
+	} else {
+		// Verbose block form: inputs { field "city" { type = "string" ... } }
+		for _, blk := range toolContent.Blocks {
+			if blk.Type == "inputs" {
+				var parsedInputs inputsBlock
+				diags := gohcl.DecodeBody(blk.Body, nil, &parsedInputs)
+				if diags.HasErrors() {
+					return nil, diags
+				}
+				tool.Inputs = &InputsSchema{}
+				for _, f := range parsedInputs.Fields {
+					tool.Inputs.Fields = append(tool.Inputs.Fields, InputField{
+						Name:        f.Name,
+						Type:        f.Type,
+						Description: f.Description,
+						Required:    f.Required,
+					})
+				}
 			}
 		}
 	}
@@ -769,10 +794,19 @@ func buildVarsContext(vars []Variable) (*hcl.EvalContext, map[string]cty.Value) 
 		}
 	}
 
+	// Seed schema type-ref variables (string, number, integer, bool) so they can be
+	// used as bare type arguments inside list()/map(): e.g. list(string, "Tags").
+	// Subsequent context builders copy Variables, so these propagate automatically.
+	baseVars := map[string]cty.Value{
+		"vars": cty.ObjectVal(varsMap),
+	}
+	for k, v := range schemafunc.SchemaTypeVars() {
+		baseVars[k] = v
+	}
+
 	return &hcl.EvalContext{
-		Variables: map[string]cty.Value{
-			"vars": cty.ObjectVal(varsMap),
-		},
+		Variables: baseVars,
+		Functions: schemafunc.SchemaFunctions(),
 	}, varsMap
 }
 
@@ -796,6 +830,7 @@ func buildModelsContext(ctx *hcl.EvalContext, models []Model) *hcl.EvalContext {
 
 	return &hcl.EvalContext{
 		Variables: newVars,
+		Functions: schemafunc.SchemaFunctions(),
 	}
 }
 
@@ -818,6 +853,7 @@ func buildToolsContext(ctx *hcl.EvalContext, customTools []CustomTool) *hcl.Eval
 
 	return &hcl.EvalContext{
 		Variables: newVars,
+		Functions: schemafunc.SchemaFunctions(),
 	}
 }
 
@@ -862,6 +898,7 @@ func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.
 
 	return &hcl.EvalContext{
 		Variables: newVars,
+		Functions: schemafunc.SchemaFunctions(),
 	}
 }
 
@@ -900,6 +937,7 @@ func buildAgentsContext(ctx *hcl.EvalContext, agents []Agent) *hcl.EvalContext {
 
 	return &hcl.EvalContext{
 		Variables: newVars,
+		Functions: schemafunc.SchemaFunctions(),
 	}
 }
 
@@ -922,11 +960,12 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Name: "directive"},
 			{Name: "folders"},
 			{Name: "max_parallel"},
+			{Name: "inputs"}, // shorthand: inputs = { field = string("desc", { default = "val" }) }
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "commander"},
 			{Type: "task", LabelNames: []string{"name"}},
-			{Type: "input", LabelNames: []string{"name"}},
+			{Type: "input", LabelNames: []string{"name"}}, // verbose input blocks still supported
 			{Type: "dataset", LabelNames: []string{"name"}},
 			{Type: "secret", LabelNames: []string{"name"}},
 			{Type: "folder"},
@@ -1107,22 +1146,37 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		MaxParallel: maxParallel,
 	}
 
-	// Parse input blocks first
-	for _, inputBlock := range missionContent.Blocks {
-		if inputBlock.Type != "input" {
-			continue
+	// Parse inputs — accept either shorthand attribute or verbose labeled block form.
+	if inputsAttr, ok := missionContent.Attributes["inputs"]; ok {
+		// Shorthand: inputs = { severity = string("Severity level", { default = "high" }) }
+		val, diags := inputsAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s': inputs: %w", missionName, diags)
 		}
-		input, err := parseMissionInputBlock(inputBlock, ctx)
+		parsedInputs, err := parseSchemaObjectAsMissionInputs(val)
 		if err != nil {
-			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
+			return nil, fmt.Errorf("mission '%s': inputs: %w", missionName, err)
 		}
-		mission.Inputs = append(mission.Inputs, *input)
+		mission.Inputs = append(mission.Inputs, parsedInputs...)
+	} else {
+		// Verbose form: input "severity" { type = "string"; description = "..."; default = "high" }
+		for _, inputBlock := range missionContent.Blocks {
+			if inputBlock.Type != "input" {
+				continue
+			}
+			input, err := parseMissionInputBlock(inputBlock, ctx)
+			if err != nil {
+				return nil, fmt.Errorf("mission '%s': %w", missionName, err)
+			}
+			mission.Inputs = append(mission.Inputs, *input)
+		}
 	}
 
 	// Build inputs context with placeholder values for dataset bind_to validation
 	inputsType := mission.BuildInputsCtyType()
 	inputsCtx := &hcl.EvalContext{
 		Variables: make(map[string]cty.Value),
+		Functions: schemafunc.SchemaFunctions(),
 	}
 	for k, v := range ctx.Variables {
 		inputsCtx.Variables[k] = v
@@ -1158,6 +1212,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 	// Add tasks, inputs, datasets, and item namespaces to context
 	taskCtx := &hcl.EvalContext{
 		Variables: make(map[string]cty.Value),
+		Functions: schemafunc.SchemaFunctions(),
 	}
 	for k, v := range ctx.Variables {
 		taskCtx.Variables[k] = v
@@ -1300,9 +1355,10 @@ func parseDatasetBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Dataset, error)
 			{Name: "description"},
 			{Name: "bind_to"},
 			{Name: "items"},
+			{Name: "schema"}, // shorthand: schema = { field = string("desc", true) }
 		},
 		Blocks: []hcl.BlockHeaderSchema{
-			{Type: "schema"},
+			{Type: "schema"}, // verbose: schema { field "name" { ... } }
 		},
 	})
 	if diags.HasErrors() {
@@ -1360,14 +1416,28 @@ func parseDatasetBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Dataset, error)
 		}
 	}
 
-	// Parse schema block if present
-	for _, schemaBlock := range datasetContent.Blocks {
-		if schemaBlock.Type == "schema" {
-			schema, err := parseSchemaBlock(schemaBlock)
-			if err != nil {
-				return nil, fmt.Errorf("dataset '%s': %w", datasetName, err)
+	// Parse schema — accept either shorthand attribute or verbose block form.
+	if schemaAttr, ok := datasetContent.Attributes["schema"]; ok {
+		// Shorthand: schema = { id = number("Item ID", true) }
+		val, diags := schemaAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("dataset '%s': schema: %w", datasetName, diags)
+		}
+		fields, err := parseSchemaObject(val)
+		if err != nil {
+			return nil, fmt.Errorf("dataset '%s': schema: %w", datasetName, err)
+		}
+		dataset.Schema = &InputsSchema{Fields: fields}
+	} else {
+		// Verbose block form: schema { field "id" { type = "number" ... } }
+		for _, schemaBlock := range datasetContent.Blocks {
+			if schemaBlock.Type == "schema" {
+				schema, err := parseSchemaBlock(schemaBlock)
+				if err != nil {
+					return nil, fmt.Errorf("dataset '%s': %w", datasetName, err)
+				}
+				dataset.Schema = schema
 			}
-			dataset.Schema = schema
 		}
 	}
 
@@ -1509,10 +1579,11 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			{Name: "agents"},    // Optional - uses mission-level agents if not specified
 			{Name: "depends_on"},
 			{Name: "send_to"},
+			{Name: "output"}, // shorthand: output = { field = string("desc", true) }
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "iterator"},
-			{Type: "output"},
+			{Type: "output"}, // verbose: output { field "name" { ... } }
 			{Type: "router"},
 		},
 	})
@@ -1583,16 +1654,30 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		}
 	}
 
-	// Parse output block if present
+	// Parse output — accept either shorthand attribute or verbose block form.
 	var output *OutputSchema
-	for _, outputBlock := range taskContent.Blocks {
-		if outputBlock.Type == "output" {
-			out, err := parseOutputBlock(outputBlock)
-			if err != nil {
-				return nil, fmt.Errorf("task '%s': %w", taskName, err)
+	if outputAttr, ok := taskContent.Attributes["output"]; ok {
+		// Shorthand: output = { summary = string("Research summary", true) }
+		val, diags := outputAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s': output: %w", taskName, diags)
+		}
+		fields, err := parseOutputSchemaObject(val)
+		if err != nil {
+			return nil, fmt.Errorf("task '%s': output: %w", taskName, err)
+		}
+		output = &OutputSchema{Fields: fields}
+	} else {
+		// Verbose block form: output { field "summary" { type = "string" ... } }
+		for _, outputBlock := range taskContent.Blocks {
+			if outputBlock.Type == "output" {
+				out, err := parseOutputBlock(outputBlock)
+				if err != nil {
+					return nil, fmt.Errorf("task '%s': %w", taskName, err)
+				}
+				output = out
+				break
 			}
-			output = out
-			break
 		}
 	}
 

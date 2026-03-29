@@ -75,6 +75,37 @@ inputs {
 }
 ```
 
+### Shorthand Schema Syntax
+
+For concise definitions, you can use the shorthand `inputs = { ... }` attribute form with schema helper functions:
+
+```hcl
+tool "weather" {
+  implements  = builtins.http.get
+  description = "Get current weather"
+
+  inputs = {
+    city  = string("City name", true)
+    units = string("Unit system", { default = "metric" })
+    days  = number("Forecast days", { default = 3 })
+  }
+
+  url = "https://wttr.in/${inputs.city}?format=3"
+}
+```
+
+Available helper functions: `string`, `number`, `integer`, `bool`, `list`, `map`, `object`. Pass `true` as the second argument to mark a field as required, or an options object to set a default:
+
+```hcl
+inputs = {
+  required_field   = string("Always needed", true)
+  optional_default = string("Has a fallback", { default = "fallback" })
+  optional_field   = number("No default, not required")
+}
+```
+
+Both the block form and the shorthand are fully equivalent.
+
 ### Field Expressions
 
 Use `inputs.field_name` to reference input values in dynamic fields:

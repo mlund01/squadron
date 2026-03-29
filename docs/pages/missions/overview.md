@@ -73,8 +73,30 @@ mission "report" {
 | `type` | string | Input type (`string`, `number`, `integer`, `boolean`) |
 | `description` | string | Human-readable description |
 | `default` | any | Default value (makes the input optional) |
+| `secret` | bool | Mark the input as sensitive (masked in logs/UI) |
 
 Inputs without a `default` are required. Pass them via CLI:
+
+### Shorthand Schema Syntax
+
+Instead of `input` blocks you can use a single `inputs = { ... }` attribute with schema helper functions:
+
+```hcl
+mission "report" {
+  inputs = {
+    topic   = string("The topic to research")
+    format  = string("Output format", { default = "markdown" })
+    limit   = number("Max results", { default = 10 })
+    api_key = string("API key", { secret = true })
+  }
+
+  task "research" {
+    objective = "Research ${inputs.topic} and output in ${inputs.format}"
+  }
+}
+```
+
+See [Functions](/squadron/config/functions) for the complete reference on all helper functions, type references, and the options object (`default`, `secret`).
 
 ```bash
 squadron mission report -c ./config --input topic="AI safety" --input format=html

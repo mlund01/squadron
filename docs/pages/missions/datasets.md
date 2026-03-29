@@ -54,6 +54,38 @@ schema {
 }
 ```
 
+### Shorthand Schema Syntax
+
+Instead of `field` blocks you can use a `schema = { ... }` attribute with schema helper functions:
+
+```hcl
+dataset "city_list" {
+  description = "Cities to process"
+  schema = {
+    id       = integer("City ID", true)
+    name     = string("City name", true)
+    metadata = map(string, "Additional metadata")   # free-form key-value
+  }
+}
+```
+
+Use `object({...}, "desc")` when items have a known nested structure:
+
+```hcl
+dataset "order_list" {
+  schema = {
+    id      = integer("Order ID", true)
+    status  = string("Order status", true)
+    address = object({
+      city    = string("City", true)
+      country = string("Country code", true)
+    }, "Shipping address")
+  }
+}
+```
+
+See [Functions](/squadron/config/functions) for the complete reference on all helper functions and type references. Both the block form and shorthand are fully equivalent.
+
 ### Field Types
 
 - `string`

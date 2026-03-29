@@ -29,6 +29,7 @@ const navigation = [
       { title: 'Models', href: '/config/models' },
       { title: 'Agents', href: '/config/agents' },
       { title: 'Tools', href: '/config/tools' },
+      { title: 'Functions', href: '/config/functions' },
       { title: 'Plugins', href: '/config/plugins' },
     ],
   },

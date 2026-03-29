@@ -154,7 +154,7 @@ task "analyze_sales" {
 }
 ```
 
-Available helper functions: `string`, `number`, `integer`, `bool`, `list`, `map`, `object`. Pass `true` as the second argument to mark a field as required. Both forms are fully equivalent.
+See [Functions](/squadron/config/functions) for the complete reference on all helper functions and type references.
 
 Structured output is automatically captured and stored. Downstream tasks can query it using the `query_task_output` tool (see [Internal Tools](/squadron/missions/internal-tools)).
 

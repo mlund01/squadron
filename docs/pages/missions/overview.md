@@ -96,7 +96,7 @@ mission "report" {
 }
 ```
 
-Available helper functions: `string`, `number`, `integer`, `bool`, `list`, `map`, `object`. The options object supports `default` and `secret = true`. Both forms are fully equivalent.
+See [Functions](/squadron/config/functions) for the complete reference on all helper functions, type references, and the options object (`default`, `secret`).
 
 ```bash
 squadron mission report -c ./config --input topic="AI safety" --input format=html

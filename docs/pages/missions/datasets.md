@@ -84,7 +84,7 @@ dataset "order_list" {
 }
 ```
 
-Pass `true` as the last argument to mark a field required. See [Tools](/squadron/config/tools#shorthand-schema-syntax) for the full type reference including `list`, `map`, `object`, and type references (`any`, `any_primitive`). Both the block form and shorthand are fully equivalent.
+See [Functions](/squadron/config/functions) for the complete reference on all helper functions and type references. Both the block form and shorthand are fully equivalent.
 
 ### Field Types
 

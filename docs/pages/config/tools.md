@@ -79,116 +79,21 @@ inputs {
 
 For concise definitions, use the shorthand `inputs = { ... }` attribute form with schema helper functions. Both forms are fully equivalent.
 
-#### Primitives — `string` `number` `integer` `bool`
-
 ```hcl
-inputs = {
-  name    = string("Customer name", true)               # required
-  region  = string("AWS region", { default = "us-east-1" }) # optional with default
-  count   = integer("Number of items", true)            # required integer
-  score   = number("Confidence score")                  # optional float
-  verbose = bool("Enable verbose output", { default = false })
-}
-```
-
-Passing `true` as the second argument marks the field required. Pass an options object `{ default = ... }` to set a default value (making it optional).
-
-#### Type References
-
-Type references are used as the first argument to `list()` and `map()`:
-
-| Reference | Description |
-|-----------|-------------|
-| `string` | String values |
-| `number` | Floating-point numbers |
-| `integer` | Whole numbers |
-| `bool` | Boolean values |
-| `any` | Any type (strings, numbers, objects, arrays, etc.) |
-| `any_primitive` | Any primitive (strings, numbers, integers, booleans — no nested objects or arrays) |
-| `object({...})` | Nested object with defined properties |
-
-#### Lists — `list(inner_type, description, required?)`
-
-```hcl
-inputs = {
-  tags    = list(string, "Labels to apply")            # list of strings
-  scores  = list(number, "Numeric scores", true)       # required list of numbers
-  mixed   = list(any, "Items of any type")             # heterogeneous list
-}
-```
-
-#### Maps — `map(value_type, description, required?)`
-
-`map` is free-form and carries no field schema — use it for arbitrary key-value data:
-
-```hcl
-inputs = {
-  headers  = map(string, "HTTP headers to include")        # string values only
-  counts   = map(number, "Counts by category", true)       # required, number values
-  config   = map(any_primitive, "Flat configuration data")  # any primitive value type
-  metadata = map(any, "Arbitrary data including nested")    # any value including objects
-}
-```
-
-#### Objects — `object(properties, description?, required?)`
-
-`object` is always schematic — it requires a properties definition as its first argument. For free-form key-value data without a defined schema, use `map()` instead.
-
-```hcl
-inputs = {
-  address = object({
-    street = string("Street address", true)
-    city   = string("City", true)
-    zip    = string("ZIP code")
-  }, "Shipping address", true)
-
-  coords = object({
-    lat = number("Latitude", true)
-    lon = number("Longitude", true)
-  })
-}
-```
-
-As a type reference inside `list()`:
-
-```hcl
-inputs = {
-  line_items = list(object({
-    sku      = string("Product SKU", true)
-    quantity = integer("Item quantity", true)
-    price    = number("Unit price")
-  }), "Order line items", true)
-}
-```
-
-#### Full example
-
-```hcl
-tool "process_order" {
-  implements  = builtins.http.post
-  description = "Submit a customer order"
+tool "weather" {
+  implements  = builtins.http.get
+  description = "Get weather for a city"
 
   inputs = {
-    order_id   = string("Order identifier", true)
-    total      = number("Order total in USD", true)
-    express    = bool("Use express shipping", { default = false })
-    tags       = list(string, "Order labels")
-    metadata   = map(any_primitive, "Arbitrary order metadata")
-    address    = object({
-      street = string("Street address", true)
-      city   = string("City", true)
-      zip    = string("ZIP code")
-    }, "Shipping address", true)
-    line_items = list(object({
-      sku      = string("Product SKU", true)
-      quantity = integer("Quantity", true)
-    }), "Line items", true)
+    city  = string("City name", true)
+    units = string("Temperature units", { default = "metric" })
   }
 
-  url  = "https://api.example.com/orders"
-  body = { order_id = inputs.order_id }
+  url = "https://wttr.in/${inputs.city}?format=3"
 }
 ```
+
+See [Functions](/squadron/config/functions) for the complete reference on `string`, `number`, `integer`, `bool`, `list`, `map`, `object`, and type references like `any` and `any_primitive`.
 
 ### Field Expressions
 

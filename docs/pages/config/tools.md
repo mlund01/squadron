@@ -75,6 +75,26 @@ inputs {
 }
 ```
 
+### Shorthand Schema Syntax
+
+For concise definitions, use the shorthand `inputs = { ... }` attribute form with schema helper functions. Both forms are fully equivalent.
+
+```hcl
+tool "weather" {
+  implements  = builtins.http.get
+  description = "Get weather for a city"
+
+  inputs = {
+    city  = string("City name", true)
+    units = string("Temperature units", { default = "metric" })
+  }
+
+  url = "https://wttr.in/${inputs.city}?format=3"
+}
+```
+
+See [Functions](/squadron/config/functions) for the complete reference on `string`, `number`, `integer`, `bool`, `list`, `map`, `object`, and type references like `any` and `any_primitive`.
+
 ### Field Expressions
 
 Use `inputs.field_name` to reference input values in dynamic fields:

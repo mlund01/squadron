@@ -26,15 +26,20 @@ type InputsSchema struct {
 	Fields []InputField `json:"fields"`
 }
 
-// InputField represents a single input field definition
+// InputField represents a single input field definition.
+// For list/map types, Items holds the element type descriptor.
+// For object types, Properties holds the nested field definitions.
 type InputField struct {
-	Name        string `json:"name"`
-	Type        string `json:"type"`
-	Description string `json:"description,omitempty"`
-	Required    bool   `json:"required,omitempty"`
+	Name        string       `json:"name"`
+	Type        string       `json:"type"`
+	Description string       `json:"description,omitempty"`
+	Required    bool         `json:"required,omitempty"`
+	Items       *InputField  `json:"items,omitempty"`
+	Properties  []InputField `json:"properties,omitempty"`
 }
 
-// ToAIToolsSchema converts InputsSchema to aitools.Schema
+// ToAIToolsSchema converts InputsSchema to aitools.Schema.
+// Handles nested types (list items, object properties) recursively.
 func (s *InputsSchema) ToAIToolsSchema() aitools.Schema {
 	if s == nil {
 		return aitools.Schema{
@@ -47,10 +52,7 @@ func (s *InputsSchema) ToAIToolsSchema() aitools.Schema {
 	var required []string
 
 	for _, field := range s.Fields {
-		props[field.Name] = aitools.Property{
-			Type:        stringToPropertyType(field.Type),
-			Description: field.Description,
-		}
+		props[field.Name] = inputFieldToProperty(field)
 		if field.Required {
 			required = append(required, field.Name)
 		}
@@ -61,6 +63,34 @@ func (s *InputsSchema) ToAIToolsSchema() aitools.Schema {
 		Properties: props,
 		Required:   required,
 	}
+}
+
+// inputFieldToProperty recursively converts an InputField to an aitools.Property.
+func inputFieldToProperty(field InputField) aitools.Property {
+	prop := aitools.Property{
+		Type:        stringToPropertyType(field.Type),
+		Description: field.Description,
+	}
+
+	// Recurse into list/array items.
+	// Skip "any" and "any_primitive" — omitting Items means no type constraint in JSON Schema.
+	if field.Items != nil && field.Items.Type != "any" && field.Items.Type != "any_primitive" {
+		itemProp := inputFieldToProperty(*field.Items)
+		prop.Items = &itemProp
+	}
+
+	// Recurse into object/map properties
+	if len(field.Properties) > 0 {
+		prop.Properties = make(aitools.PropertyMap)
+		for _, p := range field.Properties {
+			prop.Properties[p.Name] = inputFieldToProperty(p)
+			if p.Required {
+				prop.Required = append(prop.Required, p.Name)
+			}
+		}
+	}
+
+	return prop
 }
 
 func stringToPropertyType(s string) aitools.PropertyType {
@@ -219,10 +249,14 @@ func BuildFieldsEvalContext(baseCtx *hcl.EvalContext, inputsType cty.Type) *hcl.
 	// Create placeholder values for inputs based on the type
 	inputsPlaceholder := cty.UnknownVal(inputsType)
 
+	// Walk the parent chain so that vars.*, models.*, etc. are all available
+	// even when baseCtx is a child context (e.g., the schema-enhanced tool context).
 	newVars := make(map[string]cty.Value)
-	if baseCtx != nil {
-		for k, v := range baseCtx.Variables {
-			newVars[k] = v
+	for c := baseCtx; c != nil; c = c.Parent() {
+		for k, v := range c.Variables {
+			if _, exists := newVars[k]; !exists {
+				newVars[k] = v
+			}
 		}
 	}
 	newVars["inputs"] = inputsPlaceholder

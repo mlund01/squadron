@@ -72,8 +72,9 @@ func inputFieldToProperty(field InputField) aitools.Property {
 		Description: field.Description,
 	}
 
-	// Recurse into list/array items
-	if field.Items != nil {
+	// Recurse into list/array items.
+	// Skip "any" and "any_primitive" — omitting Items means no type constraint in JSON Schema.
+	if field.Items != nil && field.Items.Type != "any" && field.Items.Type != "any_primitive" {
 		itemProp := inputFieldToProperty(*field.Items)
 		prop.Items = &itemProp
 	}

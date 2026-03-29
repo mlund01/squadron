@@ -77,34 +77,98 @@ inputs {
 
 ### Shorthand Schema Syntax
 
-For concise definitions, you can use the shorthand `inputs = { ... }` attribute form with schema helper functions:
+For concise definitions, use the shorthand `inputs = { ... }` attribute form with schema helper functions. Both forms are fully equivalent.
 
-```hcl
-tool "weather" {
-  implements  = builtins.http.get
-  description = "Get current weather"
-
-  inputs = {
-    city  = string("City name", true)
-    units = string("Unit system", { default = "metric" })
-    days  = number("Forecast days", { default = 3 })
-  }
-
-  url = "https://wttr.in/${inputs.city}?format=3"
-}
-```
-
-Available helper functions: `string`, `number`, `integer`, `bool`, `list`, `map`, `object`. Pass `true` as the second argument to mark a field as required, or an options object to set a default:
+#### Primitives — `string` `number` `integer` `bool`
 
 ```hcl
 inputs = {
-  required_field   = string("Always needed", true)
-  optional_default = string("Has a fallback", { default = "fallback" })
-  optional_field   = number("No default, not required")
+  name    = string("Customer name", true)               # required
+  region  = string("AWS region", { default = "us-east-1" }) # optional with default
+  count   = integer("Number of items", true)            # required integer
+  score   = number("Confidence score")                  # optional float
+  verbose = bool("Enable verbose output", { default = false })
 }
 ```
 
-Both the block form and the shorthand are fully equivalent.
+Passing `true` as the second argument marks the field required. Pass an options object `{ default = ... }` to set a default value (making it optional).
+
+#### Lists — `list(inner_type, description, required?)`
+
+```hcl
+inputs = {
+  tags    = list(string, "Labels to apply")            # list of strings
+  scores  = list(number, "Numeric scores", true)       # required list of numbers
+}
+```
+
+The first argument is a type reference (`string`, `number`, `integer`, `bool`) or a nested `object({...})`.
+
+#### Maps — `map(value_type, description, required?)`
+
+`map` is free-form and carries no field schema — use it for arbitrary key-value data:
+
+```hcl
+inputs = {
+  headers  = map(string, "HTTP headers to include")    # free-form string map
+  counts   = map(number, "Counts by category", true)   # required number map
+}
+```
+
+#### Objects — `object(properties, description, required?)`
+
+`object` is schematic — the first argument defines the nested field layout:
+
+```hcl
+inputs = {
+  address = object({
+    street = string("Street address", true)
+    city   = string("City", true)
+    zip    = string("ZIP code")
+  }, "Shipping address", true)
+}
+```
+
+Nest `object({...})` inside `list()` for lists of typed objects:
+
+```hcl
+inputs = {
+  line_items = list(object({
+    sku      = string("Product SKU", true)
+    quantity = integer("Item quantity", true)
+    price    = number("Unit price")
+  }), "Order line items", true)
+}
+```
+
+#### Full example
+
+```hcl
+tool "process_order" {
+  implements  = builtins.http.post
+  description = "Submit a customer order"
+
+  inputs = {
+    order_id   = string("Order identifier", true)
+    total      = number("Order total in USD", true)
+    express    = bool("Use express shipping", { default = false })
+    tags       = list(string, "Order labels")
+    metadata   = map(string, "Arbitrary order metadata")
+    address    = object({
+      street = string("Street address", true)
+      city   = string("City", true)
+      zip    = string("ZIP code")
+    }, "Shipping address", true)
+    line_items = list(object({
+      sku      = string("Product SKU", true)
+      quantity = integer("Quantity", true)
+    }), "Line items", true)
+  }
+
+  url  = "https://api.example.com/orders"
+  body = { order_id = inputs.order_id }
+}
+```
 
 ### Field Expressions
 

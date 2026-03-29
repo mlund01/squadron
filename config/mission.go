@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"regexp"
 	"strconv"
 	"strings"
@@ -15,11 +16,12 @@ import (
 
 // Input type constants
 const (
-	InputTypeString = "string"
-	InputTypeNumber = "number"
-	InputTypeBool   = "bool"
-	InputTypeList   = "list"
-	InputTypeObject = "object"
+	InputTypeString  = "string"
+	InputTypeNumber  = "number"
+	InputTypeInteger = "integer"
+	InputTypeBool    = "bool"
+	InputTypeList    = "list"
+	InputTypeObject  = "object"
 )
 
 // MissionInput represents an input parameter for a mission
@@ -519,14 +521,23 @@ func (i *MissionInput) Validate() error {
 		return fmt.Errorf("input name is required")
 	}
 	validTypes := map[string]bool{
-		InputTypeString: true,
-		InputTypeNumber: true,
-		InputTypeBool:   true,
-		InputTypeList:   true,
-		InputTypeObject: true,
+		InputTypeString:  true,
+		InputTypeNumber:  true,
+		InputTypeInteger: true,
+		InputTypeBool:    true,
+		InputTypeList:    true,
+		InputTypeObject:  true,
 	}
 	if !validTypes[i.Type] {
-		return fmt.Errorf("invalid type '%s': must be string, number, bool, list, or object", i.Type)
+		return fmt.Errorf("invalid type '%s': must be string, number, integer, bool, list, or object", i.Type)
+	}
+
+	// Integer defaults must be whole numbers
+	if i.Type == InputTypeInteger && i.Default != nil {
+		bf := i.Default.AsBigFloat()
+		if !bf.IsInt() {
+			return fmt.Errorf("input %q: default value must be a whole number for integer type", i.Name)
+		}
 	}
 
 	// Secret inputs have additional requirements
@@ -623,7 +634,7 @@ func inputTypeToCtyType(inputType string) cty.Type {
 	switch inputType {
 	case InputTypeString:
 		return cty.String
-	case InputTypeNumber:
+	case InputTypeNumber, InputTypeInteger:
 		return cty.Number
 	case InputTypeBool:
 		return cty.Bool
@@ -677,6 +688,16 @@ func parseInputValue(strVal string, inputType string) (cty.Value, error) {
 		f, err := strconv.ParseFloat(strVal, 64)
 		if err != nil {
 			return cty.NilVal, fmt.Errorf("invalid number: %w", err)
+		}
+		return cty.NumberFloatVal(f), nil
+	case InputTypeInteger:
+		f, err := strconv.ParseFloat(strVal, 64)
+		if err != nil {
+			return cty.NilVal, fmt.Errorf("invalid integer: %w", err)
+		}
+		bf := new(big.Float).SetFloat64(f)
+		if !bf.IsInt() {
+			return cty.NilVal, fmt.Errorf("invalid integer: %q is not a whole number", strVal)
 		}
 		return cty.NumberFloatVal(f), nil
 	case InputTypeBool:

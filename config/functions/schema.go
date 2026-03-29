@@ -11,20 +11,33 @@ import (
 // These are registered in every EvalContext so config authors can use shorthand
 // schema definitions instead of verbose field blocks.
 //
-// Primitive usage (description, optional required-or-options):
+// Primitives — string / number / integer / bool:
 //
-//	city  = string("The target city", true)
-//	count = number("How many results")
-//	flag  = bool("Whether active", { default = true })
+//	city    = string("Target city", true)               // required
+//	region  = string("Region", { default = "us-east-1" }) // optional with default
+//	count   = number("Result count")                    // optional, no default
 //
-// Composite usage:
+// Lists — list(inner_type, description, required?):
 //
-//	tags  = list(string, "Tags to apply")
-//	meta  = map(string, "Arbitrary key-value pairs")
+//	tags    = list(string, "Labels to apply", true)
+//	scores  = list(number, "Numeric scores")
+//
+// Maps — map(value_type, description, required?) — free-form, no field schema:
+//
+//	headers = map(string, "HTTP headers")
+//	counts  = map(number, "Counts by category")
+//
+// Objects — object(properties, description, required?) — schematic, fields defined:
+//
 //	coord = object({
 //	  lat = number("Latitude", true)
 //	  lon = number("Longitude", true)
 //	}, "Geographic coordinates", true)
+//
+//	items = list(object({
+//	  id    = integer("Item ID", true)
+//	  label = string("Item label")
+//	}), "Order items", true)
 func SchemaFunctions() map[string]function.Function {
 	return map[string]function.Function{
 		"string":  makePrimitiveFunc("string"),

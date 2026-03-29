@@ -64,12 +64,27 @@ dataset "city_list" {
   schema = {
     id       = integer("City ID", true)
     name     = string("City name", true)
-    metadata = object("Additional data")
+    metadata = map(string, "Additional metadata")   # free-form key-value
   }
 }
 ```
 
-Available helper functions: `string`, `number`, `integer`, `bool`, `list`, `map`, `object`. Pass `true` as the second argument to mark a field as required. Both forms are fully equivalent.
+Use `object({...}, "desc")` when items have a known nested structure:
+
+```hcl
+dataset "order_list" {
+  schema = {
+    id      = integer("Order ID", true)
+    status  = string("Order status", true)
+    address = object({
+      city    = string("City", true)
+      country = string("Country code", true)
+    }, "Shipping address")
+  }
+}
+```
+
+Pass `true` as the second argument to mark a field required. See [Tools](/squadron/config/tools#shorthand-schema-syntax) for the full type reference including `list`, `map`, and nested `object`. Both the block form and shorthand are fully equivalent.
 
 ### Field Types
 

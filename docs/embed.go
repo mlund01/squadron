@@ -2,5 +2,5 @@ package docs
 
 import "embed"
 
-//go:embed pages/**/*.md pages/*.md
+//go:embed content/**/*.mdx content/*.mdx
 var DocsFS embed.FS

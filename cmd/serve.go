@@ -19,6 +19,7 @@ import (
 	"squadron/config"
 	"squadron/config/vault"
 	"squadron/internal/paths"
+	squadronmcp "squadron/mcp"
 	"squadron/scheduler"
 	"squadron/store"
 	"squadron/wsbridge"
@@ -154,6 +155,27 @@ func runServe(cmd *cobra.Command, args []string) {
 		sched.UpdateConfig(newCfg)
 	}
 
+	// Start MCP server if enabled
+	var mcpServer *squadronmcp.Server
+	if cfg.MCP != nil && cfg.MCP.Enabled {
+		mcpDeps := squadronmcp.Deps{
+			Config:       client.GetConfig,
+			Stores:       stores,
+			Version:      Version,
+			ConfigPath:   serveConfigPath,
+			RunMission:   client.RunMissionDirect,
+			ReloadConfig: client.ReloadConfig,
+		}
+		mcpSrv := squadronmcp.NewServer(mcpDeps)
+		var err error
+		mcpServer, err = squadronmcp.StartSSE(mcpSrv, cfg.MCP.Port, cfg.MCP.Secret)
+		if err != nil {
+			log.Printf("Warning: MCP server failed to start: %v", err)
+		} else {
+			fmt.Printf("MCP server listening on http://localhost:%d/sse\n", cfg.MCP.Port)
+		}
+	}
+
 	// Connect immediately — even without valid config, the command center
 	// can show vars and config files so the user can fix things from the UI
 	if localCC {
@@ -203,6 +225,7 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	<-stop
 	fmt.Println("\nShutting down...")
+	mcpServer.Shutdown()
 	sched.Stop()
 	client.Close()
 

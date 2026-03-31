@@ -1332,3 +1332,62 @@ func (c *Client) RunScheduledMission(missionName, source string, inputs map[stri
 		c.runMissionChain(missionCtx, missionCancel, runner, storingHandler, wsHandler, missionName)
 	}()
 }
+
+// RunMissionDirect starts a mission without going through the WebSocket protocol.
+// It returns the mission ID immediately. The mission runs in the background.
+// This is used by the MCP server to trigger missions.
+func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) (string, error) {
+	cfg := c.getConfig()
+	if cfg == nil {
+		return "", fmt.Errorf("config not loaded")
+	}
+
+	// Validate mission exists
+	var missionCfg *config.Mission
+	for i := range cfg.Missions {
+		if cfg.Missions[i].Name == missionName {
+			missionCfg = &cfg.Missions[i]
+			break
+		}
+	}
+	if missionCfg == nil {
+		return "", fmt.Errorf("mission %q not found", missionName)
+	}
+
+	// Check concurrency limit
+	if !c.concurrency.NotifyMissionStarted(missionName) {
+		return "", fmt.Errorf("mission %q is at max parallel capacity (%d)", missionName, missionCfg.MaxParallel)
+	}
+
+	// Create mission runner
+	debugLogger, _ := mission.NewDebugLogger("")
+	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger))
+	if err != nil {
+		c.concurrency.NotifyMissionDone(missionName)
+		return "", fmt.Errorf("failed to create runner: %w", err)
+	}
+
+	// Create WS handler for tracking and event streaming
+	wsHandler := NewWSMissionHandler(c)
+	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+
+	// Run mission in background
+	missionCtx, missionCancel := context.WithCancel(context.Background())
+	go func() {
+		c.runMissionChain(missionCtx, missionCancel, runner, storingHandler, wsHandler, missionName)
+	}()
+
+	// Wait for the mission ID
+	missionID, err := wsHandler.WaitForMissionID(30 * time.Second)
+	if err != nil {
+		missionCancel()
+		return "", fmt.Errorf("mission failed to start: %w", err)
+	}
+
+	// Track the running mission
+	c.missionMu.Lock()
+	c.runningMissions[missionID] = missionCancel
+	c.missionMu.Unlock()
+
+	return missionID, nil
+}

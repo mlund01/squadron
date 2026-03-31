@@ -31,6 +31,9 @@ type Config struct {
 	// CommandCenter configuration (optional, nil when absent = standalone mode)
 	CommandCenter *CommandCenterConfig `hcl:"-"`
 
+	// MCP server configuration (optional, nil when absent = no MCP server)
+	MCP *MCPConfig `hcl:"-"`
+
 	// File browser configurations (optional)
 	SharedFolders []SharedFolder `hcl:"-"`
 
@@ -82,6 +85,7 @@ func LoadPartial(path string) (*Config, error) {
 				{Type: "variable", LabelNames: []string{"name"}},
 				{Type: "plugin", LabelNames: []string{"name"}},
 				{Type: "command_center"},
+				{Type: "mcp"},
 			},
 		})
 		if diags.HasErrors() {
@@ -126,6 +130,14 @@ func LoadPartial(path string) (*Config, error) {
 					if diags := gohcl.DecodeBody(block.Body, nil, &cc); !diags.HasErrors() {
 						cc.Defaults()
 						partial.CommandCenter = &cc
+					}
+				}
+			case "mcp":
+				if partial.MCP == nil {
+					var mc MCPConfig
+					if diags := gohcl.DecodeBody(block.Body, nil, &mc); !diags.HasErrors() {
+						mc.Defaults()
+						partial.MCP = &mc
 					}
 				}
 			}
@@ -201,6 +213,12 @@ func (c *Config) Validate() error {
 	if c.CommandCenter != nil {
 		if err := c.CommandCenter.Validate(); err != nil {
 			return fmt.Errorf("command_center: %w", err)
+		}
+	}
+
+	if c.MCP != nil {
+		if err := c.MCP.Validate(); err != nil {
+			return fmt.Errorf("mcp: %w", err)
 		}
 	}
 
@@ -349,9 +367,10 @@ type parsedBlocks struct {
 	Tools     []*hcl.Block
 	Plugins   []*hcl.Block
 	Missions  []*hcl.Block
-	Storage      []*hcl.Block
+	Storage       []*hcl.Block
 	CommandCenter []*hcl.Block
 	SharedFolders []*hcl.Block
+	MCP           []*hcl.Block
 }
 
 // loadFromFiles implements staged loading: variables → models → agents → tools
@@ -378,6 +397,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "storage"},
 				{Type: "command_center"},
 				{Type: "shared_folder", LabelNames: []string{"name"}},
+				{Type: "mcp"},
 			},
 		})
 		if diags.HasErrors() {
@@ -405,6 +425,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.CommandCenter = append(pb.CommandCenter, block)
 			case "shared_folder":
 				pb.SharedFolders = append(pb.SharedFolders, block)
+			case "mcp":
+				pb.MCP = append(pb.MCP, block)
 			}
 		}
 		allParsedBlocks = append(allParsedBlocks, pb)
@@ -468,6 +490,20 @@ func loadFromFiles(files []string) (*Config, error) {
 			}
 			cc.Defaults()
 			commandCenterConfig = &cc
+		}
+	}
+
+	// Parse mcp block (optional singleton, with vars context)
+	var mcpConfig *MCPConfig
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.MCP {
+			var mc MCPConfig
+			diags := gohcl.DecodeBody(block.Body, varsCtx, &mc)
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("mcp: %w", diags)
+			}
+			mc.Defaults()
+			mcpConfig = &mc
 		}
 	}
 
@@ -638,6 +674,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		Missions:      allMissions,
 		Storage:        &storageConfig,
 		CommandCenter:  commandCenterConfig,
+		MCP:            mcpConfig,
 		SharedFolders:   allSharedFolders,
 		LoadedPlugins:  loadedPlugins,
 		ResolvedVars:   resolvedVars,

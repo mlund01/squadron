@@ -31,7 +31,7 @@ go build -o squadron ./cmd/cli              # Build the CLI
 
 ## Architecture Overview
 
-Squad is an HCL-based CLI for defining and running AI agents and multi-agent missions. It uses a config-first approach where agents, models, tools, plugins, and missions are declared in `.hcl` files.
+Squadron is a declarative framework for building and running AI agent workflows. LLM-powered agents, tools, plugins, and multi-step missions are defined entirely in HCL configuration files — no code required. Agents reason and act autonomously using a two-tier architecture: commanders orchestrate tasks while agents execute tool calls in ReAct loops.
 
 ### Key Directories
 

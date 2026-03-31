@@ -4,13 +4,13 @@ title: Introduction
 
 # Squadron
 
-Squadron is a framework for building AI agent workflows as configuration, not code.
+Squadron is a declarative framework for building and running AI agent workflows — entirely from configuration, not code.
 
-Define agents, tools, and multi-step missions in HCL files. Squadron handles orchestration, state management, branching, and recovery — so you describe *what* you want done, not how to wire it together.
+Define LLM-powered agents, connect them to tools and plugins, and orchestrate multi-step missions where agents reason, act, and collaborate autonomously. Squadron handles the hard parts — agent orchestration, tool execution, state management, conditional branching, and crash recovery — so you describe *what* you want your agents to accomplish, not how to wire them together.
 
 ## Why Squadron
 
-Most agent frameworks require writing code to orchestrate multi-agent workflows — glue code, retry logic, state serialization, branching. Squadron takes a different approach: your workflow definition *is* the configuration.
+Most agentic frameworks require writing code to orchestrate multi-agent workflows — glue code, retry logic, state serialization, branching. Squadron takes a different approach: your entire agentic workflow — agents, their tools, how they collaborate, and what they produce — is defined as configuration.
 
 **Workflows are readable and reviewable.** A `.hcl` mission file describes the full task graph, agent assignments, branching conditions, and structured outputs. Anyone on the team can read it, diff it, and review it — no Python class hierarchies to decode.
 
@@ -24,13 +24,13 @@ Most agent frameworks require writing code to orchestrate multi-agent workflows 
 
 ## How It Works
 
-Squadron separates *strategic thinking* from *tactical execution*:
+Squadron separates *strategic thinking* from *tactical execution* using a two-tier agent architecture:
 
-- **Commanders** orchestrate each task — they plan subtasks, delegate to agents, query upstream results, and make routing decisions
-- **Agents** execute the work — they call tools, process results, and report back
-- **Missions** wire it all together — tasks form a dependency graph with static sequencing, conditional branching, and fan-out patterns
+- **Commanders** are LLM-powered orchestrators — they break down each task into subtasks, delegate work to agents, interpret results, query upstream context, and make routing decisions. They reason about *what* needs to happen.
+- **Agents** are LLM-powered executors — they use tools (plugins, APIs, shell, browser) in a ReAct loop to accomplish specific objectives. They reason about *how* to accomplish it.
+- **Missions** wire it all together — tasks form a dependency graph with static sequencing, conditional branching, and fan-out patterns. Each task gets a commander that autonomously manages the agents assigned to it.
 
-Different models can fill different roles. A fast model can handle routing while a capable model handles analysis.
+Different models can fill different roles. A fast model can handle routing while a capable model handles complex analysis. Agents and commanders can use different providers (Anthropic, OpenAI, Gemini) within the same mission.
 
 ## Quick Example
 

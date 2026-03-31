@@ -101,7 +101,7 @@ For **cross-mission routes**, the options include `required_inputs` and the seco
 | `route` | string | Key of the chosen route, or `"none"` (optional — only for routing tasks) |
 | `mission_inputs` | object | Input values for mission route targets (optional — only for cross-mission routes) |
 
-See [Routing](/squadron/missions/routing) for full details.
+See [Routing](/missions/routing) for full details.
 
 #### submit_output
 
@@ -320,7 +320,7 @@ Returns the next item with its index and total count. Returns `{"status": "exhau
 
 ## Agent Tools
 
-Agents have access to the tools configured in their agent definition, plus mission-level dataset tools when running in mission context. See [Tools](/squadron/config/tools) for configuring agent tools.
+Agents have access to the tools configured in their agent definition, plus mission-level dataset tools when running in mission context. See [Tools](/config/tools) for configuring agent tools.
 
 ### Dataset Tools
 
@@ -333,4 +333,4 @@ When running inside a mission, agents automatically get these dataset tools:
 | `dataset_count` | Get the number of items in a dataset |
 | `result_to_dataset` | Convert a large intercepted result into a dataset for iteration |
 
-See [Datasets](/squadron/missions/datasets) for details and examples.
+See [Datasets](/missions/datasets) for details and examples.

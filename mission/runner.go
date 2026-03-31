@@ -1085,8 +1085,8 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 
 	// Set up tool callbacks
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
-		OnAgentStart: func(taskName, agentName string) {
-			streamer.AgentStarted(taskName, agentName)
+		OnAgentStart: func(taskName, agentName, instruction string) {
+			streamer.AgentStarted(taskName, agentName, instruction)
 			if r.debugLogger != nil {
 				r.debugLogger.LogEvent(EventAgentStarted, map[string]any{
 					"task":  taskName,
@@ -1260,6 +1260,24 @@ func (r *Runner) getDependencyChain(taskName string) []string {
 	return result
 }
 
+// convertOutputField converts a config.OutputField to agent.OutputFieldSchema recursively
+func convertOutputField(field config.OutputField) agent.OutputFieldSchema {
+	s := agent.OutputFieldSchema{
+		Name:        field.Name,
+		Type:        field.Type,
+		Description: field.Description,
+		Required:    field.Required,
+	}
+	if field.Items != nil {
+		items := convertOutputField(*field.Items)
+		s.Items = &items
+	}
+	for _, prop := range field.Properties {
+		s.Properties = append(s.Properties, convertOutputField(prop))
+	}
+	return s
+}
+
 // getTaskOutputSchema converts a task's output schema to agent.OutputFieldSchema slice
 func (r *Runner) getTaskOutputSchema(task config.Task) []agent.OutputFieldSchema {
 	if task.Output == nil {
@@ -1268,12 +1286,7 @@ func (r *Runner) getTaskOutputSchema(task config.Task) []agent.OutputFieldSchema
 
 	var result []agent.OutputFieldSchema
 	for _, field := range task.Output.Fields {
-		result = append(result, agent.OutputFieldSchema{
-			Name:        field.Name,
-			Type:        field.Type,
-			Description: field.Description,
-			Required:    field.Required,
-		})
+		result = append(result, convertOutputField(field))
 	}
 	return result
 }
@@ -1790,8 +1803,8 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 
 	// Set up tool callbacks
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
-		OnAgentStart: func(taskName, agentName string) {
-			streamer.AgentStarted(taskName, agentName)
+		OnAgentStart: func(taskName, agentName, instruction string) {
+			streamer.AgentStarted(taskName, agentName, instruction)
 			if r.debugLogger != nil {
 				r.debugLogger.LogEvent(EventAgentStarted, map[string]any{
 					"task":  taskName,
@@ -2230,8 +2243,8 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 
 	// Set up tool callbacks
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
-		OnAgentStart: func(taskName, agentName string) {
-			streamer.AgentStarted(taskName, agentName)
+		OnAgentStart: func(taskName, agentName, instruction string) {
+			streamer.AgentStarted(taskName, agentName, instruction)
 		},
 		GetAgentHandler: func(taskName, agentName string) streamers.ChatHandler {
 			return streamer.AgentHandler(taskName, agentName)
@@ -2453,8 +2466,8 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 
 	// Set up tool callbacks for iteration
 	sup.SetToolCallbacks(&agent.CommanderToolCallbacks{
-		OnAgentStart: func(taskName, agentName string) {
-			streamer.AgentStarted(taskName, agentName)
+		OnAgentStart: func(taskName, agentName, instruction string) {
+			streamer.AgentStarted(taskName, agentName, instruction)
 			if r.debugLogger != nil {
 				r.debugLogger.LogEvent(EventAgentStarted, map[string]any{
 					"task":  taskName,

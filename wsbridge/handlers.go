@@ -738,9 +738,6 @@ func (c *Client) handleGetChatMessages(env *protocol.Envelope) (*protocol.Envelo
 
 	var messages []protocol.ChatMessageInfo
 	for _, m := range msgs {
-		if m.Role == "system" {
-			continue
-		}
 		messages = append(messages, protocol.ChatMessageInfo{
 			ID:        m.ID,
 			Role:      m.Role,

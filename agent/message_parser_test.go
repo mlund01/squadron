@@ -34,7 +34,9 @@ func (m *mockStreamer) ReasoningCompleted() { m.finishReasoningCount++ }
 func (m *mockStreamer) PublishAnswerChunk(chunk string) {
 	m.answerChunks = append(m.answerChunks, chunk)
 }
-func (m *mockStreamer) FinishAnswer() { m.finishAnswerCount++ }
+func (m *mockStreamer) FinishAnswer()              { m.finishAnswerCount++ }
+func (m *mockStreamer) AskCommander(content string)      {}
+func (m *mockStreamer) CommanderResponse(content string) {}
 
 func TestParseAction(t *testing.T) {
 	s := &mockStreamer{}

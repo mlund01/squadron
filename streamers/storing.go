@@ -300,13 +300,14 @@ func (h *StoringMissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	h.inner.SessionTurn(data)
 }
 
-func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string) {
+func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string, instruction string) {
 	sessionKey := taskName + ":" + agentName
 	h.storeEvent(protocol.EventAgentStarted, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.AgentStartedData{
-		TaskName:  taskName,
-		AgentName: agentName,
+		TaskName:    taskName,
+		AgentName:   agentName,
+		Instruction: instruction,
 	})
-	h.inner.AgentStarted(taskName, agentName)
+	h.inner.AgentStarted(taskName, agentName, instruction)
 }
 
 func (h *StoringMissionHandler) AgentHandler(taskName string, agentName string) ChatHandler {
@@ -437,6 +438,24 @@ func (c *storingChatHandler) FinishAnswer() {
 		c.answerBuf.Reset()
 	}
 	c.inner.FinishAnswer()
+}
+
+func (c *storingChatHandler) AskCommander(content string) {
+	c.parent.storeEvent(protocol.EventAgentAskCommander, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentAskCommanderData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+		Content:   content,
+	})
+	c.inner.AskCommander(content)
+}
+
+func (c *storingChatHandler) CommanderResponse(content string) {
+	c.parent.storeEvent(protocol.EventAgentCommanderResponse, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentCommanderResponseData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+		Content:   content,
+	})
+	c.inner.CommanderResponse(content)
 }
 
 // =============================================================================

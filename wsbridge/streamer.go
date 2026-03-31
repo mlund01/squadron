@@ -3,6 +3,7 @@ package wsbridge
 import (
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -229,10 +230,11 @@ func (h *WSMissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	h.sendEvent(protocol.EventSessionTurn, data)
 }
 
-func (h *WSMissionHandler) AgentStarted(taskName string, agentName string) {
+func (h *WSMissionHandler) AgentStarted(taskName string, agentName string, instruction string) {
 	h.sendEvent(protocol.EventAgentStarted, protocol.AgentStartedData{
-		TaskName:  taskName,
-		AgentName: agentName,
+		TaskName:    taskName,
+		AgentName:   agentName,
+		Instruction: instruction,
 	})
 }
 
@@ -265,9 +267,11 @@ func (h *WSMissionHandler) RouteChosen(routerTask string, targetTask string, con
 // =============================================================================
 
 type wsChatHandler struct {
-	parent    *WSMissionHandler
-	taskName  string
-	agentName string
+	parent      *WSMissionHandler
+	taskName    string
+	agentName   string
+	reasoningBuf strings.Builder
+	answerBuf    strings.Builder
 }
 
 func (c *wsChatHandler) Welcome(agentName string, modelName string) {}
@@ -312,23 +316,45 @@ func (c *wsChatHandler) ToolComplete(toolCallId string, toolName string, result 
 }
 
 func (c *wsChatHandler) PublishReasoningChunk(chunk string) {
-	// High-volume streaming chunks are not sent over WS individually
+	c.reasoningBuf.WriteString(chunk)
 }
 
 func (c *wsChatHandler) ReasoningCompleted() {
+	content := strings.TrimSpace(c.reasoningBuf.String())
+	c.reasoningBuf.Reset()
 	c.parent.sendEvent(protocol.EventAgentReasoningCompleted, protocol.AgentReasoningCompletedData{
 		TaskName:  c.taskName,
 		AgentName: c.agentName,
+		Content:   content,
 	})
 }
 
 func (c *wsChatHandler) PublishAnswerChunk(chunk string) {
-	// High-volume streaming chunks are not sent over WS individually
+	c.answerBuf.WriteString(chunk)
 }
 
 func (c *wsChatHandler) FinishAnswer() {
+	content := strings.TrimSpace(c.answerBuf.String())
+	c.answerBuf.Reset()
 	c.parent.sendEvent(protocol.EventAgentAnswer, protocol.AgentAnswerData{
 		TaskName:  c.taskName,
 		AgentName: c.agentName,
+		Content:   content,
+	})
+}
+
+func (c *wsChatHandler) AskCommander(content string) {
+	c.parent.sendEvent(protocol.EventAgentAskCommander, protocol.AgentAskCommanderData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+		Content:   content,
+	})
+}
+
+func (c *wsChatHandler) CommanderResponse(content string) {
+	c.parent.sendEvent(protocol.EventAgentCommanderResponse, protocol.AgentCommanderResponseData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+		Content:   content,
 	})
 }

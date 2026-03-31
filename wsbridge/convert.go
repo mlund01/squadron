@@ -61,12 +61,7 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			mi.Datasets = append(mi.Datasets, di)
 		}
 		for _, inp := range m.Inputs {
-			mi.Inputs = append(mi.Inputs, protocol.MissionInputInfo{
-				Name:        inp.Name,
-				Description: inp.Description,
-				Type:        inp.Type,
-				Required:    inp.Default == nil && !inp.Secret,
-			})
+			mi.Inputs = append(mi.Inputs, convertMissionInput(inp))
 		}
 		for _, t := range m.Tasks {
 			ti := protocol.TaskInfo{
@@ -229,6 +224,23 @@ func pluginToolInfoToProtocol(t *plugin.ToolInfo) protocol.ToolInfo {
 		Description: t.Description,
 		Parameters:  convertAIToolSchema(t.Schema),
 	}
+}
+
+func convertMissionInput(inp config.MissionInput) protocol.MissionInputInfo {
+	info := protocol.MissionInputInfo{
+		Name:        inp.Name,
+		Description: inp.Description,
+		Type:        inp.Type,
+		Required:    inp.Default == nil && !inp.Secret,
+	}
+	if inp.Items != nil {
+		items := convertMissionInput(*inp.Items)
+		info.Items = &items
+	}
+	for _, prop := range inp.Properties {
+		info.Properties = append(info.Properties, convertMissionInput(prop))
+	}
+	return info
 }
 
 func convertAIToolSchema(s aitools.Schema) *protocol.ToolSchema {

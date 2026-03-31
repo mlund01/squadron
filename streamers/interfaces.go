@@ -40,6 +40,12 @@ type ChatHandler interface {
 
 	// FinishAnswer is called when the answer is complete (to print newlines, stop spinner, etc)
 	FinishAnswer()
+
+	// AskCommander is called when the agent sends a question/response back to the commander
+	AskCommander(content string)
+
+	// CommanderResponse is called when the agent receives a response from the commander
+	CommanderResponse(content string)
 }
 
 // MissionHandler defines the interface for handling mission execution events
@@ -79,7 +85,7 @@ type MissionHandler interface {
 	SessionTurn(data protocol.SessionTurnData)
 
 	// Agent execution events (for streaming agent output during call_agent)
-	AgentStarted(taskName string, agentName string)
+	AgentStarted(taskName string, agentName string, instruction string)
 	AgentHandler(taskName string, agentName string) ChatHandler
 	AgentCompleted(taskName string, agentName string)
 

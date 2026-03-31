@@ -130,6 +130,10 @@ func (s *ChatHandler) FinishAnswer() {
 	s.answerBuffer.Reset()
 }
 
+func (s *ChatHandler) AskCommander(content string) {}
+
+func (s *ChatHandler) CommanderResponse(content string) {}
+
 // spinner handles the loading animation
 type spinner struct {
 	frames  []string

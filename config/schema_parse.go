@@ -193,6 +193,32 @@ func parseSchemaNodeAsMissionInput(name string, val cty.Value) (*MissionInput, e
 		Description: desc,
 	}
 
+	// Nested types: items for list/map, properties for object
+	switch kind {
+	case "list", "map":
+		if val.Type().HasAttribute("items") {
+			items, err := parseSchemaNodeAsMissionInput("", val.GetAttr("items"))
+			if err != nil {
+				return nil, fmt.Errorf("input %q items: %w", name, err)
+			}
+			input.Items = items
+		}
+	case "object":
+		if val.Type().HasAttribute("properties") {
+			propsVal := val.GetAttr("properties")
+			if propsVal.Type().IsObjectType() {
+				propNames := sortedAttrNames(propsVal)
+				for _, pn := range propNames {
+					prop, err := parseSchemaNodeAsMissionInput(pn, propsVal.GetAttr(pn))
+					if err != nil {
+						return nil, fmt.Errorf("input %q property %q: %w", name, pn, err)
+					}
+					input.Properties = append(input.Properties, *prop)
+				}
+			}
+		}
+	}
+
 	// "default" extra attribute from options object: { default = "val" }
 	if val.Type().HasAttribute("default") {
 		dv := val.GetAttr("default")
@@ -228,9 +254,10 @@ func schemaKindToInputType(kind string) string {
 		return "boolean"
 	case "list":
 		return "array"
-	case "object", "map":
-		// JSON Schema uses "object" for both structured objects and free-form maps
+	case "object":
 		return "object"
+	case "map":
+		return "map"
 	case "any", "any_primitive":
 		// Used as inner type refs for list/map — no JSON Schema type constraint
 		return kind

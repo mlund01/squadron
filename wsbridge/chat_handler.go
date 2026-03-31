@@ -99,6 +99,10 @@ func (h *WSChatHandler) FinishAnswer() {
 	h.sendChatEvent(protocol.ChatEventAnswerDone, nil)
 }
 
+func (h *WSChatHandler) AskCommander(content string) {}
+
+func (h *WSChatHandler) CommanderResponse(content string) {}
+
 // FullAnswer returns the accumulated answer text for persistence.
 func (h *WSChatHandler) FullAnswer() string {
 	h.mu.Lock()

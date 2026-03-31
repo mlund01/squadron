@@ -80,7 +80,7 @@ func (s *MissionHandler) CommanderToolComplete(taskName string, toolCallId strin
 	fmt.Printf("[%s] %s complete\n", taskName, toolName)
 }
 
-func (s *MissionHandler) AgentStarted(taskName string, agentName string) {
+func (s *MissionHandler) AgentStarted(taskName string, agentName string, instruction string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("%s[%s] Running agent '%s'...%s\n", ColorLightBrown, taskName, agentName, ColorReset)
@@ -272,3 +272,12 @@ func (s *agentHandler) FinishAnswer() {
 	}
 	s.answerBuffer.Reset()
 }
+
+func (s *agentHandler) AskCommander(content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	truncated := truncate(content, 200)
+	fmt.Printf("%s    [%s/%s] Ask Commander: %s%s\n", ColorLightBrown, s.taskName, s.agentName, truncated, ColorReset)
+}
+
+func (s *agentHandler) CommanderResponse(content string) {}

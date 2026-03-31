@@ -93,12 +93,14 @@ type OutputFieldSchema struct {
 	Type        string
 	Description string
 	Required    bool
+	Items       *OutputFieldSchema  // For array/list types — describes the element type
+	Properties  []OutputFieldSchema // For object types — describes inner fields
 }
 
 // CommanderToolCallbacks allows the mission to provide callbacks for commander tools
 type CommanderToolCallbacks struct {
 	// OnAgentStart is called when call_agent begins executing an agent
-	OnAgentStart func(taskName, agentName string)
+	OnAgentStart func(taskName, agentName, instruction string)
 	// GetAgentHandler returns a ChatHandler for the agent execution
 	GetAgentHandler func(taskName, agentName string) streamers.ChatHandler
 	// OnAgentComplete is called when call_agent finishes executing an agent
@@ -685,14 +687,33 @@ func (s *Commander) injectDependencyContext(summaries []DependencySummary, outpu
 	s.session.AddSystemPrompt(sb.String())
 }
 
-// injectOutputSchemaInstructions adds instructions for producing structured output via submit_output tool
-func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
-	var sb strings.Builder
-	sb.WriteString("## Required Structured Output\n\n")
-	sb.WriteString("This task requires structured output. You MUST call the `submit_output` tool to deliver your results.\n\n")
+// formatFieldType returns a human-readable type string including nested type info
+func formatFieldType(field OutputFieldSchema) string {
+	switch field.Type {
+	case "array", "list":
+		if field.Items != nil {
+			return "list<" + formatFieldType(*field.Items) + ">"
+		}
+		return "list<any>"
+	case "map":
+		if field.Items != nil {
+			return "map<string, " + formatFieldType(*field.Items) + ">"
+		}
+		return "map<string, any>"
+	case "object":
+		if len(field.Properties) > 0 {
+			return "object"
+		}
+		return "object"
+	default:
+		return field.Type
+	}
+}
 
-	sb.WriteString("**Output fields:**\n")
-	for _, field := range schema {
+// writeFieldList writes output field descriptions to sb at the given indent level
+func writeFieldList(sb *strings.Builder, fields []OutputFieldSchema, indent int) {
+	prefix := strings.Repeat("  ", indent)
+	for _, field := range fields {
 		req := ""
 		if field.Required {
 			req = " (required)"
@@ -701,26 +722,69 @@ func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 		if field.Description != "" {
 			desc = " - " + field.Description
 		}
-		sb.WriteString(fmt.Sprintf("- `%s` (%s%s)%s\n", field.Name, field.Type, req, desc))
+		typeName := formatFieldType(field)
+		sb.WriteString(fmt.Sprintf("%s- `%s` (%s%s)%s\n", prefix, field.Name, typeName, req, desc))
+
+		// Render nested object properties
+		if field.Type == "object" && len(field.Properties) > 0 {
+			writeFieldList(sb, field.Properties, indent+1)
+		}
 	}
+}
+
+// writeExampleJSON writes a JSON example value for a field
+func writeExampleJSON(field OutputFieldSchema) string {
+	switch field.Type {
+	case "number":
+		return "0.0"
+	case "integer":
+		return "0"
+	case "boolean":
+		return "false"
+	case "string":
+		return "\"...\""
+	case "array", "list":
+		if field.Items != nil {
+			return "[" + writeExampleJSON(*field.Items) + "]"
+		}
+		return "[]"
+	case "map":
+		if field.Items != nil {
+			return "{\"key\": " + writeExampleJSON(*field.Items) + "}"
+		}
+		return "{}"
+	case "object":
+		if len(field.Properties) > 0 {
+			parts := make([]string, 0, len(field.Properties))
+			for _, prop := range field.Properties {
+				parts = append(parts, fmt.Sprintf("\"%s\": %s", prop.Name, writeExampleJSON(prop)))
+			}
+			return "{" + strings.Join(parts, ", ") + "}"
+		}
+		return "{}"
+	default:
+		return "\"...\""
+	}
+}
+
+// injectOutputSchemaInstructions adds instructions for producing structured output via submit_output tool
+func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
+	var sb strings.Builder
+	sb.WriteString("## Required Structured Output\n\n")
+	sb.WriteString("This task requires structured output. You MUST call the `submit_output` tool to deliver your results.\n\n")
+
+	sb.WriteString("**Output fields:**\n")
+	writeFieldList(&sb, schema, 0)
 
 	sb.WriteString("\n**Example submit_output call:**\n")
 	sb.WriteString("```json\n")
 	sb.WriteString("{\"output\": {")
 
-	// Build example JSON
 	for i, field := range schema {
 		if i > 0 {
 			sb.WriteString(", ")
 		}
-		switch field.Type {
-		case "number", "integer":
-			sb.WriteString(fmt.Sprintf("\"%s\": 0", field.Name))
-		case "boolean":
-			sb.WriteString(fmt.Sprintf("\"%s\": false", field.Name))
-		default:
-			sb.WriteString(fmt.Sprintf("\"%s\": \"value\"", field.Name))
-		}
+		sb.WriteString(fmt.Sprintf("\"%s\": %s", field.Name, writeExampleJSON(field)))
 	}
 
 	sb.WriteString("}, \"summary\": \"Brief description of what was done\"}\n")
@@ -1807,8 +1871,12 @@ func (t *callAgentTool) Call(input string) string {
 	}
 
 	// Notify that agent is starting and get a streamer for it
+	instruction := params.Task
+	if params.Response != "" {
+		instruction = params.Response
+	}
 	if t.commander.callbacks != nil && t.commander.callbacks.OnAgentStart != nil {
-		t.commander.callbacks.OnAgentStart(t.commander.TaskName, params.Name)
+		t.commander.callbacks.OnAgentStart(t.commander.TaskName, params.Name, instruction)
 	}
 
 	var agentHandler streamers.ChatHandler
@@ -1828,6 +1896,9 @@ func (t *callAgentTool) Call(input string) string {
 		var agentInput string
 		if params.Response != "" {
 			agentInput = fmt.Sprintf("<COMMANDER_RESPONSE>\n%s\n</COMMANDER_RESPONSE>", params.Response)
+			if agentHandler != nil {
+				agentHandler.CommanderResponse(params.Response)
+			}
 		} else {
 			agentInput = fmt.Sprintf("<NEW_TASK>\n%s\n</NEW_TASK>", params.Task)
 		}

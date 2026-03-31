@@ -99,19 +99,32 @@ mission "example" {
   }
   agents = [agents.browser_navigator]
 
+  inputs = {
+    url      = string("Target URL to scrape", true)
+    max_pages = integer("Max pages to scrape", { default = 10 })
+    tags     = list(string, "Tags to apply")
+    options  = map(string, "Extra key-value options")
+    auth     = object({
+      username = string("Login username", true)
+      password = string("Login password", { secret = true })
+    }, "Authentication credentials")
+  }
+
   task "login" {
     objective = "Log into the application"
-    output {
-      field "session_id" {
-        type     = "string"
-        required = true
-      }
+    output = {
+      session_id = string("The session token", true)
     }
   }
 
   task "scrape" {
     depends_on = [tasks.login]
     objective  = "Scrape data from the logged-in session"
+    output = {
+      results   = list(object({ title = string("Title"), url = string("URL") }), "Scraped results", true)
+      metadata  = map(string, "Extra metadata")
+      summary   = string("Summary of scraped data", true)
+    }
   }
 }
 ```
@@ -521,8 +534,13 @@ Creates a debug directory: `debug/<mission>_<timestamp>/`
 - `task_started`, `task_completed`
 - `iteration_started`, `iteration_completed`
 - `agent_started`, `agent_completed`
-- `tool_call`, `tool_result`
+- `commander_reasoning_started`, `commander_reasoning_completed`
+- `agent_reasoning_started`, `agent_reasoning_completed`
+- `commander_calling_tool`, `commander_tool_complete`
+- `agent_calling_tool`, `agent_tool_complete`
+- `commander_answer`, `agent_answer`
 - `route_chosen`
+- `compaction`
 
 ---
 

@@ -206,7 +206,7 @@ tool "meta" {
 
 			meta := findInputField(cfg.CustomTools[0].Inputs.Fields, "metadata")
 			Expect(meta).NotTo(BeNil())
-			Expect(meta.Type).To(Equal("object"))
+			Expect(meta.Type).To(Equal("map"))
 			Expect(meta.Items).NotTo(BeNil())
 			Expect(meta.Items.Type).To(Equal("string"))
 		})

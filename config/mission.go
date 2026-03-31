@@ -22,16 +22,19 @@ const (
 	InputTypeBool    = "bool"
 	InputTypeList    = "list"
 	InputTypeObject  = "object"
+	InputTypeMap     = "map"
 )
 
 // MissionInput represents an input parameter for a mission
 type MissionInput struct {
-	Name        string     `json:"name"`
-	Type        string     `json:"type"`
-	Description string     `json:"description,omitempty"`
-	Default     *cty.Value `json:"-"`
-	Secret      bool       `json:"secret,omitempty"`
-	Value       *cty.Value `json:"-"`
+	Name        string          `json:"name"`
+	Type        string          `json:"type"`
+	Description string          `json:"description,omitempty"`
+	Default     *cty.Value      `json:"-"`
+	Secret      bool            `json:"secret,omitempty"`
+	Value       *cty.Value      `json:"-"`
+	Items       *MissionInput   `json:"items,omitempty"`       // Element type for list/map
+	Properties  []MissionInput  `json:"properties,omitempty"`  // Nested fields for object
 }
 
 // Dataset represents a collection of items for task iteration
@@ -527,6 +530,7 @@ func (i *MissionInput) Validate() error {
 		InputTypeBool:    true,
 		InputTypeList:    true,
 		InputTypeObject:  true,
+		InputTypeMap:     true,
 	}
 	if !validTypes[i.Type] {
 		return fmt.Errorf("invalid type '%s': must be string, number, integer, bool, list, or object", i.Type)
@@ -640,7 +644,7 @@ func inputTypeToCtyType(inputType string) cty.Type {
 		return cty.Bool
 	case InputTypeList:
 		return cty.List(cty.DynamicPseudoType)
-	case InputTypeObject:
+	case InputTypeObject, InputTypeMap:
 		return cty.DynamicPseudoType
 	default:
 		return cty.String
@@ -708,7 +712,7 @@ func parseInputValue(strVal string, inputType string) (cty.Value, error) {
 		return cty.BoolVal(b), nil
 	case InputTypeList:
 		return parseJSONList(strVal)
-	case InputTypeObject:
+	case InputTypeObject, InputTypeMap:
 		return parseJSONObject(strVal)
 	default:
 		return cty.StringVal(strVal), nil

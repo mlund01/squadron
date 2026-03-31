@@ -215,6 +215,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 		// Check for ASK_COMMANDER first (takes priority - agent needs commander input)
 		if askCommander := parser.GetAskCommander(); askCommander != "" {
+			o.streamer.AskCommander(askCommander)
 			return ChatResult{AskCommander: askCommander, Complete: false}, nil
 		}
 

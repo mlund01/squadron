@@ -78,7 +78,11 @@ func (h *WSChatHandler) PublishReasoningChunk(chunk string) {
 	})
 }
 
-func (h *WSChatHandler) FinishReasoning() {
+func (h *WSChatHandler) ReasoningStarted() {
+	// Chat mode doesn't need this — the Thinking() spinner is the UI indicator
+}
+
+func (h *WSChatHandler) ReasoningCompleted() {
 	h.sendChatEvent(protocol.ChatEventReasoningDone, nil)
 }
 
@@ -94,6 +98,10 @@ func (h *WSChatHandler) PublishAnswerChunk(chunk string) {
 func (h *WSChatHandler) FinishAnswer() {
 	h.sendChatEvent(protocol.ChatEventAnswerDone, nil)
 }
+
+func (h *WSChatHandler) AskCommander(content string) {}
+
+func (h *WSChatHandler) CommanderResponse(content string) {}
 
 // FullAnswer returns the accumulated answer text for persistence.
 func (h *WSChatHandler) FullAnswer() string {

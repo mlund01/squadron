@@ -233,13 +233,21 @@ func (h *StoringMissionHandler) IterationAnswer(taskName string, index int, cont
 	h.inner.IterationAnswer(taskName, index, content)
 }
 
-func (h *StoringMissionHandler) CommanderReasoning(taskName string, content string) {
+func (h *StoringMissionHandler) CommanderReasoningStarted(taskName string) {
 	sessionKey := taskName + ":commander"
-	h.storeEvent(protocol.EventCommanderReasoning, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderReasoningData{
+	h.storeEvent(protocol.EventCommanderReasoningStarted, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderReasoningStartedData{
+		TaskName: taskName,
+	})
+	h.inner.CommanderReasoningStarted(taskName)
+}
+
+func (h *StoringMissionHandler) CommanderReasoningCompleted(taskName string, content string) {
+	sessionKey := taskName + ":commander"
+	h.storeEvent(protocol.EventCommanderReasoningCompleted, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderReasoningCompletedData{
 		TaskName: taskName,
 		Content:  content,
 	})
-	h.inner.CommanderReasoning(taskName, content)
+	h.inner.CommanderReasoningCompleted(taskName, content)
 }
 
 func (h *StoringMissionHandler) CommanderAnswer(taskName string, content string) {
@@ -292,13 +300,14 @@ func (h *StoringMissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	h.inner.SessionTurn(data)
 }
 
-func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string) {
+func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string, instruction string) {
 	sessionKey := taskName + ":" + agentName
 	h.storeEvent(protocol.EventAgentStarted, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.AgentStartedData{
-		TaskName:  taskName,
-		AgentName: agentName,
+		TaskName:    taskName,
+		AgentName:   agentName,
+		Instruction: instruction,
 	})
-	h.inner.AgentStarted(taskName, agentName)
+	h.inner.AgentStarted(taskName, agentName, instruction)
 }
 
 func (h *StoringMissionHandler) AgentHandler(taskName string, agentName string) ChatHandler {
@@ -389,21 +398,29 @@ func (c *storingChatHandler) ToolComplete(toolCallId string, toolName string, re
 	c.inner.ToolComplete(toolCallId, toolName, result)
 }
 
+func (c *storingChatHandler) ReasoningStarted() {
+	c.parent.storeEvent(protocol.EventAgentReasoningStarted, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentReasoningStartedData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+	})
+	c.inner.ReasoningStarted()
+}
+
 func (c *storingChatHandler) PublishReasoningChunk(chunk string) {
 	c.reasoningBuf.WriteString(chunk)
 	c.inner.PublishReasoningChunk(chunk)
 }
 
-func (c *storingChatHandler) FinishReasoning() {
+func (c *storingChatHandler) ReasoningCompleted() {
 	if c.reasoningBuf.Len() > 0 {
-		c.parent.storeEvent(protocol.EventAgentThinking, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentThinkingData{
+		c.parent.storeEvent(protocol.EventAgentReasoningCompleted, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentReasoningCompletedData{
 			TaskName:  c.taskName,
 			AgentName: c.agentName,
 			Content:   c.reasoningBuf.String(),
 		})
 		c.reasoningBuf.Reset()
 	}
-	c.inner.FinishReasoning()
+	c.inner.ReasoningCompleted()
 }
 
 func (c *storingChatHandler) PublishAnswerChunk(chunk string) {
@@ -421,6 +438,24 @@ func (c *storingChatHandler) FinishAnswer() {
 		c.answerBuf.Reset()
 	}
 	c.inner.FinishAnswer()
+}
+
+func (c *storingChatHandler) AskCommander(content string) {
+	c.parent.storeEvent(protocol.EventAgentAskCommander, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentAskCommanderData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+		Content:   content,
+	})
+	c.inner.AskCommander(content)
+}
+
+func (c *storingChatHandler) CommanderResponse(content string) {
+	c.parent.storeEvent(protocol.EventAgentCommanderResponse, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentCommanderResponseData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+		Content:   content,
+	})
+	c.inner.CommanderResponse(content)
 }
 
 // =============================================================================

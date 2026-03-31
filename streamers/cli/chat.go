@@ -77,6 +77,10 @@ func (s *ChatHandler) ToolComplete(toolCallId string, toolName string, result st
 	fmt.Printf("%s✓%s %s%s%s called\n\n", ColorGray, ColorReset, ColorBold, toolName, ColorReset)
 }
 
+func (s *ChatHandler) ReasoningStarted() {
+	// CLI display handled in PublishReasoningChunk on first chunk
+}
+
 func (s *ChatHandler) PublishReasoningChunk(chunk string) {
 	// On first chunk, stop spinner and print title
 	if !s.reasoningStarted {
@@ -88,7 +92,7 @@ func (s *ChatHandler) PublishReasoningChunk(chunk string) {
 	fmt.Printf("%s%s%s", ColorItalic, ColorMagenta, chunk)
 }
 
-func (s *ChatHandler) FinishReasoning() {
+func (s *ChatHandler) ReasoningCompleted() {
 	if s.reasoningStarted {
 		// Reset color and add spacing
 		fmt.Printf("%s\n\n", ColorReset)
@@ -125,6 +129,10 @@ func (s *ChatHandler) FinishAnswer() {
 
 	s.answerBuffer.Reset()
 }
+
+func (s *ChatHandler) AskCommander(content string) {}
+
+func (s *ChatHandler) CommanderResponse(content string) {}
 
 // spinner handles the loading animation
 type spinner struct {

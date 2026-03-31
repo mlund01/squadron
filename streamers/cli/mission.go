@@ -52,7 +52,11 @@ func (s *MissionHandler) TaskFailed(taskName string, err error) {
 	fmt.Printf("\n%s%s[Task '%s' FAILED: %v]%s\n", ColorBold, ColorRed, taskName, err, ColorReset)
 }
 
-func (s *MissionHandler) CommanderReasoning(taskName string, content string) {
+func (s *MissionHandler) CommanderReasoningStarted(taskName string) {
+	// CLI doesn't need a separate start indicator
+}
+
+func (s *MissionHandler) CommanderReasoningCompleted(taskName string, content string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("[%s] Thinking: %s\n", taskName, truncate(content, 100))
@@ -76,7 +80,7 @@ func (s *MissionHandler) CommanderToolComplete(taskName string, toolCallId strin
 	fmt.Printf("[%s] %s complete\n", taskName, toolName)
 }
 
-func (s *MissionHandler) AgentStarted(taskName string, agentName string) {
+func (s *MissionHandler) AgentStarted(taskName string, agentName string, instruction string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	fmt.Printf("%s[%s] Running agent '%s'...%s\n", ColorLightBrown, taskName, agentName, ColorReset)
@@ -228,6 +232,10 @@ func (s *agentHandler) ToolComplete(toolCallId string, toolName string, result s
 	fmt.Printf("%s    [%s/%s] %s complete%s\n", ColorLightBrown, s.taskName, s.agentName, toolName, ColorReset)
 }
 
+func (s *agentHandler) ReasoningStarted() {
+	// CLI display handled in PublishReasoningChunk on first chunk
+}
+
 func (s *agentHandler) PublishReasoningChunk(chunk string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -239,7 +247,7 @@ func (s *agentHandler) PublishReasoningChunk(chunk string) {
 	fmt.Printf("%s%s", ColorItalic, chunk)
 }
 
-func (s *agentHandler) FinishReasoning() {
+func (s *agentHandler) ReasoningCompleted() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.reasoningStarted {
@@ -264,3 +272,12 @@ func (s *agentHandler) FinishAnswer() {
 	}
 	s.answerBuffer.Reset()
 }
+
+func (s *agentHandler) AskCommander(content string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	truncated := truncate(content, 200)
+	fmt.Printf("%s    [%s/%s] Ask Commander: %s%s\n", ColorLightBrown, s.taskName, s.agentName, truncated, ColorReset)
+}
+
+func (s *agentHandler) CommanderResponse(content string) {}

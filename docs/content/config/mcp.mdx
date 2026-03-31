@@ -1,0 +1,134 @@
+---
+title: MCP Server
+---
+
+# MCP Server
+
+Squadron includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that exposes your missions, agents, runs, and config as tools for any MCP-compatible client — including Claude Desktop, Claude Code, Cursor, and other AI coding assistants.
+
+This lets you interact with Squadron from your IDE or AI assistant: run missions, inspect run history, browse agent configs, and read documentation — all without leaving your editor.
+
+## Configuration
+
+Add an `mcp` block to any `.hcl` file in your config directory:
+
+```hcl
+mcp {
+  port   = 8090   # default
+  secret = vars.mcp_secret  # optional — enables Bearer token auth
+}
+```
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `port` | number | `8090` | Port for the SSE-based MCP server (must be 1024–65535) |
+| `secret` | string | — | When set, all requests must include this as a Bearer token or `?token=` query param |
+
+The MCP server starts automatically when you run `squadron serve`. It does not start in CLI-only mode (`squadron mission`).
+
+## Authentication
+
+When `secret` is set, clients must authenticate via:
+
+- **Authorization header**: `Authorization: Bearer <secret>`
+- **Query parameter**: `?token=<secret>`
+
+Requests without a valid token receive a `401 Unauthorized` response. If `secret` is omitted, the server is open (suitable for local-only use).
+
+## Available Tools
+
+### Documentation
+
+| Tool | Description |
+|------|-------------|
+| `list_version` | Get the squadron version |
+| `list_doc_pages` | List all available documentation pages |
+| `get_doc_page` | Get the contents of a documentation page by path |
+
+### Missions & Runs
+
+| Tool | Description |
+|------|-------------|
+| `list_missions` | List all missions defined in config |
+| `get_mission_config` | Get the full configuration of a mission |
+| `run_mission` | Start a mission with optional inputs (returns mission ID) |
+| `list_runs` | List recent mission runs with optional filtering by name |
+| `get_run_details` | Get high-level details of a run including task summaries |
+| `get_run_config` | Get the config snapshot used for a specific run |
+| `get_run_task_details` | Get detailed task info including subtasks and outputs |
+
+### Agents & Plugins
+
+| Tool | Description |
+|------|-------------|
+| `list_agents` | List all agents defined in config |
+| `get_agent_config` | Get the full configuration of an agent |
+| `list_plugins` | List all plugins defined in config |
+| `list_plugin_tools` | List all tools provided by a plugin |
+| `get_plugin_tool` | Get detailed info about a plugin tool including its schema |
+
+### Config Operations
+
+| Tool | Description |
+|------|-------------|
+| `verify_config` | Validate config files on disk without applying changes |
+| `reload_config` | Re-read and apply config changes from disk |
+| `list_vars` | List all configuration variables (secrets masked) |
+| `get_var` | Get a single configuration variable (secrets masked) |
+
+## Client Setup
+
+### Claude Desktop
+
+Add to your Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+
+```json
+{
+  "mcpServers": {
+    "squadron": {
+      "url": "http://localhost:8090/sse"
+    }
+  }
+}
+```
+
+With authentication:
+
+```json
+{
+  "mcpServers": {
+    "squadron": {
+      "url": "http://localhost:8090/sse?token=YOUR_SECRET"
+    }
+  }
+}
+```
+
+### Claude Code
+
+```bash
+claude mcp add squadron --transport sse http://localhost:8090/sse
+```
+
+## Example
+
+```hcl
+# variables.hcl
+variable "mcp_secret" {
+  description = "MCP server authentication secret"
+  secret      = true
+}
+
+# mcp.hcl
+mcp {
+  port   = 8090
+  secret = vars.mcp_secret
+}
+```
+
+```bash
+# Start squadron with the command center and MCP server
+squadron serve -c ./config -w
+
+# MCP server is now available at http://localhost:8090/sse
+```

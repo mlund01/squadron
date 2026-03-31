@@ -16,7 +16,8 @@ my-config/
 ├── models.hcl       # LLM provider configurations
 ├── agents.hcl       # Agent definitions
 ├── tools.hcl        # Custom tool definitions (optional)
-└── missions.hcl    # Mission definitions (optional)
+├── missions.hcl     # Mission definitions (optional)
+└── mcp.hcl          # MCP server config (optional)
 ```
 
 You can also put everything in a single file—Squadron reads all `.hcl` files in the directory.
@@ -56,6 +57,7 @@ agent "assistant" {
 | `plugin` | Load external plugins |
 | `mission` | Define multi-task missions |
 | `commander` | Commander server connection config |
+| `mcp` | [MCP server](/config/mcp) settings for IDE/AI assistant integration |
 | `shared_folder` | Shared file folders accessible to missions |
 
 ## Expressions

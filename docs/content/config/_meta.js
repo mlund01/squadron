@@ -6,4 +6,5 @@ export default {
   tools: 'Tools',
   functions: 'Functions',
   plugins: 'Plugins',
+  mcp: 'MCP Server',
 }

@@ -32,23 +32,23 @@ var docsCmd = &cobra.Command{
 }
 
 func extractDocs(outputDir string) error {
-	return fs.WalkDir(docs.DocsFS, "pages", func(path string, d fs.DirEntry, err error) error {
+	return fs.WalkDir(docs.DocsFS, "content", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		// Skip the root "pages" directory
-		if path == "pages" {
+		// Skip the root "content" directory
+		if path == "content" {
 			return nil
 		}
 
-		// Skip non-markdown files
-		if !d.IsDir() && filepath.Ext(path) != ".md" {
+		// Skip non-mdx files
+		if !d.IsDir() && filepath.Ext(path) != ".mdx" {
 			return nil
 		}
 
-		// Create output path (strip "pages/" prefix)
-		relPath := path[len("pages/"):]
+		// Create output path (strip "content/" prefix)
+		relPath := path[len("content/"):]
 		outPath := filepath.Join(outputDir, relPath)
 
 		if d.IsDir() {

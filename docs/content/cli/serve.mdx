@@ -74,17 +74,17 @@ docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
   ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
 ```
 
-The container's working directory is `/config`, so the `-c` flag is not needed. See the [Docker guide](/squadron/getting-started/docker) for full details.
+The container's working directory is `/config`, so the `-c` flag is not needed. See the [Docker guide](/getting-started/docker) for full details.
 
 ## Schedules & Triggers
 
 In serve mode, missions with `schedule` blocks run automatically on their configured timers. Missions with a `trigger` block expose a webhook endpoint through the command center.
 
-See [Schedules & Triggers](/squadron/missions/schedules) for full configuration details.
+See [Schedules & Triggers](/missions/schedules) for full configuration details.
 
 ## See Also
 
-- [Missions Overview](/squadron/missions/overview) - Mission structure
-- [Schedules & Triggers](/squadron/missions/schedules) - Automatic scheduling and webhooks
-- [mission](/squadron/cli/mission) - Run missions from the CLI
-- [Docker](/squadron/getting-started/docker) - Running in containers
+- [Missions Overview](/missions/overview) - Mission structure
+- [Schedules & Triggers](/missions/schedules) - Automatic scheduling and webhooks
+- [mission](/cli/mission) - Run missions from the CLI
+- [Docker](/getting-started/docker) - Running in containers

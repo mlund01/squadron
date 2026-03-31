@@ -2,6 +2,7 @@
 
 # Next.js
 .next/
+out/
 
 # Debug
 debug.txt

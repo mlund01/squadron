@@ -1,12 +1,9 @@
-import withMarkdoc from '@markdoc/next.js';
+import nextra from 'nextra'
 
-/** @type {import('next').NextConfig} */
-const nextConfig = {
+const withNextra = nextra({})
+
+export default withNextra({
   output: 'export',
   basePath: '/squadron',
-  pageExtensions: ['md', 'mdoc', 'js', 'jsx', 'ts', 'tsx'],
-};
-
-export default withMarkdoc({
-  schemaPath: './markdoc',
-})(nextConfig);
+  images: { unoptimized: true },
+})

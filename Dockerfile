@@ -7,7 +7,7 @@ COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X squadron/cmd.Version=${VERSION}" -o squadron ./cmd/cli
 
 FROM alpine:latest
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /build/squadron /usr/local/bin/squadron
 ENV SQUADRON_HOME=/data/squadron
 WORKDIR /config

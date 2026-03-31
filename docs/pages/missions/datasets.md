@@ -92,8 +92,9 @@ See [Functions](/squadron/config/functions) for the complete reference on all he
 - `number`
 - `integer`
 - `boolean`
-- `array`
-- `object`
+- `list` (aliased as `array`) — element type via `list(type)`
+- `map` — key-value pairs with typed values via `map(type)`
+- `object` — structured data with named properties via `object({...})`
 
 ## Populating Datasets
 

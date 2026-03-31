@@ -136,6 +136,9 @@ task "analyze_sales" {
 | `number` | Numeric value (float) |
 | `integer` | Whole number |
 | `boolean` | True/false |
+| `list` | Array of values — element type specified via `list(type)` |
+| `map` | Key-value pairs — keys are always strings, value type specified via `map(type)` |
+| `object` | Structured data with named fields — properties specified via `object({...})` |
 
 ### Shorthand Schema Syntax
 
@@ -150,9 +153,17 @@ task "analyze_sales" {
     total_revenue = number("Total revenue in USD", true)
     top_product   = string("Best-selling product name", true)
     growth_rate   = number("Growth rate as decimal")
+    categories    = list(string, "Product categories found")
+    metadata      = map(string, "Additional key-value data")
+    breakdown     = object({
+      online  = number("Online revenue", true)
+      instore = number("In-store revenue", true)
+    }, "Revenue breakdown by channel", true)
   }
 }
 ```
+
+Nested types are fully supported — lists can contain objects, objects can contain lists, etc. The commander's system prompt will display the full nested schema so the LLM knows the exact structure expected.
 
 See [Functions](/squadron/config/functions) for the complete reference on all helper functions and type references.
 

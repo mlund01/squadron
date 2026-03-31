@@ -70,7 +70,7 @@ mission "report" {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `type` | string | Input type (`string`, `number`, `integer`, `boolean`) |
+| `type` | string | Input type (`string`, `number`, `integer`, `boolean`, `list`, `map`, `object`) |
 | `description` | string | Human-readable description |
 | `default` | any | Default value (makes the input optional) |
 | `secret` | bool | Mark the input as sensitive (masked in logs/UI) |
@@ -88,6 +88,12 @@ mission "report" {
     format  = string("Output format", { default = "markdown" })
     limit   = number("Max results", { default = 10 })
     api_key = string("API key", { secret = true })
+    tags    = list(string, "Tags to apply")
+    options = map(string, "Additional key-value options")
+    author  = object({
+      name  = string("Author name", true)
+      email = string("Author email")
+    }, "Author information")
   }
 
   task "research" {

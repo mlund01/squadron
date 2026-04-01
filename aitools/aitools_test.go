@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -323,7 +324,7 @@ func TestSubmitOutputToolSchema(t *testing.T) {
 func TestSubmitOutputToolSuccessfulSubmission(t *testing.T) {
 	tool := NewSubmitOutputTool(nil)
 
-	result := tool.Call(`{"output": {"summary": "test result", "score": 42}}`)
+	result := tool.Call(context.Background(), `{"output": {"summary": "test result", "score": 42}}`)
 
 	if !strings.Contains(result, `"status": "ok"`) {
 		t.Errorf("expected success status, got %q", result)
@@ -348,8 +349,8 @@ func TestSubmitOutputToolSuccessfulSubmission(t *testing.T) {
 func TestSubmitOutputToolMultipleSubmissions(t *testing.T) {
 	tool := NewSubmitOutputTool(nil)
 
-	r1 := tool.Call(`{"output": {"item": "first"}}`)
-	r2 := tool.Call(`{"output": {"item": "second"}}`)
+	r1 := tool.Call(context.Background(), `{"output": {"item": "first"}}`)
+	r2 := tool.Call(context.Background(), `{"output": {"item": "second"}}`)
 
 	if !strings.Contains(r1, `"index": 0`) {
 		t.Errorf("expected index 0 for first submission, got %q", r1)
@@ -365,7 +366,7 @@ func TestSubmitOutputToolMultipleSubmissions(t *testing.T) {
 func TestSubmitOutputToolMissingOutput(t *testing.T) {
 	tool := NewSubmitOutputTool(nil)
 
-	result := tool.Call(`{}`)
+	result := tool.Call(context.Background(), `{}`)
 
 	if !strings.Contains(result, "error") {
 		t.Errorf("expected error for missing output, got %q", result)
@@ -378,7 +379,7 @@ func TestSubmitOutputToolMissingOutput(t *testing.T) {
 func TestSubmitOutputToolInvalidJSON(t *testing.T) {
 	tool := NewSubmitOutputTool(nil)
 
-	result := tool.Call(`not json`)
+	result := tool.Call(context.Background(), `not json`)
 
 	if !strings.Contains(result, "error") {
 		t.Errorf("expected error for invalid JSON, got %q", result)
@@ -388,7 +389,7 @@ func TestSubmitOutputToolInvalidJSON(t *testing.T) {
 func TestSubmitOutputToolNullOutput(t *testing.T) {
 	tool := NewSubmitOutputTool(nil)
 
-	result := tool.Call(`{"output": null}`)
+	result := tool.Call(context.Background(), `{"output": null}`)
 
 	if !strings.Contains(result, "error") {
 		t.Errorf("expected error for null output, got %q", result)
@@ -404,7 +405,7 @@ func TestSubmitOutputToolSchemaValidation(t *testing.T) {
 	tool := NewSubmitOutputTool(schema)
 
 	// Missing required fields
-	result := tool.Call(`{"output": {"notes": "optional only"}}`)
+	result := tool.Call(context.Background(), `{"output": {"notes": "optional only"}}`)
 	if !strings.Contains(result, "error") {
 		t.Errorf("expected error for missing required fields, got %q", result)
 	}
@@ -416,7 +417,7 @@ func TestSubmitOutputToolSchemaValidation(t *testing.T) {
 	}
 
 	// All required fields present (optional omitted)
-	result = tool.Call(`{"output": {"title": "Test", "count": 5}}`)
+	result = tool.Call(context.Background(), `{"output": {"title": "Test", "count": 5}}`)
 	if !strings.Contains(result, `"status": "ok"`) {
 		t.Errorf("expected success when all required fields present, got %q", result)
 	}
@@ -432,7 +433,7 @@ func TestSubmitOutputToolCallback(t *testing.T) {
 		callbackOutput = output
 	}
 
-	tool.Call(`{"output": {"key": "value"}}`)
+	tool.Call(context.Background(), `{"output": {"key": "value"}}`)
 
 	if callbackIndex != 0 {
 		t.Errorf("expected callback index 0, got %d", callbackIndex)
@@ -456,7 +457,7 @@ func TestDatasetCursorNextReturnsSequentially(t *testing.T) {
 	nextTool := NewDatasetNextTool(cursor)
 
 	// First call
-	r1 := nextTool.Call(`{}`)
+	r1 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r1, `"status": "ok"`) {
 		t.Fatalf("expected ok status, got %q", r1)
 	}
@@ -471,7 +472,7 @@ func TestDatasetCursorNextReturnsSequentially(t *testing.T) {
 	}
 
 	// Second call
-	r2 := nextTool.Call(`{}`)
+	r2 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r2, `"index": 1`) {
 		t.Errorf("expected index 1, got %q", r2)
 	}
@@ -480,7 +481,7 @@ func TestDatasetCursorNextReturnsSequentially(t *testing.T) {
 	}
 
 	// Third call
-	r3 := nextTool.Call(`{}`)
+	r3 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r3, `"index": 2`) {
 		t.Errorf("expected index 2, got %q", r3)
 	}
@@ -497,19 +498,19 @@ func TestDatasetCursorNextReturnsExhausted(t *testing.T) {
 	nextTool := NewDatasetNextTool(cursor)
 
 	// Consume the only item
-	r1 := nextTool.Call(`{}`)
+	r1 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r1, `"status": "ok"`) {
 		t.Fatalf("expected ok for first call, got %q", r1)
 	}
 
 	// Now exhausted
-	r2 := nextTool.Call(`{}`)
+	r2 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r2, `"status": "exhausted"`) {
 		t.Errorf("expected exhausted status, got %q", r2)
 	}
 
 	// Calling again should still be exhausted
-	r3 := nextTool.Call(`{}`)
+	r3 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r3, `"status": "exhausted"`) {
 		t.Errorf("expected exhausted on repeated call, got %q", r3)
 	}
@@ -519,7 +520,7 @@ func TestDatasetCursorEmptyDataset(t *testing.T) {
 	cursor := NewDatasetCursor("test_task", []cty.Value{})
 	nextTool := NewDatasetNextTool(cursor)
 
-	result := nextTool.Call(`{}`)
+	result := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(result, `"status": "exhausted"`) {
 		t.Errorf("expected exhausted for empty dataset, got %q", result)
 	}
@@ -551,12 +552,12 @@ func TestDatasetCursorCurrentIndex(t *testing.T) {
 		t.Errorf("expected CurrentIndex() = -1 before first Next, got %d", cursor.CurrentIndex())
 	}
 
-	nextTool.Call(`{}`)
+	nextTool.Call(context.Background(), `{}`)
 	if cursor.CurrentIndex() != 0 {
 		t.Errorf("expected CurrentIndex() = 0 after first Next, got %d", cursor.CurrentIndex())
 	}
 
-	nextTool.Call(`{}`)
+	nextTool.Call(context.Background(), `{}`)
 	if cursor.CurrentIndex() != 1 {
 		t.Errorf("expected CurrentIndex() = 1 after second Next, got %d", cursor.CurrentIndex())
 	}
@@ -575,8 +576,8 @@ func TestDatasetCursorOnNextCallback(t *testing.T) {
 		calledIndices = append(calledIndices, index)
 	}
 
-	nextTool.Call(`{}`)
-	nextTool.Call(`{}`)
+	nextTool.Call(context.Background(), `{}`)
+	nextTool.Call(context.Background(), `{}`)
 
 	if len(calledIndices) != 2 {
 		t.Fatalf("expected 2 OnNext callbacks, got %d", len(calledIndices))
@@ -598,13 +599,13 @@ func TestDatasetCursorOutputGating(t *testing.T) {
 	nextTool.OutputCounter = func() int { return outputCount }
 
 	// First call should work (no previous item to submit for)
-	r1 := nextTool.Call(`{}`)
+	r1 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r1, `"status": "ok"`) {
 		t.Fatalf("expected ok for first call, got %q", r1)
 	}
 
 	// Second call without submitting output should error
-	r2 := nextTool.Call(`{}`)
+	r2 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r2, `"status": "error"`) {
 		t.Errorf("expected error when output not submitted, got %q", r2)
 	}
@@ -614,7 +615,7 @@ func TestDatasetCursorOutputGating(t *testing.T) {
 
 	// Simulate output submission
 	outputCount = 1
-	r3 := nextTool.Call(`{}`)
+	r3 := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(r3, `"status": "ok"`) {
 		t.Errorf("expected ok after output submitted, got %q", r3)
 	}
@@ -634,7 +635,7 @@ func TestDatasetNextToolWithObjectItems(t *testing.T) {
 	cursor := NewDatasetCursor("test_task", items)
 	nextTool := NewDatasetNextTool(cursor)
 
-	result := nextTool.Call(`{}`)
+	result := nextTool.Call(context.Background(), `{}`)
 	if !strings.Contains(result, "Alice") {
 		t.Errorf("expected item to contain 'Alice', got %q", result)
 	}

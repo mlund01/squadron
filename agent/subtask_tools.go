@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -36,7 +37,7 @@ func (t *setSubtasksTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *setSubtasksTool) Call(params string) string {
+func (t *setSubtasksTool) Call(ctx context.Context, params string) string {
 	var input struct {
 		Subtasks []string `json:"subtasks"`
 	}
@@ -87,7 +88,7 @@ func (t *getSubtasksTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *getSubtasksTool) Call(params string) string {
+func (t *getSubtasksTool) Call(ctx context.Context, params string) string {
 	subtasks, err := t.onGet()
 	if err != nil {
 		return fmt.Sprintf(`{"status": "error", "message": "%v"}`, err)
@@ -117,7 +118,7 @@ func (t *completeSubtaskTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *completeSubtaskTool) Call(params string) string {
+func (t *completeSubtaskTool) Call(ctx context.Context, params string) string {
 	if err := t.onComplete(); err != nil {
 		return fmt.Sprintf(`{"status": "error", "message": "%v"}`, err)
 	}

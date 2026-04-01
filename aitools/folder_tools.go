@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"bufio"
 	"encoding/json"
 	"fmt"
@@ -105,7 +106,7 @@ type folderListParams struct {
 
 const defaultListLimit = 100
 
-func (t *FolderListTool) Call(params string) string {
+func (t *FolderListTool) Call(ctx context.Context, params string) string {
 	var p folderListParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -290,7 +291,7 @@ type folderReadParams struct {
 
 const maxReadSize = 10 * 1024 * 1024 // 10MB
 
-func (t *FolderReadTool) Call(params string) string {
+func (t *FolderReadTool) Call(ctx context.Context, params string) string {
 	var p folderReadParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -401,7 +402,7 @@ type folderCreateParams struct {
 	Overwrite bool   `json:"overwrite"`
 }
 
-func (t *FolderCreateTool) Call(params string) string {
+func (t *FolderCreateTool) Call(ctx context.Context, params string) string {
 	var p folderCreateParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -489,7 +490,7 @@ type folderDeleteParams struct {
 	Path   string `json:"path"`
 }
 
-func (t *FolderDeleteTool) Call(params string) string {
+func (t *FolderDeleteTool) Call(ctx context.Context, params string) string {
 	var p folderDeleteParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -576,7 +577,7 @@ type folderSearchParams struct {
 
 const defaultSearchLimit = 50
 
-func (t *FolderSearchTool) Call(params string) string {
+func (t *FolderSearchTool) Call(ctx context.Context, params string) string {
 	var p folderSearchParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -730,7 +731,7 @@ type folderGrepParams struct {
 
 const defaultGrepLimit = 50
 
-func (t *FolderGrepTool) Call(params string) string {
+func (t *FolderGrepTool) Call(ctx context.Context, params string) string {
 	var p folderGrepParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()

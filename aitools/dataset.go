@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -103,7 +104,7 @@ func (t *SetDatasetTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *SetDatasetTool) Call(params string) string {
+func (t *SetDatasetTool) Call(ctx context.Context, params string) string {
 	if t.Store == nil {
 		return "Error: dataset tools are only available within mission context"
 	}
@@ -187,7 +188,7 @@ func (t *DatasetSampleTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *DatasetSampleTool) Call(params string) string {
+func (t *DatasetSampleTool) Call(ctx context.Context, params string) string {
 	if t.Store == nil {
 		return "Error: dataset tools are only available within mission context"
 	}
@@ -267,7 +268,7 @@ func (t *DatasetCountTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *DatasetCountTool) Call(params string) string {
+func (t *DatasetCountTool) Call(ctx context.Context, params string) string {
 	if t.Store == nil {
 		return "Error: dataset tools are only available within mission context"
 	}

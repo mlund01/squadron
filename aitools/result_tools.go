@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -39,7 +40,7 @@ func (t *ResultInfoTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *ResultInfoTool) Call(params string) string {
+func (t *ResultInfoTool) Call(ctx context.Context, params string) string {
 	var args struct {
 		ID string `json:"id"`
 	}
@@ -93,7 +94,7 @@ func (t *ResultItemsTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *ResultItemsTool) Call(params string) string {
+func (t *ResultItemsTool) Call(ctx context.Context, params string) string {
 	var args struct {
 		ID     string `json:"id"`
 		Offset int    `json:"offset"`
@@ -158,7 +159,7 @@ func (t *ResultGetTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *ResultGetTool) Call(params string) string {
+func (t *ResultGetTool) Call(ctx context.Context, params string) string {
 	var args struct {
 		ID   string `json:"id"`
 		Path string `json:"path"`
@@ -245,7 +246,7 @@ func (t *ResultKeysTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *ResultKeysTool) Call(params string) string {
+func (t *ResultKeysTool) Call(ctx context.Context, params string) string {
 	var args struct {
 		ID   string `json:"id"`
 		Path string `json:"path"`
@@ -346,7 +347,7 @@ func (t *ResultChunkTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *ResultChunkTool) Call(params string) string {
+func (t *ResultChunkTool) Call(ctx context.Context, params string) string {
 	var args struct {
 		ID     string `json:"id"`
 		Offset int    `json:"offset"`
@@ -408,7 +409,7 @@ func (t *ResultToDatasetTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *ResultToDatasetTool) Call(params string) string {
+func (t *ResultToDatasetTool) Call(ctx context.Context, params string) string {
 	var args struct {
 		ID          string `json:"id"`
 		DatasetName string `json:"dataset_name"`

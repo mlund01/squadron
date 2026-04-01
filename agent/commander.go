@@ -979,7 +979,7 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 			tcID := uuid.New().String()
 			streamer.CallingTool(tcID, action, actionInput)
 			toolStart := time.Now()
-			result := tool.Call(actionInput)
+			result := tool.Call(ctx, actionInput)
 
 			var observationContent string
 			currentInput, observationContent = s.formatObservation(action, result)
@@ -1178,7 +1178,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 		// Execute the tool
 		toolStart := time.Now()
-		result := tool.Call(actionInput)
+		result := tool.Call(ctx, actionInput)
 
 		// Format observation (may intercept/truncate large results)
 		var observationContent string
@@ -1454,7 +1454,7 @@ Wrap your final answer in <ANSWER> tags.
 			continue
 		}
 
-		result := tool.Call(actionInput)
+		result := tool.Call(ctx, actionInput)
 		currentInput, _ = s.formatObservation(action, result)
 	}
 }
@@ -1751,7 +1751,7 @@ func (t *callAgentTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *callAgentTool) Call(input string) string {
+func (t *callAgentTool) Call(ctx context.Context, input string) string {
 	var params struct {
 		Name     string `json:"name"`
 		Task     string `json:"task"`
@@ -1777,8 +1777,6 @@ func (t *callAgentTool) Call(input string) string {
 		}
 		return fmt.Sprintf("Error: Agent '%s' not found. Available agents: %v", params.Name, available)
 	}
-
-	ctx := context.Background()
 
 	// Get existing session or create new one
 	a, exists := t.commander.agentSessions[params.Name]
@@ -1974,7 +1972,7 @@ func (t *askAgentTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *askAgentTool) Call(input string) string {
+func (t *askAgentTool) Call(ctx context.Context, input string) string {
 	var params struct {
 		AgentID  string `json:"agent_id"`
 		Question string `json:"question"`
@@ -1993,7 +1991,6 @@ func (t *askAgentTool) Call(input string) string {
 		return fmt.Sprintf("Error: Agent '%s' not found. Available agents: %v", params.AgentID, available)
 	}
 
-	ctx := context.Background()
 	answer, err := completed.agent.AnswerFollowUp(ctx, params.Question)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
@@ -2046,7 +2043,7 @@ func (t *askCommanderTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *askCommanderTool) Call(input string) string {
+func (t *askCommanderTool) Call(ctx context.Context, input string) string {
 	var params struct {
 		TaskName string `json:"task_name"`
 		Question string `json:"question"`
@@ -2095,7 +2092,6 @@ func (t *askCommanderTool) Call(input string) string {
 		t.commander.queryClones[cacheKey] = supClone
 	}
 
-	ctx := context.Background()
 	answer, err := supClone.AnswerQueryIsolated(ctx, params.Question)
 	if err != nil {
 		return fmt.Sprintf("Error: %v", err)
@@ -2136,7 +2132,7 @@ func (t *listCommanderQuestionsTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *listCommanderQuestionsTool) Call(input string) string {
+func (t *listCommanderQuestionsTool) Call(ctx context.Context, input string) string {
 	var params struct {
 		TaskName string `json:"task_name"`
 	}
@@ -2196,7 +2192,7 @@ func (t *getCommanderAnswerTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *getCommanderAnswerTool) Call(input string) string {
+func (t *getCommanderAnswerTool) Call(ctx context.Context, input string) string {
 	var params struct {
 		TaskName string `json:"task_name"`
 		Index    int    `json:"index"`
@@ -2286,7 +2282,7 @@ func (t *queryTaskOutputTool) ToolPayloadSchema() aitools.Schema {
 	}
 }
 
-func (t *queryTaskOutputTool) Call(input string) string {
+func (t *queryTaskOutputTool) Call(ctx context.Context, input string) string {
 	var params struct {
 		Task      string `json:"task"`
 		Filters   []struct {

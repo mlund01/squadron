@@ -247,9 +247,14 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			break // No tool call, done with this turn
 		}
 
+		// Check for cancellation before executing tool
+		if ctx.Err() != nil {
+			return ChatResult{}, ctx.Err()
+		}
+
 		actionInput := parser.GetActionInput()
 
-		// Log with placeholder version (secrets not exposed in logs)
+		// Emit event with pre-injection params (protected values stay masked)
 		tcID := uuid.New().String()
 		o.streamer.CallingTool(tcID, action, actionInput)
 
@@ -281,7 +286,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		}
 		toolStart := time.Now()
 
-		result := tool.Call(injectedInput)
+		result := tool.Call(ctx, injectedInput)
 
 		if o.eventLogger != nil {
 			o.eventLogger.LogEvent("agent_tool_result", map[string]any{

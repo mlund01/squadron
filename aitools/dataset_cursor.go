@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -78,7 +79,7 @@ func (t *DatasetNextTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *DatasetNextTool) Call(params string) string {
+func (t *DatasetNextTool) Call(ctx context.Context, params string) string {
 	t.cursor.mu.Lock()
 	defer t.cursor.mu.Unlock()
 

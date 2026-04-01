@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -326,7 +327,7 @@ func (t *customToolRuntime) ToolPayloadSchema() aitools.Schema {
 	return t.inputSchema
 }
 
-func (t *customToolRuntime) Call(params string) string {
+func (t *customToolRuntime) Call(ctx context.Context, params string) string {
 	// Parse the incoming inputs
 	var inputValues map[string]any
 	if err := json.Unmarshal([]byte(params), &inputValues); err != nil {
@@ -357,7 +358,7 @@ func (t *customToolRuntime) Call(params string) string {
 		return "Error: failed to marshal base parameters - " + err.Error()
 	}
 
-	return t.baseTool.Call(string(baseParamsJSON))
+	return t.baseTool.Call(ctx, string(baseParamsJSON))
 }
 
 // mapToCtyValue converts a Go map to cty.Value

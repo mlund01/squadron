@@ -1,6 +1,10 @@
 package plugin
 
-import "squadron/aitools"
+import (
+	"context"
+
+	"squadron/aitools"
+)
 
 // PluginTool wraps a plugin tool and implements the aitools.Tool interface
 type PluginTool struct {
@@ -32,7 +36,7 @@ func (t *PluginTool) ToolPayloadSchema() aitools.Schema {
 }
 
 // Call executes the tool with the given parameters and returns a stringified response
-func (t *PluginTool) Call(params string) string {
+func (t *PluginTool) Call(ctx context.Context, params string) string {
 	result, err := t.provider.Call(t.info.Name, params)
 	if err != nil {
 		return "error: " + err.Error()

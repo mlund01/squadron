@@ -248,12 +248,12 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		}
 
 		actionInput := parser.GetActionInput()
-
-		// Log with placeholder version (secrets not exposed in logs)
 		tcID := uuid.New().String()
+
+		// Emit event with pre-injection params (protected values stay masked)
 		o.streamer.CallingTool(tcID, action, actionInput)
 
-		// Inject secrets before tool execution
+		// Inject protected values before execution
 		injectedInput, secretErr := o.secretInjector.Inject(actionInput)
 		if secretErr != nil {
 			errMsg := fmt.Sprintf("Error: %v", secretErr)
@@ -290,9 +290,9 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			})
 		}
 
-		// Persist tool result for auditing
+		// Persist tool result for auditing (uses injected input so tool detail shows actual values)
 		if o.sessionLogger != nil && o.sessionID != "" {
-			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, tcID, action, actionInput, result, toolStart, time.Now())
+			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, tcID, action, injectedInput, result, toolStart, time.Now())
 		}
 
 		// Format observation (may intercept/truncate large results)

@@ -84,7 +84,7 @@ func typeRef(kind string) cty.Value {
 //	string("desc")                          — optional field
 //	string("desc", true)                    — required field
 //	string("desc", { default = "high" })    — optional with default
-//	string("desc", { secret = true })       — secret
+//	string("desc", { protected = true })    — protected
 func makePrimitiveFunc(kind string) function.Function {
 	return function.New(&function.Spec{
 		Params: []function.Parameter{
@@ -220,7 +220,7 @@ func makeObjectFunc() function.Function {
 // ── internal helpers ──────────────────────────────────────────────────────────
 
 // buildSchemaNode constructs a schema node cty.Value with the given kind, description,
-// required flag, and any extra attributes (e.g. default, secret).
+// required flag, and any extra attributes (e.g. default, protected).
 func buildSchemaNode(kind, desc string, required bool, extras map[string]cty.Value) cty.Value {
 	attrs := schemaNodeAttrs(kind, desc, required, extras)
 	return cty.ObjectVal(attrs)
@@ -267,7 +267,7 @@ func extractPrimitiveVarArgs(args []cty.Value) (required bool, extras map[string
 		required, extras = extractOptionsObject(arg)
 	default:
 		return false, nil, fmt.Errorf(
-			"second argument must be a bool (required) or an options object { default = ..., secret = ... }, got %s",
+			"second argument must be a bool (required) or an options object { default = ..., protected = ... }, got %s",
 			arg.Type().FriendlyName(),
 		)
 	}
@@ -304,7 +304,7 @@ func extractCompositeVarArgs(args []cty.Value) (desc string, required bool, extr
 	return desc, required, extras, nil
 }
 
-// extractOptionsObject pulls required, default, and secret out of an options cty.Object.
+// extractOptionsObject pulls required, default, and protected out of an options cty.Object.
 func extractOptionsObject(obj cty.Value) (required bool, extras map[string]cty.Value) {
 	extras = make(map[string]cty.Value)
 
@@ -318,9 +318,9 @@ func extractOptionsObject(obj cty.Value) (required bool, extras map[string]cty.V
 			extras["default"] = v
 		}
 	}
-	if obj.Type().HasAttribute("secret") {
-		if v := obj.GetAttr("secret"); !v.IsNull() {
-			extras["secret"] = v
+	if obj.Type().HasAttribute("protected") {
+		if v := obj.GetAttr("protected"); !v.IsNull() {
+			extras["protected"] = v
 		}
 	}
 	return required, extras

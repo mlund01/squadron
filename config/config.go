@@ -1325,7 +1325,7 @@ func parseMissionInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*MissionInp
 			{Name: "type", Required: true},
 			{Name: "description"},
 			{Name: "default"},
-			{Name: "secret"},
+			{Name: "protected"},
 			{Name: "value"},
 		},
 	})
@@ -1362,13 +1362,13 @@ func parseMissionInputBlock(block *hcl.Block, ctx *hcl.EvalContext) (*MissionInp
 		input.Default = &defaultVal
 	}
 
-	// Get optional secret flag
-	if secretAttr, ok := inputContent.Attributes["secret"]; ok {
-		secretVal, diags := secretAttr.Expr.Value(ctx)
+	// Get optional protected flag
+	if protectedAttr, ok := inputContent.Attributes["protected"]; ok {
+		protectedVal, diags := protectedAttr.Expr.Value(ctx)
 		if diags.HasErrors() {
 			return nil, fmt.Errorf("input '%s': %w", inputName, diags)
 		}
-		input.Secret = secretVal.True()
+		input.Protected = protectedVal.True()
 	}
 
 	// Get optional value (required for secrets, from vars.* or literal)

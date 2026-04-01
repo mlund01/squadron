@@ -151,12 +151,12 @@ func parseOutputSchemaNode(name string, val cty.Value) (*OutputField, error) {
 //	inputs = {
 //	  complaint = string("The original complaint", true)
 //	  severity  = string("Severity level", { default = "high" })
-//	  api_key   = string("OpenAI API key", { secret = true })
+//	  api_key   = string("OpenAI API key", { protected = true })
 //	  limit     = number("Max results", { default = 10 })
 //	}
 //
 // Returns []MissionInput sorted by name for deterministic ordering.
-// The options object may carry "default" (value) and "secret" (bool) extra attributes.
+// The options object may carry "default" (value) and "protected" (bool) extra attributes.
 func parseSchemaObjectAsMissionInputs(val cty.Value) ([]MissionInput, error) {
 	if !val.Type().IsObjectType() {
 		return nil, fmt.Errorf("expected an object expression { key = type(...) }, got %s", val.Type().FriendlyName())
@@ -175,7 +175,7 @@ func parseSchemaObjectAsMissionInputs(val cty.Value) ([]MissionInput, error) {
 }
 
 // parseSchemaNodeAsMissionInput parses a single schema node into a MissionInput.
-// Handles the "default" and "secret" extra attributes set by the options object.
+// Handles the "default" and "protected" extra attributes set by the options object.
 func parseSchemaNodeAsMissionInput(name string, val cty.Value) (*MissionInput, error) {
 	if !val.Type().IsObjectType() || !val.Type().HasAttribute("kind") {
 		return nil, fmt.Errorf(
@@ -227,11 +227,11 @@ func parseSchemaNodeAsMissionInput(name string, val cty.Value) (*MissionInput, e
 		}
 	}
 
-	// "secret" boolean flag from options object: { secret = true }
-	if val.Type().HasAttribute("secret") {
-		sv := val.GetAttr("secret")
+	// "protected" boolean flag from options object: { protected = true }
+	if val.Type().HasAttribute("protected") {
+		sv := val.GetAttr("protected")
 		if sv == cty.True {
-			input.Secret = true
+			input.Protected = true
 		}
 	}
 

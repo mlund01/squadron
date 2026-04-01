@@ -31,7 +31,7 @@ type MissionInput struct {
 	Type        string          `json:"type"`
 	Description string          `json:"description,omitempty"`
 	Default     *cty.Value      `json:"-"`
-	Secret      bool            `json:"secret,omitempty"`
+	Protected   bool            `json:"protected,omitempty"`
 	Value       *cty.Value      `json:"-"`
 	Items       *MissionInput   `json:"items,omitempty"`       // Element type for list/map
 	Properties  []MissionInput  `json:"properties,omitempty"`  // Nested fields for object
@@ -544,15 +544,15 @@ func (i *MissionInput) Validate() error {
 		}
 	}
 
-	// Secret inputs have additional requirements
-	if i.Secret {
-		// Secrets must have a value (from vars.* or literal)
+	// Protected inputs have additional requirements
+	if i.Protected {
+		// Protected inputs must have a value (from vars.* or literal)
 		if i.Value == nil || i.Value.IsNull() {
-			return fmt.Errorf("secret input must have a value")
+			return fmt.Errorf("protected input must have a value")
 		}
-		// Secret values must be strings
+		// Protected values must be strings
 		if i.Value.Type() != cty.String {
-			return fmt.Errorf("secret value must be a string, got %s", i.Value.Type().FriendlyName())
+			return fmt.Errorf("protected value must be a string, got %s", i.Value.Type().FriendlyName())
 		}
 	}
 
@@ -652,14 +652,14 @@ func inputTypeToCtyType(inputType string) cty.Type {
 }
 
 // ResolveInputValues converts string CLI values to cty.Values, applying defaults.
-// Secret inputs are skipped - they get their value from the 'value' attribute
+// Protected inputs are skipped - they get their value from the 'value' attribute
 // and cannot be interpolated in objectives.
 func (w *Mission) ResolveInputValues(provided map[string]string) (map[string]cty.Value, error) {
 	result := make(map[string]cty.Value)
 
 	for _, input := range w.Inputs {
-		// Skip secret inputs - they are handled separately and not interpolatable
-		if input.Secret {
+		// Skip protected inputs - they are handled separately and not interpolatable
+		if input.Protected {
 			continue
 		}
 

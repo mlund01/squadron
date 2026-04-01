@@ -412,7 +412,7 @@ mission "triage" {
 			Expect(complaint.Type).To(Equal("string"))
 			Expect(complaint.Description).To(Equal("The original complaint"))
 			Expect(complaint.Default).To(BeNil())
-			Expect(complaint.Secret).To(BeFalse())
+			Expect(complaint.Protected).To(BeFalse())
 		})
 
 		It("parses input with default value", func() {
@@ -447,7 +447,7 @@ mission "report" {
 			Expect(limit.Default).NotTo(BeNil())
 		})
 
-		It("parses input with secret = true flag", func() {
+		It("parses input with protected = true flag", func() {
 			hclSrc := fullBaseHCL() + `
 mission "ai_task" {
   commander {
@@ -456,7 +456,7 @@ mission "ai_task" {
   agents = [agents.test_agent]
 
   inputs = {
-    api_key = string("OpenAI API key", { secret = true })
+    api_key = string("OpenAI API key", { protected = true })
   }
 
   task "run" {
@@ -470,7 +470,7 @@ mission "ai_task" {
 
 			apiKey := findMissionInput(cfg.Missions[0].Inputs, "api_key")
 			Expect(apiKey).NotTo(BeNil())
-			Expect(apiKey.Secret).To(BeTrue())
+			Expect(apiKey.Protected).To(BeTrue())
 			Expect(apiKey.Value).To(BeNil())
 		})
 

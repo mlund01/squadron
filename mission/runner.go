@@ -190,11 +190,11 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		}
 		r.resolvedDatasets = resolvedDatasets
 
-		// Resolve secrets from inputs with secret=true
+		// Resolve secrets from inputs with protected=true
 		secretValues := make(map[string]string)
 		var secretInfos []agent.SecretInfo
 		for _, input := range mission.Inputs {
-			if !input.Secret {
+			if !input.Protected {
 				continue
 			}
 			if input.Value != nil && input.Value.Type() == cty.String {
@@ -317,7 +317,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		// Re-resolve secrets
 		r.secretValues = make(map[string]string)
 		for _, input := range r.mission.Inputs {
-			if !input.Secret {
+			if !input.Protected {
 				continue
 			}
 			if input.Value != nil && input.Value.Type() == cty.String {
@@ -1405,7 +1405,7 @@ func (r *Runner) routeOptionsForTask(task config.Task) []aitools.RouteOption {
 							Name:        inp.Name,
 							Type:        inp.Type,
 							Description: inp.Description,
-							Required:    inp.Default == nil && !inp.Secret,
+							Required:    inp.Default == nil && !inp.Protected,
 						})
 					}
 					break
@@ -1460,8 +1460,8 @@ func (r *Runner) missionSnapshot() map[string]any {
 			if input.Description != "" {
 				m["description"] = input.Description
 			}
-			if input.Secret {
-				m["secret"] = true
+			if input.Protected {
+				m["protected"] = true
 			}
 			inputs = append(inputs, m)
 		}

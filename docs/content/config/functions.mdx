@@ -29,7 +29,7 @@ inputs = {
 The second argument is optional:
 - `true` marks the field as required
 - An options object `{ default = value }` sets a default (making it optional)
-- For mission inputs, `{ secret = true }` marks the field as sensitive
+- For mission inputs, `{ protected = true }` marks the field as sensitive
 
 ### list
 
@@ -119,12 +119,12 @@ Primitives accept an optional options object as the second argument instead of a
 | Key | Type | Description |
 |-----|------|-------------|
 | `default` | any | Default value (makes the field optional) |
-| `secret` | bool | Mark as sensitive — masked in logs and UI (mission inputs only) |
+| `protected` | bool | Mark as sensitive — masked in logs and UI (mission inputs only) |
 
 ```hcl
 inputs = {
   region  = string("AWS region", { default = "us-east-1" })
-  api_key = string("API key", { secret = true })
+  api_key = string("API key", { protected = true })
   verbose = bool("Verbose mode", { default = false })
 }
 ```
@@ -157,7 +157,7 @@ mission "report" {
   inputs = {
     topic   = string("The topic to research")
     format  = string("Output format", { default = "markdown" })
-    api_key = string("API key", { secret = true })
+    api_key = string("API key", { protected = true })
   }
 }
 ```

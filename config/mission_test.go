@@ -100,8 +100,8 @@ mission "with_secret" {
   agents    = [agents.test_agent]
   input "api_token" {
     type   = "string"
-    secret = true
-    value  = vars.test_api_key
+    protected = true
+    value     = vars.test_api_key
   }
   task "work" { objective = "Do work" }
 }
@@ -109,7 +109,7 @@ mission "with_secret" {
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].Inputs[0].Secret).To(BeTrue())
+			Expect(cfg.Missions[0].Inputs[0].Protected).To(BeTrue())
 			Expect(cfg.Missions[0].Inputs[0].Value).NotTo(BeNil())
 		})
 
@@ -376,24 +376,24 @@ mission "valid" {
 				Expect(err.Error()).To(ContainSubstring("invalid type"))
 			})
 
-			It("rejects secret input without value", func() {
-				input := config.MissionInput{Name: "test", Type: "string", Secret: true, Value: nil}
+			It("rejects protected input without value", func() {
+				input := config.MissionInput{Name: "test", Type: "string", Protected: true, Value: nil}
 				err := input.Validate()
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("secret input must have a value"))
+				Expect(err.Error()).To(ContainSubstring("protected input must have a value"))
 			})
 
-			It("rejects secret input with non-string value", func() {
+			It("rejects protected input with non-string value", func() {
 				boolVal := cty.BoolVal(true)
-				input := config.MissionInput{Name: "test", Type: "string", Secret: true, Value: &boolVal}
+				input := config.MissionInput{Name: "test", Type: "string", Protected: true, Value: &boolVal}
 				err := input.Validate()
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("secret value must be a string"))
+				Expect(err.Error()).To(ContainSubstring("protected value must be a string"))
 			})
 
-			It("accepts secret input with string value", func() {
+			It("accepts protected input with string value", func() {
 				strVal := cty.StringVal("my-secret")
-				input := config.MissionInput{Name: "test", Type: "string", Secret: true, Value: &strVal}
+				input := config.MissionInput{Name: "test", Type: "string", Protected: true, Value: &strVal}
 				Expect(input.Validate()).To(Succeed())
 			})
 		})

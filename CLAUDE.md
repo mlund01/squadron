@@ -106,7 +106,7 @@ mission "example" {
     options  = map(string, "Extra key-value options")
     auth     = object({
       username = string("Login username", true)
-      password = string("Login password", { secret = true })
+      password = string("Login password", { protected = true })
     }, "Authentication credentials")
   }
 

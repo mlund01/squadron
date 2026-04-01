@@ -231,7 +231,7 @@ func convertMissionInput(inp config.MissionInput) protocol.MissionInputInfo {
 		Name:        inp.Name,
 		Description: inp.Description,
 		Type:        inp.Type,
-		Required:    inp.Default == nil && !inp.Secret,
+		Required:    inp.Default == nil && !inp.Protected,
 	}
 	if inp.Items != nil {
 		items := convertMissionInput(*inp.Items)

@@ -376,13 +376,13 @@ mission "m" {
 			Expect(thr.Default).NotTo(BeNil())
 		})
 
-		It("parses mission input with secret = true flag", func() {
+		It("parses mission input with protected = true flag", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents = [agents.test_agent]
   inputs = {
-    api_key = string("OpenAI API key", { secret = true })
+    api_key = string("OpenAI API key", { protected = true })
   }
   task "t" { objective = "Call API" }
 }
@@ -393,7 +393,7 @@ mission "m" {
 
 			inputs := cfg.Missions[0].Inputs
 			apiKey := missionInputByName(inputs, "api_key")
-			Expect(apiKey.Secret).To(BeTrue())
+			Expect(apiKey.Protected).To(BeTrue())
 			Expect(apiKey.Value).To(BeNil())
 		})
 

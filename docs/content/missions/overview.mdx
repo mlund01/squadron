@@ -73,7 +73,7 @@ mission "report" {
 | `type` | string | Input type (`string`, `number`, `integer`, `boolean`, `list`, `map`, `object`) |
 | `description` | string | Human-readable description |
 | `default` | any | Default value (makes the input optional) |
-| `secret` | bool | Mark the input as sensitive (masked in logs/UI) |
+| `protected` | bool | Mark the input as sensitive (masked in logs/UI) |
 
 Inputs without a `default` are required. Pass them via CLI:
 
@@ -87,7 +87,7 @@ mission "report" {
     topic   = string("The topic to research")
     format  = string("Output format", { default = "markdown" })
     limit   = number("Max results", { default = 10 })
-    api_key = string("API key", { secret = true })
+    api_key = string("API key", { protected = true })
     tags    = list(string, "Tags to apply")
     options = map(string, "Additional key-value options")
     author  = object({
@@ -102,27 +102,26 @@ mission "report" {
 }
 ```
 
-### Secret Inputs
+### Protected Inputs
 
-Marking an input as `secret` (via `{ secret = true }` in shorthand or `secret = true` in block form) has the following effects:
+Marking an input as `protected` (via `{ protected = true }` in shorthand or `protected = true` in block form) has the following effects:
 
 - The value is **encrypted at rest** in the Squadron vault, not stored in plaintext config files
 - It is **masked in logs and the command center UI** (displayed as `********`)
-- It **cannot be interpolated** in objective strings — use it only for tool/plugin settings that need API keys or credentials
-- It must be set via `squadron vars set <name>` rather than passed as a CLI input
+- It **cannot be interpolated** in objective strings — agents access it through tool/plugin settings, not directly in task objectives
 
 ```hcl
 inputs = {
-  api_key = string("Third-party API key", { secret = true })
+  api_key = string("Third-party API key", { protected = true })
 }
 ```
 
 ```bash
-# Set the secret value (stored encrypted in the vault)
+# Set the protected value (stored encrypted in the vault)
 squadron vars set api_key
 ```
 
-See [Functions](/config/functions) for the complete reference on all helper functions, type references, and the options object (`default`, `secret`).
+See [Functions](/config/functions) for the complete reference on all helper functions, type references, and the options object (`default`, `protected`).
 
 ```bash
 squadron mission report -c ./config --input topic="AI safety" --input format=html

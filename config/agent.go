@@ -24,7 +24,7 @@ var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils"}
 var BuiltinTools = map[string][]string{
 	"http":    {"get", "post", "put", "patch", "delete"},
 	"dataset": {"set", "sample", "count"},
-	"utils":   {"sleep", "nested_img_example"},
+	"utils":   {"sleep"},
 }
 
 // InternalTools is the list of available internal tools (legacy format for backwards compatibility)

@@ -137,8 +137,6 @@ func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore) aitools.Tool 
 		return &aitools.DatasetCountTool{Store: datasetStore}
 	case "builtins.utils.sleep":
 		return &aitools.SleepTool{}
-	case "builtins.utils.nested_img_example":
-		return &aitools.NestedImgExampleTool{}
 	default:
 		return nil
 	}

@@ -407,8 +407,8 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		}
 		r.missionID = missionID
 		stateMgr = NewTaskStateManager(missionID, stateStore)
+		stateMgr.missionState = MissionRunning // DB creates missions as 'running'
 		r.stateMgr = stateMgr
-		_ = stateMgr.TransitionMission(MissionRunning)
 
 		// Initialize store-backed knowledge store
 		r.knowledgeStore = &PersistentKnowledgeStore{MissionID: missionID, Store: r.stores.Missions}
@@ -667,11 +667,8 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 					}
 				}
 
-				// Transition: running → completed
-				if err := stateMgr.TransitionTask(task.Name, TaskCompleted, nil, nil); err != nil {
-					errChan <- fmt.Errorf("task '%s' state transition failed: %w", task.Name, err)
-					return
-				}
+				// Update in-memory state (DB already updated by runTask/runIteratedTask)
+				stateMgr.ForceState(task.Name, TaskCompleted)
 				errChan <- nil
 			}()
 		}

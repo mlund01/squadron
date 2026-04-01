@@ -106,6 +106,14 @@ func (m *TaskStateManager) SetTaskID(taskName, taskID string) {
 	m.taskIDs[taskName] = taskID
 }
 
+// ForceState sets a task's in-memory state without validation or DB write.
+// Use when the DB was already updated by another path (e.g. runTask).
+func (m *TaskStateManager) ForceState(taskName string, state TaskState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tasks[taskName] = state
+}
+
 // TaskState returns the current state of a task.
 func (m *TaskStateManager) GetTaskState(taskName string) (TaskState, bool) {
 	m.mu.RLock()

@@ -102,6 +102,26 @@ mission "report" {
 }
 ```
 
+### Secret Inputs
+
+Marking an input as `secret` (via `{ secret = true }` in shorthand or `secret = true` in block form) has the following effects:
+
+- The value is **encrypted at rest** in the Squadron vault, not stored in plaintext config files
+- It is **masked in logs and the command center UI** (displayed as `********`)
+- It **cannot be interpolated** in objective strings — use it only for tool/plugin settings that need API keys or credentials
+- It must be set via `squadron vars set <name>` rather than passed as a CLI input
+
+```hcl
+inputs = {
+  api_key = string("Third-party API key", { secret = true })
+}
+```
+
+```bash
+# Set the secret value (stored encrypted in the vault)
+squadron vars set api_key
+```
+
 See [Functions](/config/functions) for the complete reference on all helper functions, type references, and the options object (`default`, `secret`).
 
 ```bash

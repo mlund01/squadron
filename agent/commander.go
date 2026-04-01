@@ -479,6 +479,9 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		if callbacks.ExistingSessionID != "" {
 			// Reuse existing session (resume — found by runner from stored state)
 			s.sessionID = callbacks.ExistingSessionID
+			if callbacks.OnSessionCreated != nil {
+				callbacks.OnSessionCreated(s.TaskName, "commander", s.sessionID)
+			}
 		} else {
 			// Create new session
 			if id, err := callbacks.SessionLogger.CreateSession(callbacks.TaskID, "commander", "", s.ModelName, callbacks.IterationIndex); err != nil {
@@ -1782,8 +1785,14 @@ func (t *callAgentTool) Call(ctx context.Context, input string) string {
 	a, exists := t.commander.agentSessions[params.Name]
 	if exists {
 		// Reopen the session so the UI shows the agent as active again
-		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok && t.commander.sessionLogger != nil {
-			t.commander.sessionLogger.ReopenSession(agentSID)
+		if agentSID, ok := t.commander.agentSessionIDs[params.Name]; ok {
+			if t.commander.sessionLogger != nil {
+				t.commander.sessionLogger.ReopenSession(agentSID)
+			}
+			// Re-register session ID with the storing handler so events get tagged
+			if t.commander.callbacks != nil && t.commander.callbacks.OnSessionCreated != nil {
+				t.commander.callbacks.OnSessionCreated(t.commander.TaskName, params.Name, agentSID)
+			}
 		}
 	}
 	if !exists {
@@ -1868,13 +1877,15 @@ func (t *callAgentTool) Call(ctx context.Context, input string) string {
 		)
 	}
 
-	// Notify that agent is starting and get a streamer for it
+	// Notify that agent is starting (skip for resumed agents — they already emitted agent_started)
 	instruction := params.Task
 	if params.Response != "" {
 		instruction = params.Response
 	}
-	if t.commander.callbacks != nil && t.commander.callbacks.OnAgentStart != nil {
-		t.commander.callbacks.OnAgentStart(t.commander.TaskName, params.Name, instruction)
+	if !exists {
+		if t.commander.callbacks != nil && t.commander.callbacks.OnAgentStart != nil {
+			t.commander.callbacks.OnAgentStart(t.commander.TaskName, params.Name, instruction)
+		}
 	}
 
 	var agentHandler streamers.ChatHandler

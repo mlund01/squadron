@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -152,8 +153,8 @@ func (p *PluginClient) Configure(settings map[string]string) error {
 }
 
 // Call invokes a tool on the plugin
-func (p *PluginClient) Call(toolName string, payload string) (string, error) {
-	return p.provider.Call(toolName, payload)
+func (p *PluginClient) Call(ctx context.Context, toolName string, payload string) (string, error) {
+	return p.provider.Call(ctx, toolName, payload)
 }
 
 // GetToolInfo returns metadata about a specific tool

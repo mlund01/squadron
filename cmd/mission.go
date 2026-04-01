@@ -84,7 +84,9 @@ var missionCmd = &cobra.Command{
 		streamer := streamers.NewStoringMissionHandler(cliHandler, runner.EventStore())
 
 		// Run the mission
-		if err := runner.Run(ctx, streamer); err != nil {
+		err = runner.Run(ctx, streamer)
+		runner.CloseStores()
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "\nMission failed: %v\n", err)
 			os.Exit(1)
 		}

@@ -262,6 +262,8 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 			})
 			c.SendEvent(completeEnv)
 		}
+
+		runner.CloseStores()
 	}()
 
 	// For resume, the mission ID is already known
@@ -1229,6 +1231,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 				Error:     err.Error(),
 			})
 			c.SendEvent(completeEnv)
+			runner.CloseStores()
 			return
 		}
 
@@ -1242,8 +1245,12 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		// Check for cross-mission routing
 		nextMission := runner.NextMission()
 		if nextMission == "" {
+			runner.CloseStores()
 			return
 		}
+
+		// Close stores for completed mission before chaining
+		runner.CloseStores()
 
 		// Chain into the next mission
 		log.Printf("Mission %q routed to mission %q", missionName, nextMission)

@@ -265,6 +265,11 @@ func (r *Runner) EventStore() store.EventStore {
 	return r.stores.Events
 }
 
+// CloseStores closes the underlying data stores. Call after Run returns and all events are flushed.
+func (r *Runner) CloseStores() {
+	r.stores.Close()
+}
+
 // NextMission returns the mission name to launch as a result of cross-mission routing, or "".
 func (r *Runner) NextMission() string {
 	return r.nextMission
@@ -275,9 +280,9 @@ func (r *Runner) NextMissionInputs() map[string]string {
 	return r.nextMissionInputs
 }
 
-// Run executes the mission
+// Run executes the mission.
+// The caller is responsible for closing r.stores after Run returns and all events are flushed.
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
-	defer r.stores.Close()
 
 	var missionID string
 
@@ -479,6 +484,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	for !isLoopDone() {
 		select {
 		case <-ctx.Done():
+			wg.Wait()
 			r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
 			return ctx.Err()
 		default:
@@ -542,6 +548,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 					return err
 				}
 			case <-ctx.Done():
+				wg.Wait()
 				r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
 				return ctx.Err()
 			}
@@ -573,7 +580,12 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 				}
 
 				if err != nil {
-					errChan <- fmt.Errorf("task '%s' failed: %w", task.Name, err)
+					if ctx.Err() != nil {
+						// Mission was stopped — not a task failure
+						errChan <- ctx.Err()
+					} else {
+						errChan <- fmt.Errorf("task '%s' failed: %w", task.Name, err)
+					}
 					return
 				}
 
@@ -1162,9 +1174,13 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	// Execute (or resume if stored messages were loaded)
 	err = sup.ExecuteOrResume(ctx, objective, taskStreamer)
 	if err != nil {
+		sup.Close()
+		if ctx.Err() != nil {
+			// Mission was stopped — don't emit task_failed, just propagate
+			return &TaskResult{TaskName: task.Name, Success: false, Error: ctx.Err()}, ctx.Err()
+		}
 		errStr := err.Error()
 		updateTaskDone(false, nil, &errStr)
-		sup.Close()
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
 			TaskName: task.Name,
@@ -1681,6 +1697,9 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	}
 
 	if !allSuccess {
+		if ctx.Err() != nil {
+			return &TaskResult{TaskName: task.Name, Success: false, Error: ctx.Err()}, ctx.Err()
+		}
 		errStr := firstError.Error()
 		updateTaskDone(false, nil, &errStr)
 		streamer.TaskFailed(task.Name, firstError)

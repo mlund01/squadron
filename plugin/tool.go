@@ -37,7 +37,7 @@ func (t *PluginTool) ToolPayloadSchema() aitools.Schema {
 
 // Call executes the tool with the given parameters and returns a stringified response
 func (t *PluginTool) Call(ctx context.Context, params string) string {
-	result, err := t.provider.Call(t.info.Name, params)
+	result, err := t.provider.Call(ctx, t.info.Name, params)
 	if err != nil {
 		return "error: " + err.Error()
 	}

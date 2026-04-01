@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -102,8 +103,9 @@ func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools m
 // because the session already has a pending user message from healing or interruption.
 // Returns a ChatResult with either an answer (complete) or ASK_COMMANDER question (needs input)
 func (o *orchestrator) processTurn(ctx context.Context, input string, resume bool) (ChatResult, error) {
-	currentTextInput := input
-	var currentImageInput *llm.ImageBlock
+	var currentParts []llm.ContentBlock
+	currentParts = append(currentParts, llm.ContentBlock{Type: llm.ContentTypeText, Text: input})
+	currentLogText := input
 	var finalAnswer string
 
 	for {
@@ -127,26 +129,44 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 				}
 			})
 			resume = false
-		} else if currentImageInput != nil {
-			// Send image directly (not wrapped in OBSERVATION)
-			msg := llm.NewImageMessage(llm.RoleUser, currentImageInput)
-			resp, err = o.session.SendMessageStream(ctx, msg, func(content string) {
-				if content != "" {
-					parser.ProcessChunk(content)
-				}
-			})
-			currentImageInput = nil // Reset for next iteration
 		} else {
-			// Log user message to session store
+			// Check if we have images in the content parts
+			hasImages := false
+			for _, p := range currentParts {
+				if p.Type == llm.ContentTypeImage {
+					hasImages = true
+					break
+				}
+			}
+
+			// Extract text for logging
+			var textContent string
+			for _, p := range currentParts {
+				if p.Type == llm.ContentTypeText {
+					textContent += p.Text
+				}
+			}
+
+			// Log user message to session store (uses text with [image] placeholders)
 			if o.sessionLogger != nil && o.sessionID != "" {
 				now := time.Now()
-				o.sessionLogger.AppendMessage(o.sessionID, "user", currentTextInput, now, now)
+				o.sessionLogger.AppendMessage(o.sessionID, "user", currentLogText, now, now)
 			}
-			resp, err = o.session.SendStream(ctx, currentTextInput, func(content string) {
-				if content != "" {
-					parser.ProcessChunk(content)
-				}
-			})
+
+			if hasImages {
+				msg := llm.NewMultimodalMessage(llm.RoleUser, currentParts...)
+				resp, err = o.session.SendMessageStream(ctx, msg, func(content string) {
+					if content != "" {
+						parser.ProcessChunk(content)
+					}
+				})
+			} else {
+				resp, err = o.session.SendStream(ctx, textContent, func(content string) {
+					if content != "" {
+						parser.ProcessChunk(content)
+					}
+				})
+			}
 		}
 
 		// Check if compaction is needed after response
@@ -238,7 +258,8 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		if secretErr != nil {
 			errMsg := fmt.Sprintf("Error: %v", secretErr)
 			o.streamer.ToolComplete(tcID, action, errMsg)
-			currentTextInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
+			currentLogText = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
+			currentParts = []llm.ContentBlock{{Type: llm.ContentTypeText, Text: currentLogText}}
 			continue
 		}
 
@@ -247,7 +268,8 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		if tool == nil {
 			errMsg := fmt.Sprintf("Error: Tool '%s' not found", action)
 			o.streamer.ToolComplete(tcID, action, errMsg)
-			currentTextInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
+			currentLogText = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
+			currentParts = []llm.ContentBlock{{Type: llm.ContentTypeText, Text: currentLogText}}
 			continue
 		}
 
@@ -275,7 +297,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 		// Format observation (may intercept/truncate large results)
 		var observationContent string
-		currentTextInput, currentImageInput, observationContent = o.formatObservation(action, result)
+		currentParts, currentLogText, observationContent = o.formatObservation(action, result)
 		o.streamer.ToolComplete(tcID, action, observationContent)
 
 	}
@@ -348,25 +370,60 @@ func (o *orchestrator) lookupTool(name string) aitools.Tool {
 }
 
 // formatObservation formats a tool result as an observation, with optional metadata.
-// Returns the formatted string, optional ImageBlock (for image results), and the observation content fed to the LLM.
-func (o *orchestrator) formatObservation(toolName, result string) (string, *llm.ImageBlock, string) {
-	// Check if result is an image first
-	if img := aitools.DetectImage(result); img != nil {
-		return "", &llm.ImageBlock{
-			Data:      img.Data,
-			MediaType: img.MediaType,
-		}, ""
+// Returns content blocks (text interleaved with images at their original positions),
+// the full observation text with [image] placeholders (for logging), and the plain observation content (for streaming).
+func (o *orchestrator) formatObservation(toolName, result string) ([]llm.ContentBlock, string, string) {
+	// Extract any images from the result
+	extraction := aitools.ExtractImages(result)
+
+	// Use remaining text (with images replaced by [image] placeholders) for the text portion
+	textResult := extraction.RemainingText
+	if len(extraction.Images) > 0 && textResult == "[image]" {
+		textResult = "[see image]"
 	}
 
-	// Not an image - format as text observation
-	if o.interceptor == nil {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result), nil, result
+	// Apply interceptor if configured
+	var metadata string
+	if o.interceptor != nil {
+		ir := o.interceptor.Intercept(toolName, textResult)
+		textResult = ir.Data
+		metadata = ir.Metadata
 	}
 
-	ir := o.interceptor.Intercept(toolName, result)
-	if ir.Metadata == "" {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data), nil, ir.Data
+	// No images — simple text observation
+	if len(extraction.Images) == 0 {
+		obs := fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", textResult)
+		if metadata != "" {
+			obs += fmt.Sprintf("\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", metadata)
+		}
+		return []llm.ContentBlock{{Type: llm.ContentTypeText, Text: obs}}, obs, textResult
 	}
 
-	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata), nil, ir.Data
+	// Has images — split text at [image] placeholders and interleave with image blocks
+	wrapped := fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", textResult)
+	if metadata != "" {
+		wrapped += fmt.Sprintf("\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", metadata)
+	}
+
+	segments := strings.Split(wrapped, "[image]")
+	var parts []llm.ContentBlock
+	imgIdx := 0
+	for i, seg := range segments {
+		if seg != "" {
+			parts = append(parts, llm.ContentBlock{Type: llm.ContentTypeText, Text: seg})
+		}
+		if i < len(segments)-1 && imgIdx < len(extraction.Images) {
+			img := extraction.Images[imgIdx]
+			parts = append(parts, llm.ContentBlock{
+				Type: llm.ContentTypeImage,
+				ImageData: &llm.ImageBlock{
+					Data:      img.Data,
+					MediaType: img.MediaType,
+				},
+			})
+			imgIdx++
+		}
+	}
+
+	return parts, wrapped, textResult
 }

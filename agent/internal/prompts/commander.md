@@ -228,12 +228,7 @@ When `partial: true`, only a sample is shown. Use result tools (`result_items`, 
 
 ## Image Results from Tools
 
-When a tool returns an image (e.g., screenshot), it will NOT be wrapped in `<OBSERVATION>` tags.
-Instead, the image will appear directly in the conversation as visual content.
-
-Analyze the image directly based on what you see. Do not expect `<OBSERVATION>` tags for image results.
-
-You will then respond with another turn following the appropriate pattern.
+When a tool returns an image (e.g., screenshot), it will be included inside the `<OBSERVATION>` block as inline visual content alongside any text output. Analyze the image directly based on what you see.
 
 
 {{SEQUENTIAL_ITERATION_CONTEXT}}## Rules

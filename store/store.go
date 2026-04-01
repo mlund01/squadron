@@ -30,8 +30,12 @@ func (b *Bundle) Close() error {
 type MissionStore interface {
 	CreateMission(name string, inputsJSON, configJSON string) (id string, err error)
 	UpdateMissionStatus(id, status string) error
+	// UpdateMissionStatusCAS atomically transitions a mission status, returning false if current status doesn't match expected.
+	UpdateMissionStatusCAS(id, expectedOldStatus, newStatus string) (bool, error)
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
 	UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error
+	// UpdateTaskStatusCAS atomically transitions a task status, returning false if current status doesn't match expected.
+	UpdateTaskStatusCAS(id, expectedOldStatus, newStatus string, outputJSON, errMsg *string) (bool, error)
 	GetTask(id string) (*MissionTask, error)
 	GetTasksByMission(missionID string) ([]MissionTask, error)
 	GetTaskByName(missionID, taskName string) (*MissionTask, error)

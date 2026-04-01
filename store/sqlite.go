@@ -229,6 +229,40 @@ func (s *SQLiteMissionStore) UpdateTaskStatus(id, status string, outputJSON, err
 	return err
 }
 
+func (s *SQLiteMissionStore) UpdateTaskStatusCAS(id, expectedOldStatus, newStatus string, outputJSON, errMsg *string) (bool, error) {
+	var finishedAt *string
+	if newStatus == "completed" || newStatus == "failed" {
+		s := tsNow()
+		finishedAt = &s
+	}
+	result, err := s.db.Exec(
+		`UPDATE mission_tasks SET status = ?, output_json = ?, error = ?, finished_at = ? WHERE id = ? AND status = ?`,
+		newStatus, outputJSON, errMsg, finishedAt, id, expectedOldStatus,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
+func (s *SQLiteMissionStore) UpdateMissionStatusCAS(id, expectedOldStatus, newStatus string) (bool, error) {
+	var finishedAt *string
+	if newStatus == "completed" || newStatus == "failed" {
+		s := tsNow()
+		finishedAt = &s
+	}
+	result, err := s.db.Exec(
+		`UPDATE missions SET status = ?, finished_at = ? WHERE id = ? AND status = ?`,
+		newStatus, finishedAt, id, expectedOldStatus,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
 func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = ?`,

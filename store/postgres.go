@@ -226,6 +226,40 @@ func (s *PgMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMsg 
 	return err
 }
 
+func (s *PgMissionStore) UpdateTaskStatusCAS(id, expectedOldStatus, newStatus string, outputJSON, errMsg *string) (bool, error) {
+	var finishedAt *string
+	if newStatus == "completed" || newStatus == "failed" {
+		s := tsNow()
+		finishedAt = &s
+	}
+	result, err := s.db.Exec(
+		`UPDATE mission_tasks SET status = $1, output_json = $2, error = $3, finished_at = $4 WHERE id = $5 AND status = $6`,
+		newStatus, outputJSON, errMsg, finishedAt, id, expectedOldStatus,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
+func (s *PgMissionStore) UpdateMissionStatusCAS(id, expectedOldStatus, newStatus string) (bool, error) {
+	var finishedAt *string
+	if newStatus == "completed" || newStatus == "failed" {
+		s := tsNow()
+		finishedAt = &s
+	}
+	result, err := s.db.Exec(
+		`UPDATE missions SET status = $1, finished_at = $2 WHERE id = $3 AND status = $4`,
+		newStatus, finishedAt, id, expectedOldStatus,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	return rows > 0, err
+}
+
 func (s *PgMissionStore) GetTasksByMission(missionID string) ([]MissionTask, error) {
 	rows, err := s.db.Query(
 		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = $1`,

@@ -146,7 +146,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 
 	// Track the running mission for stop/cancel
 	c.missionMu.Lock()
-	c.runningMissions[missionID] = missionCancel
+	c.runningMissions[missionID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 	c.missionMu.Unlock()
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
@@ -162,7 +162,7 @@ func (c *Client) handleStopMission(env *protocol.Envelope) (*protocol.Envelope, 
 	}
 
 	c.missionMu.Lock()
-	cancel, exists := c.runningMissions[payload.MissionID]
+	rm, exists := c.runningMissions[payload.MissionID]
 	c.missionMu.Unlock()
 
 	if !exists {
@@ -181,13 +181,16 @@ func (c *Client) handleStopMission(env *protocol.Envelope) (*protocol.Envelope, 
 		})
 	}
 
-	// Store and emit mission_stopped event BEFORE cancel to avoid racing with store.Close()
+	// Emit mission_stopped event
 	c.emitMissionLifecycleEvent(payload.MissionID, protocol.EventMissionStopped, protocol.MissionStoppedData{
 		MissionID: payload.MissionID,
 	})
 
-	// Cancel the context — the runner will detect ctx.Done() and clean up
-	cancel()
+	// Drain first (graceful), then cancel context as hard backstop
+	if rm.drain != nil {
+		rm.drain()
+	}
+	rm.cancel()
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeStopMissionAck, &protocol.StopMissionAckPayload{
 		Accepted: true,
@@ -262,11 +265,13 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 			})
 			c.SendEvent(completeEnv)
 		}
+
+		runner.CloseStores()
 	}()
 
 	// For resume, the mission ID is already known
 	c.missionMu.Lock()
-	c.runningMissions[payload.MissionID] = missionCancel
+	c.runningMissions[payload.MissionID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 	c.missionMu.Unlock()
 
 	// Still wait for runner to emit MissionStarted (it does so even on resume)
@@ -1229,6 +1234,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 				Error:     err.Error(),
 			})
 			c.SendEvent(completeEnv)
+			runner.CloseStores()
 			return
 		}
 
@@ -1242,8 +1248,12 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		// Check for cross-mission routing
 		nextMission := runner.NextMission()
 		if nextMission == "" {
+			runner.CloseStores()
 			return
 		}
+
+		// Close stores for completed mission before chaining
+		runner.CloseStores()
 
 		// Chain into the next mission
 		log.Printf("Mission %q routed to mission %q", missionName, nextMission)
@@ -1270,13 +1280,76 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 				return
 			}
 			c.missionMu.Lock()
-			c.runningMissions[chainedMID] = cancel
+			c.runningMissions[chainedMID] = &runningMission{cancel: cancel, drain: runner.Drain}
 			c.missionMu.Unlock()
 		}()
 	}
 }
 
 // RunScheduledMission is called by the scheduler when a schedule fires.
+// ResumeOrphanedMissions finds missions stuck in "running" status (from a crash/kill)
+// and auto-resumes them. Called once on startup after config is loaded.
+func (c *Client) ResumeOrphanedMissions() {
+	cfg := c.getConfig()
+	if cfg == nil {
+		return
+	}
+
+	records, _, err := c.stores.Missions.ListMissions(100, 0)
+	if err != nil {
+		log.Printf("auto-resume: failed to list missions: %v", err)
+		return
+	}
+
+	for _, r := range records {
+		if r.Status != "running" {
+			continue
+		}
+
+		// Check if mission still exists in config
+		var found bool
+		for _, m := range cfg.Missions {
+			if m.Name == r.MissionName {
+				found = true
+				break
+			}
+		}
+		if !found {
+			log.Printf("auto-resume: mission %q (%s) not in config, marking as stopped", r.MissionName, r.ID)
+			c.stores.Missions.UpdateMissionStatus(r.ID, "stopped")
+			continue
+		}
+
+		// Mark as stopped first (resume expects stopped state)
+		c.stores.Missions.UpdateMissionStatus(r.ID, "stopped")
+
+		log.Printf("auto-resume: resuming orphaned mission %q (%s)", r.MissionName, r.ID)
+
+		debugLogger, _ := mission.NewDebugLogger("")
+		runner, err := mission.NewRunner(cfg, c.configPath, r.MissionName, nil,
+			mission.WithDebugLogger(debugLogger),
+			mission.WithResume(r.ID),
+		)
+		if err != nil {
+			log.Printf("auto-resume: failed to create runner for %q: %v", r.MissionName, err)
+			continue
+		}
+
+		wsHandler := NewWSMissionHandler(c)
+		storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+
+		missionCtx, missionCancel := context.WithCancel(context.Background())
+		go func(missionName, missionID string) {
+			c.runMissionChain(missionCtx, missionCancel, runner, storingHandler, wsHandler, missionName)
+		}(r.MissionName, r.ID)
+
+		// Track the running mission
+		c.missionMu.Lock()
+		c.runningMissions[r.ID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
+		c.missionMu.Unlock()
+	}
+}
+
 // It creates a mission runner and runs it in the background, reusing the
 // same flow as handleRunMission but without a WebSocket request/response.
 func (c *Client) RunScheduledMission(missionName, source string, inputs map[string]string) {
@@ -1325,7 +1398,7 @@ func (c *Client) RunScheduledMission(missionName, source string, inputs map[stri
 				return
 			}
 			c.missionMu.Lock()
-			c.runningMissions[mid] = missionCancel
+			c.runningMissions[mid] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 			c.missionMu.Unlock()
 		}()
 
@@ -1386,7 +1459,7 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 
 	// Track the running mission
 	c.missionMu.Lock()
-	c.runningMissions[missionID] = missionCancel
+	c.runningMissions[missionID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 	c.missionMu.Unlock()
 
 	return missionID, nil

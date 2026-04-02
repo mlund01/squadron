@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -64,7 +65,7 @@ func (t *SubmitOutputTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *SubmitOutputTool) Call(params string) string {
+func (t *SubmitOutputTool) Call(ctx context.Context, params string) string {
 	var input struct {
 		Output map[string]any `json:"output"`
 	}

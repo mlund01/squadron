@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"squadron/store"
@@ -462,8 +463,11 @@ func (c *storingChatHandler) CommanderResponse(content string) {
 // Helpers
 // =============================================================================
 
+var eventIDCounter uint64
+
 func generateEventID() string {
-	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), time.Now().UnixNano()%100000)
+	n := atomic.AddUint64(&eventIDCounter, 1)
+	return fmt.Sprintf("%d-%d", time.Now().UnixNano(), n)
 }
 
 // extractIterationIndex parses an iteration index from a task name like "greet[2]".

@@ -40,7 +40,7 @@ var pluginCallCmd = &cobra.Command{
 		defer p.Close()
 
 		// Call the tool
-		result, err := p.Call(toolName, payload)
+		result, err := p.Call(cmd.Context(), toolName, payload)
 		if err != nil {
 			return fmt.Errorf("plugin call failed: %w", err)
 		}

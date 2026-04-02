@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"context"
 	"encoding/json"
 
 	goplugin "github.com/hashicorp/go-plugin"
@@ -31,7 +32,7 @@ type ToolProvider interface {
 	Configure(settings map[string]string) error
 
 	// Call invokes a tool with the given JSON payload
-	Call(toolName string, payload string) (string, error)
+	Call(ctx context.Context, toolName string, payload string) (string, error)
 
 	// GetToolInfo returns metadata about a specific tool
 	GetToolInfo(toolName string) (*ToolInfo, error)
@@ -49,8 +50,8 @@ func (w *sdkProviderWrapper) Configure(settings map[string]string) error {
 	return w.impl.Configure(settings)
 }
 
-func (w *sdkProviderWrapper) Call(toolName string, payload string) (string, error) {
-	return w.impl.Call(toolName, payload)
+func (w *sdkProviderWrapper) Call(ctx context.Context, toolName string, payload string) (string, error) {
+	return w.impl.Call(ctx, toolName, payload)
 }
 
 func (w *sdkProviderWrapper) GetToolInfo(toolName string) (*ToolInfo, error) {

@@ -800,6 +800,111 @@ var _ = Describe("SQLite SessionStore", func() {
 			Expect(r2[0].ToolCallId).To(Equal("tc-b"))
 		})
 	})
+
+	// =========================================================================
+	Describe("Two-phase tool calls (StartToolCall / CompleteToolCall)", func() {
+		It("creates a started record then completes it", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, err := bundle.Sessions.CreateSession(taskID, "agent", "test", "claude-3", nil)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Phase 1: start
+			recordID, err := bundle.Sessions.StartToolCall(taskID, sessionID, "tc-1", "http_get", `{"url":"https://example.com"}`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(recordID).NotTo(BeEmpty())
+
+			// Should be visible as 'started'
+			results, err := bundle.Sessions.GetToolResultsByTask(taskID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].Status).To(Equal("started"))
+			Expect(results[0].ToolName).To(Equal("http_get"))
+			Expect(results[0].InputParams).To(Equal(`{"url":"https://example.com"}`))
+			Expect(results[0].RawData).To(BeEmpty())
+
+			// Phase 2: complete
+			err = bundle.Sessions.CompleteToolCall(recordID, `{"status":200}`)
+			Expect(err).NotTo(HaveOccurred())
+
+			results, err = bundle.Sessions.GetToolResultsByTask(taskID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].Status).To(Equal("completed"))
+			Expect(results[0].RawData).To(Equal(`{"status":200}`))
+		})
+
+		It("leaves status as started if never completed (crash simulation)", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, _ := bundle.Sessions.CreateSession(taskID, "agent", "test", "claude-3", nil)
+
+			_, err := bundle.Sessions.StartToolCall(taskID, sessionID, "tc-crash", "shell_exec", `{"cmd":"sleep 100"}`)
+			Expect(err).NotTo(HaveOccurred())
+
+			// Never call CompleteToolCall — simulates crash
+			results, _ := bundle.Sessions.GetToolResultsByTask(taskID)
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].Status).To(Equal("started"))
+			Expect(results[0].ToolName).To(Equal("shell_exec"))
+		})
+
+		It("StoreToolResult writes completed status directly", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, _ := bundle.Sessions.CreateSession(taskID, "agent", "test", "claude-3", nil)
+
+			now := time.Now()
+			err := bundle.Sessions.StoreToolResult(taskID, sessionID, "tc-legacy", "http_post", "{}", `{"ok":true}`, now, now)
+			Expect(err).NotTo(HaveOccurred())
+
+			results, _ := bundle.Sessions.GetToolResultsByTask(taskID)
+			Expect(results).To(HaveLen(1))
+			Expect(results[0].Status).To(Equal("completed"))
+		})
+	})
+
+	// =========================================================================
+	Describe("CAS methods", func() {
+		It("UpdateTaskStatusCAS succeeds when status matches", func() {
+			_, taskID := seedMissionAndTask(bundle)
+
+			ok, err := bundle.Missions.UpdateTaskStatusCAS(taskID, "pending", "running", nil, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+
+			task, _ := bundle.Missions.GetTask(taskID)
+			Expect(task.Status).To(Equal("running"))
+		})
+
+		It("UpdateTaskStatusCAS fails when status doesn't match", func() {
+			_, taskID := seedMissionAndTask(bundle)
+
+			ok, err := bundle.Missions.UpdateTaskStatusCAS(taskID, "running", "completed", nil, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeFalse())
+
+			// Status should remain pending
+			task, _ := bundle.Missions.GetTask(taskID)
+			Expect(task.Status).To(Equal("pending"))
+		})
+
+		It("UpdateMissionStatusCAS succeeds when status matches", func() {
+			missionID, _ := seedMissionAndTask(bundle)
+
+			ok, err := bundle.Missions.UpdateMissionStatusCAS(missionID, "running", "completed")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeTrue())
+
+			m, _ := bundle.Missions.GetMission(missionID)
+			Expect(m.Status).To(Equal("completed"))
+		})
+
+		It("UpdateMissionStatusCAS fails when status doesn't match", func() {
+			missionID, _ := seedMissionAndTask(bundle)
+
+			ok, err := bundle.Missions.UpdateMissionStatusCAS(missionID, "stopped", "running")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(ok).To(BeFalse())
+		})
+	})
 })
 
 var _ = Describe("SQLite DatasetStore", func() {

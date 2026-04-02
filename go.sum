@@ -179,6 +179,8 @@ github.com/mitchellh/go-wordwrap v1.0.1 h1:TLuKupo69TCn6TQSyGxwI1EblZZEsQ0vMlAFQ
 github.com/mitchellh/go-wordwrap v1.0.1/go.mod h1:R62XHJLzvMFRBbcrT7m7WgmE1eOyTSsCt+hzestvNj0=
 github.com/mlund01/squadron-sdk v0.0.28 h1:uCqXhXSyHxa4Qmd+zrwbLMn5uK7jvQnefvrkvgIeCNI=
 github.com/mlund01/squadron-sdk v0.0.28/go.mod h1:sfa7zyvk2smddBZLGLqDj5e0Ofpn/dB3zVDkaqGUUos=
+github.com/mlund01/squadron-sdk v0.0.30 h1:/tG12XwmqPNXOmEx1EV8ELgFIYkCkSeSU2NtgP997xw=
+github.com/mlund01/squadron-sdk v0.0.30/go.mod h1:OIbaq0s33LUPN8OUtJLVLVXGgizTU5jS6CH5yPFY+go=
 github.com/mlund01/squadron-wire v0.0.32 h1:SDlj7SlrmO4iHWdl0V3wpxvxEqfhXdV4gmXkeVjf+0Y=
 github.com/mlund01/squadron-wire v0.0.32/go.mod h1:BmgUAhEkibCiJ2Cre+qfLs/KjeqTmm4BkfcMu6M+jLU=
 github.com/mlund01/squadron-wire v0.0.33-0.20260331033416-8c94373911f7 h1:FM9v0H4dHUKEWYBRU61Sb6HzDHRsfTqBcVKZBPo5p1E=

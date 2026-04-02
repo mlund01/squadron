@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -50,7 +51,7 @@ type httpGetParams struct {
 	Headers map[string]string `json:"headers"`
 }
 
-func (t *HTTPGetTool) Call(params string) string {
+func (t *HTTPGetTool) Call(ctx context.Context, params string) string {
 	var p httpGetParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -60,7 +61,7 @@ func (t *HTTPGetTool) Call(params string) string {
 		return "Error: url is required"
 	}
 
-	req, err := http.NewRequest("GET", p.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", p.URL, nil)
 	if err != nil {
 		return "Error: failed to create request - " + err.Error()
 	}
@@ -115,7 +116,7 @@ type httpBodyParams struct {
 	Headers     map[string]string `json:"headers"`
 }
 
-func (t *HTTPPostTool) Call(params string) string {
+func (t *HTTPPostTool) Call(ctx context.Context, params string) string {
 	var p httpBodyParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -125,7 +126,7 @@ func (t *HTTPPostTool) Call(params string) string {
 		return "Error: url is required"
 	}
 
-	return executeBodyRequest("POST", p)
+	return executeBodyRequest(ctx, "POST", p)
 }
 
 // HTTPPutTool performs HTTP PUT requests
@@ -164,7 +165,7 @@ func (t *HTTPPutTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *HTTPPutTool) Call(params string) string {
+func (t *HTTPPutTool) Call(ctx context.Context, params string) string {
 	var p httpBodyParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -174,7 +175,7 @@ func (t *HTTPPutTool) Call(params string) string {
 		return "Error: url is required"
 	}
 
-	return executeBodyRequest("PUT", p)
+	return executeBodyRequest(ctx, "PUT", p)
 }
 
 // HTTPPatchTool performs HTTP PATCH requests
@@ -213,7 +214,7 @@ func (t *HTTPPatchTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *HTTPPatchTool) Call(params string) string {
+func (t *HTTPPatchTool) Call(ctx context.Context, params string) string {
 	var p httpBodyParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -223,7 +224,7 @@ func (t *HTTPPatchTool) Call(params string) string {
 		return "Error: url is required"
 	}
 
-	return executeBodyRequest("PATCH", p)
+	return executeBodyRequest(ctx, "PATCH", p)
 }
 
 // HTTPDeleteTool performs HTTP DELETE requests
@@ -254,7 +255,7 @@ func (t *HTTPDeleteTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *HTTPDeleteTool) Call(params string) string {
+func (t *HTTPDeleteTool) Call(ctx context.Context, params string) string {
 	var p httpGetParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -264,7 +265,7 @@ func (t *HTTPDeleteTool) Call(params string) string {
 		return "Error: url is required"
 	}
 
-	req, err := http.NewRequest("DELETE", p.URL, nil)
+	req, err := http.NewRequestWithContext(ctx, "DELETE", p.URL, nil)
 	if err != nil {
 		return "Error: failed to create request - " + err.Error()
 	}
@@ -278,7 +279,7 @@ func (t *HTTPDeleteTool) Call(params string) string {
 
 // Helper functions
 
-func executeBodyRequest(method string, p httpBodyParams) string {
+func executeBodyRequest(ctx context.Context, method string, p httpBodyParams) string {
 	var bodyReader io.Reader
 	var contentType string
 
@@ -325,7 +326,7 @@ func executeBodyRequest(method string, p httpBodyParams) string {
 		}
 	}
 
-	req, err := http.NewRequest(method, p.URL, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, p.URL, bodyReader)
 	if err != nil {
 		return "Error: failed to create request - " + err.Error()
 	}

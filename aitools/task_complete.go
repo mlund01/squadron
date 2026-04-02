@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 )
@@ -96,7 +97,7 @@ func (t *TaskCompleteTool) ToolPayloadSchema() Schema {
 	}
 }
 
-func (t *TaskCompleteTool) Call(params string) string {
+func (t *TaskCompleteTool) Call(ctx context.Context, params string) string {
 	// Parse params
 	succeed := true
 	reason := ""

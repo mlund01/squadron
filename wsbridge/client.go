@@ -24,6 +24,12 @@ const (
 	requestTimeout = 30 * time.Second
 )
 
+// runningMission tracks a running mission's stop handles.
+type runningMission struct {
+	cancel context.CancelFunc // hard cancel (context)
+	drain  func()             // graceful drain signal
+}
+
 // Client manages the WebSocket connection from a squadron instance to commander.
 type Client struct {
 	cfg      *config.Config // may be partial until full load succeeds
@@ -51,7 +57,7 @@ type Client struct {
 
 	// Running missions (for stop/cancel)
 	missionMu       sync.Mutex
-	runningMissions map[string]context.CancelFunc // missionID → cancel
+	runningMissions map[string]*runningMission // missionID → mission handle
 
 	// Concurrency tracker for mission max_parallel enforcement
 	concurrency ConcurrencyTracker
@@ -101,7 +107,7 @@ func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath st
 		pending:      make(map[string]chan *protocol.Envelope),
 		handlers:     make(map[protocol.MessageType]RequestHandler),
 		chatSessions:    make(map[string]*chatSession),
-		runningMissions: make(map[string]context.CancelFunc),
+		runningMissions: make(map[string]*runningMission),
 		concurrency:     noopConcurrency{},
 		done:         make(chan struct{}),
 		ctx:        ctx,

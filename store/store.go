@@ -30,8 +30,12 @@ func (b *Bundle) Close() error {
 type MissionStore interface {
 	CreateMission(name string, inputsJSON, configJSON string) (id string, err error)
 	UpdateMissionStatus(id, status string) error
+	// UpdateMissionStatusCAS atomically transitions a mission status, returning false if current status doesn't match expected.
+	UpdateMissionStatusCAS(id, expectedOldStatus, newStatus string) (bool, error)
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
 	UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error
+	// UpdateTaskStatusCAS atomically transitions a task status, returning false if current status doesn't match expected.
+	UpdateTaskStatusCAS(id, expectedOldStatus, newStatus string, outputJSON, errMsg *string) (bool, error)
 	GetTask(id string) (*MissionTask, error)
 	GetTasksByMission(missionID string) ([]MissionTask, error)
 	GetTaskByName(missionID, taskName string) (*MissionTask, error)
@@ -131,6 +135,10 @@ type SessionStore interface {
 	GetMessages(sessionID string) ([]SessionMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)
 	StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
+	// StartToolCall records a tool call before execution (status=started). Returns a record ID.
+	StartToolCall(taskID, sessionID, toolCallId, toolName, inputParams string) (string, error)
+	// CompleteToolCall marks a tool call as completed with result data.
+	CompleteToolCall(id, rawData string) error
 	GetToolResultsByTask(taskID string) ([]ToolResult, error)
 
 	// Chat-specific methods
@@ -160,6 +168,7 @@ type ToolResult struct {
 	ToolName    string    `json:"toolName"`
 	InputParams string    `json:"inputParams"`
 	RawData     string    `json:"rawData"`
+	Status      string    `json:"status"` // "started", "completed", "interrupted"
 	StartedAt   time.Time `json:"startedAt"`
 	FinishedAt  time.Time `json:"finishedAt"`
 }

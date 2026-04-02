@@ -1,6 +1,7 @@
 package aitools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -36,7 +37,7 @@ type sleepParams struct {
 
 const maxSleepSeconds = 300
 
-func (t *SleepTool) Call(params string) string {
+func (t *SleepTool) Call(ctx context.Context, params string) string {
 	var p sleepParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
@@ -49,7 +50,10 @@ func (t *SleepTool) Call(params string) string {
 		return fmt.Sprintf("Error: maximum sleep duration is %d seconds", maxSleepSeconds)
 	}
 
-	time.Sleep(time.Duration(p.Seconds * float64(time.Second)))
-
-	return fmt.Sprintf("Slept for %.1f seconds.", p.Seconds)
+	select {
+	case <-time.After(time.Duration(p.Seconds * float64(time.Second))):
+		return fmt.Sprintf("Slept for %.1f seconds.", p.Seconds)
+	case <-ctx.Done():
+		return "Error: sleep cancelled"
+	}
 }

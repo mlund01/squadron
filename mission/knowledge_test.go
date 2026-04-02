@@ -59,11 +59,15 @@ func (m *mockMissionStore) CreateMission(name, inputsJSON, configJSON string) (s
 	return "", nil
 }
 func (m *mockMissionStore) UpdateMissionStatus(id, status string) error { return nil }
+func (m *mockMissionStore) UpdateMissionStatusCAS(id, expectedOld, newStatus string) (bool, error) { return true, nil }
 func (m *mockMissionStore) CreateTask(missionID, taskName, configJSON string) (string, error) {
 	return "", nil
 }
 func (m *mockMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error {
 	return nil
+}
+func (m *mockMissionStore) UpdateTaskStatusCAS(id, expectedOld, newStatus string, outputJSON, errMsg *string) (bool, error) {
+	return true, nil
 }
 func (m *mockMissionStore) GetTask(id string) (*store.MissionTask, error) { return nil, nil }
 func (m *mockMissionStore) GetTasksByMission(missionID string) ([]store.MissionTask, error) {

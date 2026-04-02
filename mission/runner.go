@@ -69,6 +69,13 @@ type Runner struct {
 	// Cross-mission routing result (set when a router chooses a mission target)
 	nextMission       string            // mission name to launch, or ""
 	nextMissionInputs map[string]string // inputs for the next mission
+
+	// Task state manager — single authority for task lifecycle
+	stateMgr *TaskStateManager
+
+	// Drain signal — closed when mission should gracefully stop
+	drainCh   chan struct{}
+	drainOnce sync.Once
 }
 
 // routerActivation represents a task activated by a router
@@ -167,6 +174,7 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 			questions: make(map[string][]*questionEntry),
 		},
 		routerParents: make(map[string]string),
+		drainCh:       make(chan struct{}),
 	}
 
 	// Apply options (must happen before input/dataset resolution so resumeMissionID is set)
@@ -265,6 +273,32 @@ func (r *Runner) EventStore() store.EventStore {
 	return r.stores.Events
 }
 
+// CloseStores closes the underlying data stores. Call after Run returns and all events are flushed.
+func (r *Runner) CloseStores() {
+	r.stores.Close()
+}
+
+// Drain signals the mission to stop gracefully. Running tasks finish their current
+// atomic operation (LLM call or tool call) and then transition to Stopped.
+func (r *Runner) Drain() {
+	r.drainOnce.Do(func() { close(r.drainCh) })
+}
+
+// IsDraining returns true if a drain signal has been sent.
+func (r *Runner) IsDraining() bool {
+	select {
+	case <-r.drainCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// DrainCh returns the drain signal channel for select statements.
+func (r *Runner) DrainCh() <-chan struct{} {
+	return r.drainCh
+}
+
 // NextMission returns the mission name to launch as a result of cross-mission routing, or "".
 func (r *Runner) NextMission() string {
 	return r.nextMission
@@ -275,21 +309,24 @@ func (r *Runner) NextMissionInputs() map[string]string {
 	return r.nextMissionInputs
 }
 
-// Run executes the mission
+// Run executes the mission.
+// The caller is responsible for closing r.stores after Run returns and all events are flushed.
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
-	defer r.stores.Close()
 
 	var missionID string
+	stateStore := newTaskStateStore(r.stores.Missions)
 
-	// Track completed tasks (pre-populated on resume)
-	completed := make(map[string]bool)
 	// Track existing task IDs from prior run (for resume)
 	existingTaskIDs := make(map[string]string) // taskName → taskID
+
+	var stateMgr *TaskStateManager
 
 	if r.resumeMissionID != "" {
 		// === RESUME PATH ===
 		missionID = r.resumeMissionID
 		r.missionID = missionID
+		stateMgr = NewTaskStateManager(missionID, stateStore)
+		r.stateMgr = stateMgr
 
 		// Validate mission exists and matches
 		record, err := r.stores.Missions.GetMission(missionID)
@@ -348,8 +385,20 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		}
 		for _, t := range tasks {
 			existingTaskIDs[t.TaskName] = t.ID
-			if t.Status == "completed" {
-				completed[t.TaskName] = true
+			// Register with actual DB status so CAS transitions match
+			switch t.Status {
+			case "completed":
+				stateMgr.RegisterTask(t.TaskName, t.ID, TaskCompleted)
+			case "stopped":
+				stateMgr.RegisterTask(t.TaskName, t.ID, TaskStopped)
+			case "failed":
+				stateMgr.RegisterTask(t.TaskName, t.ID, TaskFailed)
+			case "running":
+				// Was running when process died — treat as stopped
+				stateMgr.RegisterTask(t.TaskName, t.ID, TaskStopped)
+				r.stores.Missions.UpdateTaskStatus(t.ID, "stopped", nil, nil)
+			default:
+				stateMgr.RegisterTask(t.TaskName, t.ID, TaskPending)
 			}
 		}
 
@@ -361,7 +410,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		for _, rd := range routeDecisions {
 			r.routerParents[rd.TargetTask] = rd.RouterTask
 			// If the routed-to task hasn't completed yet, re-queue it
-			if !completed[rd.TargetTask] {
+			if !stateMgr.IsCompleted(rd.TargetTask) {
 				r.routerPending = append(r.routerPending, routerActivation{
 					TaskName:    rd.TargetTask,
 					ActivatedBy: rd.RouterTask,
@@ -373,7 +422,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		sortedTasks := r.mission.TopologicalSort()
 		var completedNames []string
 		for _, t := range sortedTasks {
-			if completed[t.Name] {
+			if stateMgr.IsCompleted(t.Name) {
 				completedNames = append(completedNames, t.Name)
 			}
 		}
@@ -381,7 +430,8 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 			return fmt.Errorf("resume: resaturating commanders: %w", err)
 		}
 
-		r.stores.Missions.UpdateMissionStatus(missionID, "running")
+		stateMgr.missionState = MissionStopped // resume from stopped
+		_ = stateMgr.TransitionMission(MissionRunning)
 	} else {
 		// === FRESH PATH ===
 		rawInputsJSON, _ := json.Marshal(r.rawInputs)
@@ -392,6 +442,9 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 			return fmt.Errorf("create mission record: %w", err)
 		}
 		r.missionID = missionID
+		stateMgr = NewTaskStateManager(missionID, stateStore)
+		stateMgr.missionState = MissionRunning // DB creates missions as 'running'
+		r.stateMgr = stateMgr
 
 		// Initialize store-backed knowledge store
 		r.knowledgeStore = &PersistentKnowledgeStore{MissionID: missionID, Store: r.stores.Missions}
@@ -437,49 +490,45 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		}
 	}
 
-	var inFlightMu sync.Mutex
-	inFlight := make(map[string]bool)
-
 	// Create a wait group for all tasks
 	var wg sync.WaitGroup
 
 	// Error channel to collect errors from goroutines
 	errChan := make(chan error, len(sortedTasks))
 
-	// Track total expected tasks (static + dynamically activated via routing)
-	expectedTasks := make(map[string]bool)
+	// Register static tasks that aren't already registered (fresh run)
 	for _, t := range sortedTasks {
-		expectedTasks[t.Name] = true
+		if _, ok := stateMgr.GetTaskState(t.Name); !ok {
+			stateMgr.RegisterTask(t.Name, "", TaskPending)
+		}
 	}
 	// Include already-activated router targets (from resume or prior route decisions)
 	for _, activation := range r.routerPending {
-		expectedTasks[activation.TaskName] = true
-	}
-	// Include already-completed router targets (from resume)
-	for target := range r.routerParents {
-		if completed[target] {
-			expectedTasks[target] = true
+		if _, ok := stateMgr.GetTaskState(activation.TaskName); !ok {
+			stateMgr.RegisterTask(activation.TaskName, "", TaskPending)
 		}
 	}
 
-	// isLoopDone returns true when all expected tasks are completed and no router-activated tasks are pending
+	// isLoopDone returns true when all registered tasks are completed and no router-activated tasks are pending
 	isLoopDone := func() bool {
-		inFlightMu.Lock()
-		anyInFlight := len(inFlight) > 0
-		inFlightMu.Unlock()
-		for name := range expectedTasks {
-			if !completed[name] {
-				return false
-			}
-		}
-		return !anyInFlight && len(r.routerPending) == 0
+		return stateMgr.AllCompleted() && !stateMgr.AnyInFlight() && len(r.routerPending) == 0
 	}
 
 	// Process tasks, launching parallel tasks when their dependencies are met
 	for !isLoopDone() {
+		// Check for drain signal — wait for in-flight tasks then stop gracefully
 		select {
-		case <-ctx.Done():
+		case <-r.drainCh:
+			stateMgr.StopAll()
+			wg.Wait()
 			r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
+			stateMgr.missionState = MissionStopped
+			return fmt.Errorf("mission stopped")
+		case <-ctx.Done():
+			stateMgr.StopAll()
+			wg.Wait()
+			r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
+			stateMgr.missionState = MissionStopped
 			return ctx.Err()
 		default:
 		}
@@ -487,22 +536,14 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		// Find tasks that are ready to run (all dependencies completed)
 		var readyTasks []config.Task
 		for _, task := range sortedTasks {
-			if completed[task.Name] {
-				continue
-			}
-
-			inFlightMu.Lock()
-			isInFlight := inFlight[task.Name]
-			inFlightMu.Unlock()
-
-			if isInFlight {
+			if stateMgr.IsCompleted(task.Name) || stateMgr.IsInFlight(task.Name) {
 				continue
 			}
 
 			// Check if all dependencies are completed
 			depsReady := true
 			for _, dep := range task.DependsOn {
-				if !completed[dep] {
+				if !stateMgr.IsCompleted(dep) {
 					depsReady = false
 					break
 				}
@@ -518,13 +559,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		pendingCopy = append(pendingCopy, r.routerPending...)
 		r.routerPending = nil
 		for _, activation := range pendingCopy {
-			if completed[activation.TaskName] {
-				continue
-			}
-			inFlightMu.Lock()
-			isInFlight := inFlight[activation.TaskName]
-			inFlightMu.Unlock()
-			if isInFlight {
+			if stateMgr.IsCompleted(activation.TaskName) || stateMgr.IsInFlight(activation.TaskName) {
 				continue
 			}
 			task := r.mission.GetTaskByName(activation.TaskName)
@@ -541,8 +576,17 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 					r.stores.Missions.UpdateMissionStatus(missionID, "failed")
 					return err
 				}
-			case <-ctx.Done():
+			case <-r.drainCh:
+				stateMgr.StopAll()
+				wg.Wait()
 				r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
+				stateMgr.missionState = MissionStopped
+				return fmt.Errorf("mission stopped")
+			case <-ctx.Done():
+				stateMgr.StopAll()
+				wg.Wait()
+				r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
+				stateMgr.missionState = MissionStopped
 				return ctx.Err()
 			}
 			continue
@@ -552,9 +596,14 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		for _, task := range readyTasks {
 			task := task // capture for goroutine
 
-			inFlightMu.Lock()
-			inFlight[task.Name] = true
-			inFlightMu.Unlock()
+			// Transition: pending → ready → running
+			// If any transition fails (e.g. already running), skip this task
+			if err := stateMgr.TransitionTask(task.Name, TaskReady, nil, nil); err != nil {
+				continue
+			}
+			if err := stateMgr.TransitionTask(task.Name, TaskRunning, nil, nil); err != nil {
+				continue
+			}
 
 			wg.Add(1)
 			go func() {
@@ -573,7 +622,17 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 				}
 
 				if err != nil {
-					errChan <- fmt.Errorf("task '%s' failed: %w", task.Name, err)
+					if ctx.Err() != nil {
+						// Mission was stopped — mark task as stopped
+						stateMgr.ForceState(task.Name, TaskStopped)
+						if tid := stateMgr.GetTaskID(task.Name); tid != "" {
+							r.stores.Missions.UpdateTaskStatus(tid, "stopped", nil, nil)
+						}
+						errChan <- ctx.Err()
+					} else {
+						stateMgr.ForceState(task.Name, TaskFailed)
+						errChan <- fmt.Errorf("task '%s' failed: %w", task.Name, err)
+					}
 					return
 				}
 
@@ -621,9 +680,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 					} else {
 						// Local task route: activate the target task
 						// First-one-wins: only activate if target isn't already completed or in-flight
-						inFlightMu.Lock()
-						alreadyActive := completed[result.ChosenRoute] || inFlight[result.ChosenRoute]
-						inFlightMu.Unlock()
+						alreadyActive := stateMgr.IsCompleted(result.ChosenRoute) || stateMgr.IsInFlight(result.ChosenRoute)
 
 						if !alreadyActive {
 							// Record the router parent and activate the target task
@@ -632,7 +689,9 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 								TaskName:    result.ChosenRoute,
 								ActivatedBy: task.Name,
 							})
-							expectedTasks[result.ChosenRoute] = true
+							if _, ok := stateMgr.GetTaskState(result.ChosenRoute); !ok {
+								stateMgr.RegisterTask(result.ChosenRoute, "", TaskPending)
+							}
 						}
 					}
 				}
@@ -652,9 +711,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 						r.stores.Missions.StoreRouteDecision(missionID, task.Name, target, "send_to")
 
 						// First-one-wins: only activate if target isn't already completed or in-flight
-						inFlightMu.Lock()
-						alreadyActive := completed[target] || inFlight[target]
-						inFlightMu.Unlock()
+						alreadyActive := stateMgr.IsCompleted(target) || stateMgr.IsInFlight(target)
 
 						if !alreadyActive {
 							r.routerParents[target] = task.Name
@@ -662,17 +719,15 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 								TaskName:    target,
 								ActivatedBy: task.Name,
 							})
-							expectedTasks[target] = true
+							if _, ok := stateMgr.GetTaskState(target); !ok {
+								stateMgr.RegisterTask(target, "", TaskPending)
+							}
 						}
 					}
 				}
 
-				// Mark as completed
-				inFlightMu.Lock()
-				delete(inFlight, task.Name)
-				inFlightMu.Unlock()
-
-				completed[task.Name] = true
+				// Update in-memory state (DB already updated by runTask/runIteratedTask)
+				stateMgr.ForceState(task.Name, TaskCompleted)
 				errChan <- nil
 			}()
 		}
@@ -685,7 +740,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	close(errChan)
 	for err := range errChan {
 		if err != nil {
-			r.stores.Missions.UpdateMissionStatus(missionID, "failed")
+			_ = stateMgr.TransitionMission(MissionFailed)
 			return err
 		}
 	}
@@ -987,6 +1042,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	if reg, ok := streamer.(streamers.IDRegistrar); ok {
 		reg.SetTaskID(task.Name, taskID)
 	}
+	if r.stateMgr != nil {
+		r.stateMgr.SetTaskID(task.Name, taskID)
+	}
 	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil)
 
 	// Store resolved task input (non-iterated = single input, no iteration index)
@@ -1162,9 +1220,13 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 	// Execute (or resume if stored messages were loaded)
 	err = sup.ExecuteOrResume(ctx, objective, taskStreamer)
 	if err != nil {
+		sup.Close()
+		if ctx.Err() != nil {
+			// Mission was stopped — don't emit task_failed, just propagate
+			return &TaskResult{TaskName: task.Name, Success: false, Error: ctx.Err()}, ctx.Err()
+		}
 		errStr := err.Error()
 		updateTaskDone(false, nil, &errStr)
-		sup.Close()
 		streamer.TaskFailed(task.Name, err)
 		return &TaskResult{
 			TaskName: task.Name,
@@ -1560,6 +1622,9 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	if reg, ok := streamer.(streamers.IDRegistrar); ok {
 		reg.SetTaskID(task.Name, taskID)
 	}
+	if r.stateMgr != nil {
+		r.stateMgr.SetTaskID(task.Name, taskID)
+	}
 	r.stores.Missions.UpdateTaskStatus(taskID, "running", nil, nil)
 
 	updateTaskDone := func(success bool, outputJSON, errMsg *string) {
@@ -1681,6 +1746,9 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	}
 
 	if !allSuccess {
+		if ctx.Err() != nil {
+			return &TaskResult{TaskName: task.Name, Success: false, Error: ctx.Err()}, ctx.Err()
+		}
 		errStr := firstError.Error()
 		updateTaskDone(false, nil, &errStr)
 		streamer.TaskFailed(task.Name, firstError)

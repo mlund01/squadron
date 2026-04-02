@@ -1,13 +1,14 @@
 package aitools
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
 
 func TestTaskComplete_DefaultSuccess(t *testing.T) {
 	tc := &TaskCompleteTool{}
-	result := tc.Call(`{}`)
+	result := tc.Call(context.Background(), `{}`)
 
 	if !tc.IsCompleted() {
 		t.Fatal("expected IsCompleted() to be true")
@@ -28,7 +29,7 @@ func TestTaskComplete_DefaultSuccess(t *testing.T) {
 
 func TestTaskComplete_ExplicitSuccess(t *testing.T) {
 	tc := &TaskCompleteTool{}
-	result := tc.Call(`{"succeed": true}`)
+	result := tc.Call(context.Background(), `{"succeed": true}`)
 
 	if !tc.IsCompleted() {
 		t.Fatal("expected IsCompleted() to be true")
@@ -46,7 +47,7 @@ func TestTaskComplete_ExplicitSuccess(t *testing.T) {
 
 func TestTaskComplete_FailureWithReason(t *testing.T) {
 	tc := &TaskCompleteTool{}
-	result := tc.Call(`{"succeed": false, "reason": "API rate limit exceeded"}`)
+	result := tc.Call(context.Background(), `{"succeed": false, "reason": "API rate limit exceeded"}`)
 
 	if !tc.IsCompleted() {
 		t.Fatal("expected IsCompleted() to be true")
@@ -67,7 +68,7 @@ func TestTaskComplete_FailureWithReason(t *testing.T) {
 
 func TestTaskComplete_FailureWithoutReasonRejected(t *testing.T) {
 	tc := &TaskCompleteTool{}
-	result := tc.Call(`{"succeed": false}`)
+	result := tc.Call(context.Background(), `{"succeed": false}`)
 
 	if tc.IsCompleted() {
 		t.Fatal("expected IsCompleted() to be false — missing reason should be rejected")
@@ -82,7 +83,7 @@ func TestTaskComplete_FailureWithoutReasonRejected(t *testing.T) {
 
 func TestTaskComplete_SuccessIgnoresReason(t *testing.T) {
 	tc := &TaskCompleteTool{}
-	tc.Call(`{"succeed": true, "reason": "should be ignored"}`)
+	tc.Call(context.Background(), `{"succeed": true, "reason": "should be ignored"}`)
 
 	if !tc.IsSucceeded() {
 		t.Fatal("expected IsSucceeded() to be true")
@@ -96,7 +97,7 @@ func TestTaskComplete_SuccessBlockedByIncompleteSubtasks(t *testing.T) {
 	tc := &TaskCompleteTool{}
 	tc.SubtaskChecker = func() (int, int) { return 3, 2 }
 
-	result := tc.Call(`{}`)
+	result := tc.Call(context.Background(), `{}`)
 
 	if tc.IsCompleted() {
 		t.Fatal("expected IsCompleted() to be false when subtasks incomplete")
@@ -113,7 +114,7 @@ func TestTaskComplete_FailureSkipsSubtaskCheck(t *testing.T) {
 	tc := &TaskCompleteTool{}
 	tc.SubtaskChecker = func() (int, int) { return 3, 2 }
 
-	result := tc.Call(`{"succeed": false, "reason": "cannot proceed"}`)
+	result := tc.Call(context.Background(), `{"succeed": false, "reason": "cannot proceed"}`)
 
 	if !tc.IsCompleted() {
 		t.Fatal("expected IsCompleted() to be true — failure should skip subtask check")
@@ -133,7 +134,7 @@ func TestTaskComplete_SuccessWithAllSubtasksComplete(t *testing.T) {
 	tc := &TaskCompleteTool{}
 	tc.SubtaskChecker = func() (int, int) { return 3, 0 }
 
-	tc.Call(`{}`)
+	tc.Call(context.Background(), `{}`)
 
 	if !tc.IsCompleted() {
 		t.Fatal("expected IsCompleted() to be true")
@@ -145,7 +146,7 @@ func TestTaskComplete_SuccessWithAllSubtasksComplete(t *testing.T) {
 
 func TestTaskComplete_EmptyParams(t *testing.T) {
 	tc := &TaskCompleteTool{}
-	tc.Call(``)
+	tc.Call(context.Background(), ``)
 
 	if !tc.IsCompleted() {
 		t.Fatal("expected IsCompleted() to be true")

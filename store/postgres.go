@@ -768,15 +768,35 @@ func (s *PgSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, error)
 func (s *PgSessionStore) StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO tool_results (id, task_id, session_id, tool_call_id, tool_name, input_params, raw_data, started_at, finished_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		`INSERT INTO tool_results (id, task_id, session_id, tool_call_id, tool_name, input_params, raw_data, status, started_at, finished_at) VALUES ($1, $2, $3, $4, $5, $6, $7, 'completed', $8, $9)`,
 		id, taskID, sessionID, toolCallId, toolName, inputParams, rawData, tsFrom(startedAt), tsFrom(finishedAt),
+	)
+	return err
+}
+
+func (s *PgSessionStore) StartToolCall(taskID, sessionID, toolCallId, toolName, inputParams string) (string, error) {
+	id := generateID()
+	_, err := s.db.Exec(
+		`INSERT INTO tool_results (id, task_id, session_id, tool_call_id, tool_name, input_params, status, started_at) VALUES ($1, $2, $3, $4, $5, $6, 'started', $7)`,
+		id, taskID, sessionID, toolCallId, toolName, inputParams, tsNow(),
+	)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (s *PgSessionStore) CompleteToolCall(id, rawData string) error {
+	_, err := s.db.Exec(
+		`UPDATE tool_results SET status = 'completed', raw_data = $1, finished_at = $2 WHERE id = $3`,
+		rawData, tsNow(), id,
 	)
 	return err
 }
 
 func (s *PgSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task_id, session_id, COALESCE(tool_call_id, ''), tool_name, input_params, raw_data, started_at, finished_at FROM tool_results WHERE task_id = $1 ORDER BY started_at`,
+		`SELECT id, task_id, session_id, COALESCE(tool_call_id, ''), tool_name, input_params, raw_data, COALESCE(status, 'completed'), started_at, COALESCE(finished_at, started_at) FROM tool_results WHERE task_id = $1 ORDER BY started_at`,
 		taskID,
 	)
 	if err != nil {
@@ -789,7 +809,7 @@ func (s *PgSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, erro
 		var tr ToolResult
 		var inputParams, rawData sql.NullString
 		var startedAtStr, finishedAtStr string
-		if err := rows.Scan(&tr.ID, &tr.TaskID, &tr.SessionID, &tr.ToolCallId, &tr.ToolName, &inputParams, &rawData, &startedAtStr, &finishedAtStr); err != nil {
+		if err := rows.Scan(&tr.ID, &tr.TaskID, &tr.SessionID, &tr.ToolCallId, &tr.ToolName, &inputParams, &rawData, &tr.Status, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, err
 		}
 		tr.InputParams = inputParams.String

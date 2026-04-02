@@ -300,24 +300,16 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 		return nil, err
 	}
 
-	var contentBuilder strings.Builder
-	var lastChunk StreamChunk
-
-	for chunk := range stream {
-		if chunk.Error != nil {
-			return nil, chunk.Error
-		}
-
-		contentBuilder.WriteString(chunk.Content)
-
+	accumulated, lastChunk, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
 		if onChunk != nil {
 			onChunk(chunk)
 		}
-
-		lastChunk = chunk
+	})
+	if streamErr != nil {
+		return nil, streamErr
 	}
 
-	content := s.stripStopSequences(contentBuilder.String())
+	content := s.stripStopSequences(accumulated)
 
 	s.logMessage("LLM Response", content)
 
@@ -359,24 +351,16 @@ func (s *Session) ContinueStream(ctx context.Context, onChunk func(StreamChunk))
 		return nil, err
 	}
 
-	var contentBuilder strings.Builder
-	var lastChunk StreamChunk
-
-	for chunk := range stream {
-		if chunk.Error != nil {
-			return nil, chunk.Error
-		}
-
-		contentBuilder.WriteString(chunk.Content)
-
+	accumulated, lastChunk, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
 		if onChunk != nil {
 			onChunk(chunk)
 		}
-
-		lastChunk = chunk
+	})
+	if streamErr != nil {
+		return nil, streamErr
 	}
 
-	content := s.stripStopSequences(contentBuilder.String())
+	content := s.stripStopSequences(accumulated)
 
 	s.logMessage("LLM Response", content)
 
@@ -674,24 +658,16 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 		return nil, err
 	}
 
-	var contentBuilder strings.Builder
-	var lastChunk StreamChunk
-
-	for chunk := range stream {
-		if chunk.Error != nil {
-			return nil, chunk.Error
-		}
-
-		contentBuilder.WriteString(chunk.Content)
-
+	accumulated, lastChunk, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
 		if onChunk != nil {
 			onChunk(chunk)
 		}
-
-		lastChunk = chunk
+	})
+	if streamErr != nil {
+		return nil, streamErr
 	}
 
-	content := s.stripStopSequences(contentBuilder.String())
+	content := s.stripStopSequences(accumulated)
 
 	s.logMessage("LLM Response", content)
 
@@ -711,4 +687,30 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: content})
 
 	return resp, nil
+}
+
+// readStream reads chunks from a stream channel, respecting context cancellation.
+// Returns the accumulated content and the last chunk, or an error.
+func readStream(ctx context.Context, stream <-chan StreamChunk, onChunk func(StreamChunk)) (string, StreamChunk, error) {
+	var contentBuilder strings.Builder
+	var lastChunk StreamChunk
+
+	for {
+		select {
+		case <-ctx.Done():
+			return contentBuilder.String(), lastChunk, ctx.Err()
+		case chunk, ok := <-stream:
+			if !ok {
+				return contentBuilder.String(), lastChunk, nil
+			}
+			if chunk.Error != nil {
+				return contentBuilder.String(), lastChunk, chunk.Error
+			}
+			contentBuilder.WriteString(chunk.Content)
+			if onChunk != nil {
+				onChunk(chunk)
+			}
+			lastChunk = chunk
+		}
+	}
 }

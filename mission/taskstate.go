@@ -114,6 +114,13 @@ func (m *TaskStateManager) ForceState(taskName string, state TaskState) {
 	m.tasks[taskName] = state
 }
 
+// GetTaskID returns the DB ID for a task, or empty string if not set.
+func (m *TaskStateManager) GetTaskID(taskName string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.taskIDs[taskName]
+}
+
 // TaskState returns the current state of a task.
 func (m *TaskStateManager) GetTaskState(taskName string) (TaskState, bool) {
 	m.mu.RLock()

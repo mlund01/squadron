@@ -359,9 +359,19 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		}
 		for _, t := range tasks {
 			existingTaskIDs[t.TaskName] = t.ID
-			if t.Status == "completed" {
+			// Register with actual DB status so CAS transitions match
+			switch t.Status {
+			case "completed":
 				stateMgr.RegisterTask(t.TaskName, t.ID, TaskCompleted)
-			} else {
+			case "stopped":
+				stateMgr.RegisterTask(t.TaskName, t.ID, TaskStopped)
+			case "failed":
+				stateMgr.RegisterTask(t.TaskName, t.ID, TaskFailed)
+			case "running":
+				// Was running when process died — treat as stopped
+				stateMgr.RegisterTask(t.TaskName, t.ID, TaskStopped)
+				r.stores.Missions.UpdateTaskStatus(t.ID, "stopped", nil, nil)
+			default:
 				stateMgr.RegisterTask(t.TaskName, t.ID, TaskPending)
 			}
 		}
@@ -484,8 +494,8 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		case <-ctx.Done():
 			stateMgr.StopAll()
 			wg.Wait()
-			_ = stateMgr.TransitionMission(MissionStopping)
-			_ = stateMgr.TransitionMission(MissionStopped)
+			r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
+			stateMgr.missionState = MissionStopped
 			return ctx.Err()
 		default:
 		}
@@ -530,14 +540,19 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 			select {
 			case err := <-errChan:
 				if err != nil {
-					_ = stateMgr.TransitionMission(MissionFailed)
+					r.stores.Missions.UpdateMissionStatus(missionID, "failed")
 					return err
 				}
 			case <-ctx.Done():
 				stateMgr.StopAll()
-				wg.Wait()
-				_ = stateMgr.TransitionMission(MissionStopping)
-				_ = stateMgr.TransitionMission(MissionStopped)
+				waitDone := make(chan struct{})
+				go func() { wg.Wait(); close(waitDone) }()
+				select {
+				case <-waitDone:
+				case <-time.After(5 * time.Second):
+				}
+				r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
+				stateMgr.missionState = MissionStopped
 				return ctx.Err()
 			}
 			continue
@@ -547,9 +562,14 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		for _, task := range readyTasks {
 			task := task // capture for goroutine
 
-			// Transition: pending/ready → running (write-ahead to DB)
-			_ = stateMgr.TransitionTask(task.Name, TaskReady, nil, nil)
-			_ = stateMgr.TransitionTask(task.Name, TaskRunning, nil, nil)
+			// Transition: pending → ready → running
+			// If any transition fails (e.g. already running), skip this task
+			if err := stateMgr.TransitionTask(task.Name, TaskReady, nil, nil); err != nil {
+				continue
+			}
+			if err := stateMgr.TransitionTask(task.Name, TaskRunning, nil, nil); err != nil {
+				continue
+			}
 
 			wg.Add(1)
 			go func() {
@@ -569,9 +589,14 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 
 				if err != nil {
 					if ctx.Err() != nil {
-						// Mission was stopped — not a task failure
+						// Mission was stopped — mark task as stopped
+						stateMgr.ForceState(task.Name, TaskStopped)
+						if tid := stateMgr.GetTaskID(task.Name); tid != "" {
+							r.stores.Missions.UpdateTaskStatus(tid, "stopped", nil, nil)
+						}
 						errChan <- ctx.Err()
 					} else {
+						stateMgr.ForceState(task.Name, TaskFailed)
 						errChan <- fmt.Errorf("task '%s' failed: %w", task.Name, err)
 					}
 					return
@@ -689,7 +714,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	// Cleanup iteration commanders now that all tasks are complete
 	r.cleanupIterationCommanders()
 
-	_ = stateMgr.TransitionMission(MissionCompleted)
+	r.stores.Missions.UpdateMissionStatus(missionID, "completed")
 	streamer.MissionCompleted(r.mission.Name)
 
 	// Log mission completed event

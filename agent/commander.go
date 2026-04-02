@@ -249,6 +249,8 @@ type SessionLogger interface {
 	ReopenSession(id string)
 	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
 	StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
+	StartToolCall(taskID, sessionID, toolCallId, toolName, inputParams string) (string, error)
+	CompleteToolCall(id, rawData string) error
 }
 
 // CommanderStreamer is the interface for streaming commander events
@@ -981,16 +983,21 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 		} else {
 			tcID := uuid.New().String()
 			streamer.CallingTool(tcID, action, actionInput)
-			toolStart := time.Now()
+
+			var toolRecordID string
+			if s.sessionLogger != nil && s.sessionID != "" {
+				toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tcID, action, actionInput)
+			}
+
 			result := tool.Call(ctx, actionInput)
+
+			if toolRecordID != "" {
+				s.sessionLogger.CompleteToolCall(toolRecordID, result)
+			}
 
 			var observationContent string
 			currentInput, observationContent = s.formatObservation(action, result)
 			streamer.ToolComplete(tcID, action, observationContent)
-
-			if s.sessionLogger != nil && s.sessionID != "" {
-				s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, tcID, action, actionInput, result, toolStart, time.Now())
-			}
 		}
 	} else {
 		// DEFAULT: result was lost, tell the LLM
@@ -1179,9 +1186,20 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			continue
 		}
 
+		// Write-ahead: record tool call before execution
+		var toolRecordID string
+		if s.sessionLogger != nil && s.sessionID != "" {
+			toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tcID, action, actionInput)
+		}
+
 		// Execute the tool
 		toolStart := time.Now()
 		result := tool.Call(ctx, actionInput)
+
+		// Complete the tool call record
+		if toolRecordID != "" {
+			s.sessionLogger.CompleteToolCall(toolRecordID, result)
+		}
 
 		// Format observation (may intercept/truncate large results)
 		var observationContent string
@@ -1196,11 +1214,6 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 				"result":      result,
 				"duration_ms": time.Since(toolStart).Milliseconds(),
 			})
-		}
-
-		// Persist tool result for auditing
-		if s.sessionLogger != nil && s.sessionID != "" {
-			s.sessionLogger.StoreToolResult(s.callbacksTaskID, s.sessionID, tcID, action, actionInput, result, toolStart, time.Now())
 		}
 
 		// Check if task_complete was called

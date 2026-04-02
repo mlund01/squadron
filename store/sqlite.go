@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS tool_results (
     tool_name TEXT NOT NULL,
     input_params TEXT,
     raw_data TEXT,
+    status TEXT DEFAULT 'started',
     started_at TEXT,
     finished_at TEXT
 );
@@ -547,15 +548,35 @@ func (s *SQLiteSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, er
 func (s *SQLiteSessionStore) StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO tool_results (id, task_id, session_id, tool_call_id, tool_name, input_params, raw_data, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		`INSERT INTO tool_results (id, task_id, session_id, tool_call_id, tool_name, input_params, raw_data, status, started_at, finished_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'completed', ?, ?)`,
 		id, taskID, sessionID, toolCallId, toolName, inputParams, rawData, tsFrom(startedAt), tsFrom(finishedAt),
+	)
+	return err
+}
+
+func (s *SQLiteSessionStore) StartToolCall(taskID, sessionID, toolCallId, toolName, inputParams string) (string, error) {
+	id := generateID()
+	_, err := s.db.Exec(
+		`INSERT INTO tool_results (id, task_id, session_id, tool_call_id, tool_name, input_params, status, started_at) VALUES (?, ?, ?, ?, ?, ?, 'started', ?)`,
+		id, taskID, sessionID, toolCallId, toolName, inputParams, tsNow(),
+	)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func (s *SQLiteSessionStore) CompleteToolCall(id, rawData string) error {
+	_, err := s.db.Exec(
+		`UPDATE tool_results SET status = 'completed', raw_data = ?, finished_at = ? WHERE id = ?`,
+		rawData, tsNow(), id,
 	)
 	return err
 }
 
 func (s *SQLiteSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, error) {
 	rows, err := s.db.Query(
-		`SELECT id, task_id, session_id, COALESCE(tool_call_id, ''), tool_name, input_params, raw_data, started_at, finished_at FROM tool_results WHERE task_id = ? ORDER BY started_at`,
+		`SELECT id, task_id, session_id, COALESCE(tool_call_id, ''), tool_name, input_params, raw_data, COALESCE(status, 'completed'), started_at, COALESCE(finished_at, started_at) FROM tool_results WHERE task_id = ? ORDER BY started_at`,
 		taskID,
 	)
 	if err != nil {
@@ -568,7 +589,7 @@ func (s *SQLiteSessionStore) GetToolResultsByTask(taskID string) ([]ToolResult, 
 		var tr ToolResult
 		var inputParams, rawData sql.NullString
 		var startedAtStr, finishedAtStr string
-		if err := rows.Scan(&tr.ID, &tr.TaskID, &tr.SessionID, &tr.ToolCallId, &tr.ToolName, &inputParams, &rawData, &startedAtStr, &finishedAtStr); err != nil {
+		if err := rows.Scan(&tr.ID, &tr.TaskID, &tr.SessionID, &tr.ToolCallId, &tr.ToolName, &inputParams, &rawData, &tr.Status, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, err
 		}
 		tr.InputParams = inputParams.String

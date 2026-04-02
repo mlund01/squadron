@@ -278,26 +278,33 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			continue
 		}
 
-		// Execute the tool with injected secrets
+		// Write-ahead: record tool call before execution
+		var toolRecordID string
+		if o.sessionLogger != nil && o.sessionID != "" {
+			toolRecordID, _ = o.sessionLogger.StartToolCall(o.taskID, o.sessionID, tcID, action, injectedInput)
+		}
+
 		if o.eventLogger != nil {
 			o.eventLogger.LogEvent("agent_tool_call", map[string]any{
 				"tool": action,
 			})
 		}
-		toolStart := time.Now()
 
 		result := tool.Call(ctx, injectedInput)
 
 		if o.eventLogger != nil {
 			o.eventLogger.LogEvent("agent_tool_result", map[string]any{
 				"tool":        action,
-				"duration_ms": time.Since(toolStart).Milliseconds(),
+				"duration_ms": time.Since(time.Now()).Milliseconds(),
 			})
 		}
 
-		// Persist tool result for auditing
-		if o.sessionLogger != nil && o.sessionID != "" {
-			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, tcID, action, actionInput, result, toolStart, time.Now())
+		// Complete the tool call record with result
+		if toolRecordID != "" && o.sessionLogger != nil {
+			o.sessionLogger.CompleteToolCall(toolRecordID, result)
+		} else if o.sessionLogger != nil && o.sessionID != "" {
+			// Fallback: write full record if StartToolCall wasn't available
+			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, tcID, action, injectedInput, result, time.Now(), time.Now())
 		}
 
 		// Format observation (may intercept/truncate large results)

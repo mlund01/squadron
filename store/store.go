@@ -135,6 +135,10 @@ type SessionStore interface {
 	GetMessages(sessionID string) ([]SessionMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)
 	StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
+	// StartToolCall records a tool call before execution (status=started). Returns a record ID.
+	StartToolCall(taskID, sessionID, toolCallId, toolName, inputParams string) (string, error)
+	// CompleteToolCall marks a tool call as completed with result data.
+	CompleteToolCall(id, rawData string) error
 	GetToolResultsByTask(taskID string) ([]ToolResult, error)
 
 	// Chat-specific methods
@@ -164,6 +168,7 @@ type ToolResult struct {
 	ToolName    string    `json:"toolName"`
 	InputParams string    `json:"inputParams"`
 	RawData     string    `json:"rawData"`
+	Status      string    `json:"status"` // "started", "completed", "interrupted"
 	StartedAt   time.Time `json:"startedAt"`
 	FinishedAt  time.Time `json:"finishedAt"`
 }

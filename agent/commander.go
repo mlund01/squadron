@@ -77,6 +77,8 @@ type CommanderOptions struct {
 	PruneTo int
 	// Routes contains conditional routing options for this task (nil if no router)
 	Routes []aitools.RouteOption
+	// ToolResponseMaxSize overrides the default tool response size limit (0 = default)
+	ToolResponseMaxSize int
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -377,7 +379,8 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 
 	// Create result store and interceptor for large results
 	resultStore := aitools.NewMemoryResultStore()
-	interceptor := aitools.NewResultInterceptor(resultStore, aitools.DefaultLargeResultConfig())
+	resultConfig := aitools.LargeResultConfigWithMaxSize(opts.ToolResponseMaxSize)
+	interceptor := aitools.NewResultInterceptor(resultStore, resultConfig)
 
 	sup := &Commander{
 		Name:            fmt.Sprintf("%s/%s", opts.MissionName, opts.TaskName),

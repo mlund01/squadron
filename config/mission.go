@@ -289,9 +289,22 @@ type CommanderPruning struct {
 
 // MissionCommander holds configuration for the mission's commander LLM
 type MissionCommander struct {
-	Model      string            `json:"model"`
-	Compaction *Compaction       `json:"compaction,omitempty"`
-	Pruning    *CommanderPruning `json:"pruning,omitempty"`
+	Model        string              `json:"model"`
+	Compaction   *Compaction         `json:"compaction,omitempty"`
+	Pruning      *CommanderPruning   `json:"pruning,omitempty"`
+	ToolResponse *ToolResponseConfig `json:"toolResponse,omitempty"`
+}
+
+// GetToolResponseMaxBytes returns the configured max size in bytes for tool responses, falling back to default.
+func (c *MissionCommander) GetToolResponseMaxBytes() int {
+	if c == nil || c.ToolResponse == nil || c.ToolResponse.MaxTokens <= 0 {
+		return DefaultToolResponseMaxTokens * bytesPerToken
+	}
+	tokens := c.ToolResponse.MaxTokens
+	if tokens > HardMaxToolResponseTokens {
+		tokens = HardMaxToolResponseTokens
+	}
+	return tokens * bytesPerToken
 }
 
 // Mission represents a mission configuration with multiple tasks

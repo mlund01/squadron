@@ -850,11 +850,12 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			TaskOutputSchema: taskOutputSchema,
 			SecretInfos:      r.secretInfos,
 			SecretValues:     r.secretValues,
-			IsIteration:      isIterated,
-			FolderStore:      r.folderStore,
-			Compaction:       r.commanderCompaction(),
-			PruneOn:          r.commanderPruneOn(),
-		PruneTo:          r.commanderPruneTo(),
+			IsIteration:         isIterated,
+			FolderStore:         r.folderStore,
+			Compaction:          r.commanderCompaction(),
+			PruneOn:             r.commanderPruneOn(),
+			PruneTo:             r.commanderPruneTo(),
+			ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -1102,24 +1103,25 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 
 	// Create commander for this task (non-iterated)
 	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
-		Config:           r.cfg,
-		ConfigPath:       r.configPath,
-		MissionName:     r.mission.Name,
-		TaskName:         task.Name,
-		Commander:  r.mission.Commander.Model,
-		AgentNames:       agents,
-		DepSummaries:     depSummaries,
-		DepOutputSchemas: depOutputSchemas,
-		TaskOutputSchema: taskOutputSchema,
-		SecretInfos:      r.secretInfos,
-		SecretValues:     r.secretValues,
-		IsIteration:      false, // Not an iterated task
-		DebugFile:        debugFile,
-		FolderStore:      r.folderStore,
-		Compaction:       r.commanderCompaction(),
-		PruneOn:          r.commanderPruneOn(),
-		PruneTo:          r.commanderPruneTo(),
-		Routes:           r.routeOptionsForTask(task),
+		Config:              r.cfg,
+		ConfigPath:          r.configPath,
+		MissionName:         r.mission.Name,
+		TaskName:            task.Name,
+		Commander:            r.mission.Commander.Model,
+		AgentNames:          agents,
+		DepSummaries:        depSummaries,
+		DepOutputSchemas:    depOutputSchemas,
+		TaskOutputSchema:    taskOutputSchema,
+		SecretInfos:         r.secretInfos,
+		SecretValues:        r.secretValues,
+		IsIteration:         false,
+		DebugFile:           debugFile,
+		FolderStore:         r.folderStore,
+		Compaction:          r.commanderCompaction(),
+		PruneOn:             r.commanderPruneOn(),
+		PruneTo:             r.commanderPruneTo(),
+		Routes:              r.routeOptionsForTask(task),
+		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -1845,12 +1847,13 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		IsIteration:       true,
 		IsParallel:        false,
 		DebugFile:         debugFile,
-		SequentialDataset: items, // Pass all items for sequential processing
-		FolderStore:       r.folderStore,
-		Compaction:        r.commanderCompaction(),
-		PruneOn:           r.commanderPruneOn(),
-		PruneTo:           r.commanderPruneTo(),
-		Routes:            r.routeOptionsForTask(task),
+		SequentialDataset:   items,
+		FolderStore:         r.folderStore,
+		Compaction:          r.commanderCompaction(),
+		PruneOn:             r.commanderPruneOn(),
+		PruneTo:             r.commanderPruneTo(),
+		Routes:              r.routeOptionsForTask(task),
+		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -2280,10 +2283,11 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		IsParallel:        false,
 		DebugFile:         debugFile,
 		SequentialDataset: remainingItems,
-		FolderStore:       r.folderStore,
-		Compaction:        r.commanderCompaction(),
-		PruneOn:           r.commanderPruneOn(),
-		PruneTo:           r.commanderPruneTo(),
+		FolderStore:         r.folderStore,
+		Compaction:          r.commanderCompaction(),
+		PruneOn:             r.commanderPruneOn(),
+		PruneTo:             r.commanderPruneTo(),
+		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
 	})
 	if err != nil {
 		return append(iterations, IterationResult{
@@ -2509,6 +2513,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		Compaction:             r.commanderCompaction(),
 		PruneOn:                r.commanderPruneOn(),
 		PruneTo:                r.commanderPruneTo(),
+		ToolResponseMaxSize:    r.mission.Commander.GetToolResponseMaxBytes(),
 	})
 	if err != nil {
 		streamer.IterationFailed(task.Name, index, err)

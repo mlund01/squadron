@@ -130,7 +130,8 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 
 	// Create result store and interceptor for large results
 	resultStore := aitools.NewMemoryResultStore()
-	interceptor := aitools.NewResultInterceptor(resultStore, aitools.DefaultLargeResultConfig())
+	resultConfig := aitools.LargeResultConfigWithMaxSize(agentCfg.GetToolResponseMaxBytes())
+	interceptor := aitools.NewResultInterceptor(resultStore, resultConfig)
 
 	// Add result tools to agent's tool map
 	tools["result_info"] = &aitools.ResultInfoTool{Store: resultStore}

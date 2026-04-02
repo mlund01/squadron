@@ -104,6 +104,41 @@ All agents automatically have access to result tools for handling large data:
 | `result_keys` | Get keys of a large object |
 | `result_chunk` | Get chunks of large text |
 
-When any tool returns a large result (>8KB), it's automatically stored and a sample is shown. The agent can use these tools to access more data without overwhelming context.
+When a tool returns a result larger than the configured threshold (default: ~16,000 tokens), it's automatically stored and a sample is shown. The agent can use these tools to access the full data without overwhelming context.
 
 In mission context, `result_to_dataset` is also available to promote arrays to datasets.
+
+## Tool Response Limits
+
+You can configure the maximum token count for tool call responses before they're truncated and stored for paged access:
+
+```hcl
+agent "data_processor" {
+  model = models.anthropic.claude_sonnet_4
+  role  = "Processes large datasets"
+  tools = [builtins.http.get]
+
+  tool_response {
+    max_tokens = 32000  # override the default 16,000 token limit
+  }
+}
+```
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_tokens` | number | `16000` | Approximate max token count before a tool response is truncated/sampled. Hard maximum: `64000`. |
+
+When a response exceeds `max_tokens`, it's stored in memory and the LLM receives a preview with metadata. The agent can then use `result_*` tools to access the full data.
+
+The same setting is available on the mission commander:
+
+```hcl
+mission "example" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+    tool_response {
+      max_tokens = 32000
+    }
+  }
+}
+```

@@ -106,6 +106,34 @@ type Agent struct {
 
 	// Compaction settings (optional block)
 	Compaction *Compaction `hcl:"compaction,block"`
+
+	// Tool response size limits (optional block)
+	ToolResponse *ToolResponseConfig `hcl:"tool_response,block"`
+}
+
+// ToolResponseConfig configures how large tool call responses are handled.
+type ToolResponseConfig struct {
+	// MaxTokens is the approximate max token count for a tool response before it gets truncated/sampled.
+	// Default: 16000. Hard max: 64000. Converted to bytes internally (~4 bytes per token).
+	MaxTokens int `hcl:"max_tokens,optional"`
+}
+
+const (
+	DefaultToolResponseMaxTokens = 16000 // ~64KB — high default
+	HardMaxToolResponseTokens    = 64000 // ~256KB — hard ceiling
+	bytesPerToken                = 4     // approximate bytes per token
+)
+
+// GetToolResponseMaxBytes returns the configured max size in bytes, falling back to default.
+func (a *Agent) GetToolResponseMaxBytes() int {
+	if a.ToolResponse == nil || a.ToolResponse.MaxTokens <= 0 {
+		return DefaultToolResponseMaxTokens * bytesPerToken
+	}
+	tokens := a.ToolResponse.MaxTokens
+	if tokens > HardMaxToolResponseTokens {
+		tokens = HardMaxToolResponseTokens
+	}
+	return tokens * bytesPerToken
 }
 
 // GetPruneOn returns the prune_on threshold (0 = disabled)

@@ -146,7 +146,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 
 	// Track the running mission for stop/cancel
 	c.missionMu.Lock()
-	c.runningMissions[missionID] = missionCancel
+	c.runningMissions[missionID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 	c.missionMu.Unlock()
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
@@ -162,7 +162,7 @@ func (c *Client) handleStopMission(env *protocol.Envelope) (*protocol.Envelope, 
 	}
 
 	c.missionMu.Lock()
-	cancel, exists := c.runningMissions[payload.MissionID]
+	rm, exists := c.runningMissions[payload.MissionID]
 	c.missionMu.Unlock()
 
 	if !exists {
@@ -181,13 +181,16 @@ func (c *Client) handleStopMission(env *protocol.Envelope) (*protocol.Envelope, 
 		})
 	}
 
-	// Store and emit mission_stopped event BEFORE cancel to avoid racing with store.Close()
+	// Emit mission_stopped event
 	c.emitMissionLifecycleEvent(payload.MissionID, protocol.EventMissionStopped, protocol.MissionStoppedData{
 		MissionID: payload.MissionID,
 	})
 
-	// Cancel the context — the runner will detect ctx.Done() and clean up
-	cancel()
+	// Drain first (graceful), then cancel context as hard backstop
+	if rm.drain != nil {
+		rm.drain()
+	}
+	rm.cancel()
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeStopMissionAck, &protocol.StopMissionAckPayload{
 		Accepted: true,
@@ -268,7 +271,7 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 
 	// For resume, the mission ID is already known
 	c.missionMu.Lock()
-	c.runningMissions[payload.MissionID] = missionCancel
+	c.runningMissions[payload.MissionID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 	c.missionMu.Unlock()
 
 	// Still wait for runner to emit MissionStarted (it does so even on resume)
@@ -1277,7 +1280,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 				return
 			}
 			c.missionMu.Lock()
-			c.runningMissions[chainedMID] = cancel
+			c.runningMissions[chainedMID] = &runningMission{cancel: cancel, drain: runner.Drain}
 			c.missionMu.Unlock()
 		}()
 	}
@@ -1332,7 +1335,7 @@ func (c *Client) RunScheduledMission(missionName, source string, inputs map[stri
 				return
 			}
 			c.missionMu.Lock()
-			c.runningMissions[mid] = missionCancel
+			c.runningMissions[mid] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 			c.missionMu.Unlock()
 		}()
 
@@ -1393,7 +1396,7 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 
 	// Track the running mission
 	c.missionMu.Lock()
-	c.runningMissions[missionID] = missionCancel
+	c.runningMissions[missionID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 	c.missionMu.Unlock()
 
 	return missionID, nil

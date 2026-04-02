@@ -72,6 +72,10 @@ type Runner struct {
 
 	// Task state manager — single authority for task lifecycle
 	stateMgr *TaskStateManager
+
+	// Drain signal — closed when mission should gracefully stop
+	drainCh   chan struct{}
+	drainOnce sync.Once
 }
 
 // routerActivation represents a task activated by a router
@@ -170,6 +174,7 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 			questions: make(map[string][]*questionEntry),
 		},
 		routerParents: make(map[string]string),
+		drainCh:       make(chan struct{}),
 	}
 
 	// Apply options (must happen before input/dataset resolution so resumeMissionID is set)
@@ -271,6 +276,27 @@ func (r *Runner) EventStore() store.EventStore {
 // CloseStores closes the underlying data stores. Call after Run returns and all events are flushed.
 func (r *Runner) CloseStores() {
 	r.stores.Close()
+}
+
+// Drain signals the mission to stop gracefully. Running tasks finish their current
+// atomic operation (LLM call or tool call) and then transition to Stopped.
+func (r *Runner) Drain() {
+	r.drainOnce.Do(func() { close(r.drainCh) })
+}
+
+// IsDraining returns true if a drain signal has been sent.
+func (r *Runner) IsDraining() bool {
+	select {
+	case <-r.drainCh:
+		return true
+	default:
+		return false
+	}
+}
+
+// DrainCh returns the drain signal channel for select statements.
+func (r *Runner) DrainCh() <-chan struct{} {
+	return r.drainCh
 }
 
 // NextMission returns the mission name to launch as a result of cross-mission routing, or "".
@@ -490,7 +516,14 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 
 	// Process tasks, launching parallel tasks when their dependencies are met
 	for !isLoopDone() {
+		// Check for drain signal — wait for in-flight tasks then stop gracefully
 		select {
+		case <-r.drainCh:
+			stateMgr.StopAll()
+			wg.Wait()
+			r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
+			stateMgr.missionState = MissionStopped
+			return fmt.Errorf("mission stopped")
 		case <-ctx.Done():
 			stateMgr.StopAll()
 			wg.Wait()
@@ -543,14 +576,15 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 					r.stores.Missions.UpdateMissionStatus(missionID, "failed")
 					return err
 				}
+			case <-r.drainCh:
+				stateMgr.StopAll()
+				wg.Wait()
+				r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
+				stateMgr.missionState = MissionStopped
+				return fmt.Errorf("mission stopped")
 			case <-ctx.Done():
 				stateMgr.StopAll()
-				waitDone := make(chan struct{})
-				go func() { wg.Wait(); close(waitDone) }()
-				select {
-				case <-waitDone:
-				case <-time.After(5 * time.Second):
-				}
+				wg.Wait()
 				r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
 				stateMgr.missionState = MissionStopped
 				return ctx.Err()

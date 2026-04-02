@@ -1865,10 +1865,12 @@ func (t *askAgentTool) Call(ctx context.Context, input string) string {
 		return fmt.Sprintf("Error: Invalid input: %v", err)
 	}
 
-	// Look up the completed agent via manager
-	agent, ok := t.commander.agentMgr.GetCompleted(params.AgentID)
-	if !ok {
-		// Fallback to legacy map for resaturated commanders
+	// Look up the completed agent via manager (or legacy map for cloned/resaturated commanders)
+	var agent *Agent
+	if t.commander.agentMgr != nil {
+		agent, _ = t.commander.agentMgr.GetCompleted(params.AgentID)
+	}
+	if agent == nil {
 		ca := t.commander.completedAgents[params.AgentID]
 		if ca == nil {
 			return fmt.Sprintf("Error: Agent '%s' not found or not yet completed", params.AgentID)

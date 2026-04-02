@@ -194,6 +194,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	// Auto-resume any missions that were running when the process last died
+	if cfgErr == nil {
+		client.ResumeOrphanedMissions()
+	}
+
 	// If config not fully valid, watch for changes to trigger reload
 	if cfgErr != nil {
 		go watchForConfigChanges(client, serveConfigPath)

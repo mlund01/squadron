@@ -272,6 +272,65 @@ mission "multi_agent" {
 		})
 	})
 
+	Describe("Commander tool_response", func() {
+		It("parses tool_response block on commander", func() {
+			hcl := fullBaseHCL() + `
+mission "with_limits" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+    tool_response {
+      max_tokens = 10000
+    }
+  }
+  agents = [agents.test_agent]
+  task "t" { objective = "Do work" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Commander.ToolResponse).NotTo(BeNil())
+			Expect(cfg.Missions[0].Commander.ToolResponse.MaxTokens).To(Equal(10000))
+			Expect(cfg.Missions[0].Commander.GetToolResponseMaxBytes()).To(Equal(10000 * 4))
+		})
+
+		It("defaults to 16000 tokens when no tool_response block", func() {
+			hcl := fullBaseHCL() + `
+mission "default_limits" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "t" { objective = "Do work" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Commander.ToolResponse).To(BeNil())
+			Expect(cfg.Missions[0].Commander.GetToolResponseMaxBytes()).To(Equal(16000 * 4))
+		})
+
+		It("clamps commander tool_response to hard max", func() {
+			hcl := fullBaseHCL() + `
+mission "huge_limits" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+    tool_response {
+      max_tokens = 999999
+    }
+  }
+  agents = [agents.test_agent]
+  task "t" { objective = "Do work" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Commander.GetToolResponseMaxBytes()).To(Equal(64000 * 4))
+		})
+	})
+
 	Describe("Validate", func() {
 		Context("mission-level", func() {
 			It("rejects mission with no commander", func() {

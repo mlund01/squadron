@@ -1032,6 +1032,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			Blocks: []hcl.BlockHeaderSchema{
 				{Type: "compaction"},
 				{Type: "pruning"},
+				{Type: "tool_response"},
 			},
 		})
 		if cmdDiags.HasErrors() {
@@ -1070,6 +1071,13 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 					return nil, fmt.Errorf("mission '%s' commander pruning: %w", missionName, pruningDiags)
 				}
 				missionCommander.Pruning = &pruning
+			case "tool_response":
+				var tr ToolResponseConfig
+				trDiags := gohcl.DecodeBody(subBlock.Body, ctx, &tr)
+				if trDiags.HasErrors() {
+					return nil, fmt.Errorf("mission '%s' commander tool_response: %w", missionName, trDiags)
+				}
+				missionCommander.ToolResponse = &tr
 			}
 		}
 	}

@@ -101,6 +101,60 @@ agent "no_pruning" {
 			Expect(cfg.Agents[0].GetPruneOn()).To(Equal(0))
 			Expect(cfg.Agents[0].GetPruneTo()).To(Equal(0))
 		})
+
+		It("parses an agent with tool_response block", func() {
+			hcl := minimalVarsHCL() + minimalModelHCL() + `
+agent "limited" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Careful"
+  role        = "Response limit tester"
+  tools       = [builtins.http.get]
+  tool_response {
+    max_tokens = 8000
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Agents[0].ToolResponse).NotTo(BeNil())
+			Expect(cfg.Agents[0].ToolResponse.MaxTokens).To(Equal(8000))
+			Expect(cfg.Agents[0].GetToolResponseMaxBytes()).To(Equal(8000 * 4))
+		})
+
+		It("defaults tool response to 16000 tokens when no block", func() {
+			hcl := minimalVarsHCL() + minimalModelHCL() + `
+agent "default_limits" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Simple"
+  role        = "Default limits"
+  tools       = [builtins.http.get]
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Agents[0].ToolResponse).To(BeNil())
+			Expect(cfg.Agents[0].GetToolResponseMaxBytes()).To(Equal(16000 * 4))
+		})
+
+		It("clamps tool response to hard max", func() {
+			hcl := minimalVarsHCL() + minimalModelHCL() + `
+agent "huge_limit" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Greedy"
+  role        = "Wants too much"
+  tools       = [builtins.http.get]
+  tool_response {
+    max_tokens = 999999
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Agents[0].GetToolResponseMaxBytes()).To(Equal(64000 * 4))
+		})
 	})
 
 	Describe("Validate (tool references via Config.Validate)", func() {

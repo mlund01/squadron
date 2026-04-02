@@ -17,10 +17,32 @@ type LargeResultConfig struct {
 // DefaultLargeResultConfig returns the default configuration
 func DefaultLargeResultConfig() LargeResultConfig {
 	return LargeResultConfig{
-		ByteThreshold: 8192,
+		ByteThreshold: 65536,
 		ItemThreshold: 20,
 		SampleSize:    5,
-		PreviewLength: 500,
+		PreviewLength: 2000,
+	}
+}
+
+// LargeResultConfigWithMaxSize creates a config with the given max byte size.
+// Preview length and item threshold scale with the max size.
+func LargeResultConfigWithMaxSize(maxSize int) LargeResultConfig {
+	if maxSize <= 0 {
+		return DefaultLargeResultConfig()
+	}
+	// Preview length: ~3% of max size, clamped between 500 and 8000
+	preview := maxSize / 32
+	if preview < 500 {
+		preview = 500
+	}
+	if preview > 8000 {
+		preview = 8000
+	}
+	return LargeResultConfig{
+		ByteThreshold: maxSize,
+		ItemThreshold: 20,
+		SampleSize:    5,
+		PreviewLength: preview,
 	}
 }
 

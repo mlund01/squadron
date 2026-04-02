@@ -16,7 +16,7 @@ import (
 
 func TestInterceptSmallResultPassesThrough(t *testing.T) {
 	store := NewMemoryResultStore()
-	interceptor := NewResultInterceptor(store, DefaultLargeResultConfig())
+	interceptor := NewResultInterceptor(store, LargeResultConfigWithMaxSize(8192))
 
 	result := interceptor.Intercept("my_tool", "small result")
 
@@ -33,7 +33,7 @@ func TestInterceptSmallResultPassesThrough(t *testing.T) {
 
 func TestInterceptSmallJSONPassesThrough(t *testing.T) {
 	store := NewMemoryResultStore()
-	interceptor := NewResultInterceptor(store, DefaultLargeResultConfig())
+	interceptor := NewResultInterceptor(store, LargeResultConfigWithMaxSize(8192))
 
 	smallJSON := `{"key": "value"}`
 	result := interceptor.Intercept("my_tool", smallJSON)
@@ -48,7 +48,7 @@ func TestInterceptSmallJSONPassesThrough(t *testing.T) {
 
 func TestInterceptLargeTextResult(t *testing.T) {
 	store := NewMemoryResultStore()
-	config := DefaultLargeResultConfig()
+	config := LargeResultConfigWithMaxSize(8192)
 	interceptor := NewResultInterceptor(store, config)
 
 	// Create a string larger than 8KB
@@ -81,7 +81,7 @@ func TestInterceptLargeTextResult(t *testing.T) {
 
 func TestInterceptLargeJSONArray(t *testing.T) {
 	store := NewMemoryResultStore()
-	config := DefaultLargeResultConfig()
+	config := LargeResultConfigWithMaxSize(8192)
 	interceptor := NewResultInterceptor(store, config)
 
 	// Create array with more than 20 items
@@ -118,7 +118,7 @@ func TestInterceptLargeJSONArray(t *testing.T) {
 
 func TestInterceptLargeJSONObject(t *testing.T) {
 	store := NewMemoryResultStore()
-	interceptor := NewResultInterceptor(store, DefaultLargeResultConfig())
+	interceptor := NewResultInterceptor(store, LargeResultConfigWithMaxSize(8192))
 
 	// Create a large JSON object (>8KB)
 	obj := make(map[string]string)
@@ -145,7 +145,7 @@ func TestInterceptLargeJSONObject(t *testing.T) {
 
 func TestInterceptResultToolsNotReIntercepted(t *testing.T) {
 	store := NewMemoryResultStore()
-	interceptor := NewResultInterceptor(store, DefaultLargeResultConfig())
+	interceptor := NewResultInterceptor(store, LargeResultConfigWithMaxSize(8192))
 
 	largeText := strings.Repeat("x", 10000)
 
@@ -165,7 +165,7 @@ func TestInterceptResultToolsNotReIntercepted(t *testing.T) {
 }
 
 func TestInterceptNilStorePassesThrough(t *testing.T) {
-	interceptor := NewResultInterceptor(nil, DefaultLargeResultConfig())
+	interceptor := NewResultInterceptor(nil, LargeResultConfigWithMaxSize(8192))
 
 	largeText := strings.Repeat("x", 10000)
 	result := interceptor.Intercept("my_tool", largeText)
@@ -180,7 +180,7 @@ func TestInterceptNilStorePassesThrough(t *testing.T) {
 
 func TestInterceptArrayBelowItemThresholdButLargeBytes(t *testing.T) {
 	store := NewMemoryResultStore()
-	config := DefaultLargeResultConfig()
+	config := LargeResultConfigWithMaxSize(8192)
 	interceptor := NewResultInterceptor(store, config)
 
 	// 10 items (below threshold of 20) but each item is large enough to exceed byte threshold
@@ -659,7 +659,7 @@ func TestDatasetNextToolName(t *testing.T) {
 
 func TestInterceptorStoreRoundTrip(t *testing.T) {
 	store := NewMemoryResultStore()
-	interceptor := NewResultInterceptor(store, DefaultLargeResultConfig())
+	interceptor := NewResultInterceptor(store, LargeResultConfigWithMaxSize(8192))
 
 	original := strings.Repeat("data ", 2000) // ~10KB
 	result := interceptor.Intercept("fetch_data", original)
@@ -686,7 +686,7 @@ func TestInterceptorStoreRoundTrip(t *testing.T) {
 
 func TestInterceptorArrayStoreRoundTrip(t *testing.T) {
 	store := NewMemoryResultStore()
-	interceptor := NewResultInterceptor(store, DefaultLargeResultConfig())
+	interceptor := NewResultInterceptor(store, LargeResultConfigWithMaxSize(8192))
 
 	items := make([]int, 30)
 	for i := range items {

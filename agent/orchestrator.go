@@ -253,12 +253,12 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		}
 
 		actionInput := parser.GetActionInput()
+		tcID := uuid.New().String()
 
 		// Emit event with pre-injection params (protected values stay masked)
-		tcID := uuid.New().String()
 		o.streamer.CallingTool(tcID, action, actionInput)
 
-		// Inject secrets before tool execution
+		// Inject protected values before execution
 		injectedInput, secretErr := o.secretInjector.Inject(actionInput)
 		if secretErr != nil {
 			errMsg := fmt.Sprintf("Error: %v", secretErr)
@@ -303,7 +303,6 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		if toolRecordID != "" && o.sessionLogger != nil {
 			o.sessionLogger.CompleteToolCall(toolRecordID, result)
 		} else if o.sessionLogger != nil && o.sessionID != "" {
-			// Fallback: write full record if StartToolCall wasn't available
 			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, tcID, action, injectedInput, result, time.Now(), time.Now())
 		}
 

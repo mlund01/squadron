@@ -493,6 +493,75 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 	}
 
+	// parseModelBlock parses a model block with optional pricing sub-blocks.
+	parseModelBlock := func(block *hcl.Block, ctx *hcl.EvalContext) (*Model, error) {
+		content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+			Attributes: []hcl.AttributeSchema{
+				{Name: "provider", Required: true},
+				{Name: "allowed_models", Required: true},
+				{Name: "api_key", Required: true},
+				{Name: "prompt_caching"},
+			},
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "pricing", LabelNames: []string{"model"}},
+			},
+		})
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		m := &Model{Name: block.Labels[0]}
+
+		providerVal, d := content.Attributes["provider"].Expr.Value(ctx)
+		if d.HasErrors() {
+			return nil, d
+		}
+		m.Provider = Provider(providerVal.AsString())
+
+		modelsVal, d := content.Attributes["allowed_models"].Expr.Value(ctx)
+		if d.HasErrors() {
+			return nil, d
+		}
+		for it := modelsVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			m.AllowedModels = append(m.AllowedModels, v.AsString())
+		}
+
+		keyVal, d := content.Attributes["api_key"].Expr.Value(ctx)
+		if d.HasErrors() {
+			return nil, d
+		}
+		m.APIKey = keyVal.AsString()
+
+		if attr, ok := content.Attributes["prompt_caching"]; ok {
+			val, d := attr.Expr.Value(ctx)
+			if d.HasErrors() {
+				return nil, d
+			}
+			b := val.True()
+			m.PromptCaching = &b
+		}
+
+		// Parse pricing sub-blocks
+		for _, pBlock := range content.Blocks {
+			if pBlock.Type != "pricing" {
+				continue
+			}
+			modelName := pBlock.Labels[0]
+			var pc ModelPricingConfig
+			pDiags := gohcl.DecodeBody(pBlock.Body, ctx, &pc)
+			if pDiags.HasErrors() {
+				return nil, fmt.Errorf("pricing '%s': %w", modelName, pDiags)
+			}
+			if m.Pricing == nil {
+				m.Pricing = make(map[string]*ModelPricingConfig)
+			}
+			m.Pricing[modelName] = &pc
+		}
+
+		return m, nil
+	}
+
 	// Parse mcp block (optional singleton, with vars context)
 	var mcpConfig *MCPConfig
 	for _, pb := range allParsedBlocks {
@@ -569,13 +638,11 @@ func loadFromFiles(files []string) (*Config, error) {
 	var allModels []Model
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Models {
-			var m Model
-			m.Name = block.Labels[0]
-			diags := gohcl.DecodeBody(block.Body, pluginsCtx, &m)
-			if diags.HasErrors() {
-				return nil, diags
+			m, err := parseModelBlock(block, pluginsCtx)
+			if err != nil {
+				return nil, fmt.Errorf("model '%s': %w", block.Labels[0], err)
 			}
-			allModels = append(allModels, m)
+			allModels = append(allModels, *m)
 		}
 	}
 

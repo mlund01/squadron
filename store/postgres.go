@@ -164,6 +164,7 @@ func NewPostgresBundle(connStr string) (*Bundle, error) {
 		Datasets: &PgDatasetStore{db: db},
 		Sessions: &PgSessionStore{db: db},
 		Events:   &PgEventStore{db: db},
+		Costs:    &PgCostStore{db: db},
 		closer:   db.Close,
 	}, nil
 }

@@ -33,6 +33,9 @@ type Runner struct {
 	secretValues map[string]string    // secret name → actual value
 	secretInfos  []agent.SecretInfo   // name + description for prompts
 
+	// Pricing overrides from config (API model name → pricing)
+	pricingOverrides map[string]*llm.ModelPricing
+
 	// Resolved datasets for iteration
 	resolvedDatasets map[string][]cty.Value
 	datasetIDs       map[string]string // dataset name → store ID
@@ -182,6 +185,20 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		opt(r)
 	}
 
+	// Build pricing overrides from model config
+	configOverrides := config.BuildPricingOverrides(cfg.Models)
+	if len(configOverrides) > 0 {
+		r.pricingOverrides = make(map[string]*llm.ModelPricing, len(configOverrides))
+		for apiName, pc := range configOverrides {
+			r.pricingOverrides[apiName] = &llm.ModelPricing{
+				Input:      pc.Input,
+				Output:     pc.Output,
+				CacheRead:  pc.CacheRead,
+				CacheWrite: pc.CacheWrite,
+			}
+		}
+	}
+
 	// When resuming, skip input/dataset resolution — they'll be loaded from the store in Run()
 	if r.resumeMissionID == "" {
 		// Resolve and validate input values
@@ -271,6 +288,11 @@ func resolveDatasets(mission *config.Mission, inputValues map[string]cty.Value) 
 // EventStore returns the runner's event store for use by decorators like StoringMissionHandler.
 func (r *Runner) EventStore() store.EventStore {
 	return r.stores.Events
+}
+
+// CostStore returns the runner's cost store for turn cost persistence.
+func (r *Runner) CostStore() store.CostStore {
+	return r.stores.Costs
 }
 
 // CloseStores closes the underlying data stores. Call after Run returns and all events are flushed.
@@ -856,6 +878,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			PruneOn:             r.commanderPruneOn(),
 			PruneTo:             r.commanderPruneTo(),
 			ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+		PricingOverrides:    r.pricingOverrides,
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -1122,6 +1145,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		PruneTo:             r.commanderPruneTo(),
 		Routes:              r.routeOptionsForTask(task),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+		PricingOverrides:    r.pricingOverrides,
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -1854,6 +1878,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		PruneTo:             r.commanderPruneTo(),
 		Routes:              r.routeOptionsForTask(task),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+		PricingOverrides:    r.pricingOverrides,
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -2288,6 +2313,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		PruneOn:             r.commanderPruneOn(),
 		PruneTo:             r.commanderPruneTo(),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+		PricingOverrides:    r.pricingOverrides,
 	})
 	if err != nil {
 		return append(iterations, IterationResult{

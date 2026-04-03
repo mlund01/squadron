@@ -81,7 +81,7 @@ var missionCmd = &cobra.Command{
 
 		// Create handler with event persistence
 		cliHandler := cli.NewMissionHandler()
-		streamer := streamers.NewStoringMissionHandler(cliHandler, runner.EventStore())
+		streamer := streamers.NewStoringMissionHandler(cliHandler, runner.EventStore(), runner.CostStore())
 
 		// Run the mission
 		err = runner.Run(ctx, streamer)

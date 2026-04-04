@@ -251,6 +251,7 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 
 	return New(ctx, Options{
 		ConfigPath:       m.configPath,
+		AgentConfig:      agentCfg,
 		AgentName:        agentCfg.Name,
 		Mode:             &mode,
 		DatasetStore:     datasetStore,

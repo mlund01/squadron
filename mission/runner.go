@@ -879,6 +879,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			PruneTo:             r.commanderPruneTo(),
 			ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
 		PricingOverrides:    r.pricingOverrides,
+		MissionLocalAgents:  r.mission.LocalAgents,
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -1146,6 +1147,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		Routes:              r.routeOptionsForTask(task),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
 		PricingOverrides:    r.pricingOverrides,
+		MissionLocalAgents:  r.mission.LocalAgents,
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -1879,6 +1881,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		Routes:              r.routeOptionsForTask(task),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
 		PricingOverrides:    r.pricingOverrides,
+		MissionLocalAgents:  r.mission.LocalAgents,
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -2314,6 +2317,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		PruneTo:             r.commanderPruneTo(),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
 		PricingOverrides:    r.pricingOverrides,
+		MissionLocalAgents:  r.mission.LocalAgents,
 	})
 	if err != nil {
 		return append(iterations, IterationResult{
@@ -2540,6 +2544,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		PruneOn:                r.commanderPruneOn(),
 		PruneTo:                r.commanderPruneTo(),
 		ToolResponseMaxSize:    r.mission.Commander.GetToolResponseMaxBytes(),
+		MissionLocalAgents:     r.mission.LocalAgents,
 	})
 	if err != nil {
 		streamer.IterationFailed(task.Name, index, err)

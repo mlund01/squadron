@@ -313,6 +313,7 @@ type Mission struct {
 	Directive   string            `hcl:"directive,optional"`
 	Commander   *MissionCommander `json:"-"` // Parsed manually from commander block
 	Agents      []string          `hcl:"agents"`
+	LocalAgents []Agent           `json:"localAgents,omitempty"` // Mission-scoped agents
 	Tasks       []Task            `hcl:"task,block"`
 	Inputs      []MissionInput    // Parsed from input blocks
 	Datasets    []Dataset         // Parsed from dataset blocks
@@ -321,6 +322,16 @@ type Mission struct {
 	Schedules   []Schedule        `json:"schedules,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"`
 	MaxParallel int               `json:"maxParallel,omitempty"` // default 3
+}
+
+// GetLocalAgent returns a mission-scoped agent by name, or nil if not found.
+func (m *Mission) GetLocalAgent(name string) *Agent {
+	for i := range m.LocalAgents {
+		if m.LocalAgents[i].Name == name {
+			return &m.LocalAgents[i]
+		}
+	}
+	return nil
 }
 
 // Task represents a single task within a mission
@@ -431,10 +442,20 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 		taskNames[t.Name] = true
 	}
 
-	// Build map of agent names for validation
+	// Build map of agent names for validation (global + local)
 	agentNames := make(map[string]bool)
 	for _, a := range agents {
 		agentNames[a.Name] = true
+	}
+
+	// Check for name conflicts between local and global agents
+	for _, la := range w.LocalAgents {
+		for _, ga := range agents {
+			if la.Name == ga.Name {
+				return fmt.Errorf("mission-scoped agent '%s' conflicts with global agent of the same name", la.Name)
+			}
+		}
+		agentNames[la.Name] = true
 	}
 
 	// Validate mission-level agents

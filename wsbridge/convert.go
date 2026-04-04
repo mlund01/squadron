@@ -36,6 +36,19 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		})
 	}
 
+	// Add mission-scoped agents
+	for _, m := range cfg.Missions {
+		for _, a := range m.LocalAgents {
+			ic.Agents = append(ic.Agents, protocol.AgentInfo{
+				Name:    a.Name,
+				Role:    a.Role,
+				Model:   a.Model,
+				Tools:   a.Tools,
+				Mission: m.Name,
+			})
+		}
+	}
+
 	for _, m := range cfg.Missions {
 		mi := protocol.MissionInfo{
 			Name:        m.Name,

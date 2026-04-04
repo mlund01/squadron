@@ -83,6 +83,8 @@ type Options struct {
 	OnSessionTurn func(data protocol.SessionTurnData)
 	// PricingOverrides maps API model names to custom pricing (optional, from config)
 	PricingOverrides map[string]*llm.ModelPricing
+	// AgentConfig is a pre-resolved agent config (optional, used for mission-scoped agents)
+	AgentConfig *config.Agent
 }
 
 // New creates a new agent from config
@@ -101,10 +103,14 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 
 	// Find the agent config
 	var agentCfg *config.Agent
-	for _, a := range cfg.Agents {
-		if a.Name == opts.AgentName {
-			agentCfg = &a
-			break
+	if opts.AgentConfig != nil {
+		agentCfg = opts.AgentConfig
+	} else {
+		for _, a := range cfg.Agents {
+			if a.Name == opts.AgentName {
+				agentCfg = &a
+				break
+			}
 		}
 	}
 

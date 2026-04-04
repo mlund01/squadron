@@ -81,6 +81,8 @@ type CommanderOptions struct {
 	ToolResponseMaxSize int
 	// PricingOverrides maps API model names to custom pricing (optional, from config)
 	PricingOverrides map[string]*llm.ModelPricing
+	// MissionLocalAgents are agents scoped to this mission (checked before global agents)
+	MissionLocalAgents []config.Agent
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -333,9 +335,25 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	}
 
 	// Get agent configs and build agent info for the prompt
+	// Check mission-local agents first, then fall back to global agents
 	agents := make(map[string]*config.Agent)
 	var agentInfos []prompts.AgentInfo
 	for _, agentName := range opts.AgentNames {
+		found := false
+		for i := range opts.MissionLocalAgents {
+			if opts.MissionLocalAgents[i].Name == agentName {
+				agents[agentName] = &opts.MissionLocalAgents[i]
+				agentInfos = append(agentInfos, prompts.AgentInfo{
+					Name:        agentName,
+					Description: opts.MissionLocalAgents[i].Role,
+				})
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
 		for i := range opts.Config.Agents {
 			if opts.Config.Agents[i].Name == agentName {
 				agents[agentName] = &opts.Config.Agents[i]

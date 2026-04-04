@@ -70,6 +70,9 @@ type Runner struct {
 	nextMission       string            // mission name to launch, or ""
 	nextMissionInputs map[string]string // inputs for the next mission
 
+	// Provider factory for testing — when set, commanders and agents use this instead of creating real providers
+	providerFactory func() llm.Provider
+
 	// Task state manager — single authority for task lifecycle
 	stateMgr *TaskStateManager
 
@@ -112,6 +115,32 @@ func WithResume(missionID string) RunnerOption {
 	return func(r *Runner) {
 		r.resumeMissionID = missionID
 	}
+}
+
+// WithProviderFactory sets a factory function that creates LLM providers for commanders and agents.
+// Used in tests to inject mock providers. The factory is called once per commander/agent.
+func WithProviderFactory(factory func() llm.Provider) RunnerOption {
+	return func(r *Runner) {
+		r.providerFactory = factory
+	}
+}
+
+// testProvider returns a provider from the factory if set, or nil (letting the commander/agent create its own).
+func (r *Runner) testProvider() llm.Provider {
+	if r.providerFactory != nil {
+		return r.providerFactory()
+	}
+	return nil
+}
+
+// debugLoggerInterface returns the debug logger as an agent.DebugLogger interface,
+// or nil if no logger is set. This avoids the Go pitfall where a typed nil pointer
+// assigned to an interface creates a non-nil interface value.
+func (r *Runner) debugLoggerInterface() agent.DebugLogger {
+	if r.debugLogger == nil {
+		return nil
+	}
+	return r.debugLogger
 }
 
 // TaskResult holds the outcome of a completed task
@@ -856,6 +885,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			PruneOn:             r.commanderPruneOn(),
 			PruneTo:             r.commanderPruneTo(),
 			ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+			Provider:            r.testProvider(),
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -1122,6 +1152,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		PruneTo:             r.commanderPruneTo(),
 		Routes:              r.routeOptionsForTask(task),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+		Provider:            r.testProvider(),
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -1170,7 +1201,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
-		DebugLogger:    r.debugLogger,
+		DebugLogger:    r.debugLoggerInterface(),
 		GetCommanderForQuery: func(taskName string, iterationIndex int) (*agent.Commander, error) {
 			return r.getCommanderForQuery(taskName, iterationIndex, task.Name)
 		},
@@ -1854,6 +1885,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		PruneTo:             r.commanderPruneTo(),
 		Routes:              r.routeOptionsForTask(task),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+		Provider:            r.testProvider(),
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -1899,7 +1931,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
-		DebugLogger:    r.debugLogger,
+		DebugLogger:    r.debugLoggerInterface(),
 		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
 			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},
@@ -2288,6 +2320,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		PruneOn:             r.commanderPruneOn(),
 		PruneTo:             r.commanderPruneTo(),
 		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+		Provider:            r.testProvider(),
 	})
 	if err != nil {
 		return append(iterations, IterationResult{
@@ -2328,7 +2361,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
-		DebugLogger:    r.debugLogger,
+		DebugLogger:    r.debugLoggerInterface(),
 		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
 			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},
@@ -2514,6 +2547,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		PruneOn:                r.commanderPruneOn(),
 		PruneTo:                r.commanderPruneTo(),
 		ToolResponseMaxSize:    r.mission.Commander.GetToolResponseMaxBytes(),
+		Provider:               r.testProvider(),
 	})
 	if err != nil {
 		streamer.IterationFailed(task.Name, index, err)
@@ -2564,7 +2598,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
 		DatasetStore:   r,
 		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
-		DebugLogger:    r.debugLogger,
+		DebugLogger:    r.debugLoggerInterface(),
 		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
 			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},

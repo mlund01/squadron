@@ -79,6 +79,10 @@ type CommanderOptions struct {
 	Routes []aitools.RouteOption
 	// ToolResponseMaxSize overrides the default tool response size limit (0 = default)
 	ToolResponseMaxSize int
+	// Provider is an optional pre-created LLM provider. When set, commander creation
+	// skips the internal provider factory and uses this provider instead.
+	// The caller retains ownership — the commander will NOT close it.
+	Provider llm.Provider
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -319,14 +323,20 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		return nil, fmt.Errorf("resolving commander model: %w", err)
 	}
 
-	if modelConfig.APIKey == "" {
-		return nil, fmt.Errorf("API key not set for model '%s'", modelConfig.Name)
-	}
-
-	// Create provider
-	provider, ownsProvider, err := createCommanderProvider(ctx, modelConfig)
-	if err != nil {
-		return nil, fmt.Errorf("creating provider: %w", err)
+	// Use injected provider or create one from config
+	var provider llm.Provider
+	var ownsProvider bool
+	if opts.Provider != nil {
+		provider = opts.Provider
+		ownsProvider = false
+	} else {
+		if modelConfig.APIKey == "" {
+			return nil, fmt.Errorf("API key not set for model '%s'", modelConfig.Name)
+		}
+		provider, ownsProvider, err = createCommanderProvider(ctx, modelConfig)
+		if err != nil {
+			return nil, fmt.Errorf("creating provider: %w", err)
+		}
 	}
 
 	// Get agent configs and build agent info for the prompt
@@ -654,6 +664,7 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		IterationIndex: s.iterationIndex,
 		Callbacks:      callbacks,
 		DebugLogger:    s.debugLogger,
+		Provider:       s.provider,
 	})
 }
 

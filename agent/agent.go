@@ -80,6 +80,10 @@ type Options struct {
 	OnCompaction func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 	// OnSessionTurn is called after each LLM turn with telemetry data (optional)
 	OnSessionTurn func(data protocol.SessionTurnData)
+	// Provider is an optional pre-created LLM provider. When set, agent creation
+	// skips the internal provider factory and uses this provider instead.
+	// The caller retains ownership — the agent will NOT close it.
+	Provider llm.Provider
 }
 
 // New creates a new agent from config
@@ -115,14 +119,20 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		return nil, fmt.Errorf("resolving model: %w", err)
 	}
 
-	if modelConfig.APIKey == "" {
-		return nil, fmt.Errorf("API key not set for model '%s'", modelConfig.Name)
-	}
-
-	// Create provider
-	provider, ownsProvider, err := createProvider(ctx, modelConfig)
-	if err != nil {
-		return nil, fmt.Errorf("creating provider: %w", err)
+	// Use injected provider or create one from config
+	var provider llm.Provider
+	var ownsProvider bool
+	if opts.Provider != nil {
+		provider = opts.Provider
+		ownsProvider = false
+	} else {
+		if modelConfig.APIKey == "" {
+			return nil, fmt.Errorf("API key not set for model '%s'", modelConfig.Name)
+		}
+		provider, ownsProvider, err = createProvider(ctx, modelConfig)
+		if err != nil {
+			return nil, fmt.Errorf("creating provider: %w", err)
+		}
 	}
 
 	// Build tools map

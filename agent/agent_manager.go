@@ -10,6 +10,7 @@ import (
 
 	"squadron/aitools"
 	"squadron/config"
+	"squadron/llm"
 	"squadron/streamers"
 )
 
@@ -40,6 +41,7 @@ type AgentManager struct {
 	iterationIndex *int
 	callbacks      *CommanderToolCallbacks
 	debugLogger    DebugLogger
+	provider       llm.Provider // optional injected provider for agents
 }
 
 // AgentManagerConfig holds the dependencies needed to create an AgentManager.
@@ -56,6 +58,8 @@ type AgentManagerConfig struct {
 	IterationIndex *int
 	Callbacks      *CommanderToolCallbacks
 	DebugLogger    DebugLogger
+	// Provider is an optional pre-created LLM provider passed to spawned agents.
+	Provider llm.Provider
 }
 
 // NewAgentManager creates a new AgentManager.
@@ -76,6 +80,7 @@ func NewAgentManager(cfg AgentManagerConfig) *AgentManager {
 		iterationIndex: cfg.IterationIndex,
 		callbacks:      cfg.Callbacks,
 		debugLogger:    cfg.DebugLogger,
+		provider:       cfg.Provider,
 	}
 }
 
@@ -246,6 +251,7 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 	}
 
 	return New(ctx, Options{
+		Config:        m.cfg,
 		ConfigPath:    m.configPath,
 		AgentName:     agentCfg.Name,
 		Mode:          &mode,
@@ -255,6 +261,7 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 		FolderStore:   m.folderStore,
 		OnCompaction:  onCompaction,
 		OnSessionTurn: onSessionTurn,
+		Provider:      m.provider,
 	})
 }
 

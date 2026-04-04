@@ -15,6 +15,7 @@ type Bundle struct {
 	Datasets DatasetStore
 	Sessions SessionStore
 	Events   EventStore
+	Costs    CostStore
 	closer   func() error
 }
 
@@ -222,5 +223,84 @@ type MissionEvent struct {
 	EventType      string    `json:"eventType"`
 	DataJSON       string    `json:"dataJson"`
 	CreatedAt      time.Time `json:"createdAt"`
+}
+
+// CostStore tracks per-turn costs for aggregation and reporting.
+type CostStore interface {
+	// StoreTurnCost records cost data for a single LLM turn.
+	StoreTurnCost(cost TurnCostRecord) error
+	// GetCostsByMission returns all turn costs for a mission.
+	GetCostsByMission(missionID string) ([]TurnCostRecord, error)
+	// GetCostSummary returns aggregated costs within a time range, grouped by the specified field.
+	GetCostSummary(from, to time.Time, groupBy string) ([]CostSummaryRow, error)
+	// GetRecentMissionCosts returns total cost per mission for recent missions.
+	GetRecentMissionCosts(limit int) ([]MissionCostRow, error)
+	// GetCostsByDateAndField returns costs grouped by date and a secondary field (model or mission_name).
+	GetCostsByDateAndField(from, to time.Time, field string) ([]DateFieldCostRow, error)
+	// GetTotalCosts returns overall totals within a time range.
+	GetTotalCosts(from, to time.Time) (*CostTotals, error)
+}
+
+// TurnCostRecord represents a single turn's cost data stored in the DB.
+type TurnCostRecord struct {
+	ID               string    `json:"id"`
+	MissionID        string    `json:"missionId"`
+	TaskID           string    `json:"taskId"`
+	SessionID        string    `json:"sessionId"`
+	MissionName      string    `json:"missionName"`
+	TaskName         string    `json:"taskName"`
+	Entity           string    `json:"entity"`
+	Model            string    `json:"model"`
+	InputTokens      int       `json:"inputTokens"`
+	OutputTokens     int       `json:"outputTokens"`
+	CacheWriteTokens int       `json:"cacheWriteTokens"`
+	CacheReadTokens  int       `json:"cacheReadTokens"`
+	InputCost        float64   `json:"inputCost"`
+	OutputCost       float64   `json:"outputCost"`
+	CacheReadCost    float64   `json:"cacheReadCost"`
+	CacheWriteCost   float64   `json:"cacheWriteCost"`
+	TotalCost        float64   `json:"totalCost"`
+	DurationMs       int64     `json:"durationMs"`
+	CreatedAt        time.Time `json:"createdAt"`
+}
+
+// CostSummaryRow is an aggregated cost row grouped by a field (model, mission, date, etc.)
+type CostSummaryRow struct {
+	GroupKey       string  `json:"groupKey"`
+	Turns          int     `json:"turns"`
+	TotalCost      float64 `json:"totalCost"`
+	InputCost      float64 `json:"inputCost"`
+	OutputCost     float64 `json:"outputCost"`
+	CacheReadCost  float64 `json:"cacheReadCost"`
+	CacheWriteCost float64 `json:"cacheWriteCost"`
+}
+
+// MissionCostRow represents total cost for a single mission run.
+type MissionCostRow struct {
+	MissionID   string    `json:"missionId"`
+	MissionName string    `json:"missionName"`
+	Status      string    `json:"status"`
+	Turns       int       `json:"turns"`
+	TotalCost   float64   `json:"totalCost"`
+	StartedAt   time.Time `json:"startedAt"`
+}
+
+// DateFieldCostRow is a cost row grouped by date + a secondary field (model or mission).
+type DateFieldCostRow struct {
+	Date      string  `json:"date"`
+	FieldKey  string  `json:"fieldKey"`
+	TotalCost float64 `json:"totalCost"`
+}
+
+// CostTotals holds overall cost aggregates.
+type CostTotals struct {
+	TotalCost        float64 `json:"totalCost"`
+	InputCost        float64 `json:"inputCost"`
+	OutputCost       float64 `json:"outputCost"`
+	CacheReadCost    float64 `json:"cacheReadCost"`
+	CacheWriteCost   float64 `json:"cacheWriteCost"`
+	TotalTurns       int     `json:"totalTurns"`
+	TotalInputTokens int     `json:"totalInputTokens"`
+	TotalOutputTokens int    `json:"totalOutputTokens"`
 }
 

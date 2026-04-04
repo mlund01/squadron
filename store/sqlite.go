@@ -56,6 +56,31 @@ CREATE TABLE IF NOT EXISTS session_messages (
 );
 CREATE INDEX IF NOT EXISTS idx_session_messages_session ON session_messages(session_id);
 
+CREATE TABLE IF NOT EXISTS turn_costs (
+    id TEXT PRIMARY KEY,
+    mission_id TEXT NOT NULL REFERENCES missions(id),
+    task_id TEXT NOT NULL REFERENCES mission_tasks(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    mission_name TEXT NOT NULL,
+    task_name TEXT NOT NULL,
+    entity TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    input_cost REAL NOT NULL DEFAULT 0,
+    output_cost REAL NOT NULL DEFAULT 0,
+    cache_read_cost REAL NOT NULL DEFAULT 0,
+    cache_write_cost REAL NOT NULL DEFAULT 0,
+    total_cost REAL NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_turn_costs_mission ON turn_costs(mission_id);
+CREATE INDEX IF NOT EXISTS idx_turn_costs_created ON turn_costs(created_at);
+CREATE INDEX IF NOT EXISTS idx_turn_costs_model ON turn_costs(model);
+
 CREATE TABLE IF NOT EXISTS tool_results (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL REFERENCES mission_tasks(id),
@@ -168,6 +193,7 @@ func NewSQLiteBundle(dbPath string) (*Bundle, error) {
 		Datasets: &SQLiteDatasetStore{db: db},
 		Sessions: &SQLiteSessionStore{db: db},
 		Events:   &SQLiteEventStore{db: db},
+		Costs:    &SQLiteCostStore{db: db},
 		closer:   db.Close,
 	}, nil
 }

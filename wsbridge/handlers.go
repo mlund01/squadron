@@ -49,6 +49,9 @@ func (c *Client) registerHandlers() {
 	c.handlers[protocol.TypeGetVariables] = c.handleGetVariables
 	c.handlers[protocol.TypeSetVariable] = c.handleSetVariable
 	c.handlers[protocol.TypeDeleteVariable] = c.handleDeleteVariable
+	c.handlers[protocol.TypeGetCostSummary] = c.handleGetCostSummary
+	c.handlers[protocol.TypeSubscribe] = c.handleSubscribe
+	c.handlers[protocol.TypeUnsubscribe] = c.handleUnsubscribe
 }
 
 func (c *Client) handleReloadConfig(env *protocol.Envelope) (*protocol.Envelope, error) {
@@ -126,7 +129,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 
 	// Create WS handler — it will capture the mission ID when MissionStarted fires
 	wsHandler := NewWSMissionHandler(c)
-	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore(), runner.CostStore())
 
 	// Run mission in background with cancellable context
 	missionCtx, missionCancel := context.WithCancel(context.Background())
@@ -235,7 +238,7 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 	}
 
 	wsHandler := NewWSMissionHandler(c)
-	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore(), runner.CostStore())
 
 	missionCtx, missionCancel := context.WithCancel(context.Background())
 	go func() {
@@ -1270,7 +1273,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		}
 
 		wsHandler = NewWSMissionHandler(c)
-		storingHandler = streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+		storingHandler = streamers.NewStoringMissionHandler(wsHandler, runner.EventStore(), runner.CostStore())
 
 		// Wait for mission ID in a separate goroutine — we need it to track the running mission
 		go func() {
@@ -1336,7 +1339,7 @@ func (c *Client) ResumeOrphanedMissions() {
 		}
 
 		wsHandler := NewWSMissionHandler(c)
-		storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+		storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore(), runner.CostStore())
 
 		missionCtx, missionCancel := context.WithCancel(context.Background())
 		go func(missionName, missionID string) {
@@ -1386,7 +1389,7 @@ func (c *Client) RunScheduledMission(missionName, source string, inputs map[stri
 	}
 
 	wsHandler := NewWSMissionHandler(c)
-	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore(), runner.CostStore())
 
 	missionCtx, missionCancel := context.WithCancel(context.Background())
 	go func() {
@@ -1442,7 +1445,7 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 
 	// Create WS handler for tracking and event streaming
 	wsHandler := NewWSMissionHandler(c)
-	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore())
+	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore(), runner.CostStore())
 
 	// Run mission in background
 	missionCtx, missionCancel := context.WithCancel(context.Background())
@@ -1463,4 +1466,111 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 	c.missionMu.Unlock()
 
 	return missionID, nil
+}
+
+func (c *Client) handleGetCostSummary(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.GetCostSummaryPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode get_cost_summary: %w", err)
+	}
+
+	from, err := time.Parse(time.RFC3339, payload.From)
+	if err != nil {
+		from = time.Now().AddDate(0, -1, 0) // default: last 30 days
+	}
+	to, err := time.Parse(time.RFC3339, payload.To)
+	if err != nil {
+		to = time.Now()
+	}
+
+	groupBy := payload.GroupBy
+	if groupBy == "" {
+		groupBy = "date"
+	}
+
+	totals, err := c.stores.Costs.GetTotalCosts(from, to)
+	if err != nil {
+		return nil, fmt.Errorf("get total costs: %w", err)
+	}
+
+	byGroup, err := c.stores.Costs.GetCostSummary(from, to, groupBy)
+	if err != nil {
+		return nil, fmt.Errorf("get cost summary: %w", err)
+	}
+
+	recentMissions, err := c.stores.Costs.GetRecentMissionCosts(20)
+	if err != nil {
+		return nil, fmt.Errorf("get recent mission costs: %w", err)
+	}
+
+	// Convert store types to protocol types
+	result := protocol.GetCostSummaryResultPayload{
+		Totals: protocol.CostTotals{
+			TotalCost:         totals.TotalCost,
+			InputCost:         totals.InputCost,
+			OutputCost:        totals.OutputCost,
+			CacheReadCost:     totals.CacheReadCost,
+			CacheWriteCost:    totals.CacheWriteCost,
+			TotalTurns:        totals.TotalTurns,
+			TotalInputTokens:  totals.TotalInputTokens,
+			TotalOutputTokens: totals.TotalOutputTokens,
+		},
+	}
+
+	for _, row := range byGroup {
+		result.ByGroup = append(result.ByGroup, protocol.CostSummaryRow{
+			GroupKey:       row.GroupKey,
+			Turns:          row.Turns,
+			TotalCost:      row.TotalCost,
+			InputCost:      row.InputCost,
+			OutputCost:     row.OutputCost,
+			CacheReadCost:  row.CacheReadCost,
+			CacheWriteCost: row.CacheWriteCost,
+		})
+	}
+
+	for _, row := range recentMissions {
+		result.RecentMissions = append(result.RecentMissions, protocol.MissionCostRow{
+			MissionID:   row.MissionID,
+			MissionName: row.MissionName,
+			Status:      row.Status,
+			Turns:       row.Turns,
+			TotalCost:   row.TotalCost,
+			StartedAt:   row.StartedAt.Format(time.RFC3339),
+		})
+	}
+
+	// Optional: date × field breakdown for chart
+	if payload.BreakdownField == "model" || payload.BreakdownField == "mission_name" {
+		dateFieldRows, err := c.stores.Costs.GetCostsByDateAndField(from, to, payload.BreakdownField)
+		if err == nil {
+			for _, row := range dateFieldRows {
+				result.ByDateAndField = append(result.ByDateAndField, protocol.DateFieldCostRow{
+					Date:      row.Date,
+					FieldKey:  row.FieldKey,
+					TotalCost: row.TotalCost,
+				})
+			}
+		}
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeGetCostSummaryResult, &result)
+}
+
+func (c *Client) handleSubscribe(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.SubscribePayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode subscribe: %w", err)
+	}
+	c.subscriptions.Subscribe(payload.Scope, payload.MissionID)
+	return nil, nil
+}
+
+func (c *Client) handleUnsubscribe(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.UnsubscribePayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode unsubscribe: %w", err)
+	}
+	c.subscriptions.Unsubscribe(payload.Scope, payload.MissionID)
+	return nil, nil
 }

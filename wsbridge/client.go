@@ -59,6 +59,9 @@ type Client struct {
 	missionMu       sync.Mutex
 	runningMissions map[string]*runningMission // missionID → mission handle
 
+	// Event subscriptions — controls what gets sent to commander
+	subscriptions *SubscriptionManager
+
 	// Concurrency tracker for mission max_parallel enforcement
 	concurrency ConcurrencyTracker
 
@@ -108,6 +111,7 @@ func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath st
 		handlers:     make(map[protocol.MessageType]RequestHandler),
 		chatSessions:    make(map[string]*chatSession),
 		runningMissions: make(map[string]*runningMission),
+		subscriptions:   NewSubscriptionManager(),
 		concurrency:     noopConcurrency{},
 		done:         make(chan struct{}),
 		ctx:        ctx,

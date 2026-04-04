@@ -10,6 +10,7 @@ import (
 
 	"squadron/aitools"
 	"squadron/config"
+	"squadron/llm"
 	"squadron/streamers"
 )
 
@@ -37,9 +38,10 @@ type AgentManager struct {
 	sessionLogger  SessionLogger
 	taskID         string
 	taskName       string
-	iterationIndex *int
-	callbacks      *CommanderToolCallbacks
-	debugLogger    DebugLogger
+	iterationIndex   *int
+	callbacks        *CommanderToolCallbacks
+	debugLogger      DebugLogger
+	pricingOverrides map[string]*llm.ModelPricing
 }
 
 // AgentManagerConfig holds the dependencies needed to create an AgentManager.
@@ -54,8 +56,9 @@ type AgentManagerConfig struct {
 	TaskID         string
 	TaskName       string
 	IterationIndex *int
-	Callbacks      *CommanderToolCallbacks
-	DebugLogger    DebugLogger
+	Callbacks        *CommanderToolCallbacks
+	DebugLogger      DebugLogger
+	PricingOverrides map[string]*llm.ModelPricing
 }
 
 // NewAgentManager creates a new AgentManager.
@@ -74,8 +77,9 @@ func NewAgentManager(cfg AgentManagerConfig) *AgentManager {
 		taskID:         cfg.TaskID,
 		taskName:       cfg.TaskName,
 		iterationIndex: cfg.IterationIndex,
-		callbacks:      cfg.Callbacks,
-		debugLogger:    cfg.DebugLogger,
+		callbacks:        cfg.Callbacks,
+		debugLogger:      cfg.DebugLogger,
+		pricingOverrides: cfg.PricingOverrides,
 	}
 }
 
@@ -246,15 +250,16 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 	}
 
 	return New(ctx, Options{
-		ConfigPath:    m.configPath,
-		AgentName:     agentCfg.Name,
-		Mode:          &mode,
-		DatasetStore:  datasetStore,
-		SecretInfos:   m.secretInfos,
-		SecretValues:  m.secretValues,
-		FolderStore:   m.folderStore,
-		OnCompaction:  onCompaction,
-		OnSessionTurn: onSessionTurn,
+		ConfigPath:       m.configPath,
+		AgentName:        agentCfg.Name,
+		Mode:             &mode,
+		DatasetStore:     datasetStore,
+		SecretInfos:      m.secretInfos,
+		SecretValues:     m.secretValues,
+		FolderStore:      m.folderStore,
+		OnCompaction:     onCompaction,
+		OnSessionTurn:    onSessionTurn,
+		PricingOverrides: m.pricingOverrides,
 	})
 }
 

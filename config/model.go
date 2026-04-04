@@ -30,12 +30,17 @@ var SupportedModels = map[Provider]map[string]string{
 		"o3_mini":      "o3-mini",
 	},
 	ProviderGemini: {
+		"gemini_2_5_pro":       "gemini-2.5-pro",
+		"gemini_2_5_flash":     "gemini-2.5-flash",
+		"gemini_2_5_flash_lite": "gemini-2.5-flash-lite",
 		"gemini_2_0_flash":     "gemini-2.0-flash",
+		"gemini_2_0_flash_exp": "gemini-2.0-flash-exp",
 		"gemini_1_5_pro":       "gemini-1.5-pro",
 		"gemini_1_5_flash":     "gemini-1.5-flash",
-		"gemini_2_0_flash_exp": "gemini-2.0-flash-exp",
 	},
 	ProviderAnthropic: {
+		"claude_opus_4_6":   "claude-opus-4-6",
+		"claude_sonnet_4_6": "claude-sonnet-4-6",
 		"claude_sonnet_4":   "claude-sonnet-4-20250514",
 		"claude_opus_4":     "claude-opus-4-20250514",
 		"claude_haiku_4_5":  "claude-haiku-4-5-20251001",
@@ -45,12 +50,43 @@ var SupportedModels = map[Provider]map[string]string{
 }
 
 // Model represents a model provider configuration
+// BuildPricingOverrides builds a map of API model name → pricing from all model configs.
+// Only includes models that have explicit pricing blocks.
+func BuildPricingOverrides(models []Model) map[string]*ModelPricingConfig {
+	overrides := make(map[string]*ModelPricingConfig)
+	for _, m := range models {
+		if m.Pricing == nil {
+			continue
+		}
+		supported := SupportedModels[m.Provider]
+		for hclName, pc := range m.Pricing {
+			// Resolve HCL model name to API model name
+			if apiName, ok := supported[hclName]; ok {
+				overrides[apiName] = pc
+			} else {
+				// User might have used the API name directly
+				overrides[hclName] = pc
+			}
+		}
+	}
+	return overrides
+}
+
 type Model struct {
-	Name           string   `hcl:"name,label"`
-	Provider       Provider `hcl:"provider"`
-	AllowedModels  []string `hcl:"allowed_models"`
-	APIKey         string   `hcl:"api_key"`
-	PromptCaching  *bool    `hcl:"prompt_caching,optional"`
+	Name           string            `hcl:"name,label"`
+	Provider       Provider          `hcl:"provider"`
+	AllowedModels  []string          `hcl:"allowed_models"`
+	APIKey         string            `hcl:"api_key"`
+	PromptCaching  *bool             `hcl:"prompt_caching,optional"`
+	Pricing        map[string]*ModelPricingConfig `json:"-"` // model name → pricing override
+}
+
+// ModelPricingConfig holds per-million-token cost overrides for a model.
+type ModelPricingConfig struct {
+	Input      float64 `hcl:"input"`
+	Output     float64 `hcl:"output"`
+	CacheRead  float64 `hcl:"cache_read,optional"`
+	CacheWrite float64 `hcl:"cache_write,optional"`
 }
 
 // IsPromptCachingEnabled returns whether prompt caching is enabled (defaults to true).

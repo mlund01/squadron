@@ -42,6 +42,9 @@ model "gemini" {
 
 | Key | Model |
 |-----|-------|
+| `claude_opus_4_6` | claude-opus-4-6 |
+| `claude_sonnet_4_6` | claude-sonnet-4-6 |
+| `claude_haiku_4_5` | claude-haiku-4-5-20251001 |
 | `claude_opus_4` | claude-opus-4-20250514 |
 | `claude_sonnet_4` | claude-sonnet-4-20250514 |
 | `claude_3_5_sonnet` | claude-3-5-sonnet-20241022 |
@@ -51,9 +54,17 @@ model "gemini" {
 
 | Key | Model |
 |-----|-------|
+| `gpt_5` | gpt-5 |
+| `gpt_5_mini` | gpt-5-mini |
+| `gpt_5_nano` | gpt-5-nano |
+| `gpt_4_1` | gpt-4.1 |
+| `gpt_4_1_mini` | gpt-4.1-mini |
+| `gpt_4_1_nano` | gpt-4.1-nano |
 | `gpt_4o` | gpt-4o |
 | `gpt_4o_mini` | gpt-4o-mini |
 | `gpt_4_turbo` | gpt-4-turbo |
+| `o3` | o3 |
+| `o4_mini` | o4-mini |
 | `o1` | o1 |
 | `o1_mini` | o1-mini |
 | `o3_mini` | o3-mini |
@@ -62,6 +73,9 @@ model "gemini" {
 
 | Key | Model |
 |-----|-------|
+| `gemini_2_5_pro` | gemini-2.5-pro |
+| `gemini_2_5_flash` | gemini-2.5-flash |
+| `gemini_2_5_flash_lite` | gemini-2.5-flash-lite |
 | `gemini_2_0_flash` | gemini-2.0-flash |
 | `gemini_2_0_flash_exp` | gemini-2.0-flash-exp |
 | `gemini_1_5_pro` | gemini-1.5-pro |
@@ -100,3 +114,40 @@ model "anthropic_dev" {
   api_key        = vars.anthropic_dev_key
 }
 ```
+
+## Pricing Overrides
+
+Squadron includes built-in pricing for all supported models to estimate costs per turn. If you have custom pricing (volume discounts, enterprise agreements, etc.), you can override the defaults per model using `pricing` blocks:
+
+```hcl
+model "anthropic" {
+  provider       = "anthropic"
+  allowed_models = ["claude_sonnet_4_6", "claude_haiku_4_5"]
+  api_key        = vars.anthropic_api_key
+
+  pricing "claude_sonnet_4_6" {
+    input       = 2.50   # per 1M tokens
+    output      = 12.00
+    cache_read  = 0.25
+    cache_write = 3.00
+  }
+
+  pricing "claude_haiku_4_5" {
+    input       = 0.80
+    output      = 4.00
+    cache_read  = 0.08
+    cache_write = 1.00
+  }
+}
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `input` | number | Cost per 1M input tokens (required) |
+| `output` | number | Cost per 1M output tokens (required) |
+| `cache_read` | number | Cost per 1M cached input tokens (optional, default: 0) |
+| `cache_write` | number | Cost per 1M cache write tokens (optional, default: 0) |
+
+The pricing block label must match a model key from `allowed_models`. Costs are shown in the command center's Costs tab and the per-mission cost breakdown.
+
+If no pricing override is specified, Squadron uses its built-in pricing table which is updated with each release.

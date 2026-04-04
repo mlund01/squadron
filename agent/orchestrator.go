@@ -78,9 +78,10 @@ type orchestrator struct {
 	onCompaction   func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 	onSessionTurn  func(data protocol.SessionTurnData)
 	modelName      string
-	sessionLogger  SessionLogger
-	sessionID      string
-	taskID         string
+	sessionLogger    SessionLogger
+	sessionID        string
+	taskID           string
+	pricingOverrides map[string]*llm.ModelPricing
 }
 
 // newOrchestrator creates a new chat orchestrator
@@ -181,18 +182,28 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		if resp != nil && o.onSessionTurn != nil {
 			if adapter, ok := o.session.(*llm.SessionAdapter); ok {
 				stats := adapter.GetSession().MessageStats()
-				o.onSessionTurn(protocol.SessionTurnData{
-					Model:                     o.modelName,
-					InputTokens:              resp.Usage.InputTokens,
-					OutputTokens:             resp.Usage.OutputTokens,
+				turnData := protocol.SessionTurnData{
+					Model:             o.modelName,
+					InputTokens:      resp.Usage.InputTokens,
+					OutputTokens:     resp.Usage.OutputTokens,
 					CacheWriteTokens: resp.Usage.CacheWriteTokens,
 					CacheReadTokens:  resp.Usage.CacheReadTokens,
-					UserMessages:             stats.UserCount,
-					AssistantMessages:        stats.AssistantCount,
-					SystemMessages:           stats.SystemCount,
-					PayloadBytes:             stats.PayloadBytes,
-					TurnDurationMs:           time.Since(llmStart).Milliseconds(),
-				})
+					UserMessages:     stats.UserCount,
+					AssistantMessages: stats.AssistantCount,
+					SystemMessages:   stats.SystemCount,
+					PayloadBytes:     stats.PayloadBytes,
+					TurnDurationMs:   time.Since(llmStart).Milliseconds(),
+				}
+				// Compute cost
+				if pricing := llm.GetPricing(o.modelName, o.pricingOverrides); pricing != nil {
+					cost := llm.ComputeTurnCost(pricing, resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheReadTokens, resp.Usage.CacheWriteTokens)
+					turnData.Cost = cost.TotalCost
+					turnData.InputCost = cost.InputCost
+					turnData.OutputCost = cost.OutputCost
+					turnData.CacheReadCost = cost.CacheReadCost
+					turnData.CacheWriteCost = cost.CacheWriteCost
+				}
+				o.onSessionTurn(turnData)
 			}
 		}
 

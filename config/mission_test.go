@@ -1077,6 +1077,217 @@ mission "sendto_cycle" {
 		})
 	})
 
+	Describe("Mission-scoped agents", func() {
+		Context("parsing", func() {
+			It("parses a mission with a scoped agent", func() {
+				hcl := fullBaseHCL() + `
+mission "scoped" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+
+  agent "specialist" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Expert"
+    role        = "A specialist"
+    tools       = [builtins.http.get]
+  }
+
+  agents = [agents.specialist]
+  task "work" { objective = "Do work" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Missions).To(HaveLen(1))
+				Expect(cfg.Missions[0].LocalAgents).To(HaveLen(1))
+				Expect(cfg.Missions[0].LocalAgents[0].Name).To(Equal("specialist"))
+				Expect(cfg.Missions[0].LocalAgents[0].Role).To(Equal("A specialist"))
+				Expect(cfg.Missions[0].LocalAgents[0].Model).To(Equal("claude_sonnet_4"))
+				Expect(cfg.Missions[0].LocalAgents[0].Tools).To(ConsistOf("builtins.http.get"))
+			})
+
+			It("allows mixing global and scoped agents in the agents list", func() {
+				hcl := fullBaseHCL() + `
+mission "mixed" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+
+  agent "local_helper" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Helpful"
+    role        = "Local helper"
+  }
+
+  agents = [agents.test_agent, agents.local_helper]
+  task "work" { objective = "Do work" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Missions[0].Agents).To(ConsistOf("test_agent", "local_helper"))
+				Expect(cfg.Missions[0].LocalAgents).To(HaveLen(1))
+				Expect(cfg.Missions[0].LocalAgents[0].Name).To(Equal("local_helper"))
+			})
+
+			It("allows scoped agents on task-level agents list", func() {
+				hcl := fullBaseHCL() + `
+mission "task_scoped" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+
+  agent "specialist" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Expert"
+    role        = "Specialist"
+  }
+
+  agents = [agents.test_agent, agents.specialist]
+  task "work" {
+    objective = "Do work"
+    agents    = [agents.specialist]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Missions[0].Tasks[0].Agents).To(ConsistOf("specialist"))
+			})
+
+			It("allows two missions to each define a scoped agent with the same name", func() {
+				hcl := fullBaseHCL() + `
+mission "alpha" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agent "helper" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Alpha helper"
+    role        = "Helper for alpha"
+  }
+  agents = [agents.helper]
+  task "work" { objective = "Do work" }
+}
+
+mission "beta" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agent "helper" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Beta helper"
+    role        = "Helper for beta"
+  }
+  agents = [agents.helper]
+  task "work" { objective = "Do work" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				Expect(cfg.Missions).To(HaveLen(2))
+				Expect(cfg.Missions[0].LocalAgents[0].Role).To(Equal("Helper for alpha"))
+				Expect(cfg.Missions[1].LocalAgents[0].Role).To(Equal("Helper for beta"))
+			})
+		})
+
+		Context("validation", func() {
+			It("rejects scoped agent that conflicts with a global agent name", func() {
+				hcl := fullBaseHCL() + `
+mission "conflict" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+
+  agent "test_agent" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Conflict"
+    role        = "Conflicts with global"
+  }
+
+  agents = [agents.test_agent]
+  task "work" { objective = "Do work" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("conflicts with global agent"))
+			})
+
+			It("rejects scoped agent with unknown tool reference", func() {
+				hcl := fullBaseHCL() + `
+mission "bad_tools" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+
+  agent "bad" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Bad"
+    role        = "Has bad tools"
+    tools       = [plugins.nonexistent.tool]
+  }
+
+  agents = [agents.bad]
+  task "work" { objective = "Do work" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadFile(f)
+				Expect(err).To(HaveOccurred())
+			})
+
+			It("validates scoped agent tool references at config level", func() {
+				hcl := fullBaseHCL() + `
+mission "valid_tools" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+
+  agent "good" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Good"
+    role        = "Has valid tools"
+    tools       = [builtins.http.get]
+  }
+
+  agents = [agents.good]
+  task "work" { objective = "Do work" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("GetLocalAgent", func() {
+			It("returns the agent when it exists", func() {
+				m := config.Mission{
+					LocalAgents: []config.Agent{
+						{Name: "specialist", Role: "Expert"},
+					},
+				}
+				a := m.GetLocalAgent("specialist")
+				Expect(a).NotTo(BeNil())
+				Expect(a.Role).To(Equal("Expert"))
+			})
+
+			It("returns nil when the agent does not exist", func() {
+				m := config.Mission{
+					LocalAgents: []config.Agent{
+						{Name: "specialist"},
+					},
+				}
+				Expect(m.GetLocalAgent("nonexistent")).To(BeNil())
+			})
+		})
+	})
+
 	Describe("GetRootTasks", func() {
 		It("returns only tasks with no dependencies", func() {
 			m := config.Mission{

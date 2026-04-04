@@ -220,24 +220,12 @@ mission "research" {
 ```
 
 **Rules:**
-- Mission-scoped agents are stored in `Mission.LocalAgents`, NOT merged into `Config.Agents`
+- Same syntax as global agents — same fields, same capabilities
 - A scoped agent name must not conflict with any global agent name (validation error)
 - Two different missions CAN each define a scoped agent with the same name (independently scoped)
-- Scoped agents are resolved via a mission-local HCL eval context that merges global + local agent names into the `agents` namespace
-- At runtime, `CommanderOptions.MissionLocalAgents` is checked first for agent lookup, then falls back to `Config.Agents`
-- `agent.New()` accepts an `AgentConfig` option to use a pre-resolved agent config, avoiding re-lookup from globals
-- The shared `parseAgentBlock()` function in `config/config.go` is used by both global (Stage 4) and mission-level parsing
-
-**Implementation files:**
-| File | What |
-|------|------|
-| `config/mission.go` | `LocalAgents` field, `GetLocalAgent()`, name conflict validation |
-| `config/config.go` | `parseAgentBlock()` shared function, mission block schema, eval context scoping, tool ref validation |
-| `agent/commander.go` | `MissionLocalAgents` in `CommanderOptions`, agent lookup priority |
-| `agent/agent.go` | `AgentConfig` option in `Options` for pre-resolved config |
-| `agent/agent_manager.go` | Passes `AgentConfig` when creating agents |
-| `mission/runner.go` | Threads `MissionLocalAgents` through all 5 `NewCommander` call sites |
-| `wsbridge/convert.go` | Serializes scoped agents with `Mission` field |
+- Scoped agents must be listed in the mission's `agents = [...]` to be available
+- Can be assigned at the task level via `agents = [agents.specialist]`
+- Multiple scoped agents per mission are supported
 
 ### Task Connectivity: depends_on, router, and send_to
 

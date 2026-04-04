@@ -42,6 +42,7 @@ type AgentManager struct {
 	callbacks        *CommanderToolCallbacks
 	debugLogger      DebugLogger
 	pricingOverrides map[string]*llm.ModelPricing
+	provider         llm.Provider // optional injected provider for agents
 }
 
 // AgentManagerConfig holds the dependencies needed to create an AgentManager.
@@ -59,6 +60,8 @@ type AgentManagerConfig struct {
 	Callbacks        *CommanderToolCallbacks
 	DebugLogger      DebugLogger
 	PricingOverrides map[string]*llm.ModelPricing
+	// Provider is an optional pre-created LLM provider passed to spawned agents.
+	Provider llm.Provider
 }
 
 // NewAgentManager creates a new AgentManager.
@@ -80,6 +83,7 @@ func NewAgentManager(cfg AgentManagerConfig) *AgentManager {
 		callbacks:        cfg.Callbacks,
 		debugLogger:      cfg.DebugLogger,
 		pricingOverrides: cfg.PricingOverrides,
+		provider:         cfg.Provider,
 	}
 }
 
@@ -250,6 +254,7 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 	}
 
 	return New(ctx, Options{
+		Config:           m.cfg,
 		ConfigPath:       m.configPath,
 		AgentConfig:      agentCfg,
 		AgentName:        agentCfg.Name,
@@ -261,6 +266,7 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 		OnCompaction:     onCompaction,
 		OnSessionTurn:    onSessionTurn,
 		PricingOverrides: m.pricingOverrides,
+		Provider:         m.provider,
 	})
 }
 

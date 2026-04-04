@@ -38,10 +38,11 @@ type AgentManager struct {
 	sessionLogger  SessionLogger
 	taskID         string
 	taskName       string
-	iterationIndex *int
-	callbacks      *CommanderToolCallbacks
-	debugLogger    DebugLogger
-	provider       llm.Provider // optional injected provider for agents
+	iterationIndex   *int
+	callbacks        *CommanderToolCallbacks
+	debugLogger      DebugLogger
+	pricingOverrides map[string]*llm.ModelPricing
+	provider         llm.Provider // optional injected provider for agents
 }
 
 // AgentManagerConfig holds the dependencies needed to create an AgentManager.
@@ -56,8 +57,9 @@ type AgentManagerConfig struct {
 	TaskID         string
 	TaskName       string
 	IterationIndex *int
-	Callbacks      *CommanderToolCallbacks
-	DebugLogger    DebugLogger
+	Callbacks        *CommanderToolCallbacks
+	DebugLogger      DebugLogger
+	PricingOverrides map[string]*llm.ModelPricing
 	// Provider is an optional pre-created LLM provider passed to spawned agents.
 	Provider llm.Provider
 }
@@ -78,9 +80,10 @@ func NewAgentManager(cfg AgentManagerConfig) *AgentManager {
 		taskID:         cfg.TaskID,
 		taskName:       cfg.TaskName,
 		iterationIndex: cfg.IterationIndex,
-		callbacks:      cfg.Callbacks,
-		debugLogger:    cfg.DebugLogger,
-		provider:       cfg.Provider,
+		callbacks:        cfg.Callbacks,
+		debugLogger:      cfg.DebugLogger,
+		pricingOverrides: cfg.PricingOverrides,
+		provider:         cfg.Provider,
 	}
 }
 
@@ -251,17 +254,19 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 	}
 
 	return New(ctx, Options{
-		Config:        m.cfg,
-		ConfigPath:    m.configPath,
-		AgentName:     agentCfg.Name,
-		Mode:          &mode,
-		DatasetStore:  datasetStore,
-		SecretInfos:   m.secretInfos,
-		SecretValues:  m.secretValues,
-		FolderStore:   m.folderStore,
-		OnCompaction:  onCompaction,
-		OnSessionTurn: onSessionTurn,
-		Provider:      m.provider,
+		Config:           m.cfg,
+		ConfigPath:       m.configPath,
+		AgentConfig:      agentCfg,
+		AgentName:        agentCfg.Name,
+		Mode:             &mode,
+		DatasetStore:     datasetStore,
+		SecretInfos:      m.secretInfos,
+		SecretValues:     m.secretValues,
+		FolderStore:      m.folderStore,
+		OnCompaction:     onCompaction,
+		OnSessionTurn:    onSessionTurn,
+		PricingOverrides: m.pricingOverrides,
+		Provider:         m.provider,
 	})
 }
 

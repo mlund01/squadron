@@ -41,9 +41,10 @@ type Agent struct {
 	secretValues   map[string]string // Actual secret values (for tool call injection)
 	onCompaction   func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 	onSessionTurn  func(protocol.SessionTurnData)
-	sessionLogger  SessionLogger    // Optional session logger for tool result auditing
-	sessionID      string           // Session ID for tool result auditing
-	taskID         string           // Task ID for tool result auditing
+	sessionLogger    SessionLogger    // Optional session logger for tool result auditing
+	sessionID        string           // Session ID for tool result auditing
+	taskID           string           // Task ID for tool result auditing
+	pricingOverrides map[string]*llm.ModelPricing
 }
 
 // CompactionConfig holds settings for context compaction
@@ -80,6 +81,10 @@ type Options struct {
 	OnCompaction func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 	// OnSessionTurn is called after each LLM turn with telemetry data (optional)
 	OnSessionTurn func(data protocol.SessionTurnData)
+	// PricingOverrides maps API model names to custom pricing (optional, from config)
+	PricingOverrides map[string]*llm.ModelPricing
+	// AgentConfig is a pre-resolved agent config (optional, used for mission-scoped agents)
+	AgentConfig *config.Agent
 	// Provider is an optional pre-created LLM provider. When set, agent creation
 	// skips the internal provider factory and uses this provider instead.
 	// The caller retains ownership — the agent will NOT close it.
@@ -102,10 +107,14 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 
 	// Find the agent config
 	var agentCfg *config.Agent
-	for _, a := range cfg.Agents {
-		if a.Name == opts.AgentName {
-			agentCfg = &a
-			break
+	if opts.AgentConfig != nil {
+		agentCfg = opts.AgentConfig
+	} else {
+		for _, a := range cfg.Agents {
+			if a.Name == opts.AgentName {
+				agentCfg = &a
+				break
+			}
 		}
 	}
 
@@ -258,9 +267,10 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		compaction:     compaction,
 		eventLogger:    opts.EventLogger,
 		onCompaction:   opts.OnCompaction,
-		onSessionTurn:  opts.OnSessionTurn,
-		turnLogger:     turnLogger,
-		secretInfos:    opts.SecretInfos,
+		onSessionTurn:    opts.OnSessionTurn,
+		turnLogger:       turnLogger,
+		secretInfos:      opts.SecretInfos,
+		pricingOverrides: opts.PricingOverrides,
 		secretValues:   opts.SecretValues,
 	}, nil
 }
@@ -305,6 +315,7 @@ func (a *Agent) Resume(ctx context.Context, streamer streamers.ChatHandler) (Cha
 	orch.sessionLogger = a.sessionLogger
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID
+	orch.pricingOverrides = a.pricingOverrides
 	return orch.processTurn(ctx, "", true)
 }
 
@@ -352,6 +363,7 @@ func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatH
 	orch.sessionLogger = a.sessionLogger
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID
+	orch.pricingOverrides = a.pricingOverrides
 	return orch.processTurn(ctx, input, false)
 }
 

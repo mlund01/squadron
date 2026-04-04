@@ -294,6 +294,17 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate tool references in mission-scoped agents
+	for _, m := range c.Missions {
+		for _, a := range m.LocalAgents {
+			for _, toolRef := range a.Tools {
+				if !validToolRefs[toolRef] {
+					return fmt.Errorf("mission '%s' agent '%s': unknown tool '%s'. Available tools: %v", m.Name, a.Name, toolRef, getToolNames(validToolRefs))
+				}
+			}
+		}
+	}
+
 	// Build mission names set for cross-mission route validation
 	allMissionNames := make(map[string]bool, len(c.Missions))
 	for _, m := range c.Missions {
@@ -493,6 +504,75 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 	}
 
+	// parseModelBlock parses a model block with optional pricing sub-blocks.
+	parseModelBlock := func(block *hcl.Block, ctx *hcl.EvalContext) (*Model, error) {
+		content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+			Attributes: []hcl.AttributeSchema{
+				{Name: "provider", Required: true},
+				{Name: "allowed_models", Required: true},
+				{Name: "api_key", Required: true},
+				{Name: "prompt_caching"},
+			},
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "pricing", LabelNames: []string{"model"}},
+			},
+		})
+		if diags.HasErrors() {
+			return nil, diags
+		}
+
+		m := &Model{Name: block.Labels[0]}
+
+		providerVal, d := content.Attributes["provider"].Expr.Value(ctx)
+		if d.HasErrors() {
+			return nil, d
+		}
+		m.Provider = Provider(providerVal.AsString())
+
+		modelsVal, d := content.Attributes["allowed_models"].Expr.Value(ctx)
+		if d.HasErrors() {
+			return nil, d
+		}
+		for it := modelsVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			m.AllowedModels = append(m.AllowedModels, v.AsString())
+		}
+
+		keyVal, d := content.Attributes["api_key"].Expr.Value(ctx)
+		if d.HasErrors() {
+			return nil, d
+		}
+		m.APIKey = keyVal.AsString()
+
+		if attr, ok := content.Attributes["prompt_caching"]; ok {
+			val, d := attr.Expr.Value(ctx)
+			if d.HasErrors() {
+				return nil, d
+			}
+			b := val.True()
+			m.PromptCaching = &b
+		}
+
+		// Parse pricing sub-blocks
+		for _, pBlock := range content.Blocks {
+			if pBlock.Type != "pricing" {
+				continue
+			}
+			modelName := pBlock.Labels[0]
+			var pc ModelPricingConfig
+			pDiags := gohcl.DecodeBody(pBlock.Body, ctx, &pc)
+			if pDiags.HasErrors() {
+				return nil, fmt.Errorf("pricing '%s': %w", modelName, pDiags)
+			}
+			if m.Pricing == nil {
+				m.Pricing = make(map[string]*ModelPricingConfig)
+			}
+			m.Pricing[modelName] = &pc
+		}
+
+		return m, nil
+	}
+
 	// Parse mcp block (optional singleton, with vars context)
 	var mcpConfig *MCPConfig
 	for _, pb := range allParsedBlocks {
@@ -569,13 +649,11 @@ func loadFromFiles(files []string) (*Config, error) {
 	var allModels []Model
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Models {
-			var m Model
-			m.Name = block.Labels[0]
-			diags := gohcl.DecodeBody(block.Body, pluginsCtx, &m)
-			if diags.HasErrors() {
-				return nil, diags
+			m, err := parseModelBlock(block, pluginsCtx)
+			if err != nil {
+				return nil, fmt.Errorf("model '%s': %w", block.Labels[0], err)
 			}
-			allModels = append(allModels, m)
+			allModels = append(allModels, *m)
 		}
 	}
 
@@ -605,13 +683,11 @@ func loadFromFiles(files []string) (*Config, error) {
 	var allAgents []Agent
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Agents {
-			var a Agent
-			a.Name = block.Labels[0]
-			diags := gohcl.DecodeBody(block.Body, fullCtx, &a)
-			if diags.HasErrors() {
-				return nil, diags
+			a, err := parseAgentBlock(block, fullCtx)
+			if err != nil {
+				return nil, err
 			}
-			allAgents = append(allAgents, a)
+			allAgents = append(allAgents, *a)
 		}
 	}
 
@@ -987,6 +1063,18 @@ type missionTaskBlock struct {
 }
 
 // parseMissionBlock parses a mission block with its nested task blocks
+// parseAgentBlock parses an agent HCL block into an Agent struct.
+// Used for both global agents and mission-scoped agents.
+func parseAgentBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Agent, error) {
+	var a Agent
+	a.Name = block.Labels[0]
+	diags := gohcl.DecodeBody(block.Body, ctx, &a)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("agent '%s': %w", a.Name, diags)
+	}
+	return &a, nil
+}
+
 func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error) {
 	missionName := block.Labels[0]
 
@@ -1001,6 +1089,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "commander"},
+			{Type: "agent", LabelNames: []string{"name"}}, // mission-scoped agents
 			{Type: "task", LabelNames: []string{"name"}},
 			{Type: "input", LabelNames: []string{"name"}}, // verbose input blocks still supported
 			{Type: "dataset", LabelNames: []string{"name"}},
@@ -1085,9 +1174,47 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		return nil, fmt.Errorf("mission '%s': commander block is required", missionName)
 	}
 
-	// Get agents attribute (mission-level agents)
+	// Parse mission-scoped agent blocks (before resolving agents attribute)
+	var localAgents []Agent
+	for _, agentBlock := range missionContent.Blocks {
+		if agentBlock.Type != "agent" {
+			continue
+		}
+		a, err := parseAgentBlock(agentBlock, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
+		}
+		localAgents = append(localAgents, *a)
+	}
+
+	// Build mission-local context that includes scoped agent names in the agents namespace
+	missionCtx := ctx
+	if len(localAgents) > 0 {
+		agentsMap := make(map[string]cty.Value)
+		// Copy existing global agents
+		if existingAgents, ok := ctx.Variables["agents"]; ok && existingAgents.Type().IsObjectType() {
+			for k, v := range existingAgents.AsValueMap() {
+				agentsMap[k] = v
+			}
+		}
+		// Add local agent names
+		for _, a := range localAgents {
+			agentsMap[a.Name] = cty.StringVal(a.Name)
+		}
+		newVars := make(map[string]cty.Value)
+		for k, v := range ctx.Variables {
+			newVars[k] = v
+		}
+		newVars["agents"] = cty.ObjectVal(agentsMap)
+		missionCtx = &hcl.EvalContext{
+			Variables: newVars,
+			Functions: ctx.Functions,
+		}
+	}
+
+	// Get agents attribute (mission-level agents) — use mission context so local agents resolve
 	agentsAttr := missionContent.Attributes["agents"]
-	agentsVal, diags := agentsAttr.Expr.Value(ctx)
+	agentsVal, diags := agentsAttr.Expr.Value(missionCtx)
 	if diags.HasErrors() {
 		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
 	}
@@ -1184,6 +1311,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Directive:   directive,
 		Commander:   missionCommander,
 		Agents:      missionAgents,
+		LocalAgents: localAgents,
 		Folders:     missionFolders,
 		Folder:      missionFolder,
 		Schedules:   schedules,
@@ -1259,7 +1387,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Variables: make(map[string]cty.Value),
 		Functions: schemafunc.SchemaFunctions(),
 	}
-	for k, v := range ctx.Variables {
+	for k, v := range missionCtx.Variables {
 		taskCtx.Variables[k] = v
 	}
 	taskCtx.Variables["tasks"] = cty.ObjectVal(taskNames)

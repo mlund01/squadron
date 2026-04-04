@@ -51,6 +51,11 @@ func (h *WSMissionHandler) sendEvent(eventType protocol.MissionEventType, data i
 	mid := h.missionID
 	h.mu.Unlock()
 
+	// Check if anyone is subscribed to this event
+	if !h.client.subscriptions.ShouldSend(string(eventType), mid) {
+		return
+	}
+
 	env, err := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
 		MissionID: mid,
 		EventType: eventType,

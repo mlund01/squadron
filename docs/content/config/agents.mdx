@@ -67,6 +67,37 @@ tools = [
 ]
 ```
 
+## Mission-Scoped Agents
+
+Agents can be defined inside a `mission` block, making them available only to that mission. This is useful for specialized agents that don't make sense as global definitions.
+
+```hcl
+mission "research" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+
+  agent "specialist" {
+    model       = models.anthropic.claude_opus_4
+    personality = "Deep domain expert"
+    role        = "Research specialist with access to specialized tools"
+    tools       = [plugins.shell.exec]
+  }
+
+  agents = [agents.global_helper, agents.specialist]
+
+  task "gather" {
+    objective = "Research the topic"
+    agents    = [agents.specialist]
+  }
+}
+```
+
+Mission-scoped agents use the same syntax and attributes as global agents. They must be listed in the mission's `agents = [...]` to be available, and can be assigned at the task level.
+
+**Rules:**
+- A scoped agent name must not conflict with any global agent name
+- Two different missions can each define an agent with the same name (they are independently scoped)
+- Multiple scoped agents per mission are supported
+
 ## Example: Specialized Agents
 
 ```hcl

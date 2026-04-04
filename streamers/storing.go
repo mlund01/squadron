@@ -20,18 +20,21 @@ import (
 type StoringMissionHandler struct {
 	inner  MissionHandler
 	events store.EventStore
+	costs  store.CostStore
 
-	mu         sync.Mutex
-	missionID  string
-	taskIDs    map[string]string // taskName → taskID
-	sessionIDs map[string]string // "taskName:agentName" → sessionID
+	mu          sync.Mutex
+	missionID   string
+	missionName string
+	taskIDs     map[string]string // taskName → taskID
+	sessionIDs  map[string]string // "taskName:agentName" → sessionID
 }
 
 // NewStoringMissionHandler wraps an existing MissionHandler with event persistence.
-func NewStoringMissionHandler(inner MissionHandler, events store.EventStore) *StoringMissionHandler {
+func NewStoringMissionHandler(inner MissionHandler, events store.EventStore, costs store.CostStore) *StoringMissionHandler {
 	return &StoringMissionHandler{
 		inner:      inner,
 		events:     events,
+		costs:      costs,
 		taskIDs:    make(map[string]string),
 		sessionIDs: make(map[string]string),
 	}
@@ -120,6 +123,7 @@ func (h *StoringMissionHandler) SetSessionID(taskName, agentName, sessionID stri
 func (h *StoringMissionHandler) MissionStarted(name string, missionID string, taskCount int) {
 	h.mu.Lock()
 	h.missionID = missionID
+	h.missionName = name
 	h.mu.Unlock()
 
 	h.storeEvent(protocol.EventMissionStarted, nil, nil, nil, protocol.MissionStartedData{
@@ -298,6 +302,43 @@ func (h *StoringMissionHandler) Compaction(taskName string, entity string, input
 func (h *StoringMissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	sessionKey := data.TaskName + ":" + data.Entity
 	h.storeEvent(protocol.EventSessionTurn, &data.TaskName, &sessionKey, extractIterationIndex(data.TaskName), data)
+
+	// Persist cost record for aggregation
+	if h.costs != nil && data.Cost > 0 {
+		h.mu.Lock()
+		missionID := h.missionID
+		missionName := h.missionName
+		taskID := ""
+		if tid, ok := h.taskIDs[data.TaskName]; ok {
+			taskID = tid
+		}
+		sessionID := ""
+		if sid, ok := h.sessionIDs[sessionKey]; ok {
+			sessionID = sid
+		}
+		h.mu.Unlock()
+
+		h.costs.StoreTurnCost(store.TurnCostRecord{
+			MissionID:        missionID,
+			TaskID:           taskID,
+			SessionID:        sessionID,
+			MissionName:      missionName,
+			TaskName:         data.TaskName,
+			Entity:           data.Entity,
+			Model:            data.Model,
+			InputTokens:      data.InputTokens,
+			OutputTokens:     data.OutputTokens,
+			CacheWriteTokens: data.CacheWriteTokens,
+			CacheReadTokens:  data.CacheReadTokens,
+			InputCost:        data.InputCost,
+			OutputCost:       data.OutputCost,
+			CacheReadCost:    data.CacheReadCost,
+			CacheWriteCost:   data.CacheWriteCost,
+			TotalCost:        data.Cost,
+			DurationMs:       data.TurnDurationMs,
+		})
+	}
+
 	h.inner.SessionTurn(data)
 }
 

@@ -79,6 +79,10 @@ type CommanderOptions struct {
 	Routes []aitools.RouteOption
 	// ToolResponseMaxSize overrides the default tool response size limit (0 = default)
 	ToolResponseMaxSize int
+	// PricingOverrides maps API model names to custom pricing (optional, from config)
+	PricingOverrides map[string]*llm.ModelPricing
+	// MissionLocalAgents are agents scoped to this mission (checked before global agents)
+	MissionLocalAgents []config.Agent
 	// Provider is an optional pre-created LLM provider. When set, commander creation
 	// skips the internal provider factory and uses this provider instead.
 	// The caller retains ownership — the commander will NOT close it.
@@ -308,6 +312,7 @@ type Commander struct {
 	callbacksTaskID    string                 // Task ID from callbacks (for agent session creation)
 	iterationIndex     *int                   // Iteration index (nil for non-iterated tasks)
 	agentMgr           *AgentManager          // Manages agent lifecycle (creation, session, resume)
+	pricingOverrides   map[string]*llm.ModelPricing
 	subtasksSet        bool                   // Whether set_subtasks has been called
 	folderStore        aitools.FolderStore    // Folder access for missions (nil if not configured)
 	compaction         *CompactionConfig      // Compaction settings (nil if disabled)
@@ -340,9 +345,25 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	}
 
 	// Get agent configs and build agent info for the prompt
+	// Check mission-local agents first, then fall back to global agents
 	agents := make(map[string]*config.Agent)
 	var agentInfos []prompts.AgentInfo
 	for _, agentName := range opts.AgentNames {
+		found := false
+		for i := range opts.MissionLocalAgents {
+			if opts.MissionLocalAgents[i].Name == agentName {
+				agents[agentName] = &opts.MissionLocalAgents[i]
+				agentInfos = append(agentInfos, prompts.AgentInfo{
+					Name:        agentName,
+					Description: opts.MissionLocalAgents[i].Role,
+				})
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
 		for i := range opts.Config.Agents {
 			if opts.Config.Agents[i].Name == agentName {
 				agents[agentName] = &opts.Config.Agents[i]
@@ -407,11 +428,12 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		interceptor:     interceptor,
 		completedAgents: make(map[string]*completedAgent),
 		agentSessions:   make(map[string]*Agent),
-		secretInfos:     opts.SecretInfos,
-		secretValues:    opts.SecretValues,
-		compaction:      opts.Compaction,
-		pruneOn:         opts.PruneOn,
-		pruneTo:         opts.PruneTo,
+		secretInfos:      opts.SecretInfos,
+		secretValues:     opts.SecretValues,
+		compaction:       opts.Compaction,
+		pruneOn:          opts.PruneOn,
+		pruneTo:          opts.PruneTo,
+		pricingOverrides: opts.PricingOverrides,
 	}
 
 	// Add result tools to commander's tool map
@@ -652,19 +674,20 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 
 	// Initialize AgentManager
 	s.agentMgr = NewAgentManager(AgentManagerConfig{
-		Agents:         s.agents,
-		ConfigPath:     s.configPath,
-		Config:         s.cfg,
-		SecretInfos:    s.secretInfos,
-		SecretValues:   s.secretValues,
-		FolderStore:    s.folderStore,
-		SessionLogger:  s.sessionLogger,
-		TaskID:         s.callbacksTaskID,
-		TaskName:       s.TaskName,
-		IterationIndex: s.iterationIndex,
-		Callbacks:      callbacks,
-		DebugLogger:    s.debugLogger,
-		Provider:       s.provider,
+		Agents:           s.agents,
+		ConfigPath:       s.configPath,
+		Config:           s.cfg,
+		SecretInfos:      s.secretInfos,
+		SecretValues:     s.secretValues,
+		FolderStore:      s.folderStore,
+		SessionLogger:    s.sessionLogger,
+		TaskID:           s.callbacksTaskID,
+		TaskName:         s.TaskName,
+		IterationIndex:   s.iterationIndex,
+		Callbacks:        callbacks,
+		DebugLogger:      s.debugLogger,
+		PricingOverrides: s.pricingOverrides,
+		Provider:         s.provider,
 	})
 }
 
@@ -1166,18 +1189,27 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		// Emit session turn telemetry
 		if resp != nil {
 			stats := s.session.MessageStats()
-			streamer.SessionTurn(protocol.SessionTurnData{
-				Model:                     s.ModelName,
-				InputTokens:              resp.Usage.InputTokens,
-				OutputTokens:             resp.Usage.OutputTokens,
+			turnData := protocol.SessionTurnData{
+				Model:             s.ModelName,
+				InputTokens:      resp.Usage.InputTokens,
+				OutputTokens:     resp.Usage.OutputTokens,
 				CacheWriteTokens: resp.Usage.CacheWriteTokens,
 				CacheReadTokens:  resp.Usage.CacheReadTokens,
-				UserMessages:             stats.UserCount,
-				AssistantMessages:        stats.AssistantCount,
-				SystemMessages:           stats.SystemCount,
-				PayloadBytes:             stats.PayloadBytes,
-				TurnDurationMs:           time.Since(llmStart).Milliseconds(),
-			})
+				UserMessages:     stats.UserCount,
+				AssistantMessages: stats.AssistantCount,
+				SystemMessages:   stats.SystemCount,
+				PayloadBytes:     stats.PayloadBytes,
+				TurnDurationMs:   time.Since(llmStart).Milliseconds(),
+			}
+			if pricing := llm.GetPricing(s.ModelName, s.pricingOverrides); pricing != nil {
+				cost := llm.ComputeTurnCost(pricing, resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheReadTokens, resp.Usage.CacheWriteTokens)
+				turnData.Cost = cost.TotalCost
+				turnData.InputCost = cost.InputCost
+				turnData.OutputCost = cost.OutputCost
+				turnData.CacheReadCost = cost.CacheReadCost
+				turnData.CacheWriteCost = cost.CacheWriteCost
+			}
+			streamer.SessionTurn(turnData)
 		}
 
 		parser.Finish()

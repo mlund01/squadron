@@ -195,6 +195,38 @@ The command center registers the route `POST /webhooks/<instance_name>/<webhook_
 
 The scheduler lives in `scheduler/` but its lifecycle (creation, config updates, shutdown) is managed by `cmd/serve.go`, not wsbridge. The wsbridge client receives a `ConcurrencyTracker` interface for enforcing `max_parallel` on all mission starts. The cron library used is `robfig/cron/v3`.
 
+### Mission-Scoped Agents
+
+Agents can be defined inside a `mission` block, making them available only to that mission. Mission-scoped agents use the same syntax and parsing as global agents but are namespaced to their mission.
+
+```hcl
+mission "research" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+
+  agent "specialist" {
+    model       = models.anthropic.claude_opus_4
+    personality = "Deep domain expert"
+    role        = "Research specialist with access to specialized tools"
+    tools       = [plugins.shell.exec]
+  }
+
+  agents = [agents.global_helper, agents.specialist]
+
+  task "gather" {
+    objective = "Research the topic"
+    agents    = [agents.specialist]
+  }
+}
+```
+
+**Rules:**
+- Same syntax as global agents — same fields, same capabilities
+- A scoped agent name must not conflict with any global agent name (validation error)
+- Two different missions CAN each define a scoped agent with the same name (independently scoped)
+- Scoped agents must be listed in the mission's `agents = [...]` to be available
+- Can be assigned at the task level via `agents = [agents.specialist]`
+- Multiple scoped agents per mission are supported
+
 ### Task Connectivity: depends_on, router, and send_to
 
 There are three ways tasks connect to each other. Each serves a different purpose, but they share a common execution model built around the distinction between **static** and **dynamic** task activation.

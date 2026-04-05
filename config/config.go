@@ -510,7 +510,8 @@ func loadFromFiles(files []string) (*Config, error) {
 			Attributes: []hcl.AttributeSchema{
 				{Name: "provider", Required: true},
 				{Name: "allowed_models", Required: true},
-				{Name: "api_key", Required: true},
+				{Name: "api_key"},
+				{Name: "base_url"},
 				{Name: "prompt_caching"},
 			},
 			Blocks: []hcl.BlockHeaderSchema{
@@ -538,11 +539,21 @@ func loadFromFiles(files []string) (*Config, error) {
 			m.AllowedModels = append(m.AllowedModels, v.AsString())
 		}
 
-		keyVal, d := content.Attributes["api_key"].Expr.Value(ctx)
-		if d.HasErrors() {
-			return nil, d
+		if attr, ok := content.Attributes["api_key"]; ok {
+			keyVal, d := attr.Expr.Value(ctx)
+			if d.HasErrors() {
+				return nil, d
+			}
+			m.APIKey = keyVal.AsString()
 		}
-		m.APIKey = keyVal.AsString()
+
+		if attr, ok := content.Attributes["base_url"]; ok {
+			urlVal, d := attr.Expr.Value(ctx)
+			if d.HasErrors() {
+				return nil, d
+			}
+			m.BaseURL = urlVal.AsString()
+		}
 
 		if attr, ok := content.Attributes["prompt_caching"]; ok {
 			val, d := attr.Expr.Value(ctx)

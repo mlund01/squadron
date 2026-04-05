@@ -335,7 +335,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		provider = opts.Provider
 		ownsProvider = false
 	} else {
-		if modelConfig.APIKey == "" {
+		if modelConfig.Provider != config.ProviderOllama && modelConfig.APIKey == "" {
 			return nil, fmt.Errorf("API key not set for model '%s'", modelConfig.Name)
 		}
 		provider, ownsProvider, err = createCommanderProvider(ctx, modelConfig)
@@ -1619,11 +1619,15 @@ func resolveCommander(cfg *config.Config, modelKey string) (*config.Model, strin
 
 		for _, allowedKey := range m.AllowedModels {
 			if allowedKey == modelKey {
-				actualModel, ok := supportedModels[modelKey]
-				if !ok {
-					return nil, "", fmt.Errorf("model key '%s' not found in supported models for provider '%s'", modelKey, m.Provider)
+				if actualModel, ok := supportedModels[modelKey]; ok {
+					return m, actualModel, nil
 				}
-				return m, actualModel, nil
+				// For providers like Ollama that allow arbitrary models,
+				// use the key itself as the API model name
+				if m.Provider == config.ProviderOllama {
+					return m, modelKey, nil
+				}
+				return nil, "", fmt.Errorf("model key '%s' not found in supported models for provider '%s'", modelKey, m.Provider)
 			}
 		}
 	}
@@ -1644,6 +1648,8 @@ func createCommanderProvider(ctx context.Context, modelConfig *config.Model) (ll
 			return nil, false, err
 		}
 		return provider, true, nil
+	case config.ProviderOllama:
+		return llm.NewOpenAICompatibleProvider(modelConfig.BaseURL), false, nil
 	default:
 		return nil, false, fmt.Errorf("unknown provider: %s", modelConfig.Provider)
 	}

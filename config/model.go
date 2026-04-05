@@ -8,6 +8,7 @@ const (
 	ProviderOpenAI    Provider = "openai"
 	ProviderGemini    Provider = "gemini"
 	ProviderAnthropic Provider = "anthropic"
+	ProviderOllama    Provider = "ollama"
 )
 
 // SupportedModels maps provider to their supported model names
@@ -47,6 +48,9 @@ var SupportedModels = map[Provider]map[string]string{
 		"claude_3_5_haiku":  "claude-3-5-haiku-20241022",
 		"claude_3_5_sonnet": "claude-3-5-sonnet-20241022",
 	},
+	ProviderOllama: {
+		"gemma_4": "gemma4",
+	},
 }
 
 // Model represents a model provider configuration
@@ -76,7 +80,8 @@ type Model struct {
 	Name           string            `hcl:"name,label"`
 	Provider       Provider          `hcl:"provider"`
 	AllowedModels  []string          `hcl:"allowed_models"`
-	APIKey         string            `hcl:"api_key"`
+	APIKey         string            `hcl:"api_key,optional"`
+	BaseURL        string            `hcl:"base_url,optional"`
 	PromptCaching  *bool             `hcl:"prompt_caching,optional"`
 	Pricing        map[string]*ModelPricingConfig `json:"-"` // model name → pricing override
 }
@@ -98,11 +103,25 @@ func (m *Model) IsPromptCachingEnabled() bool {
 }
 
 func (m *Model) Validate() error {
-	supportedForProvider, ok := SupportedModels[m.Provider]
-	if !ok {
+	if _, ok := SupportedModels[m.Provider]; !ok {
 		return fmt.Errorf("Unsupported provider; Provider '%s' is not supported", m.Provider)
 	}
 
+	// Ollama (and other local providers) allow arbitrary model names since users
+	// pull whatever models they want. Require base_url instead of api_key.
+	if m.Provider == ProviderOllama {
+		if m.BaseURL == "" {
+			return fmt.Errorf("base_url is required for provider '%s'", m.Provider)
+		}
+		return nil
+	}
+
+	// Cloud providers require an API key
+	if m.APIKey == "" {
+		return fmt.Errorf("api_key is required for provider '%s'", m.Provider)
+	}
+
+	supportedForProvider := SupportedModels[m.Provider]
 	for _, modelName := range m.AllowedModels {
 		found := false
 		for varName := range supportedForProvider {

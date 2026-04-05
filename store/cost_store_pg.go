@@ -49,7 +49,8 @@ func (s *PgCostStore) GetCostSummary(from, to time.Time, groupBy string) ([]Cost
 	rows, err := s.db.Query(
 		`SELECT `+groupExpr+` AS group_key, COUNT(*) AS turns,
 		 SUM(total_cost) AS total_cost, SUM(input_cost) AS input_cost, SUM(output_cost) AS output_cost,
-		 SUM(cache_read_cost) AS cache_read_cost, SUM(cache_write_cost) AS cache_write_cost
+		 SUM(cache_read_cost) AS cache_read_cost, SUM(cache_write_cost) AS cache_write_cost,
+		 COALESCE(SUM(input_tokens), 0) AS total_input_tokens, COALESCE(SUM(output_tokens), 0) AS total_output_tokens
 		 FROM turn_costs WHERE created_at >= $1 AND created_at <= $2
 		 GROUP BY group_key ORDER BY total_cost DESC`,
 		tsFrom(from), tsFrom(to),
@@ -62,7 +63,7 @@ func (s *PgCostStore) GetCostSummary(from, to time.Time, groupBy string) ([]Cost
 	var results []CostSummaryRow
 	for rows.Next() {
 		var r CostSummaryRow
-		if err := rows.Scan(&r.GroupKey, &r.Turns, &r.TotalCost, &r.InputCost, &r.OutputCost, &r.CacheReadCost, &r.CacheWriteCost); err != nil {
+		if err := rows.Scan(&r.GroupKey, &r.Turns, &r.TotalCost, &r.InputCost, &r.OutputCost, &r.CacheReadCost, &r.CacheWriteCost, &r.TotalInputTokens, &r.TotalOutputTokens); err != nil {
 			return nil, err
 		}
 		results = append(results, r)
@@ -73,7 +74,9 @@ func (s *PgCostStore) GetCostSummary(from, to time.Time, groupBy string) ([]Cost
 func (s *PgCostStore) GetRecentMissionCosts(limit int) ([]MissionCostRow, error) {
 	rows, err := s.db.Query(
 		`SELECT tc.mission_id, tc.mission_name, COALESCE(m.status, 'unknown'),
-		 COUNT(*) AS turns, SUM(tc.total_cost) AS total_cost, MIN(tc.created_at)
+		 COUNT(*) AS turns, SUM(tc.total_cost) AS total_cost,
+		 COALESCE(SUM(tc.input_tokens), 0) AS total_input_tokens, COALESCE(SUM(tc.output_tokens), 0) AS total_output_tokens,
+		 MIN(tc.created_at)
 		 FROM turn_costs tc
 		 LEFT JOIN missions m ON m.id = tc.mission_id
 		 GROUP BY tc.mission_id, tc.mission_name, m.status
@@ -89,7 +92,7 @@ func (s *PgCostStore) GetRecentMissionCosts(limit int) ([]MissionCostRow, error)
 	for rows.Next() {
 		var r MissionCostRow
 		var startedAtStr string
-		if err := rows.Scan(&r.MissionID, &r.MissionName, &r.Status, &r.Turns, &r.TotalCost, &startedAtStr); err != nil {
+		if err := rows.Scan(&r.MissionID, &r.MissionName, &r.Status, &r.Turns, &r.TotalCost, &r.TotalInputTokens, &r.TotalOutputTokens, &startedAtStr); err != nil {
 			return nil, err
 		}
 		r.StartedAt, _ = tsParse(startedAtStr)

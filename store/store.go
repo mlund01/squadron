@@ -209,6 +209,7 @@ type DatasetStore interface {
 // EventStore persists mission execution events for history/audit
 type EventStore interface {
 	StoreEvent(event MissionEvent) error
+	StoreEvents(events []MissionEvent) error
 	GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error)
 	GetEventsByTask(taskID string, limit, offset int) ([]MissionEvent, error)
 }

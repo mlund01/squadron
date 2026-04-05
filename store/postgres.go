@@ -1121,23 +1121,20 @@ func (s *PgEventStore) StoreEvents(events []MissionEvent) error {
 	if len(events) == 0 {
 		return nil
 	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	stmt, err := tx.Prepare(`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
-	if err != nil {
-		tx.Rollback()
-		return err
-	}
-	defer stmt.Close()
-	for _, e := range events {
-		if _, err := stmt.Exec(e.ID, e.MissionID, e.TaskID, e.SessionID, e.IterationIndex, e.EventType, e.DataJSON, tsFrom(e.CreatedAt)); err != nil {
-			tx.Rollback()
-			return err
+	const cols = 8
+	args := make([]interface{}, 0, len(events)*cols)
+	buf := make([]byte, 0, 256)
+	buf = append(buf, "INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES "...)
+	for i, e := range events {
+		if i > 0 {
+			buf = append(buf, ',')
 		}
+		base := i*cols + 1
+		buf = append(buf, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", base, base+1, base+2, base+3, base+4, base+5, base+6, base+7)...)
+		args = append(args, e.ID, e.MissionID, e.TaskID, e.SessionID, e.IterationIndex, e.EventType, e.DataJSON, tsFrom(e.CreatedAt))
 	}
-	return tx.Commit()
+	_, err := s.db.Exec(string(buf), args...)
+	return err
 }
 
 func (s *PgEventStore) GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error) {

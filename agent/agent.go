@@ -177,7 +177,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		tools["file_grep"] = &aitools.FolderGrepTool{Store: opts.FolderStore}
 	}
 
-	// Resolve skills and add load_skill/unload_skill tools
+	// Resolve skills and add load_skill tool
 	availableSkills := resolveSkills(agentCfg, cfg)
 	var promptSkills []prompts.SkillInfo
 	var skillMgr *aitools.SkillManager
@@ -191,7 +191,6 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			LoadedSkills: make(map[string]*aitools.SkillState),
 		}
 		tools["load_skill"] = aitools.NewLoadSkillTool(skillMgr)
-		tools["unload_skill"] = aitools.NewUnloadSkillTool(skillMgr)
 
 		for _, s := range availableSkills {
 			promptSkills = append(promptSkills, prompts.SkillInfo{

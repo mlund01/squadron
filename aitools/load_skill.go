@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 )
 
@@ -15,10 +16,9 @@ type SkillDefinition struct {
 	ToolRefs     []string
 }
 
-// SkillSessionManager is the interface for injecting/removing system prompts at runtime.
+// SkillSessionManager is the interface for injecting system prompts at runtime.
 type SkillSessionManager interface {
 	AddSystemPrompt(prompt string)
-	RemoveSystemPrompt(prompt string)
 }
 
 // SkillState tracks what was added when a skill was loaded.
@@ -100,9 +100,25 @@ func (t *LoadSkillTool) Call(ctx context.Context, params string) string {
 		}
 	}
 
-	// Inject skill instructions as a system prompt
-	if t.mgr.Session != nil && skill.Instructions != "" {
-		state.systemPrompt = fmt.Sprintf("# Skill: %s\n\n%s", skill.Name, skill.Instructions)
+	// Inject skill instructions + tool definitions as a system prompt
+	if t.mgr.Session != nil {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("# Skill: %s\n\n", skill.Name))
+		if skill.Instructions != "" {
+			sb.WriteString(skill.Instructions)
+			sb.WriteString("\n\n")
+		}
+		if len(state.toolNames) > 0 {
+			sb.WriteString("## Tools Added by This Skill\n\n")
+			for _, name := range state.toolNames {
+				if tool, ok := t.mgr.AgentTools[name]; ok {
+					sb.WriteString(fmt.Sprintf("### %s\n\n", name))
+					sb.WriteString(fmt.Sprintf("%s\n\n", tool.ToolDescription()))
+					sb.WriteString(fmt.Sprintf("**Input Schema:**\n```json\n%s\n```\n\n", tool.ToolPayloadSchema().String()))
+				}
+			}
+		}
+		state.systemPrompt = sb.String()
 		t.mgr.Session.AddSystemPrompt(state.systemPrompt)
 	}
 
@@ -111,61 +127,3 @@ func (t *LoadSkillTool) Call(ctx context.Context, params string) string {
 	return fmt.Sprintf("Skill '%s' loaded. Instructions and tools are now available.", input.Name)
 }
 
-// UnloadSkillTool allows agents to unload a previously loaded skill.
-type UnloadSkillTool struct {
-	mgr *SkillManager
-}
-
-func NewUnloadSkillTool(mgr *SkillManager) *UnloadSkillTool {
-	return &UnloadSkillTool{mgr: mgr}
-}
-
-func (t *UnloadSkillTool) ToolName() string { return "unload_skill" }
-
-func (t *UnloadSkillTool) ToolDescription() string {
-	return "Unload a previously loaded skill. Removes the skill's tools and instructions from your context."
-}
-
-func (t *UnloadSkillTool) ToolPayloadSchema() Schema {
-	return Schema{
-		Type: TypeObject,
-		Properties: PropertyMap{
-			"name": {
-				Type:        TypeString,
-				Description: "Name of the skill to unload",
-			},
-		},
-		Required: []string{"name"},
-	}
-}
-
-func (t *UnloadSkillTool) Call(ctx context.Context, params string) string {
-	var input struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal([]byte(params), &input); err != nil {
-		return fmt.Sprintf("Error: invalid input: %v", err)
-	}
-
-	t.mgr.mu.Lock()
-	defer t.mgr.mu.Unlock()
-
-	state, loaded := t.mgr.LoadedSkills[input.Name]
-	if !loaded {
-		return fmt.Sprintf("Error: skill '%s' is not loaded.", input.Name)
-	}
-
-	// Remove the skill's tools
-	for _, name := range state.toolNames {
-		delete(t.mgr.AgentTools, name)
-	}
-
-	// Remove the skill's system prompt
-	if t.mgr.Session != nil && state.systemPrompt != "" {
-		t.mgr.Session.RemoveSystemPrompt(state.systemPrompt)
-	}
-
-	delete(t.mgr.LoadedSkills, input.Name)
-
-	return fmt.Sprintf("Skill '%s' unloaded. Its tools and instructions have been removed.", input.Name)
-}

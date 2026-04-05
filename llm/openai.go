@@ -32,6 +32,16 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	return &OpenAIProvider{client: &client}
 }
 
+// NewOpenAICompatibleProvider creates a provider that targets an OpenAI-compatible
+// API at the given base URL (e.g. Ollama at http://localhost:11434/v1).
+func NewOpenAICompatibleProvider(baseURL string) *OpenAIProvider {
+	client := openai.NewClient(
+		option.WithBaseURL(baseURL),
+		option.WithAPIKey("ollama"), // dummy key; local servers ignore it
+	)
+	return &OpenAIProvider{client: &client}
+}
+
 func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	msgs := p.convertMessages(req.Messages)
 

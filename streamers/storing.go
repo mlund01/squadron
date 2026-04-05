@@ -303,8 +303,8 @@ func (h *StoringMissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	sessionKey := data.TaskName + ":" + data.Entity
 	h.storeEvent(protocol.EventSessionTurn, &data.TaskName, &sessionKey, extractIterationIndex(data.TaskName), data)
 
-	// Persist cost record for aggregation
-	if h.costs != nil && data.Cost > 0 {
+	// Persist cost record for aggregation (store even at $0 cost if tokens were used, for local models)
+	if h.costs != nil && (data.Cost > 0 || data.InputTokens > 0 || data.OutputTokens > 0) {
 		h.mu.Lock()
 		missionID := h.missionID
 		missionName := h.missionName

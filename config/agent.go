@@ -172,11 +172,15 @@ func (a *Agent) ResolveModel(models []Model) (*Model, string, error) {
 		// Check if this model key is in the provider's allowed models
 		for _, allowedKey := range m.AllowedModels {
 			if allowedKey == a.Model {
-				actualModel, ok := supportedModels[a.Model]
-				if !ok {
-					return nil, "", fmt.Errorf("model key '%s' not found in supported models for provider '%s'", a.Model, m.Provider)
+				if actualModel, ok := supportedModels[a.Model]; ok {
+					return m, actualModel, nil
 				}
-				return m, actualModel, nil
+				// For providers like Ollama that allow arbitrary models,
+				// use the key itself as the API model name
+				if m.Provider == ProviderOllama {
+					return m, a.Model, nil
+				}
+				return nil, "", fmt.Errorf("model key '%s' not found in supported models for provider '%s'", a.Model, m.Provider)
 			}
 		}
 	}

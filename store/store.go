@@ -266,23 +266,27 @@ type TurnCostRecord struct {
 
 // CostSummaryRow is an aggregated cost row grouped by a field (model, mission, date, etc.)
 type CostSummaryRow struct {
-	GroupKey       string  `json:"groupKey"`
-	Turns          int     `json:"turns"`
-	TotalCost      float64 `json:"totalCost"`
-	InputCost      float64 `json:"inputCost"`
-	OutputCost     float64 `json:"outputCost"`
-	CacheReadCost  float64 `json:"cacheReadCost"`
-	CacheWriteCost float64 `json:"cacheWriteCost"`
+	GroupKey          string  `json:"groupKey"`
+	Turns             int     `json:"turns"`
+	TotalCost         float64 `json:"totalCost"`
+	InputCost         float64 `json:"inputCost"`
+	OutputCost        float64 `json:"outputCost"`
+	CacheReadCost     float64 `json:"cacheReadCost"`
+	CacheWriteCost    float64 `json:"cacheWriteCost"`
+	TotalInputTokens  int     `json:"totalInputTokens"`
+	TotalOutputTokens int     `json:"totalOutputTokens"`
 }
 
 // MissionCostRow represents total cost for a single mission run.
 type MissionCostRow struct {
-	MissionID   string    `json:"missionId"`
-	MissionName string    `json:"missionName"`
-	Status      string    `json:"status"`
-	Turns       int       `json:"turns"`
-	TotalCost   float64   `json:"totalCost"`
-	StartedAt   time.Time `json:"startedAt"`
+	MissionID         string    `json:"missionId"`
+	MissionName       string    `json:"missionName"`
+	Status            string    `json:"status"`
+	Turns             int       `json:"turns"`
+	TotalCost         float64   `json:"totalCost"`
+	TotalInputTokens  int       `json:"totalInputTokens"`
+	TotalOutputTokens int       `json:"totalOutputTokens"`
+	StartedAt         time.Time `json:"startedAt"`
 }
 
 // DateFieldCostRow is a cost row grouped by date + a secondary field (model or mission).

@@ -8,6 +8,8 @@ Models define connections to LLM providers and which models are available.
 
 ## Defining Models
 
+### Cloud Providers
+
 ```hcl
 model "anthropic" {
   provider       = "anthropic"
@@ -28,13 +30,54 @@ model "gemini" {
 }
 ```
 
+### Local Models (Ollama)
+
+The `ollama` provider connects to any OpenAI-compatible local inference server. No API key is required.
+
+```hcl
+model "local" {
+  provider       = "ollama"
+  base_url       = "http://localhost:11434/v1"
+  allowed_models = ["gemma_4"]
+}
+```
+
+You can use any model that your local server supports. Model keys in `allowed_models` become the HCL reference names, and for arbitrary (non-predefined) model names the key is sent directly to the server as the model identifier:
+
+```hcl
+model "local" {
+  provider       = "ollama"
+  base_url       = "http://localhost:11434/v1"
+  allowed_models = ["gemma_4", "llama3", "mistral", "deepseek_r1"]
+}
+
+agent "researcher" {
+  model = models.local.llama3       # sends "llama3" to Ollama
+}
+
+agent "writer" {
+  model = models.local.gemma_4      # sends "gemma4" (predefined mapping)
+}
+```
+
+The `base_url` should point to the OpenAI-compatible API endpoint. Common values:
+
+| Server | Base URL |
+|--------|----------|
+| Ollama | `http://localhost:11434/v1` |
+| vLLM | `http://localhost:8000/v1` |
+| llama.cpp | `http://localhost:8080/v1` |
+| LM Studio | `http://localhost:1234/v1` |
+
 ## Attributes
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `provider` | string | Provider name: `anthropic`, `openai`, or `gemini` |
-| `allowed_models` | list | Model keys that can be used with this config |
-| `api_key` | string | API key for the provider |
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `provider` | string | yes | Provider name: `anthropic`, `openai`, `gemini`, or `ollama` |
+| `allowed_models` | list | yes | Model keys that can be used with this config |
+| `api_key` | string | cloud providers | API key (required for `anthropic`, `openai`, `gemini`) |
+| `base_url` | string | `ollama` only | URL for the OpenAI-compatible API endpoint |
+| `prompt_caching` | bool | no | Enable prompt caching (default: `true`) |
 
 ## Supported Models
 
@@ -81,6 +124,18 @@ model "gemini" {
 | `gemini_1_5_pro` | gemini-1.5-pro |
 | `gemini_1_5_flash` | gemini-1.5-flash |
 
+### Ollama (Local Models)
+
+The Ollama provider has one predefined convenience key:
+
+| Key | Model |
+|-----|-------|
+| `gemma_4` | gemma4 |
+
+Unlike cloud providers, the Ollama provider accepts **any model name** in `allowed_models`. If a key isn't in the predefined list above, it's sent directly to the server as-is. This means you can use whatever models you've pulled into Ollama (or any other OpenAI-compatible server) without waiting for Squadron to add explicit support.
+
+For example, `allowed_models = ["llama3", "codestral"]` will send `llama3` and `codestral` to the server as model identifiers.
+
 ## Referencing Models
 
 Use `models.<config_name>.<model_key>` to reference a model:
@@ -90,12 +145,18 @@ agent "assistant" {
   model = models.anthropic.claude_sonnet_4
 }
 
+agent "local_researcher" {
+  model = models.local.gemma_4
+}
+
 mission "pipeline" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
 }
 ```
+
+The `<model_key>` is whatever you put in `allowed_models`. For Ollama, this means custom model names work as references too — if you set `allowed_models = ["deepseek_r1"]`, you reference it as `models.local.deepseek_r1`.
 
 ## Multiple Configs Per Provider
 
@@ -151,3 +212,7 @@ model "anthropic" {
 The pricing block label must match a model key from `allowed_models`. Costs are shown in the command center's Costs tab and the per-mission cost breakdown.
 
 If no pricing override is specified, Squadron uses its built-in pricing table which is updated with each release.
+
+### Local Models and Cost Tracking
+
+Local models (Ollama provider) have no built-in pricing since they run on your own hardware. Squadron still tracks **token usage** for every turn, so you can monitor how many tokens your local models consume even though the dollar cost is $0.

@@ -75,6 +75,49 @@ storage {
 		})
 	})
 
+	Describe("ollama parsing", func() {
+		It("parses an ollama model block with base_url and no api_key", func() {
+			hcl := `
+variable "unused" { default = "x" }
+model "local" {
+  provider       = "ollama"
+  base_url       = "http://localhost:11434/v1"
+  allowed_models = ["gemma_4"]
+}
+storage {
+  backend = "sqlite"
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Models).To(HaveLen(1))
+			Expect(cfg.Models[0].Name).To(Equal("local"))
+			Expect(cfg.Models[0].Provider).To(Equal(config.ProviderOllama))
+			Expect(cfg.Models[0].BaseURL).To(Equal("http://localhost:11434/v1"))
+			Expect(cfg.Models[0].APIKey).To(Equal(""))
+			Expect(cfg.Models[0].AllowedModels).To(ConsistOf("gemma_4"))
+		})
+
+		It("parses an ollama model with arbitrary model names", func() {
+			hcl := `
+variable "unused" { default = "x" }
+model "local" {
+  provider       = "ollama"
+  base_url       = "http://localhost:11434/v1"
+  allowed_models = ["llama3", "mistral", "gemma_4"]
+}
+storage {
+  backend = "sqlite"
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Models[0].AllowedModels).To(ConsistOf("llama3", "mistral", "gemma_4"))
+		})
+	})
+
 	Describe("Validate", func() {
 		It("rejects unsupported provider", func() {
 			hcl := minimalVarsHCL() + `
@@ -137,6 +180,38 @@ model "openai" {
 				APIKey:        "k",
 			}
 			Expect(m.Validate()).To(Succeed())
+		})
+
+		It("accepts ollama provider with arbitrary model names and base_url", func() {
+			m := config.Model{
+				Name:          "local",
+				Provider:      config.ProviderOllama,
+				AllowedModels: []string{"gemma_4", "llama3", "my_custom_model"},
+				BaseURL:       "http://localhost:11434/v1",
+			}
+			Expect(m.Validate()).To(Succeed())
+		})
+
+		It("rejects ollama provider without base_url", func() {
+			m := config.Model{
+				Name:          "local",
+				Provider:      config.ProviderOllama,
+				AllowedModels: []string{"gemma_4"},
+			}
+			err := m.Validate()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("base_url is required"))
+		})
+
+		It("rejects cloud provider without api_key", func() {
+			m := config.Model{
+				Name:          "openai",
+				Provider:      config.ProviderOpenAI,
+				AllowedModels: []string{"gpt_4o"},
+			}
+			err := m.Validate()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("api_key is required"))
 		})
 	})
 })

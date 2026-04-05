@@ -7,38 +7,39 @@ import (
 )
 
 const (
-	defaultBatchSize     = 50
+	defaultMaxBytes      = 256 * 1024 // 256 KB
 	defaultFlushInterval = 500 * time.Millisecond
 )
 
 // BatchingEventStore wraps an EventStore and buffers StoreEvent calls,
-// flushing them in batches either when the buffer reaches maxBatchSize
-// or when the flush interval elapses — whichever comes first.
+// flushing them in batches either when the buffered payload reaches
+// maxBytes or when the flush interval elapses — whichever comes first.
 type BatchingEventStore struct {
 	inner         EventStore
-	maxBatchSize  int
+	maxBytes      int
 	flushInterval time.Duration
 
-	mu      sync.Mutex
-	buf     []MissionEvent
-	timer   *time.Timer
-	closed  bool
-	flushCh chan struct{} // signals flush goroutine
-	doneCh  chan struct{} // closed when flush goroutine exits
+	mu       sync.Mutex
+	buf      []MissionEvent
+	bufBytes int
+	timer    *time.Timer
+	closed   bool
+	flushCh  chan struct{} // signals flush goroutine
+	doneCh   chan struct{} // closed when flush goroutine exits
 }
 
 // NewBatchingEventStore creates a batching wrapper around an existing EventStore.
 func NewBatchingEventStore(inner EventStore) *BatchingEventStore {
-	return NewBatchingEventStoreWithOptions(inner, defaultBatchSize, defaultFlushInterval)
+	return NewBatchingEventStoreWithOptions(inner, defaultMaxBytes, defaultFlushInterval)
 }
 
 // NewBatchingEventStoreWithOptions creates a batching wrapper with custom settings.
-func NewBatchingEventStoreWithOptions(inner EventStore, maxBatchSize int, flushInterval time.Duration) *BatchingEventStore {
+func NewBatchingEventStoreWithOptions(inner EventStore, maxBytes int, flushInterval time.Duration) *BatchingEventStore {
 	b := &BatchingEventStore{
 		inner:         inner,
-		maxBatchSize:  maxBatchSize,
+		maxBytes:      maxBytes,
 		flushInterval: flushInterval,
-		buf:           make([]MissionEvent, 0, maxBatchSize),
+		buf:           make([]MissionEvent, 0, 64),
 		flushCh:       make(chan struct{}, 1),
 		doneCh:        make(chan struct{}),
 	}
@@ -46,8 +47,8 @@ func NewBatchingEventStoreWithOptions(inner EventStore, maxBatchSize int, flushI
 	return b
 }
 
-// StoreEvent buffers a single event. If the buffer reaches maxBatchSize,
-// it triggers an immediate flush.
+// StoreEvent buffers a single event. If the buffered payload size reaches
+// maxBytes, it triggers an immediate flush.
 func (b *BatchingEventStore) StoreEvent(event MissionEvent) error {
 	b.mu.Lock()
 	if b.closed {
@@ -55,7 +56,8 @@ func (b *BatchingEventStore) StoreEvent(event MissionEvent) error {
 		return b.inner.StoreEvent(event)
 	}
 	b.buf = append(b.buf, event)
-	needsFlush := len(b.buf) >= b.maxBatchSize
+	b.bufBytes += len(event.DataJSON)
+	needsFlush := b.bufBytes >= b.maxBytes
 
 	// Start the timer on first buffered event
 	if len(b.buf) == 1 && b.timer == nil {
@@ -128,7 +130,8 @@ func (b *BatchingEventStore) flush() {
 		return
 	}
 	batch := b.buf
-	b.buf = make([]MissionEvent, 0, b.maxBatchSize)
+	b.buf = make([]MissionEvent, 0, 64)
+	b.bufBytes = 0
 	if b.timer != nil {
 		b.timer.Stop()
 		b.timer = nil

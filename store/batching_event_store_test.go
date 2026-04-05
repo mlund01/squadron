@@ -1,8 +1,10 @@
 package store_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -45,11 +47,20 @@ var _ = Describe("BatchingEventStore", func() {
 		}
 	}
 
+	makeLargeEvent := func(id, missionID string, payloadBytes int) store.MissionEvent {
+		return store.MissionEvent{
+			ID:        id,
+			MissionID: missionID,
+			EventType: "agent_tool_complete",
+			DataJSON:  fmt.Sprintf(`{"result":"%s"}`, strings.Repeat("x", payloadBytes)),
+			CreatedAt: time.Now(),
+		}
+	}
+
 	It("flushes events on read (GetEventsByMission)", func() {
 		missionID, err := bundle.Missions.CreateMission("m1", "{}", "{}")
 		Expect(err).NotTo(HaveOccurred())
 
-		// Store events through the batching layer (bundle.Events is BatchingEventStore)
 		for i := 0; i < 5; i++ {
 			Expect(bundle.Events.StoreEvent(makeEvent("evt-"+string(rune('a'+i)), missionID))).To(Succeed())
 		}
@@ -98,11 +109,52 @@ var _ = Describe("BatchingEventStore", func() {
 		// Wait for the flush interval (default 500ms) plus some margin
 		time.Sleep(800 * time.Millisecond)
 
-		// The batching layer wraps the inner store, so we need to query through
-		// the same batching layer (which will also flush on read)
 		results, err := bundle.Events.GetEventsByMission(missionID, 100, 0)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(results).To(HaveLen(1))
+	})
+
+	It("flushes when buffered payload size exceeds threshold", func() {
+		dir, err := os.MkdirTemp("", "batch-size-test-*")
+		Expect(err).NotTo(HaveOccurred())
+		defer os.RemoveAll(dir)
+
+		dbPath := filepath.Join(dir, "test.db")
+		// Use a raw SQLite store so we can wrap it with a small maxBytes
+		rawBundle, err := store.NewSQLiteBundle(dbPath)
+		Expect(err).NotTo(HaveOccurred())
+		defer rawBundle.Close()
+
+		// Create a batching store with a 1 KB threshold and very long timer
+		// so only the size trigger fires
+		batcher := store.NewBatchingEventStoreWithOptions(rawBundle.Events, 1024, 10*time.Second)
+		defer batcher.Close()
+
+		missionID, err := rawBundle.Missions.CreateMission("m1", "{}", "{}")
+		Expect(err).NotTo(HaveOccurred())
+
+		// Write a few small events — should stay buffered
+		for i := 0; i < 3; i++ {
+			Expect(batcher.StoreEvent(makeEvent(fmt.Sprintf("small-%d", i), missionID))).To(Succeed())
+		}
+
+		// Give flush goroutine a moment to run (it shouldn't — we're under threshold)
+		time.Sleep(50 * time.Millisecond)
+
+		// Query directly on the raw store (bypassing batcher flush-on-read)
+		results, err := rawBundle.Events.GetEventsByMission(missionID, 100, 0)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(HaveLen(0), "small events should still be buffered")
+
+		// Now add a large event that pushes us over the 1 KB threshold
+		Expect(batcher.StoreEvent(makeLargeEvent("big-1", missionID, 2000))).To(Succeed())
+
+		// Give flush goroutine time to process
+		time.Sleep(50 * time.Millisecond)
+
+		results, err = rawBundle.Events.GetEventsByMission(missionID, 100, 0)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(results).To(HaveLen(4), "all events should be flushed after exceeding byte threshold")
 	})
 
 	It("batch-inserts via StoreEvents pass-through", func() {

@@ -159,13 +159,17 @@ func NewPostgresBundle(connStr string) (*Bundle, error) {
 	db.Exec(`CREATE TABLE IF NOT EXISTS task_inputs (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES mission_tasks(id), iteration_index INTEGER, objective TEXT NOT NULL, created_at TEXT)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_task_inputs_task ON task_inputs(task_id)`)
 
+	batchingEvents := NewBatchingEventStore(&PgEventStore{db: db})
 	return &Bundle{
 		Missions: &PgMissionStore{db: db},
 		Datasets: &PgDatasetStore{db: db},
 		Sessions: &PgSessionStore{db: db},
-		Events:   &PgEventStore{db: db},
+		Events:   batchingEvents,
 		Costs:    &PgCostStore{db: db},
-		closer:   db.Close,
+		closer: func() error {
+			batchingEvents.Close()
+			return db.Close()
+		},
 	}, nil
 }
 
@@ -1111,6 +1115,29 @@ func (s *PgEventStore) StoreEvent(event MissionEvent) error {
 		event.ID, event.MissionID, event.TaskID, event.SessionID, event.IterationIndex, event.EventType, event.DataJSON, tsFrom(event.CreatedAt),
 	)
 	return err
+}
+
+func (s *PgEventStore) StoreEvents(events []MissionEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, e := range events {
+		if _, err := stmt.Exec(e.ID, e.MissionID, e.TaskID, e.SessionID, e.IterationIndex, e.EventType, e.DataJSON, tsFrom(e.CreatedAt)); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *PgEventStore) GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error) {

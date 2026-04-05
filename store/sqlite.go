@@ -188,13 +188,17 @@ func NewSQLiteBundle(dbPath string) (*Bundle, error) {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
+	batchingEvents := NewBatchingEventStore(&SQLiteEventStore{db: db})
 	return &Bundle{
 		Missions: &SQLiteMissionStore{db: db},
 		Datasets: &SQLiteDatasetStore{db: db},
 		Sessions: &SQLiteSessionStore{db: db},
-		Events:   &SQLiteEventStore{db: db},
+		Events:   batchingEvents,
 		Costs:    &SQLiteCostStore{db: db},
-		closer:   db.Close,
+		closer: func() error {
+			batchingEvents.Close()
+			return db.Close()
+		},
 	}, nil
 }
 
@@ -1136,6 +1140,29 @@ func (s *SQLiteEventStore) StoreEvent(event MissionEvent) error {
 		event.ID, event.MissionID, event.TaskID, event.SessionID, event.IterationIndex, event.EventType, event.DataJSON, tsFrom(event.CreatedAt),
 	)
 	return err
+}
+
+func (s *SQLiteEventStore) StoreEvents(events []MissionEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, e := range events {
+		if _, err := stmt.Exec(e.ID, e.MissionID, e.TaskID, e.SessionID, e.IterationIndex, e.EventType, e.DataJSON, tsFrom(e.CreatedAt)); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *SQLiteEventStore) GetEventsByMission(missionID string, limit, offset int) ([]MissionEvent, error) {

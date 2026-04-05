@@ -100,6 +100,10 @@ type Agent struct {
 	Personality string   `hcl:"personality"`
 	Role        string   `hcl:"role"`
 	Tools       []string `hcl:"tools,optional"`
+	Skills      []string `hcl:"-"`
+
+	// Agent-scoped skills (parsed manually)
+	LocalSkills []Skill `hcl:"-" json:"localSkills,omitempty"`
 
 	// Pruning settings (optional block)
 	Pruning *Pruning `hcl:"pruning,block"`

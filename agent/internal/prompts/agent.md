@@ -106,6 +106,8 @@ The LEARNINGS block is optional but valuable for sequential iterations where con
 
 {{SECRETS}}
 
+{{SKILLS}}
+
 ## Begin
 
 You will now receive a task from the user. Decide how to respond based on the guidelines above.

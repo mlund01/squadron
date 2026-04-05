@@ -177,6 +177,29 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		tools["file_grep"] = &aitools.FolderGrepTool{Store: opts.FolderStore}
 	}
 
+	// Resolve skills and add load_skill tool
+	availableSkills := resolveSkills(agentCfg, cfg)
+	var promptSkills []prompts.SkillInfo
+	if len(availableSkills) > 0 {
+		// Create load_skill tool — session will be set after session creation
+		loadSkillTool := &aitools.LoadSkillTool{
+			AvailableSkills: availableSkills,
+			AgentTools:      tools,
+			ToolBuilder: func(toolRefs []string) map[string]aitools.Tool {
+				return config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+			},
+			LoadedSkills: make(map[string]bool),
+		}
+		tools["load_skill"] = loadSkillTool
+
+		for _, s := range availableSkills {
+			promptSkills = append(promptSkills, prompts.SkillInfo{
+				Name:        s.Name,
+				Description: s.Description,
+			})
+		}
+	}
+
 	// Determine mode (defaults to chat, can be overridden via Options)
 	mode := config.ModeChat
 	if opts.Mode != nil {
@@ -194,7 +217,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			Description: s.Description,
 		})
 	}
-	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(tools, mode, promptSecrets))
+	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(tools, mode, promptSecrets, promptSkills))
 	systemPrompts = append(systemPrompts,
 		fmt.Sprintf("Personality: %s", agentCfg.Personality),
 		fmt.Sprintf("Role: %s", agentCfg.Role),
@@ -218,6 +241,11 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	session := llm.NewSession(provider, actualModelName, systemPrompts...)
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (agentCfg.GetPruneOn() == 0 || (agentCfg.GetPruneOn()-agentCfg.GetPruneTo()) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
+
+	// Wire session into load_skill tool for system prompt injection
+	if loadSkill, ok := tools["load_skill"].(*aitools.LoadSkillTool); ok {
+		loadSkill.Session = session
+	}
 
 	// Set stop sequences to prevent LLM from hallucinating observations
 	session.SetStopSequences([]string{"___STOP___"})
@@ -446,4 +474,41 @@ func formatDatasetInfo(datasets []aitools.DatasetInfo) string {
 	}
 
 	return sb.String()
+}
+
+// resolveSkills builds the map of available skills for an agent from global config + agent-local skills.
+func resolveSkills(agentCfg *config.Agent, cfg *config.Config) map[string]*aitools.SkillDefinition {
+	result := make(map[string]*aitools.SkillDefinition)
+
+	// Index global skills
+	globalSkills := make(map[string]*config.Skill)
+	for i := range cfg.Skills {
+		globalSkills[cfg.Skills[i].Name] = &cfg.Skills[i]
+	}
+
+	// Resolve skill references from agent's skills list (global + plugin skills)
+	for _, ref := range agentCfg.Skills {
+		name := strings.TrimPrefix(ref, "skills.")
+		if s, ok := globalSkills[name]; ok {
+			result[name] = &aitools.SkillDefinition{
+				Name:        s.Name,
+				Description: s.Description,
+				Instructions: s.Instructions,
+				ToolRefs:    s.Tools,
+			}
+		}
+	}
+
+	// Add agent-local skills (implicitly available, no need to list in skills = [...])
+	for i := range agentCfg.LocalSkills {
+		s := &agentCfg.LocalSkills[i]
+		result[s.Name] = &aitools.SkillDefinition{
+			Name:        s.Name,
+			Description: s.Description,
+			Instructions: s.Instructions,
+			ToolRefs:    s.Tools,
+		}
+	}
+
+	return result
 }

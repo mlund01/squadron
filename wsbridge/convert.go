@@ -36,7 +36,30 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		})
 	}
 
-	// Add mission-scoped agents
+	// Add global skills
+	for _, s := range cfg.Skills {
+		ic.Skills = append(ic.Skills, protocol.SkillInfo{
+			Name:         s.Name,
+			Description:  s.Description,
+			Instructions: s.Instructions,
+			Tools:        s.Tools,
+		})
+	}
+
+	// Add agent-scoped skills
+	for _, a := range cfg.Agents {
+		for _, s := range a.LocalSkills {
+			ic.Skills = append(ic.Skills, protocol.SkillInfo{
+				Name:         s.Name,
+				Description:  s.Description,
+				Instructions: s.Instructions,
+				Tools:        s.Tools,
+				Agent:        a.Name,
+			})
+		}
+	}
+
+	// Add mission-scoped agents and their local skills
 	for _, m := range cfg.Missions {
 		for _, a := range m.LocalAgents {
 			ic.Agents = append(ic.Agents, protocol.AgentInfo{
@@ -46,6 +69,15 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 				Tools:   a.Tools,
 				Mission: m.Name,
 			})
+			for _, s := range a.LocalSkills {
+				ic.Skills = append(ic.Skills, protocol.SkillInfo{
+					Name:         s.Name,
+					Description:  s.Description,
+					Instructions: s.Instructions,
+					Tools:        s.Tools,
+					Agent:        a.Name,
+				})
+			}
 		}
 	}
 

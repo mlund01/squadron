@@ -129,6 +129,17 @@ func (s *Session) AddSystemPrompt(prompt string) {
 	s.logMessage(fmt.Sprintf("System Prompt %d", len(s.systemPrompts)), prompt)
 }
 
+// RemoveSystemPrompt removes the first system prompt that matches the given content.
+func (s *Session) RemoveSystemPrompt(prompt string) {
+	for i, sp := range s.systemPrompts {
+		if sp == prompt {
+			s.systemPrompts = append(s.systemPrompts[:i], s.systemPrompts[i+1:]...)
+			s.logMessage("System Prompt Removed", prompt[:min(80, len(prompt))]+"...")
+			return
+		}
+	}
+}
+
 func (s *Session) SetStopSequences(sequences []string) {
 	s.stopSequences = sequences
 }

@@ -177,20 +177,21 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		tools["file_grep"] = &aitools.FolderGrepTool{Store: opts.FolderStore}
 	}
 
-	// Resolve skills and add load_skill tool
+	// Resolve skills and add load_skill/unload_skill tools
 	availableSkills := resolveSkills(agentCfg, cfg)
 	var promptSkills []prompts.SkillInfo
+	var skillMgr *aitools.SkillManager
 	if len(availableSkills) > 0 {
-		// Create load_skill tool — session will be set after session creation
-		loadSkillTool := &aitools.LoadSkillTool{
+		skillMgr = &aitools.SkillManager{
 			AvailableSkills: availableSkills,
 			AgentTools:      tools,
 			ToolBuilder: func(toolRefs []string) map[string]aitools.Tool {
 				return config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
 			},
-			LoadedSkills: make(map[string]bool),
+			LoadedSkills: make(map[string]*aitools.SkillState),
 		}
-		tools["load_skill"] = loadSkillTool
+		tools["load_skill"] = aitools.NewLoadSkillTool(skillMgr)
+		tools["unload_skill"] = aitools.NewUnloadSkillTool(skillMgr)
 
 		for _, s := range availableSkills {
 			promptSkills = append(promptSkills, prompts.SkillInfo{
@@ -242,9 +243,9 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (agentCfg.GetPruneOn() == 0 || (agentCfg.GetPruneOn()-agentCfg.GetPruneTo()) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
-	// Wire session into load_skill tool for system prompt injection
-	if loadSkill, ok := tools["load_skill"].(*aitools.LoadSkillTool); ok {
-		loadSkill.Session = session
+	// Wire session into skill manager for system prompt injection/removal
+	if skillMgr != nil {
+		skillMgr.Session = session
 	}
 
 	// Set stop sequences to prevent LLM from hallucinating observations

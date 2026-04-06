@@ -177,6 +177,29 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		tools["file_grep"] = &aitools.FolderGrepTool{Store: opts.FolderStore}
 	}
 
+	// Resolve skills and add load_skill tool
+	availableSkills := resolveSkills(agentCfg, cfg)
+	var promptSkills []prompts.SkillInfo
+	var skillMgr *aitools.SkillManager
+	if len(availableSkills) > 0 {
+		skillMgr = &aitools.SkillManager{
+			AvailableSkills: availableSkills,
+			AgentTools:      tools,
+			ToolBuilder: func(toolRefs []string) map[string]aitools.Tool {
+				return config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+			},
+			LoadedSkills: make(map[string]*aitools.SkillState),
+		}
+		tools["load_skill"] = aitools.NewLoadSkillTool(skillMgr)
+
+		for _, s := range availableSkills {
+			promptSkills = append(promptSkills, prompts.SkillInfo{
+				Name:        s.Name,
+				Description: s.Description,
+			})
+		}
+	}
+
 	// Determine mode (defaults to chat, can be overridden via Options)
 	mode := config.ModeChat
 	if opts.Mode != nil {
@@ -194,7 +217,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			Description: s.Description,
 		})
 	}
-	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(mode, promptSecrets))
+	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(mode, promptSecrets, promptSkills))
 	systemPrompts = append(systemPrompts,
 		fmt.Sprintf("Personality: %s", agentCfg.Personality),
 		fmt.Sprintf("Role: %s", agentCfg.Role),
@@ -221,6 +244,11 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 
 	// Set tools on session for native tool calling
 	session.SetTools(aitools.ToolsToDefinitions(tools))
+
+	// Wire session into skill manager for system prompt injection/removal
+	if skillMgr != nil {
+		skillMgr.Session = session
+	}
 
 	if opts.DebugFile != "" {
 		if err := session.EnableDebug(opts.DebugFile); err != nil {
@@ -446,4 +474,41 @@ func formatDatasetInfo(datasets []aitools.DatasetInfo) string {
 	}
 
 	return sb.String()
+}
+
+// resolveSkills builds the map of available skills for an agent from global config + agent-local skills.
+func resolveSkills(agentCfg *config.Agent, cfg *config.Config) map[string]*aitools.SkillDefinition {
+	result := make(map[string]*aitools.SkillDefinition)
+
+	// Index global skills
+	globalSkills := make(map[string]*config.Skill)
+	for i := range cfg.Skills {
+		globalSkills[cfg.Skills[i].Name] = &cfg.Skills[i]
+	}
+
+	// Resolve skill references from agent's skills list (global + plugin skills)
+	for _, ref := range agentCfg.Skills {
+		name := strings.TrimPrefix(ref, "skills.")
+		if s, ok := globalSkills[name]; ok {
+			result[name] = &aitools.SkillDefinition{
+				Name:        s.Name,
+				Description: s.Description,
+				Instructions: s.Instructions,
+				ToolRefs:    s.Tools,
+			}
+		}
+	}
+
+	// Add agent-local skills (implicitly available, no need to list in skills = [...])
+	for i := range agentCfg.LocalSkills {
+		s := &agentCfg.LocalSkills[i]
+		result[s.Name] = &aitools.SkillDefinition{
+			Name:        s.Name,
+			Description: s.Description,
+			Instructions: s.Instructions,
+			ToolRefs:    s.Tools,
+		}
+	}
+
+	return result
 }

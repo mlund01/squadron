@@ -1,0 +1,108 @@
+---
+title: Skills
+---
+
+# Skills
+
+Skills are on-demand capability packages for agents. Each skill has a description (so the agent knows when to use it), instructions (injected when loaded), and optionally a set of tools that become available upon loading. This keeps agent context lean until a skill is actually needed.
+
+## Defining Skills
+
+```hcl
+skill "web_scraping" {
+  description  = "Load when you need to extract data from web pages"
+  instructions = load("./skills/web_scraping.md")
+  tools        = [plugins.playwright.browser_navigate, plugins.playwright.browser_snapshot]
+}
+
+skill "data_analysis" {
+  description  = "Load when you need to analyze datasets"
+  instructions = "Use the dataset tools to query, filter, and aggregate data..."
+}
+```
+
+## Attributes
+
+| Attribute | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `description` | string | yes | Short description — shown to the agent so it knows when to load the skill |
+| `instructions` | string | yes | Detailed instructions injected as a system prompt when loaded. Use `load()` for long content. |
+| `tools` | list | no | Tools that become available to the agent when the skill is loaded |
+
+## Assigning Skills to Agents
+
+Agents reference global skills via the `skills` attribute:
+
+```hcl
+agent "researcher" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Thorough"
+  role        = "Research specialist"
+  tools       = [builtins.http.get]
+  skills      = [skills.web_scraping, skills.data_analysis]
+}
+```
+
+The agent's system prompt will list available skills with their descriptions. At runtime, the agent calls `load_skill` when it decides a skill is needed.
+
+## Agent-Scoped Skills
+
+Skills can be defined inside an agent block, making them available only to that agent:
+
+```hcl
+agent "assistant" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Helpful"
+  role        = "General assistant"
+
+  skill "summarizer" {
+    description  = "Load when asked to summarize content"
+    instructions = "Summarize content in exactly 3 bullet points. Be concise."
+  }
+
+  skill "translator" {
+    description  = "Load when asked to translate text"
+    instructions = load("./skills/translator.md")
+    tools        = [plugins.translator.translate]
+  }
+}
+```
+
+Agent-scoped skills are implicitly available — they don't need to be listed in `skills = [...]`. They can also be used on mission-scoped agents:
+
+```hcl
+mission "research" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+
+  agent "worker" {
+    model       = models.anthropic.claude_sonnet_4
+    personality = "Efficient"
+    role        = "Worker"
+    skills      = [skills.web_scraping]
+
+    skill "mission_helper" {
+      description  = "Load for mission-specific analysis"
+      instructions = load("./skills/mission_analysis.md")
+    }
+  }
+
+  agents = [agents.worker]
+  task "analyze" { objective = "Analyze the target" }
+}
+```
+
+## How Skills Work at Runtime
+
+1. The agent sees available skills listed in its system prompt (name + description)
+2. When the agent decides a skill is needed, it calls `load_skill` with the skill name
+3. The skill's instructions are injected as a **system prompt** (persistent, survives compaction and pruning)
+4. The skill's tools (if any) are added to the agent's available tools
+5. The agent receives a confirmation and proceeds using the skill's instructions and tools
+
+## Rules
+
+- A scoped skill name must not conflict with any global skill name
+- Two agents can each define a scoped skill with the same name (independently scoped)
+- `load_skill` is available to agents only, not commanders
+- Skills persist through compaction and pruning because they are injected as system prompts
+- `instructions` can be an inline string or loaded from a file via `load()`

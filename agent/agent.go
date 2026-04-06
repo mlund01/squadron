@@ -144,8 +144,10 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		}
 	}
 
-	// Build tools map
+	// Build tools map and add sanitized aliases so LLM tool calls
+	// (which use API-safe names like "plugins_shell_echo") resolve correctly
 	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+	aitools.AddSanitizedAliases(tools)
 
 	// Create result store and interceptor for large results
 	resultStore := aitools.NewMemoryResultStore()
@@ -186,7 +188,9 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			AvailableSkills: availableSkills,
 			AgentTools:      tools,
 			ToolBuilder: func(toolRefs []string) map[string]aitools.Tool {
-				return config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+				t := config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+				aitools.AddSanitizedAliases(t)
+				return t
 			},
 			LoadedSkills: make(map[string]*aitools.SkillState),
 		}

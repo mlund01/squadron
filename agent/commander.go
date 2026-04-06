@@ -1342,13 +1342,14 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			}
 		}
 
+		// Send tool results back to the session (must happen before exit
+		// so the session always has matching tool_result for every tool_use)
+		s.session.AddToolResults(toolResults)
+
 		// If task is complete, exit the loop
 		if s.taskComplete.IsCompleted() {
 			break
 		}
-
-		// Send tool results back to the session
-		s.session.AddToolResults(toolResults)
 	}
 
 	if s.turnLogger != nil {

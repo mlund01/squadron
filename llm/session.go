@@ -129,6 +129,7 @@ func (s *Session) AddSystemPrompt(prompt string) {
 	s.logMessage(fmt.Sprintf("System Prompt %d", len(s.systemPrompts)), prompt)
 }
 
+
 func (s *Session) SetStopSequences(sequences []string) {
 	s.stopSequences = sequences
 }

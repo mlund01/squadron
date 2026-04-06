@@ -15,8 +15,14 @@ var agentPromptTemplate string
 //go:embed commander.md
 var commanderPromptTemplate string
 
+// SkillInfo contains name and description for an available skill (passed to prompts)
+type SkillInfo struct {
+	Name        string
+	Description string
+}
+
 // GetAgentPrompt returns the agent system prompt with tools and mode injected
-func GetAgentPrompt(tools map[string]aitools.Tool, mode config.AgentMode, secrets []SecretInfo) string {
+func GetAgentPrompt(tools map[string]aitools.Tool, mode config.AgentMode, secrets []SecretInfo, skills []SkillInfo) string {
 	prompt := agentPromptTemplate
 
 	// Inject tools
@@ -26,6 +32,10 @@ func GetAgentPrompt(tools map[string]aitools.Tool, mode config.AgentMode, secret
 	// Inject secrets section
 	secretsSection := formatSecretsSection(secrets)
 	prompt = strings.Replace(prompt, "{{SECRETS}}", secretsSection, 1)
+
+	// Inject skills section
+	skillsSection := formatSkillsSection(skills)
+	prompt = strings.Replace(prompt, "{{SKILLS}}", skillsSection, 1)
 
 	// Inject mode instructions
 	modeInstructions := getModeInstructions(mode)
@@ -40,6 +50,24 @@ func GetAgentPrompt(tools map[string]aitools.Tool, mode config.AgentMode, secret
 	prompt = strings.Replace(prompt, "{{RULES}}", rules, 1)
 
 	return prompt
+}
+
+// formatSkillsSection formats the available skills for the prompt
+func formatSkillsSection(skills []SkillInfo) string {
+	if len(skills) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("## Available Skills\n\n")
+	sb.WriteString("You can load specialized skills on-demand using the `load_skill` tool. ")
+	sb.WriteString("Each skill provides additional tools and detailed instructions for specific tasks.\n\n")
+	sb.WriteString("**Load a skill when its description matches what you need to do:**\n\n")
+	for _, s := range skills {
+		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
+	}
+	sb.WriteString("\nUse `load_skill` with the skill name to activate it. Once loaded, follow the skill's instructions and use its newly available tools.\n")
+	return sb.String()
 }
 
 // formatSecretsSection formats the secrets info for the prompt

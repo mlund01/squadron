@@ -6,6 +6,35 @@ title: Functions
 
 Squadron provides built-in HCL functions for defining schemas concisely. These functions are available everywhere a schema can be defined: tool inputs, mission inputs, task outputs, and dataset schemas.
 
+## load
+
+The `load()` function reads a file's contents as a string at config parse time. Use it to keep long text (skill instructions, task objectives, agent personalities) in separate files.
+
+**Signature:** `load(path)`
+
+```hcl
+skill "web_scraping" {
+  description  = "Load when you need to scrape web pages"
+  instructions = load("./skills/web_scraping.md")
+}
+
+task "complex" {
+  objective = load("./objectives/complex_task.md")
+}
+```
+
+### Path Resolution
+
+- `load("./foo.md")` — relative to the config file's directory
+- `load("skills/foo.md")` — relative to the working directory where Squadron was started
+- Paths starting with `/` are not allowed
+
+### Supported File Types
+
+Only `.md` and `.txt` files can be loaded.
+
+---
+
 ## Schema Helper Functions
 
 Instead of verbose `field` blocks, use the shorthand `= { ... }` attribute form with schema helper functions. Both forms are fully equivalent.

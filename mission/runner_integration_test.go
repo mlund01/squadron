@@ -44,11 +44,11 @@ var _ = Describe("Runner Integration", func() {
 			// Agent: immediately returns an answer
 			provider := newMockProvider(
 				// Turn 1 (commander): call the agent
-				mockResponse{Content: cmdCallAgent("worker", "Do the work")},
+				cmdCallAgent("worker", "Do the work"),
 				// Turn 1 (agent): answer
-				mockResponse{Content: agentAnswer("Work is done.")},
+				agentAnswer("Work is done."),
 				// Turn 2 (commander): complete
-				mockResponse{Content: cmdTaskComplete()},
+				cmdTaskComplete(),
 			)
 
 			streamer, err := runMission(cfg, "test_single", provider, nil)
@@ -85,13 +85,13 @@ var _ = Describe("Runner Integration", func() {
 
 			provider := newMockProvider(
 				// Task "fetch" — commander calls agent, agent answers, commander completes
-				mockResponse{Content: cmdCallAgent("worker", "Fetch from API")},
-				mockResponse{Content: agentAnswer("Fetched 42 records.")},
-				mockResponse{Content: cmdTaskComplete()},
+				cmdCallAgent("worker", "Fetch from API"),
+				agentAnswer("Fetched 42 records."),
+				cmdTaskComplete(),
 				// Task "process" — same flow
-				mockResponse{Content: cmdCallAgent("worker", "Process records")},
-				mockResponse{Content: agentAnswer("Processed all records.")},
-				mockResponse{Content: cmdTaskComplete()},
+				cmdCallAgent("worker", "Process records"),
+				agentAnswer("Processed all records."),
+				cmdTaskComplete(),
 			)
 
 			streamer, err := runMission(cfg, "test_deps", provider, nil)
@@ -135,16 +135,16 @@ var _ = Describe("Runner Integration", func() {
 
 			provider := newMockProvider(
 				// Commander: call agent
-				mockResponse{Content: cmdCallAgent("worker", "Extract the data")},
+				cmdCallAgent("worker", "Extract the data"),
 				// Agent: answer
-				mockResponse{Content: agentAnswer("Title is Test, count is 5.")},
+				agentAnswer("Title is Test, count is 5."),
 				// Commander: submit output
-				mockResponse{Content: cmdSubmitOutput(map[string]interface{}{
+				cmdSubmitOutput(map[string]interface{}{
 					"title": "Test",
 					"count": 5,
-				})},
+				}),
 				// Commander: complete
-				mockResponse{Content: cmdTaskComplete()},
+				cmdTaskComplete(),
 			)
 
 			streamer, err := runMission(cfg, "test_output", provider, nil)
@@ -176,14 +176,14 @@ var _ = Describe("Runner Integration", func() {
 
 			provider := newMockProvider(
 				// Task "classify": agent work → task_complete (enters routing) → choose route
-				mockResponse{Content: cmdCallAgent("worker", "Classify input")},
-				mockResponse{Content: agentAnswer("This is type B.")},
-				mockResponse{Content: cmdTaskComplete()}, // triggers routing phase
-				mockResponse{Content: cmdTaskCompleteRoute("handle_b")}, // choose route
+				cmdCallAgent("worker", "Classify input"),
+				agentAnswer("This is type B."),
+				cmdTaskComplete(),                    // triggers routing phase
+				cmdTaskCompleteRoute("handle_b"),     // choose route
 				// Task "handle_b": execute
-				mockResponse{Content: cmdCallAgent("worker", "Handle B")},
-				mockResponse{Content: agentAnswer("B handled.")},
-				mockResponse{Content: cmdTaskComplete()},
+				cmdCallAgent("worker", "Handle B"),
+				agentAnswer("B handled."),
+				cmdTaskComplete(),
 			)
 
 			streamer, err := runMission(cfg, "test_router", provider, nil)
@@ -225,17 +225,17 @@ var _ = Describe("Runner Integration", func() {
 
 			provider := newMockProvider(
 				// Task "trigger"
-				mockResponse{Content: cmdCallAgent("worker", "Do trigger work")},
-				mockResponse{Content: agentAnswer("Triggered.")},
-				mockResponse{Content: cmdTaskComplete()},
+				cmdCallAgent("worker", "Do trigger work"),
+				agentAnswer("Triggered."),
+				cmdTaskComplete(),
 				// Task "branch_a"
-				mockResponse{Content: cmdCallAgent("worker", "Branch A work")},
-				mockResponse{Content: agentAnswer("A done.")},
-				mockResponse{Content: cmdTaskComplete()},
+				cmdCallAgent("worker", "Branch A work"),
+				agentAnswer("A done."),
+				cmdTaskComplete(),
 				// Task "branch_b"
-				mockResponse{Content: cmdCallAgent("worker", "Branch B work")},
-				mockResponse{Content: agentAnswer("B done.")},
-				mockResponse{Content: cmdTaskComplete()},
+				cmdCallAgent("worker", "Branch B work"),
+				agentAnswer("B done."),
+				cmdTaskComplete(),
 			)
 
 			streamer, err := runMission(cfg, "test_sendto", provider, nil)
@@ -267,11 +267,11 @@ var _ = Describe("Runner Integration", func() {
 
 			provider := newMockProvider(
 				// Commander: call agent
-				mockResponse{Content: cmdCallAgent("worker", "Try something")},
+				cmdCallAgent("worker", "Try something"),
 				// Agent: answer
-				mockResponse{Content: agentAnswer("I tried but it didn't work.")},
+				agentAnswer("I tried but it didn't work."),
 				// Commander: fail the task
-				mockResponse{Content: cmdTaskCompleteFail("Could not complete the work")},
+				cmdTaskCompleteFail("Could not complete the work"),
 			)
 
 			streamer, err := runMission(cfg, "test_fail", provider, nil)
@@ -320,31 +320,44 @@ var _ = Describe("Runner Integration", func() {
 				}
 				return false
 			}
-			isObservation := func(substr string) func(*llm.ChatRequest) bool {
+			isToolResult := func(substr string) func(*llm.ChatRequest) bool {
 				return func(req *llm.ChatRequest) bool {
 					if isAgentSession(req) {
 						return false
 					}
-					last := ""
-					for _, m := range req.Messages {
+					// Check the last user message for tool result content
+					for i := len(req.Messages) - 1; i >= 0; i-- {
+						m := req.Messages[i]
 						if m.Role == llm.RoleUser {
-							last = m.Content
+							// Check plain content
+							if strings.Contains(m.Content, substr) {
+								return true
+							}
+							// Check Parts for tool results
+							for _, p := range m.Parts {
+								if p.Type == llm.ContentTypeToolResult && p.ToolResult != nil {
+									if strings.Contains(p.ToolResult.Content, substr) {
+										return true
+									}
+								}
+							}
+							break
 						}
 					}
-					return strings.Contains(last, substr)
+					return false
 				}
 			}
 			provider := newMockProvider()
 			for i := 0; i < 3; i++ {
 				provider.addResponses(
 					// Commander turn 1: call agent (matches any commander first turn)
-					mockResponse{Content: cmdCallAgent("worker", "Process this item")},
+					cmdCallAgent("worker", "Process this item"),
 					// Agent: answer (matches agent sessions)
-					mockResponse{Content: agentAnswer("Item processed."), Match: isAgentSession},
-					// Commander turn 2: submit output (matches when observation contains agent answer)
-					mockResponse{Content: cmdSubmitOutput(map[string]interface{}{"result": fmt.Sprintf("done_%d", i)}), Match: isObservation("Item processed.")},
-					// Commander turn 3: complete (matches when observation contains submit ok)
-					mockResponse{Content: cmdTaskComplete(), Match: isObservation(`"status": "ok"`)},
+					withMatch(agentAnswer("Item processed."), isAgentSession),
+					// Commander turn 2: submit output (matches when tool result contains agent answer)
+					withMatch(cmdSubmitOutput(map[string]interface{}{"result": fmt.Sprintf("done_%d", i)}), isToolResult("Item processed.")),
+					// Commander turn 3: complete (matches when tool result contains submit ok)
+					withMatch(cmdTaskComplete(), isToolResult(`"status": "ok"`)),
 				)
 			}
 
@@ -389,23 +402,23 @@ var _ = Describe("Runner Integration", func() {
 			// Sequential iteration uses a single commander with dataset_next/submit_output loop
 			provider := newMockProvider(
 				// Item 1: dataset_next → call_agent → submit_output
-				mockResponse{Content: cmdDatasetNext()},
-				mockResponse{Content: cmdCallAgent("worker", "Process first")},
-				mockResponse{Content: agentAnswer("First done.")},
-				mockResponse{Content: cmdSubmitOutput(map[string]interface{}{"processed": "first_done"})},
+				cmdDatasetNext(),
+				cmdCallAgent("worker", "Process first"),
+				agentAnswer("First done."),
+				cmdSubmitOutput(map[string]interface{}{"processed": "first_done"}),
 				// Item 2
-				mockResponse{Content: cmdDatasetNext()},
-				mockResponse{Content: cmdCallAgent("worker", "Process second")},
-				mockResponse{Content: agentAnswer("Second done.")},
-				mockResponse{Content: cmdSubmitOutput(map[string]interface{}{"processed": "second_done"})},
+				cmdDatasetNext(),
+				cmdCallAgent("worker", "Process second"),
+				agentAnswer("Second done."),
+				cmdSubmitOutput(map[string]interface{}{"processed": "second_done"}),
 				// Item 3
-				mockResponse{Content: cmdDatasetNext()},
-				mockResponse{Content: cmdCallAgent("worker", "Process third")},
-				mockResponse{Content: agentAnswer("Third done.")},
-				mockResponse{Content: cmdSubmitOutput(map[string]interface{}{"processed": "third_done"})},
+				cmdDatasetNext(),
+				cmdCallAgent("worker", "Process third"),
+				agentAnswer("Third done."),
+				cmdSubmitOutput(map[string]interface{}{"processed": "third_done"}),
 				// Final dataset_next returns exhausted, then task_complete
-				mockResponse{Content: cmdDatasetNext()},
-				mockResponse{Content: cmdTaskComplete()},
+				cmdDatasetNext(),
+				cmdTaskComplete(),
 			)
 
 			streamer, err := runMission(cfg, "test_seq_iter", provider, nil)
@@ -450,38 +463,48 @@ var _ = Describe("Runner Integration", func() {
 				}
 				return false
 			}
-			isObservation := func(substr string) func(*llm.ChatRequest) bool {
+			isToolResult := func(substr string) func(*llm.ChatRequest) bool {
 				return func(req *llm.ChatRequest) bool {
 					if isAgentSession(req) {
 						return false
 					}
-					last := ""
-					for _, m := range req.Messages {
+					for i := len(req.Messages) - 1; i >= 0; i-- {
+						m := req.Messages[i]
 						if m.Role == llm.RoleUser {
-							last = m.Content
+							if strings.Contains(m.Content, substr) {
+								return true
+							}
+							for _, p := range m.Parts {
+								if p.Type == llm.ContentTypeToolResult && p.ToolResult != nil {
+									if strings.Contains(p.ToolResult.Content, substr) {
+										return true
+									}
+								}
+							}
+							break
 						}
 					}
-					return strings.Contains(last, substr)
+					return false
 				}
 			}
 
 			provider := newMockProvider(
 				// Task "create_data": commander uses set_dataset to populate items
-				mockResponse{Content: cmdSetDataset("dynamic_items", []map[string]interface{}{
+				cmdSetDataset("dynamic_items", []map[string]interface{}{
 					{"label": "x"},
 					{"label": "y"},
-				})},
-				mockResponse{Content: cmdTaskComplete()},
+				}),
+				cmdTaskComplete(),
 				// Dependency query: "create_data" commander clone answers context question
-				mockResponse{Content: "I created a dataset with items x and y.", Match: matchLastUserContains("dependent task needs your help")},
+				withMatch(textResponse("I created a dataset with items x and y."), matchLastUserContains("dependent task needs your help")),
 			)
 			// Task "consume_data": 2 parallel iterations using matchers
 			for i := 0; i < 2; i++ {
 				provider.addResponses(
-					mockResponse{Content: cmdCallAgent("worker", "Process item")},
-					mockResponse{Content: agentAnswer("Item done."), Match: isAgentSession},
-					mockResponse{Content: cmdSubmitOutput(map[string]interface{}{"status": fmt.Sprintf("ok_%d", i)}), Match: isObservation("Item done.")},
-					mockResponse{Content: cmdTaskComplete(), Match: isObservation(`"status": "ok"`)},
+					cmdCallAgent("worker", "Process item"),
+					withMatch(agentAnswer("Item done."), isAgentSession),
+					withMatch(cmdSubmitOutput(map[string]interface{}{"status": fmt.Sprintf("ok_%d", i)}), isToolResult("Item done.")),
+					withMatch(cmdTaskComplete(), isToolResult(`"status": "ok"`)),
 				)
 			}
 

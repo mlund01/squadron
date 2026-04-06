@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mlund01/squadron-wire/protocol"
 	"github.com/zclconf/go-cty/cty"
 
@@ -399,8 +398,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (opts.PruneOn == 0 || (opts.PruneOn-opts.PruneTo) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
-	// Set stop sequences to prevent LLM from hallucinating observations
-	session.SetStopSequences([]string{"___STOP___"})
+	// Note: tools are set on the session in SetToolCallbacks after all tools are registered
 
 	if opts.DebugFile != "" {
 		if err := session.EnableDebug(opts.DebugFile); err != nil {
@@ -667,10 +665,8 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		}
 	}
 
-	// Inject commander tools as a system prompt so the LLM knows about them
-	if toolsPrompt := prompts.FormatCommanderTools(s.tools); toolsPrompt != "" {
-		s.session.AddSystemPrompt(toolsPrompt)
-	}
+	// Set tools on session for native tool calling (all tools are now registered)
+	s.session.SetTools(aitools.ToolsToDefinitions(s.tools))
 
 	// Initialize AgentManager
 	s.agentMgr = NewAgentManager(AgentManagerConfig{
@@ -991,10 +987,9 @@ func (s *Commander) ExecuteOrResume(ctx context.Context, objective string, strea
 
 // ResumeTask resumes an interrupted task from stored session messages.
 // It analyzes the last stored message to determine where to pick up:
-// - Last message is user: LLM was interrupted mid-response — use ContinueStream
-// - Last message is assistant with call_agent ACTION: re-execute (agent resumes from its own session)
-// - Last message is assistant with other ACTION: inject placeholder observation
-// - Last message is assistant with no action: task was already complete
+// - Last message is user (with tool results): LLM was interrupted mid-response — use ContinueStream
+// - Last message is assistant with tool_use blocks: tool call was in-flight
+// - Last message is assistant with no tool calls: task was already complete
 func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) error {
 	msgs := s.session.GetHistory()
 	if len(msgs) == 0 {
@@ -1008,14 +1003,16 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 		return s.runLoop(ctx, "", true, streamer)
 	}
 
-	// Last message is assistant
-	parser := newCommanderParser(streamer)
-	parser.ProcessChunk(last.Content)
-	parser.Finish()
+	// Last message is assistant — check for tool_use blocks in Parts
+	var toolUses []llm.ToolUseBlock
+	for _, part := range last.Parts {
+		if part.Type == llm.ContentTypeToolUse && part.ToolUse != nil {
+			toolUses = append(toolUses, *part.ToolUse)
+		}
+	}
 
-	action := parser.GetAction()
-	if action == "" {
-		// No action — consider done
+	if len(toolUses) == 0 {
+		// No tool calls — consider done
 		if s.turnLogger != nil {
 			s.turnLogger.Close()
 		}
@@ -1025,22 +1022,28 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 		return nil
 	}
 
-	// Tool call was in-flight — handle based on tool type
-	actionInput := parser.GetActionInput()
-	var currentInput string
+	// Tool calls were in-flight — execute them and collect results
+	var toolResults []llm.ToolResultBlock
+	for _, tc := range toolUses {
+		actionInput := string(tc.Input)
 
-	if action == "call_agent" {
-		// EXCEPTION: re-execute call_agent — agent resumes from its own stored session
-		tool := s.tools[action]
-		if tool == nil {
-			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found.\n</OBSERVATION>", action)
-		} else {
-			tcID := uuid.New().String()
-			streamer.CallingTool(tcID, action, actionInput)
+		if tc.Name == "call_agent" {
+			// EXCEPTION: re-execute call_agent — agent resumes from its own stored session
+			tool := s.tools[tc.Name]
+			if tool == nil {
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   fmt.Sprintf("Error: Tool '%s' not found.", tc.Name),
+					IsError:   true,
+				})
+				continue
+			}
+
+			streamer.CallingTool(tc.ID, tc.Name, actionInput)
 
 			var toolRecordID string
 			if s.sessionLogger != nil && s.sessionID != "" {
-				toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tcID, action, actionInput)
+				toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tc.ID, tc.Name, actionInput)
 			}
 
 			result := tool.Call(ctx, actionInput)
@@ -1049,21 +1052,34 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 				s.sessionLogger.CompleteToolCall(toolRecordID, result)
 			}
 
-			var observationContent string
-			currentInput, observationContent = s.formatObservation(action, result)
-			streamer.ToolComplete(tcID, action, observationContent)
+			resultContent := result
+			if s.interceptor != nil {
+				ir := s.interceptor.Intercept(tc.Name, result)
+				resultContent = ir.Data
+				if ir.Metadata != "" {
+					resultContent += "\n\n---\n" + ir.Metadata
+				}
+			}
+
+			streamer.ToolComplete(tc.ID, tc.Name, resultContent)
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content:   resultContent,
+			})
+		} else {
+			// DEFAULT: result was lost, tell the LLM
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content: fmt.Sprintf("The result of this %s call was lost due to an interruption. "+
+					"You may need to run it again or attempt to verify whether the call was successful.", tc.Name),
+				IsError: true,
+			})
 		}
-	} else {
-		// DEFAULT: result was lost, tell the LLM
-		currentInput = fmt.Sprintf(
-			"<OBSERVATION>\nThe result of this %s call was lost due to an interruption. "+
-				"You may need to run it again or attempt to verify whether the call was successful.\n</OBSERVATION>",
-			action,
-		)
 	}
 
-	// Continue the loop with the observation (normal send, not resume)
-	return s.runLoop(ctx, currentInput, false, streamer)
+	// Add tool results and continue the loop
+	s.session.AddToolResults(toolResults)
+	return s.runLoop(ctx, "", true, streamer)
 }
 
 // LoadSessionMessages loads persisted messages into the commander's session.
@@ -1127,8 +1143,8 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		default:
 		}
 
-		// Create parser for this message
-		parser := newCommanderParser(streamer)
+		// Create reasoning parser for this turn
+		parser := newCommanderReasoningParser(streamer)
 
 		if s.debugLogger != nil {
 			s.debugLogger.LogEvent("commander_llm_start", map[string]any{"task": s.TaskName})
@@ -1138,14 +1154,17 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		var resp *llm.ChatResponse
 		var err error
 
+		// Callback for streaming chunks — routes text to reasoning parser
+		onChunk := func(chunk llm.StreamChunk) {
+			if chunk.Content != "" {
+				parser.ProcessChunk(chunk.Content)
+			}
+		}
+
 		if resume {
 			// First turn of resume — LLM responds to existing state.
 			// Don't log to session store (the pending message is already stored).
-			resp, err = s.session.ContinueStream(ctx, func(chunk llm.StreamChunk) {
-				if chunk.Content != "" {
-					parser.ProcessChunk(chunk.Content)
-				}
-			})
+			resp, err = s.session.ContinueStream(ctx, onChunk)
 			resume = false
 		} else {
 			// Normal turn — log user message, then send
@@ -1153,11 +1172,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 				now := time.Now()
 				s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput, now, now)
 			}
-			resp, err = s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
-				if chunk.Content != "" {
-					parser.ProcessChunk(chunk.Content)
-				}
-			})
+			resp, err = s.session.SendStream(ctx, currentInput, onChunk)
 		}
 
 		if s.debugLogger != nil {
@@ -1223,74 +1238,117 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			s.sessionLogger.AppendMessage(s.sessionID, "assistant", resp.Content, llmStart, time.Now())
 		}
 
-		// Determine action for turn logging
-		action := parser.GetAction()
+		// Extract tool calls from the response ContentBlocks
+		var toolUses []llm.ToolUseBlock
+		if resp != nil {
+			for _, block := range resp.ContentBlocks {
+				if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+					toolUses = append(toolUses, *block.ToolUse)
+				}
+			}
+		}
+
+		// Determine first tool name for turn logging
+		var firstToolName string
+		if len(toolUses) > 0 {
+			firstToolName = toolUses[0].Name
+		}
 
 		// Log turn snapshot
 		if s.turnLogger != nil {
-			s.turnLogger.LogTurn(action, s.session.SnapshotMessages())
+			s.turnLogger.LogTurn(firstToolName, s.session.SnapshotMessages())
 		}
 
-		if action == "" {
-			break // No tool call, done with this turn
+		// If no tool calls, we're done
+		if len(toolUses) == 0 {
+			break
 		}
 
-		actionInput := parser.GetActionInput()
-		tcID := uuid.New().String()
-		streamer.CallingTool(tcID, action, actionInput)
+		// Execute all tool calls and collect results
+		var toolResults []llm.ToolResultBlock
+		for _, tc := range toolUses {
+			actionInput := string(tc.Input)
 
-		// Log tool call event
-		if s.debugLogger != nil {
-			s.debugLogger.LogEvent("tool_call", map[string]any{
-				"task":   s.TaskName,
-				"tool":   action,
-				"input":  actionInput,
+			// Emit event with pre-injection params
+			streamer.CallingTool(tc.ID, tc.Name, actionInput)
+
+			// Log tool call event
+			if s.debugLogger != nil {
+				s.debugLogger.LogEvent("tool_call", map[string]any{
+					"task":  s.TaskName,
+					"tool":  tc.Name,
+					"input": actionInput,
+				})
+			}
+
+			// Look up the tool
+			tool := s.tools[tc.Name]
+			if tool == nil {
+				errMsg := fmt.Sprintf("Error: Tool '%s' not found", tc.Name)
+				streamer.ToolComplete(tc.ID, tc.Name, errMsg)
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   errMsg,
+					IsError:   true,
+				})
+				continue
+			}
+
+			// Write-ahead: record tool call before execution
+			var toolRecordID string
+			if s.sessionLogger != nil && s.sessionID != "" {
+				toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tc.ID, tc.Name, actionInput)
+			}
+
+			// Execute the tool
+			toolStart := time.Now()
+			result := tool.Call(ctx, actionInput)
+
+			// Complete the tool call record
+			if toolRecordID != "" {
+				s.sessionLogger.CompleteToolCall(toolRecordID, result)
+			}
+
+			// Apply result interception for large results
+			resultContent := result
+			if s.interceptor != nil {
+				ir := s.interceptor.Intercept(tc.Name, result)
+				resultContent = ir.Data
+				if ir.Metadata != "" {
+					resultContent += "\n\n---\n" + ir.Metadata
+				}
+			}
+
+			streamer.ToolComplete(tc.ID, tc.Name, resultContent)
+
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content:   resultContent,
 			})
+
+			// Log tool result event
+			if s.debugLogger != nil {
+				s.debugLogger.LogEvent("tool_result", map[string]any{
+					"task":        s.TaskName,
+					"tool":        tc.Name,
+					"result":      result,
+					"duration_ms": time.Since(toolStart).Milliseconds(),
+				})
+			}
+
+			// Check if task_complete was called
+			if s.taskComplete.IsCompleted() {
+				break
+			}
 		}
 
-		// Look up the tool
-		tool := s.tools[action]
-		if tool == nil {
-			errMsg := fmt.Sprintf("Error: Tool '%s' not found. Available tools: call_agent, ask_agent", action)
-			streamer.ToolComplete(tcID, action, errMsg)
-			currentInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
-			continue
-		}
-
-		// Write-ahead: record tool call before execution
-		var toolRecordID string
-		if s.sessionLogger != nil && s.sessionID != "" {
-			toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tcID, action, actionInput)
-		}
-
-		// Execute the tool
-		toolStart := time.Now()
-		result := tool.Call(ctx, actionInput)
-
-		// Complete the tool call record
-		if toolRecordID != "" {
-			s.sessionLogger.CompleteToolCall(toolRecordID, result)
-		}
-
-		// Format observation (may intercept/truncate large results)
-		var observationContent string
-		currentInput, observationContent = s.formatObservation(action, result)
-		streamer.ToolComplete(tcID, action, observationContent)
-
-		// Log tool result event
-		if s.debugLogger != nil {
-			s.debugLogger.LogEvent("tool_result", map[string]any{
-				"task":        s.TaskName,
-				"tool":        action,
-				"result":      result,
-				"duration_ms": time.Since(toolStart).Milliseconds(),
-			})
-		}
-
-		// Check if task_complete was called
+		// If task is complete, exit the loop
 		if s.taskComplete.IsCompleted() {
 			break
 		}
+
+		// Send tool results back to the session
+		s.session.AddToolResults(toolResults)
 	}
 
 	if s.turnLogger != nil {
@@ -1512,7 +1570,13 @@ Provide a concise, factual answer based on what you learned during your task exe
 Wrap your final answer in <ANSWER> tags.
 </QUESTION>`, question)
 
-	// Run execution loop to handle any tool calls
+	// First turn: send the question
+	resp, err := s.session.Send(ctx, currentInput)
+	if err != nil {
+		return "", err
+	}
+
+	// Loop to handle tool calls
 	for {
 		select {
 		case <-ctx.Done():
@@ -1520,57 +1584,53 @@ Wrap your final answer in <ANSWER> tags.
 		default:
 		}
 
-		resp, err := s.session.Send(ctx, currentInput)
+		// Extract tool calls from ContentBlocks
+		var toolUses []llm.ToolUseBlock
+		for _, block := range resp.ContentBlocks {
+			if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+				toolUses = append(toolUses, *block.ToolUse)
+			}
+		}
+
+		if len(toolUses) == 0 {
+			return s.extractAnswer(resp.Content), nil
+		}
+
+		// Execute tool calls and collect results
+		var toolResults []llm.ToolResultBlock
+		for _, tc := range toolUses {
+			tool := s.tools[tc.Name]
+			if tool == nil {
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   fmt.Sprintf("Error: Tool '%s' not found. Available tools: ask_agent", tc.Name),
+					IsError:   true,
+				})
+				continue
+			}
+
+			result := tool.Call(ctx, string(tc.Input))
+			resultContent := result
+			if s.interceptor != nil {
+				ir := s.interceptor.Intercept(tc.Name, result)
+				resultContent = ir.Data
+				if ir.Metadata != "" {
+					resultContent += "\n\n---\n" + ir.Metadata
+				}
+			}
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content:   resultContent,
+			})
+		}
+
+		// Send tool results and get next response
+		s.session.AddToolResults(toolResults)
+		resp, err = s.session.ContinueStream(ctx, func(chunk llm.StreamChunk) {})
 		if err != nil {
 			return "", err
 		}
-
-		content := resp.Content
-
-		// Check if there's an action to call
-		action, actionInput := s.parseActionFromContent(content)
-		if action == "" {
-			// No tool call, extract and return the answer
-			return s.extractAnswer(content), nil
-		}
-
-		// Look up and execute the tool
-		tool := s.tools[action]
-		if tool == nil {
-			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found. Available tools: ask_agent\n</OBSERVATION>", action)
-			continue
-		}
-
-		result := tool.Call(ctx, actionInput)
-		currentInput, _ = s.formatObservation(action, result)
 	}
-}
-
-// parseActionFromContent extracts ACTION and ACTION_INPUT from a response
-func (s *Commander) parseActionFromContent(content string) (action, actionInput string) {
-	// Find <ACTION>...</ACTION>
-	actionStart := strings.Index(content, "<ACTION>")
-	if actionStart == -1 {
-		return "", ""
-	}
-	actionEnd := strings.Index(content[actionStart:], "</ACTION>")
-	if actionEnd == -1 {
-		return "", ""
-	}
-	action = strings.TrimSpace(content[actionStart+8 : actionStart+actionEnd])
-
-	// Find <ACTION_INPUT>...</ACTION_INPUT>
-	inputStart := strings.Index(content, "<ACTION_INPUT>")
-	if inputStart == -1 {
-		return action, ""
-	}
-	inputEnd := strings.Index(content[inputStart:], "</ACTION_INPUT>")
-	if inputEnd == -1 {
-		return action, ""
-	}
-	actionInput = strings.TrimSpace(content[inputStart+14 : inputStart+inputEnd])
-
-	return action, actionInput
 }
 
 // extractAnswer extracts the answer content from a response
@@ -1584,20 +1644,6 @@ func (s *Commander) extractAnswer(content string) string {
 	return strings.TrimSpace(content)
 }
 
-// formatObservation formats a tool result as an observation, with optional metadata.
-// Returns the formatted observation string and the observation content (what the LLM sees inside the tags).
-func (s *Commander) formatObservation(toolName, result string) (formatted string, content string) {
-	if s.interceptor == nil {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result), result
-	}
-
-	ir := s.interceptor.Intercept(toolName, result)
-	if ir.Metadata == "" {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data), ir.Data
-	}
-
-	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata), ir.Data
-}
 
 // ExecuteAggregation performs a simple LLM call for summary aggregation (no tools)
 func (s *Commander) ExecuteAggregation(ctx context.Context, prompt string) (string, error) {
@@ -1650,148 +1696,92 @@ func createCommanderProvider(ctx context.Context, modelConfig *config.Model) (ll
 }
 
 // =============================================================================
-// Commander Parser - parses ReAct-formatted streaming output
+// Commander Reasoning Parser - parses REASONING XML tags from streaming output
 // =============================================================================
 
-// commanderParserState represents the current parsing state
-type commanderParserState int
-
-const (
-	commanderStateNone commanderParserState = iota
-	commanderStateReasoning
-	commanderStateAction
-	commanderStateActionInput
-)
-
-// commanderParser parses ReAct-formatted streaming output for commanders
-type commanderParser struct {
+// commanderReasoningParser parses <REASONING> tags from streaming text content.
+// Tool calls are handled via native SDK tool calling (ContentBlocks), not parsed from text.
+type commanderReasoningParser struct {
 	streamer         CommanderStreamer
-	state            commanderParserState
+	inReasoning      bool
 	buffer           strings.Builder
 	reasoningStarted bool
-	actionName       string
-	actionInput      string
 	reasoningText    strings.Builder
 }
 
-// newCommanderParser creates a new parser with the given streamer
-func newCommanderParser(streamer CommanderStreamer) *commanderParser {
-	return &commanderParser{
+// newCommanderReasoningParser creates a new reasoning-only parser
+func newCommanderReasoningParser(streamer CommanderStreamer) *commanderReasoningParser {
+	return &commanderReasoningParser{
 		streamer: streamer,
-		state:    commanderStateNone,
 	}
 }
 
-// ProcessChunk processes an incoming chunk of streamed content
-func (p *commanderParser) ProcessChunk(chunk string) {
+// ProcessChunk processes an incoming chunk of streamed text content
+func (p *commanderReasoningParser) ProcessChunk(chunk string) {
 	p.buffer.WriteString(chunk)
 	p.processBuffer()
 }
 
-// GetAction returns the parsed action name
-func (p *commanderParser) GetAction() string {
-	return p.actionName
-}
-
-// GetActionInput returns the parsed action input
-func (p *commanderParser) GetActionInput() string {
-	return p.actionInput
-}
-
 // Finish signals that streaming is complete
-func (p *commanderParser) Finish() {
-	// Nothing special needed
+func (p *commanderReasoningParser) Finish() {
+	// If we're still in reasoning when stream ends, emit what we have
+	if p.inReasoning && p.reasoningText.Len() > 0 {
+		p.streamer.ReasoningCompleted(p.reasoningText.String())
+	}
 }
 
-func (p *commanderParser) processBuffer() {
+func (p *commanderReasoningParser) processBuffer() {
 	content := p.buffer.String()
 
 	for {
-		switch p.state {
-		case commanderStateNone:
-			// Look for opening tags
+		if !p.inReasoning {
+			// Look for <REASONING> opening tag
 			if idx := strings.Index(content, "<REASONING>"); idx != -1 {
 				p.streamer.ReasoningStarted()
-				p.state = commanderStateReasoning
+				p.inReasoning = true
 				content = content[idx+11:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			if idx := strings.Index(content, "<ACTION>"); idx != -1 {
-				p.state = commanderStateAction
-				content = content[idx+8:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			if idx := strings.Index(content, "<ACTION_INPUT>"); idx != -1 {
-				p.state = commanderStateActionInput
-				content = content[idx+14:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			return
-
-		case commanderStateReasoning:
-			if !p.reasoningStarted {
-				content = strings.TrimLeft(content, "\n")
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				if len(content) > 0 {
-					p.reasoningStarted = true
-				}
-			}
-
-			if idx := strings.Index(content, "</REASONING>"); idx != -1 {
-				finalContent := strings.TrimRight(content[:idx], "\n")
-				if len(finalContent) > 0 {
-					p.reasoningText.WriteString(finalContent)
-				}
-				if p.reasoningText.Len() > 0 {
-					p.streamer.ReasoningCompleted(p.reasoningText.String())
-				}
-				p.reasoningText.Reset()
-				p.reasoningStarted = false
-				p.state = commanderStateNone
-				content = content[idx+12:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			// Buffer content for reasoning
-			if len(content) > 12 {
-				safeLen := len(content) - 12
-				p.reasoningText.WriteString(content[:safeLen])
-				content = content[safeLen:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-			}
-			return
-
-		case commanderStateAction:
-			if idx := strings.Index(content, "</ACTION>"); idx != -1 {
-				p.actionName = strings.TrimSpace(content[:idx])
-				p.state = commanderStateNone
-				content = content[idx+9:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			return
-
-		case commanderStateActionInput:
-			if idx := strings.Index(content, "</ACTION_INPUT>"); idx != -1 {
-				p.actionInput = strings.TrimSpace(content[:idx])
-				p.state = commanderStateNone
-				content = content[idx+15:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
 			}
 			return
 		}
+
+		// Inside reasoning — buffer until </REASONING>
+		if !p.reasoningStarted {
+			content = strings.TrimLeft(content, "\n")
+			p.buffer.Reset()
+			p.buffer.WriteString(content)
+			if len(content) > 0 {
+				p.reasoningStarted = true
+			}
+		}
+
+		if idx := strings.Index(content, "</REASONING>"); idx != -1 {
+			finalContent := strings.TrimRight(content[:idx], "\n")
+			if len(finalContent) > 0 {
+				p.reasoningText.WriteString(finalContent)
+			}
+			if p.reasoningText.Len() > 0 {
+				p.streamer.ReasoningCompleted(p.reasoningText.String())
+			}
+			p.reasoningText.Reset()
+			p.reasoningStarted = false
+			p.inReasoning = false
+			content = content[idx+12:]
+			p.buffer.Reset()
+			p.buffer.WriteString(content)
+			continue
+		}
+		// Buffer content for reasoning, keeping enough to detect split tag
+		if len(content) > 12 {
+			safeLen := len(content) - 12
+			p.reasoningText.WriteString(content[:safeLen])
+			content = content[safeLen:]
+			p.buffer.Reset()
+			p.buffer.WriteString(content)
+		}
+		return
 	}
 }
 

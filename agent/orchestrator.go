@@ -2,12 +2,11 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mlund01/squadron-wire/protocol"
 
 	"squadron/aitools"
@@ -57,11 +56,13 @@ func (si *secretInjector) Inject(input string) (string, error) {
 // llmSession defines the interface for LLM session operations needed by the orchestrator
 type llmSession interface {
 	// SendStream sends a message and streams the response, calling onChunk for each chunk
-	SendStream(ctx context.Context, userMessage string, onChunk func(content string)) (*llm.ChatResponse, error)
+	SendStream(ctx context.Context, userMessage string, onChunk func(chunk llm.StreamChunk)) (*llm.ChatResponse, error)
 	// SendMessageStream sends a multimodal message and streams the response
-	SendMessageStream(ctx context.Context, msg llm.Message, onChunk func(content string)) (*llm.ChatResponse, error)
+	SendMessageStream(ctx context.Context, msg llm.Message, onChunk func(chunk llm.StreamChunk)) (*llm.ChatResponse, error)
 	// ContinueStream resumes from existing session state without adding a new user message
-	ContinueStream(ctx context.Context, onChunk func(content string)) (*llm.ChatResponse, error)
+	ContinueStream(ctx context.Context, onChunk func(chunk llm.StreamChunk)) (*llm.ChatResponse, error)
+	// AddToolResults appends tool result messages to the session history
+	AddToolResults(results []llm.ToolResultBlock)
 }
 
 // orchestrator handles the agent conversation loop
@@ -110,7 +111,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 	var finalAnswer string
 
 	for {
-		// Create parser for this message
+		// Create parser for streaming text content (REASONING/ANSWER tags)
 		parser := NewMessageParser(o.streamer)
 
 		if o.eventLogger != nil {
@@ -121,14 +122,19 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		var resp *llm.ChatResponse
 		var err error
 
+		// Callback for streaming chunks — routes text to parser, tool events to streamer
+		onChunk := func(chunk llm.StreamChunk) {
+			if chunk.Content != "" {
+				parser.ProcessChunk(chunk.Content)
+			}
+			if chunk.ToolCallStart != nil {
+				o.streamer.CallingTool(chunk.ToolCallStart.ID, chunk.ToolCallStart.Name, "")
+			}
+		}
+
 		if resume {
 			// First turn of resume — LLM responds to existing state.
-			// Don't add a new user message (the pending one is already in the session).
-			resp, err = o.session.ContinueStream(ctx, func(content string) {
-				if content != "" {
-					parser.ProcessChunk(content)
-				}
-			})
+			resp, err = o.session.ContinueStream(ctx, onChunk)
 			resume = false
 		} else {
 			// Check if we have images in the content parts
@@ -148,7 +154,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 				}
 			}
 
-			// Log user message to session store (uses text with [image] placeholders)
+			// Log user message to session store
 			if o.sessionLogger != nil && o.sessionID != "" {
 				now := time.Now()
 				o.sessionLogger.AppendMessage(o.sessionID, "user", currentLogText, now, now)
@@ -156,17 +162,9 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 			if hasImages {
 				msg := llm.NewMultimodalMessage(llm.RoleUser, currentParts...)
-				resp, err = o.session.SendMessageStream(ctx, msg, func(content string) {
-					if content != "" {
-						parser.ProcessChunk(content)
-					}
-				})
+				resp, err = o.session.SendMessageStream(ctx, msg, onChunk)
 			} else {
-				resp, err = o.session.SendStream(ctx, textContent, func(content string) {
-					if content != "" {
-						parser.ProcessChunk(content)
-					}
-				})
+				resp, err = o.session.SendStream(ctx, textContent, onChunk)
 			}
 		}
 
@@ -194,7 +192,6 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 					PayloadBytes:     stats.PayloadBytes,
 					TurnDurationMs:   time.Since(llmStart).Milliseconds(),
 				}
-				// Compute cost
 				if pricing := llm.GetPricing(o.modelName, o.pricingOverrides); pricing != nil {
 					cost := llm.ComputeTurnCost(pricing, resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheReadTokens, resp.Usage.CacheWriteTokens)
 					turnData.Cost = cost.TotalCost
@@ -236,92 +233,148 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			o.sessionLogger.AppendMessage(o.sessionID, "assistant", resp.Content, llmStart, time.Now())
 		}
 
-		// Determine what action (if any) was parsed — needed for turn logging
-		action := parser.GetAction()
+		// Extract tool calls from the response ContentBlocks
+		var toolUses []llm.ToolUseBlock
+		if resp != nil {
+			for _, block := range resp.ContentBlocks {
+				if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+					toolUses = append(toolUses, *block.ToolUse)
+				}
+			}
+		}
+
+		// Determine first tool name for turn logging
+		var firstToolName string
+		if len(toolUses) > 0 {
+			firstToolName = toolUses[0].Name
+		}
 
 		// Log turn snapshot after LLM response is in the session
 		if o.turnLogger != nil {
-			o.turnLogger.LogTurn(action, o.getSessionMessages())
+			o.turnLogger.LogTurn(firstToolName, o.getSessionMessages())
 		}
 
-		// Check for ASK_COMMANDER first (takes priority - agent needs commander input)
-		if askCommander := parser.GetAskCommander(); askCommander != "" {
-			o.streamer.AskCommander(askCommander)
-			return ChatResult{AskCommander: askCommander, Complete: false}, nil
-		}
-
-		// Capture the answer if one was provided
+		// Capture the answer if one was provided via <ANSWER> tag
 		if answer := parser.GetAnswer(); answer != "" {
 			finalAnswer = answer
 		}
-		if action == "" {
-			break // No tool call, done with this turn
+
+		// If no tool calls, we're done with this turn
+		if len(toolUses) == 0 {
+			break
 		}
 
-		// Check for cancellation before executing tool
+		// Check for cancellation before executing tools
 		if ctx.Err() != nil {
 			return ChatResult{}, ctx.Err()
 		}
 
-		actionInput := parser.GetActionInput()
-		tcID := uuid.New().String()
+		// Execute all tool calls and collect results
+		var toolResults []llm.ToolResultBlock
+		for _, tc := range toolUses {
+			actionInput := string(tc.Input)
 
-		// Emit event with pre-injection params (protected values stay masked)
-		o.streamer.CallingTool(tcID, action, actionInput)
+			// Check for ask_commander tool (intercepted, not actually executed)
+			if tc.Name == "ask_commander" {
+				// Parse the question from the input
+				var askInput struct {
+					Question string `json:"question"`
+				}
+				if jsonErr := json.Unmarshal(tc.Input, &askInput); jsonErr == nil && askInput.Question != "" {
+					o.streamer.AskCommander(askInput.Question)
+					return ChatResult{AskCommander: askInput.Question, Complete: false}, nil
+				}
+			}
 
-		// Inject protected values before execution
-		injectedInput, secretErr := o.secretInjector.Inject(actionInput)
-		if secretErr != nil {
-			errMsg := fmt.Sprintf("Error: %v", secretErr)
-			o.streamer.ToolComplete(tcID, action, errMsg)
-			currentLogText = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
-			currentParts = []llm.ContentBlock{{Type: llm.ContentTypeText, Text: currentLogText}}
-			continue
+			// Emit event with pre-injection params
+			o.streamer.CallingTool(tc.ID, tc.Name, actionInput)
+
+			// Inject protected values before execution
+			injectedInput, secretErr := o.secretInjector.Inject(actionInput)
+			if secretErr != nil {
+				errMsg := fmt.Sprintf("Error: %v", secretErr)
+				o.streamer.ToolComplete(tc.ID, tc.Name, errMsg)
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   errMsg,
+					IsError:   true,
+				})
+				continue
+			}
+
+			// Look up the tool
+			tool := o.lookupTool(tc.Name)
+			if tool == nil {
+				errMsg := fmt.Sprintf("Error: Tool '%s' not found", tc.Name)
+				o.streamer.ToolComplete(tc.ID, tc.Name, errMsg)
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   errMsg,
+					IsError:   true,
+				})
+				continue
+			}
+
+			// Write-ahead: record tool call before execution
+			var toolRecordID string
+			if o.sessionLogger != nil && o.sessionID != "" {
+				toolRecordID, _ = o.sessionLogger.StartToolCall(o.taskID, o.sessionID, tc.ID, tc.Name, injectedInput)
+			}
+
+			if o.eventLogger != nil {
+				o.eventLogger.LogEvent("agent_tool_call", map[string]any{
+					"tool": tc.Name,
+				})
+			}
+
+			toolStart := time.Now()
+			result := tool.Call(ctx, injectedInput)
+
+			if o.eventLogger != nil {
+				o.eventLogger.LogEvent("agent_tool_result", map[string]any{
+					"tool":        tc.Name,
+					"duration_ms": time.Since(toolStart).Milliseconds(),
+				})
+			}
+
+			// Complete the tool call record with result
+			if toolRecordID != "" && o.sessionLogger != nil {
+				o.sessionLogger.CompleteToolCall(toolRecordID, result)
+			} else if o.sessionLogger != nil && o.sessionID != "" {
+				o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, tc.ID, tc.Name, injectedInput, result, toolStart, time.Now())
+			}
+
+			// Apply result interception for large results
+			resultContent := result
+			if o.interceptor != nil {
+				ir := o.interceptor.Intercept(tc.Name, result)
+				resultContent = ir.Data
+				if ir.Metadata != "" {
+					resultContent += "\n\n---\n" + ir.Metadata
+				}
+			}
+
+			o.streamer.ToolComplete(tc.ID, tc.Name, resultContent)
+
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content:   resultContent,
+			})
 		}
 
-		// Look up the tool
-		tool := o.lookupTool(action)
-		if tool == nil {
-			errMsg := fmt.Sprintf("Error: Tool '%s' not found", action)
-			o.streamer.ToolComplete(tcID, action, errMsg)
-			currentLogText = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
-			currentParts = []llm.ContentBlock{{Type: llm.ContentTypeText, Text: currentLogText}}
-			continue
-		}
+		// Add all tool results to the session
+		o.session.AddToolResults(toolResults)
 
-		// Write-ahead: record tool call before execution
-		var toolRecordID string
+		// Log tool results for session store
 		if o.sessionLogger != nil && o.sessionID != "" {
-			toolRecordID, _ = o.sessionLogger.StartToolCall(o.taskID, o.sessionID, tcID, action, injectedInput)
+			for _, tr := range toolResults {
+				o.sessionLogger.AppendMessage(o.sessionID, "user", fmt.Sprintf("[tool_result:%s] %s", tr.ToolUseID, tr.Content), time.Now(), time.Now())
+			}
 		}
 
-		if o.eventLogger != nil {
-			o.eventLogger.LogEvent("agent_tool_call", map[string]any{
-				"tool": action,
-			})
-		}
-
-		result := tool.Call(ctx, injectedInput)
-
-		if o.eventLogger != nil {
-			o.eventLogger.LogEvent("agent_tool_result", map[string]any{
-				"tool":        action,
-				"duration_ms": time.Since(time.Now()).Milliseconds(),
-			})
-		}
-
-		// Complete the tool call record with result
-		if toolRecordID != "" && o.sessionLogger != nil {
-			o.sessionLogger.CompleteToolCall(toolRecordID, result)
-		} else if o.sessionLogger != nil && o.sessionID != "" {
-			o.sessionLogger.StoreToolResult(o.taskID, o.sessionID, tcID, action, injectedInput, result, time.Now(), time.Now())
-		}
-
-		// Format observation (may intercept/truncate large results)
-		var observationContent string
-		currentParts, currentLogText, observationContent = o.formatObservation(action, result)
-		o.streamer.ToolComplete(tcID, action, observationContent)
-
+		// Reset for next iteration — no new user text, just continue the loop
+		currentParts = nil
+		currentLogText = ""
 	}
 
 	return ChatResult{Answer: finalAnswer, Complete: finalAnswer != ""}, nil
@@ -391,61 +444,3 @@ func (o *orchestrator) lookupTool(name string) aitools.Tool {
 	return nil
 }
 
-// formatObservation formats a tool result as an observation, with optional metadata.
-// Returns content blocks (text interleaved with images at their original positions),
-// the full observation text with [image] placeholders (for logging), and the plain observation content (for streaming).
-func (o *orchestrator) formatObservation(toolName, result string) ([]llm.ContentBlock, string, string) {
-	// Extract any images from the result
-	extraction := aitools.ExtractImages(result)
-
-	// Use remaining text (with images replaced by [image] placeholders) for the text portion
-	textResult := extraction.RemainingText
-	if len(extraction.Images) > 0 && textResult == "[image]" {
-		textResult = "[see image]"
-	}
-
-	// Apply interceptor if configured
-	var metadata string
-	if o.interceptor != nil {
-		ir := o.interceptor.Intercept(toolName, textResult)
-		textResult = ir.Data
-		metadata = ir.Metadata
-	}
-
-	// No images — simple text observation
-	if len(extraction.Images) == 0 {
-		obs := fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", textResult)
-		if metadata != "" {
-			obs += fmt.Sprintf("\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", metadata)
-		}
-		return []llm.ContentBlock{{Type: llm.ContentTypeText, Text: obs}}, obs, textResult
-	}
-
-	// Has images — split text at [image] placeholders and interleave with image blocks
-	wrapped := fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", textResult)
-	if metadata != "" {
-		wrapped += fmt.Sprintf("\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", metadata)
-	}
-
-	segments := strings.Split(wrapped, "[image]")
-	var parts []llm.ContentBlock
-	imgIdx := 0
-	for i, seg := range segments {
-		if seg != "" {
-			parts = append(parts, llm.ContentBlock{Type: llm.ContentTypeText, Text: seg})
-		}
-		if i < len(segments)-1 && imgIdx < len(extraction.Images) {
-			img := extraction.Images[imgIdx]
-			parts = append(parts, llm.ContentBlock{
-				Type: llm.ContentTypeImage,
-				ImageData: &llm.ImageBlock{
-					Data:      img.Data,
-					MediaType: img.MediaType,
-				},
-			})
-			imgIdx++
-		}
-	}
-
-	return parts, wrapped, textResult
-}

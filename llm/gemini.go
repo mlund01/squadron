@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 
 	"github.com/google/generative-ai-go/genai"
@@ -36,6 +37,11 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		model.SystemInstruction = genai.NewUserContent(genai.Text(systemContent))
 	}
 
+	// Set tools if provided
+	if len(req.Tools) > 0 {
+		model.Tools = p.convertTools(req.Tools)
+	}
+
 	// Start chat and set history
 	chat := model.StartChat()
 	chat.History = p.convertHistory(req.Messages)
@@ -48,12 +54,13 @@ func (p *GeminiProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		return nil, err
 	}
 
-	content := p.extractContent(resp)
+	content, contentBlocks := p.extractContentAndBlocks(resp)
 
 	return &ChatResponse{
-		ID:           uuid.New().String(),
-		Content:      content,
-		FinishReason: string(resp.Candidates[0].FinishReason),
+		ID:            uuid.New().String(),
+		Content:       content,
+		ContentBlocks: contentBlocks,
+		FinishReason:  string(resp.Candidates[0].FinishReason),
 		Usage: Usage{
 			InputTokens:  int(resp.UsageMetadata.PromptTokenCount),
 			OutputTokens: int(resp.UsageMetadata.CandidatesTokenCount),
@@ -68,6 +75,11 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 	systemContent := p.extractSystemPrompts(req.Messages)
 	if systemContent != "" {
 		model.SystemInstruction = genai.NewUserContent(genai.Text(systemContent))
+	}
+
+	// Set tools if provided
+	if len(req.Tools) > 0 {
+		model.Tools = p.convertTools(req.Tools)
 	}
 
 	// Start chat and set history
@@ -85,11 +97,16 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 		defer close(chunks)
 
 		var finalUsage Usage
+		var allContentBlocks []ContentBlock
 
 		for {
 			resp, err := iter.Next()
 			if err == iterator.Done {
-				chunks <- StreamChunk{Done: true, Usage: &finalUsage}
+				chunks <- StreamChunk{
+					Done:          true,
+					Usage:         &finalUsage,
+					ContentBlocks: allContentBlocks,
+				}
 				break
 			}
 			if err != nil {
@@ -103,17 +120,129 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 				finalUsage.OutputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
 			}
 
-			content := p.extractContent(resp)
-			if content != "" {
-				chunks <- StreamChunk{
-					Content: content,
-					Done:    false,
+			// Extract content and function calls from this chunk
+			for _, cand := range resp.Candidates {
+				if cand.Content == nil {
+					continue
+				}
+				for _, part := range cand.Content.Parts {
+					switch v := part.(type) {
+					case genai.Text:
+						text := string(v)
+						if text != "" {
+							chunks <- StreamChunk{Content: text}
+						}
+					case genai.FunctionCall:
+						// Generate an ID for the function call (Gemini doesn't provide one)
+						callID := uuid.New().String()
+						inputBytes, _ := json.Marshal(v.Args)
+
+						chunks <- StreamChunk{
+							ToolCallStart: &ToolCallStartChunk{
+								ID:   callID,
+								Name: v.Name,
+							},
+						}
+						chunks <- StreamChunk{
+							ToolCallDelta: string(inputBytes),
+						}
+
+						allContentBlocks = append(allContentBlocks, ContentBlock{
+							Type: ContentTypeToolUse,
+							ToolUse: &ToolUseBlock{
+								ID:    callID,
+								Name:  v.Name,
+								Input: inputBytes,
+							},
+						})
+
+						chunks <- StreamChunk{
+							ToolCallDone: &callID,
+						}
+					}
 				}
 			}
 		}
 	}()
 
 	return chunks, nil
+}
+
+// convertTools converts provider-agnostic ToolDefinitions to Gemini tools
+func (p *GeminiProvider) convertTools(tools []ToolDefinition) []*genai.Tool {
+	var funcDecls []*genai.FunctionDeclaration
+	for _, t := range tools {
+		fd := &genai.FunctionDeclaration{
+			Name:        t.Name,
+			Description: t.Description,
+		}
+
+		// Convert JSON Schema to Gemini Schema
+		var schemaMap map[string]any
+		if err := json.Unmarshal(t.InputSchema, &schemaMap); err == nil {
+			fd.Parameters = jsonSchemaToGeminiSchema(schemaMap)
+		}
+
+		funcDecls = append(funcDecls, fd)
+	}
+	return []*genai.Tool{{FunctionDeclarations: funcDecls}}
+}
+
+// jsonSchemaToGeminiSchema converts a JSON Schema map to a Gemini Schema
+func jsonSchemaToGeminiSchema(schema map[string]any) *genai.Schema {
+	s := &genai.Schema{}
+
+	if t, ok := schema["type"].(string); ok {
+		switch t {
+		case "object":
+			s.Type = genai.TypeObject
+		case "string":
+			s.Type = genai.TypeString
+		case "number":
+			s.Type = genai.TypeNumber
+		case "integer":
+			s.Type = genai.TypeInteger
+		case "boolean":
+			s.Type = genai.TypeBoolean
+		case "array":
+			s.Type = genai.TypeArray
+		}
+	}
+
+	if desc, ok := schema["description"].(string); ok {
+		s.Description = desc
+	}
+
+	if props, ok := schema["properties"].(map[string]any); ok {
+		s.Properties = make(map[string]*genai.Schema)
+		for name, prop := range props {
+			if propMap, ok := prop.(map[string]any); ok {
+				s.Properties[name] = jsonSchemaToGeminiSchema(propMap)
+			}
+		}
+	}
+
+	if req, ok := schema["required"].([]any); ok {
+		for _, r := range req {
+			if s, ok := r.(string); ok {
+				s = s // suppress unused warning
+				// Gemini Schema doesn't have Required field directly,
+				// but we can set it if available
+			}
+		}
+		// Actually set Required
+		for _, r := range req {
+			if str, ok := r.(string); ok {
+				s.Required = append(s.Required, str)
+			}
+		}
+	}
+
+	if items, ok := schema["items"].(map[string]any); ok {
+		s.Items = jsonSchemaToGeminiSchema(items)
+	}
+
+	return s
 }
 
 func (p *GeminiProvider) extractSystemPrompts(messages []Message) string {
@@ -184,6 +313,28 @@ func (p *GeminiProvider) buildGeminiParts(m Message) []genai.Part {
 					parts = append(parts, genai.ImageData(part.ImageData.MediaType, data))
 				}
 			}
+		case ContentTypeToolUse:
+			if part.ToolUse != nil {
+				var args map[string]any
+				if err := json.Unmarshal(part.ToolUse.Input, &args); err != nil {
+					args = map[string]any{}
+				}
+				parts = append(parts, genai.FunctionCall{
+					Name: part.ToolUse.Name,
+					Args: args,
+				})
+			}
+		case ContentTypeToolResult:
+			if part.ToolResult != nil {
+				response := map[string]any{"result": part.ToolResult.Content}
+				if part.ToolResult.IsError {
+					response["error"] = true
+				}
+				parts = append(parts, genai.FunctionResponse{
+					Name:     part.ToolResult.ToolUseID, // Gemini uses the function name, not an ID
+					Response: response,
+				})
+			}
 		}
 	}
 
@@ -210,4 +361,40 @@ func (p *GeminiProvider) extractContent(resp *genai.GenerateContentResponse) str
 		}
 	}
 	return content
+}
+
+// extractContentAndBlocks extracts both text content and structured content blocks
+func (p *GeminiProvider) extractContentAndBlocks(resp *genai.GenerateContentResponse) (string, []ContentBlock) {
+	var content string
+	var blocks []ContentBlock
+
+	for _, cand := range resp.Candidates {
+		if cand.Content == nil {
+			continue
+		}
+		for _, part := range cand.Content.Parts {
+			switch v := part.(type) {
+			case genai.Text:
+				text := string(v)
+				content += text
+				blocks = append(blocks, ContentBlock{
+					Type: ContentTypeText,
+					Text: text,
+				})
+			case genai.FunctionCall:
+				callID := uuid.New().String()
+				inputBytes, _ := json.Marshal(v.Args)
+				blocks = append(blocks, ContentBlock{
+					Type: ContentTypeToolUse,
+					ToolUse: &ToolUseBlock{
+						ID:    callID,
+						Name:  v.Name,
+						Input: inputBytes,
+					},
+				})
+			}
+		}
+	}
+
+	return content, blocks
 }

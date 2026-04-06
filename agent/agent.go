@@ -194,7 +194,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			Description: s.Description,
 		})
 	}
-	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(tools, mode, promptSecrets))
+	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(mode, promptSecrets))
 	systemPrompts = append(systemPrompts,
 		fmt.Sprintf("Personality: %s", agentCfg.Personality),
 		fmt.Sprintf("Role: %s", agentCfg.Role),
@@ -219,8 +219,8 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (agentCfg.GetPruneOn() == 0 || (agentCfg.GetPruneOn()-agentCfg.GetPruneTo()) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
-	// Set stop sequences to prevent LLM from hallucinating observations
-	session.SetStopSequences([]string{"___STOP___"})
+	// Set tools on session for native tool calling
+	session.SetTools(aitools.ToolsToDefinitions(tools))
 
 	if opts.DebugFile != "" {
 		if err := session.EnableDebug(opts.DebugFile); err != nil {

@@ -3,6 +3,8 @@ package aitools
 import (
 	"encoding/json"
 
+	"squadron/llm"
+
 	"github.com/zclconf/go-cty/cty"
 )
 
@@ -41,6 +43,25 @@ type Schema struct {
 func (s Schema) String() string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// ToJSONSchema returns the schema as a json.RawMessage suitable for ToolDefinition.InputSchema
+func (s Schema) ToJSONSchema() json.RawMessage {
+	b, _ := json.Marshal(s)
+	return json.RawMessage(b)
+}
+
+// ToolsToDefinitions converts a tool map to provider-agnostic ToolDefinition slice
+func ToolsToDefinitions(tools map[string]Tool) []llm.ToolDefinition {
+	defs := make([]llm.ToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		defs = append(defs, llm.ToolDefinition{
+			Name:        tool.ToolName(),
+			Description: tool.ToolDescription(),
+			InputSchema: tool.ToolPayloadSchema().ToJSONSchema(),
+		})
+	}
+	return defs
 }
 
 // ToCtyType converts the schema to a cty.Type for HCL evaluation

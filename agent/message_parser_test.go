@@ -38,62 +38,6 @@ func (m *mockStreamer) FinishAnswer()              { m.finishAnswerCount++ }
 func (m *mockStreamer) AskCommander(content string)      {}
 func (m *mockStreamer) CommanderResponse(content string) {}
 
-func TestParseAction(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("<ACTION>my_tool</ACTION>")
-	p.ProcessChunk("<ACTION_INPUT>{\"key\": \"value\"}</ACTION_INPUT>")
-	p.Finish()
-
-	if p.GetAction() != "my_tool" {
-		t.Fatalf("action = %q, want %q", p.GetAction(), "my_tool")
-	}
-	if p.GetActionInput() != `{"key": "value"}` {
-		t.Fatalf("action input = %q, want %q", p.GetActionInput(), `{"key": "value"}`)
-	}
-}
-
-func TestParseAction_WhitespaceInName(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("<ACTION>  my_tool  </ACTION>")
-	p.Finish()
-
-	if p.GetAction() != "my_tool" {
-		t.Fatalf("action = %q, want %q", p.GetAction(), "my_tool")
-	}
-}
-
-func TestParseAction_WhitespaceInInput(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("<ACTION>tool</ACTION>")
-	p.ProcessChunk("<ACTION_INPUT>  {\"a\":1}  </ACTION_INPUT>")
-	p.Finish()
-
-	if p.GetActionInput() != `{"a":1}` {
-		t.Fatalf("action input = %q, want %q", p.GetActionInput(), `{"a":1}`)
-	}
-}
-
-func TestParseActionInput_StreamEndBeforeClosingTag(t *testing.T) {
-	// When stream ends during ACTION_INPUT (stop sequence), Finish() captures buffer
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("<ACTION>tool</ACTION>")
-	p.ProcessChunk("<ACTION_INPUT>{\"partial\": true}")
-	// No closing tag — stream ends
-	p.Finish()
-
-	if p.GetActionInput() != `{"partial": true}` {
-		t.Fatalf("action input = %q, want %q", p.GetActionInput(), `{"partial": true}`)
-	}
-}
-
 func TestParseAnswer(t *testing.T) {
 	s := &mockStreamer{}
 	p := NewMessageParser(s)
@@ -164,26 +108,6 @@ func TestParseReasoning_LeadingNewlinesStripped(t *testing.T) {
 	}
 }
 
-func TestParseReasoningThenAction(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("<REASONING>I should use the search tool.</REASONING>")
-	p.ProcessChunk("<ACTION>search</ACTION>")
-	p.ProcessChunk("<ACTION_INPUT>{\"query\": \"test\"}</ACTION_INPUT>")
-	p.Finish()
-
-	if p.GetAction() != "search" {
-		t.Fatalf("action = %q, want %q", p.GetAction(), "search")
-	}
-	if p.GetActionInput() != `{"query": "test"}` {
-		t.Fatalf("action input = %q, want %q", p.GetActionInput(), `{"query": "test"}`)
-	}
-	if s.finishReasoningCount != 1 {
-		t.Fatalf("finishReasoning called %d times, want 1", s.finishReasoningCount)
-	}
-}
-
 func TestParseReasoningThenAnswer(t *testing.T) {
 	s := &mockStreamer{}
 	p := NewMessageParser(s)
@@ -195,41 +119,8 @@ func TestParseReasoningThenAnswer(t *testing.T) {
 	if p.GetAnswer() != "42" {
 		t.Fatalf("answer = %q, want %q", p.GetAnswer(), "42")
 	}
-	if p.GetAction() != "" {
-		t.Fatalf("action = %q, want empty", p.GetAction())
-	}
-}
-
-func TestParseAskCommander(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("<ASK_COMMANDER>What credentials should I use?</ASK_COMMANDER>")
-	p.Finish()
-
-	got := p.GetAskCommander()
-	expected := "What credentials should I use?"
-	if got != expected {
-		t.Fatalf("ask_commander = %q, want %q", got, expected)
-	}
-}
-
-func TestChunkedStreaming_Action(t *testing.T) {
-	// Simulate content arriving in small chunks
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	chunks := []string{"<ACT", "ION>", "my_", "tool", "</ACTION>", "<ACTION_", "INPUT>", `{"k":`, `"v"}`, "</ACTION_INPUT>"}
-	for _, c := range chunks {
-		p.ProcessChunk(c)
-	}
-	p.Finish()
-
-	if p.GetAction() != "my_tool" {
-		t.Fatalf("action = %q, want %q", p.GetAction(), "my_tool")
-	}
-	if p.GetActionInput() != `{"k":"v"}` {
-		t.Fatalf("action input = %q, want %q", p.GetActionInput(), `{"k":"v"}`)
+	if s.finishReasoningCount != 1 {
+		t.Fatalf("finishReasoning called %d times, want 1", s.finishReasoningCount)
 	}
 }
 
@@ -271,74 +162,29 @@ func TestReset(t *testing.T) {
 	s := &mockStreamer{}
 	p := NewMessageParser(s)
 
-	p.ProcessChunk("<ACTION>tool1</ACTION>")
-	p.ProcessChunk("<ACTION_INPUT>input1</ACTION_INPUT>")
+	p.ProcessChunk("<ANSWER>hello</ANSWER>")
 	p.Finish()
 
-	if p.GetAction() != "tool1" {
-		t.Fatalf("before reset: action = %q", p.GetAction())
+	if p.GetAnswer() != "hello" {
+		t.Fatalf("before reset: answer = %q", p.GetAnswer())
 	}
 
 	p.Reset()
 
-	if p.GetAction() != "" {
-		t.Fatalf("after reset: action = %q, want empty", p.GetAction())
-	}
-	if p.GetActionInput() != "" {
-		t.Fatalf("after reset: action input = %q, want empty", p.GetActionInput())
-	}
 	if p.GetAnswer() != "" {
 		t.Fatalf("after reset: answer = %q, want empty", p.GetAnswer())
 	}
-	if p.GetAskCommander() != "" {
-		t.Fatalf("after reset: ask_commander = %q, want empty", p.GetAskCommander())
-	}
 }
 
-func TestNoTags_NoAction(t *testing.T) {
+func TestNoTags_NoAnswer(t *testing.T) {
 	s := &mockStreamer{}
 	p := NewMessageParser(s)
 
 	p.ProcessChunk("Just some plain text with no tags at all.")
 	p.Finish()
 
-	if p.GetAction() != "" {
-		t.Fatalf("action = %q, want empty", p.GetAction())
-	}
 	if p.GetAnswer() != "" {
 		t.Fatalf("answer = %q, want empty", p.GetAnswer())
-	}
-}
-
-func TestTextBeforeTags_Ignored(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("Some preamble text\n<ACTION>tool</ACTION><ACTION_INPUT>data</ACTION_INPUT>")
-	p.Finish()
-
-	if p.GetAction() != "tool" {
-		t.Fatalf("action = %q, want %q", p.GetAction(), "tool")
-	}
-	if p.GetActionInput() != "data" {
-		t.Fatalf("action input = %q, want %q", p.GetActionInput(), "data")
-	}
-}
-
-func TestMultilineActionInput(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	input := `{
-  "query": "test",
-  "limit": 10
-}`
-	p.ProcessChunk("<ACTION>search</ACTION>")
-	p.ProcessChunk("<ACTION_INPUT>" + input + "</ACTION_INPUT>")
-	p.Finish()
-
-	if p.GetActionInput() != input {
-		t.Fatalf("action input = %q, want %q", p.GetActionInput(), input)
 	}
 }
 

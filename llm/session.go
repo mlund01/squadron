@@ -629,10 +629,7 @@ func (s *Session) buildCompactionSummary(messages []Message) string {
 		}
 		content := msg.GetTextContent()
 
-		// Skip tool results (native or legacy XML observations)
-		if strings.Contains(content, "<OBSERVATION>") {
-			continue
-		}
+		// Skip tool results
 		if msg.HasParts() {
 			isToolResult := false
 			for _, part := range msg.Parts {
@@ -677,20 +674,6 @@ func (s *Session) buildCompactionSummary(messages []Message) string {
 			for _, part := range msg.Parts {
 				if part.Type == ContentTypeToolUse && part.ToolUse != nil {
 					toolCalls = append(toolCalls, part.ToolUse.Name)
-				}
-			}
-		}
-
-		// Legacy: extract tool calls from user messages (observations) with XML format
-		if msg.Role == RoleUser && strings.Contains(content, "<OBSERVATION>") {
-			// Try to identify what tool was called by looking at the previous assistant message
-			if i > 0 && messages[i-1].Role == RoleAssistant {
-				prevContent := messages[i-1].GetTextContent()
-				if actionStart := strings.Index(prevContent, "<ACTION>"); actionStart != -1 {
-					if actionEnd := strings.Index(prevContent[actionStart:], "</ACTION>"); actionEnd != -1 {
-						toolName := prevContent[actionStart+8 : actionStart+actionEnd]
-						toolCalls = append(toolCalls, toolName)
-					}
 				}
 			}
 		}

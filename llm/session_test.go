@@ -802,8 +802,8 @@ func TestCompact_SummarizesOldTurns(t *testing.T) {
 	s.messages = []Message{
 		{Role: RoleUser, Content: "first task"},
 		{Role: RoleAssistant, Content: "did the first task"},
-		{Role: RoleUser, Content: "<OBSERVATION>tool result</OBSERVATION>"},
-		{Role: RoleAssistant, Content: "<ACTION>search</ACTION>\n<ACTION_INPUT>{}</ACTION_INPUT>"},
+		{Role: RoleUser, Parts: []ContentBlock{{Type: ContentTypeToolResult, ToolResult: &ToolResultBlock{ToolUseID: "tc_1", Content: "tool result"}}}},
+		{Role: RoleAssistant, Parts: []ContentBlock{{Type: ContentTypeToolUse, ToolUse: &ToolUseBlock{ID: "tc_2", Name: "search", Input: []byte("{}")}}}},
 		{Role: RoleUser, Content: "latest question"},
 		{Role: RoleAssistant, Content: "latest answer"},
 	}
@@ -869,10 +869,10 @@ func TestCompact_ExtractsToolCalls(t *testing.T) {
 
 	s.messages = []Message{
 		{Role: RoleUser, Content: "do something"},
-		{Role: RoleAssistant, Content: "<ACTION>web_search</ACTION>"},
-		{Role: RoleUser, Content: "<OBSERVATION>results</OBSERVATION>"},
-		{Role: RoleAssistant, Content: "<ACTION>read_file</ACTION>"},
-		{Role: RoleUser, Content: "<OBSERVATION>file content</OBSERVATION>"},
+		{Role: RoleAssistant, Parts: []ContentBlock{{Type: ContentTypeToolUse, ToolUse: &ToolUseBlock{ID: "tc_1", Name: "web_search", Input: []byte("{}")}}}},
+		{Role: RoleUser, Parts: []ContentBlock{{Type: ContentTypeToolResult, ToolResult: &ToolResultBlock{ToolUseID: "tc_1", Content: "results"}}}},
+		{Role: RoleAssistant, Parts: []ContentBlock{{Type: ContentTypeToolUse, ToolUse: &ToolUseBlock{ID: "tc_2", Name: "read_file", Input: []byte("{}")}}}},
+		{Role: RoleUser, Parts: []ContentBlock{{Type: ContentTypeToolResult, ToolResult: &ToolResultBlock{ToolUseID: "tc_2", Content: "file content"}}}},
 		{Role: RoleAssistant, Content: "done"},
 		{Role: RoleUser, Content: "final-q"},
 		{Role: RoleAssistant, Content: "final-a"},

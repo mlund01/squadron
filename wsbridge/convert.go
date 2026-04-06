@@ -1,6 +1,8 @@
 package wsbridge
 
 import (
+	"strings"
+
 	"squadron/aitools"
 	"squadron/config"
 	"squadron/plugin"
@@ -28,11 +30,20 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 	}
 
 	for _, a := range cfg.Agents {
+		// Build skill names: explicit refs + local skill names
+		var skillNames []string
+		for _, ref := range a.Skills {
+			skillNames = append(skillNames, strings.TrimPrefix(ref, "skills."))
+		}
+		for _, ls := range a.LocalSkills {
+			skillNames = append(skillNames, ls.Name)
+		}
 		ic.Agents = append(ic.Agents, protocol.AgentInfo{
-			Name:  a.Name,
-			Role:  a.Role,
-			Model: a.Model,
-			Tools: a.Tools,
+			Name:   a.Name,
+			Role:   a.Role,
+			Model:  a.Model,
+			Tools:  a.Tools,
+			Skills: skillNames,
 		})
 	}
 
@@ -62,11 +73,19 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 	// Add mission-scoped agents and their local skills
 	for _, m := range cfg.Missions {
 		for _, a := range m.LocalAgents {
+			var mSkillNames []string
+			for _, ref := range a.Skills {
+				mSkillNames = append(mSkillNames, strings.TrimPrefix(ref, "skills."))
+			}
+			for _, ls := range a.LocalSkills {
+				mSkillNames = append(mSkillNames, ls.Name)
+			}
 			ic.Agents = append(ic.Agents, protocol.AgentInfo{
 				Name:    a.Name,
 				Role:    a.Role,
 				Model:   a.Model,
 				Tools:   a.Tools,
+				Skills:  mSkillNames,
 				Mission: m.Name,
 			})
 			for _, s := range a.LocalSkills {

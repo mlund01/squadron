@@ -482,6 +482,11 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	}
 	sup.tools["task_complete"] = sup.taskComplete
 
+	// Inject routing options as a system prompt so the commander knows upfront
+	if len(opts.Routes) > 0 {
+		sup.injectRouteOptions(opts.Routes)
+	}
+
 	// If there's previous iteration output (sequential iterations), inject it
 	if len(opts.PrevIterationOutput) > 0 {
 		sup.injectPrevIterationOutput(opts.PrevIterationOutput)
@@ -823,6 +828,23 @@ func writeExampleJSON(field OutputFieldSchema) string {
 	}
 }
 
+// injectRouteOptions adds a system prompt describing the available routing options.
+func (s *Commander) injectRouteOptions(routes []aitools.RouteOption) {
+	var sb strings.Builder
+	sb.WriteString("## Routing Options\n\n")
+	sb.WriteString("When you call `task_complete`, you MUST include a `route` parameter. Choose the route whose condition best matches your task results, or `none` if no route applies.\n\n")
+	sb.WriteString("**Available routes:**\n")
+	for _, r := range routes {
+		if r.IsMission {
+			sb.WriteString(fmt.Sprintf("- `%s` (mission) — %s\n", r.Target, r.Condition))
+		} else {
+			sb.WriteString(fmt.Sprintf("- `%s` — %s\n", r.Target, r.Condition))
+		}
+	}
+	sb.WriteString("- `none` — No route applies, complete without branching\n")
+	s.session.AddSystemPrompt(sb.String())
+}
+
 // injectOutputSchemaInstructions adds instructions for producing structured output via submit_output tool
 func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 	var sb strings.Builder
@@ -894,6 +916,11 @@ func (s *Commander) GetSessionID() string {
 }
 
 // IsTaskSucceeded returns whether task_complete was called with succeed=true (or default).
+// isFullyCompleted returns true when the commander has finished all work.
+func (s *Commander) isFullyCompleted() bool {
+	return s.taskComplete.IsCompleted()
+}
+
 func (s *Commander) IsTaskSucceeded() bool {
 	return s.taskComplete.IsSucceeded()
 }
@@ -1369,7 +1396,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			}
 
 			// Check if task_complete was called
-			if s.taskComplete.IsCompleted() {
+			if s.isFullyCompleted() {
 				break
 			}
 		}

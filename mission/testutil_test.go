@@ -382,7 +382,7 @@ func cmdTaskCompleteFail(reason string) mockResponse {
 }
 
 func cmdTaskCompleteRoute(route string) mockResponse {
-	input, _ := json.Marshal(map[string]string{"route": route})
+	input, _ := json.Marshal(map[string]string{"route": route, "summary": "Task completed, routing to " + route})
 	return mockToolCall("task_complete", input)
 }
 

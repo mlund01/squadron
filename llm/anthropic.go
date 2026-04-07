@@ -23,7 +23,7 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRe
 
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens == 0 {
-		maxTokens = 4096
+		maxTokens = 8192
 	}
 
 	params := anthropic.MessageNewParams{
@@ -91,7 +91,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 
 	maxTokens := int64(req.MaxTokens)
 	if maxTokens == 0 {
-		maxTokens = 4096
+		maxTokens = 8192
 	}
 
 	params := anthropic.MessageNewParams{

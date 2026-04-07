@@ -69,6 +69,7 @@ func (m *mockMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMs
 func (m *mockMissionStore) UpdateTaskStatusCAS(id, expectedOld, newStatus string, outputJSON, errMsg *string) (bool, error) {
 	return true, nil
 }
+func (m *mockMissionStore) UpdateTaskSummary(id, summary string) error { return nil }
 func (m *mockMissionStore) GetTask(id string) (*store.MissionTask, error) { return nil, nil }
 func (m *mockMissionStore) GetTasksByMission(missionID string) ([]store.MissionTask, error) {
 	return nil, nil

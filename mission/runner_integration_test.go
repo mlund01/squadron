@@ -223,19 +223,31 @@ var _ = Describe("Runner Integration", func() {
 			})
 			cfg := buildTestConfig(mission, testAgent("worker"))
 
+			// Match helpers for parallel tasks
+			matchTask := func(taskName string) func(*llm.ChatRequest) bool {
+				return func(req *llm.ChatRequest) bool {
+					for _, m := range req.Messages {
+						if m.Role == llm.RoleUser && strings.Contains(m.Content, taskName) {
+							return true
+						}
+					}
+					return false
+				}
+			}
+
 			provider := newMockProvider(
 				// Task "trigger"
 				cmdCallAgent("worker", "Do trigger work"),
 				agentAnswer("Triggered."),
 				cmdTaskComplete(),
-				// Task "branch_a"
-				cmdCallAgent("worker", "Branch A work"),
-				agentAnswer("A done."),
-				cmdTaskComplete(),
-				// Task "branch_b"
-				cmdCallAgent("worker", "Branch B work"),
-				agentAnswer("B done."),
-				cmdTaskComplete(),
+				// Task "branch_a" (parallel — needs match)
+				withMatch(cmdCallAgent("worker", "Branch A work"), matchTask("branch_a")),
+				withMatch(agentAnswer("A done."), matchTask("branch_a")),
+				withMatch(cmdTaskComplete(), matchTask("branch_a")),
+				// Task "branch_b" (parallel — needs match)
+				withMatch(cmdCallAgent("worker", "Branch B work"), matchTask("branch_b")),
+				withMatch(agentAnswer("B done."), matchTask("branch_b")),
+				withMatch(cmdTaskComplete(), matchTask("branch_b")),
 			)
 
 			streamer, err := runMission(cfg, "test_sendto", provider, nil)

@@ -60,34 +60,77 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-// chatStreamWithRetry wraps provider.ChatStream with exponential backoff for
-// transient errors (429, 5xx). Retries for up to ~10 minutes before giving up.
-func (s *Session) chatStreamWithRetry(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
-	backoff := 5 * time.Second
-	maxBackoff := 2 * time.Minute
-	deadline := time.Now().Add(10 * time.Minute)
+// retryBackoffs defines the exponential backoff schedule for retries.
+var retryBackoffs = []time.Duration{2, 4, 8, 16, 32, 64}
 
-	for {
+// chatStreamWithRetry wraps provider.ChatStream with exponential backoff for
+// transient errors (429, 5xx). Retries up to 6 times with 2, 4, 8, 16, 32, 64 second delays.
+func (s *Session) chatStreamWithRetry(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
+	for attempt := 0; ; attempt++ {
 		stream, err := s.provider.ChatStream(ctx, req)
 		if err == nil {
 			return stream, nil
 		}
 
-		if !isRetryableError(err) || time.Now().Add(backoff).After(deadline) {
+		if !isRetryableError(err) || attempt >= len(retryBackoffs) {
 			return nil, err
 		}
 
-		log.Printf("[LLM] Retryable error (%v), retrying in %s...", err, backoff)
+		backoff := retryBackoffs[attempt] * time.Second
+		log.Printf("[LLM] Retryable error (attempt %d/%d: %v), retrying in %s...", attempt+1, len(retryBackoffs), err, backoff)
 
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(backoff):
 		}
+	}
+}
 
-		backoff = backoff * 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
+// streamWithRetry handles the full stream lifecycle with retries.
+// Connection and mid-stream errors are retried with backoff.
+// On retry, the onChunk callback is suppressed to avoid sending
+// duplicate/garbled chunks to the UI — only the final successful
+// stream delivers chunks.
+func (s *Session) streamWithRetry(ctx context.Context, req *ChatRequest, onChunk func(StreamChunk)) (streamResult, error) {
+	for attempt := 0; ; attempt++ {
+		stream, err := s.provider.ChatStream(ctx, req)
+		if err != nil {
+			if !isRetryableError(err) || attempt >= len(retryBackoffs) {
+				return streamResult{}, err
+			}
+			backoff := retryBackoffs[attempt] * time.Second
+			log.Printf("[LLM] Retryable connection error (attempt %d/%d: %v), retrying in %s...", attempt+1, len(retryBackoffs), err, backoff)
+			select {
+			case <-ctx.Done():
+				return streamResult{}, ctx.Err()
+			case <-time.After(backoff):
+			}
+			continue
+		}
+
+		// On first attempt, use the real callback. On retries, suppress
+		// chunks since the UI already received partial data from the failed attempt.
+		cb := onChunk
+		if attempt > 0 {
+			cb = nil
+		}
+
+		sr, streamErr := readStream(ctx, stream, cb)
+		if streamErr == nil {
+			return sr, nil
+		}
+
+		if !isRetryableError(streamErr) || attempt >= len(retryBackoffs) {
+			return streamResult{}, streamErr
+		}
+
+		backoff := retryBackoffs[attempt] * time.Second
+		log.Printf("[LLM] Retryable stream error (attempt %d/%d: %v), retrying in %s...", attempt+1, len(retryBackoffs), streamErr, backoff)
+		select {
+		case <-ctx.Done():
+			return streamResult{}, ctx.Err()
+		case <-time.After(backoff):
 		}
 	}
 }
@@ -382,18 +425,9 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.chatStreamWithRetry(ctx, req)
+	sr, err := s.streamWithRetry(ctx, req, onChunk)
 	if err != nil {
 		return nil, err
-	}
-
-	sr, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
-		if onChunk != nil {
-			onChunk(chunk)
-		}
-	})
-	if streamErr != nil {
-		return nil, streamErr
 	}
 
 	content := s.stripStopSequences(sr.TextContent)
@@ -436,18 +470,9 @@ func (s *Session) ContinueStream(ctx context.Context, onChunk func(StreamChunk))
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.chatStreamWithRetry(ctx, req)
+	sr, err := s.streamWithRetry(ctx, req, onChunk)
 	if err != nil {
 		return nil, err
-	}
-
-	sr, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
-		if onChunk != nil {
-			onChunk(chunk)
-		}
-	})
-	if streamErr != nil {
-		return nil, streamErr
 	}
 
 	content := s.stripStopSequences(sr.TextContent)
@@ -750,18 +775,9 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.chatStreamWithRetry(ctx, req)
+	sr, err := s.streamWithRetry(ctx, req, onChunk)
 	if err != nil {
 		return nil, err
-	}
-
-	sr, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
-		if onChunk != nil {
-			onChunk(chunk)
-		}
-	})
-	if streamErr != nil {
-		return nil, streamErr
 	}
 
 	content := s.stripStopSequences(sr.TextContent)

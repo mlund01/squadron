@@ -201,6 +201,7 @@ func getRules(mode config.AgentMode) string {
 
 	rules = append(rules, "**Tools are optional.** Only use tools when you need information you don't have or capabilities you lack.")
 	rules = append(rules, "**Handle errors gracefully.** If a tool call fails, reason about why and try a different approach.")
+	rules = append(rules, "**Keep responses concise.** Each response has a ~16,000 token output limit. Keep reasoning brief and avoid producing extremely long content in a single response.")
 
 	var sb strings.Builder
 	for i, rule := range rules {

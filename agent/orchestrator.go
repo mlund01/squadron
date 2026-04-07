@@ -107,8 +107,8 @@ func newOrchestrator(session llmSession, streamer streamers.ChatHandler, tools m
 func (o *orchestrator) processTurn(ctx context.Context, input string, resume bool) (ChatResult, error) {
 	var currentParts []llm.ContentBlock
 	currentParts = append(currentParts, llm.ContentBlock{Type: llm.ContentTypeText, Text: input})
-	currentLogText := input
 	var finalAnswer string
+	firstTurn := true
 
 	for {
 		// Create parser for streaming text content (REASONING/ANSWER tags)
@@ -135,7 +135,8 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			// First turn of resume — LLM responds to existing state.
 			resp, err = o.session.ContinueStream(ctx, onChunk)
 			resume = false
-		} else {
+		} else if firstTurn {
+			// First turn — send the user input
 			// Check if we have images in the content parts
 			hasImages := false
 			for _, p := range currentParts {
@@ -156,7 +157,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			// Log user message to session store
 			if o.sessionLogger != nil && o.sessionID != "" {
 				now := time.Now()
-				o.sessionLogger.AppendMessage(o.sessionID, "user", currentLogText, now, now)
+				o.sessionLogger.AppendMessage(o.sessionID, "user", input, now, now)
 			}
 
 			if hasImages {
@@ -165,6 +166,11 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			} else {
 				resp, err = o.session.SendStream(ctx, textContent, onChunk)
 			}
+			firstTurn = false
+		} else {
+			// Subsequent turns — tool results are already in the session via AddToolResults.
+			// Use ContinueStream since the tool results serve as implicit continuation.
+			resp, err = o.session.ContinueStream(ctx, onChunk)
 		}
 
 		// Check if compaction is needed after response
@@ -227,9 +233,15 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			return ChatResult{}, err
 		}
 
-		// Log assistant response to session store
+		// Log assistant response to session store (include tool calls in content)
 		if o.sessionLogger != nil && o.sessionID != "" && resp != nil {
-			o.sessionLogger.AppendMessage(o.sessionID, "assistant", resp.Content, llmStart, time.Now())
+			logContent := resp.Content
+			for _, block := range resp.ContentBlocks {
+				if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+					logContent += fmt.Sprintf("\n[tool_use: %s(%s)]", block.ToolUse.Name, string(block.ToolUse.Input))
+				}
+			}
+			o.sessionLogger.AppendMessage(o.sessionID, "assistant", logContent, llmStart, time.Now())
 		}
 
 		// Extract tool calls from the response ContentBlocks
@@ -371,9 +383,8 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			}
 		}
 
-		// Reset for next iteration — no new user text, just continue the loop
+		// Reset for next iteration
 		currentParts = nil
-		currentLogText = ""
 	}
 
 	return ChatResult{Answer: finalAnswer, Complete: finalAnswer != ""}, nil

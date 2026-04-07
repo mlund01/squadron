@@ -373,7 +373,7 @@ func cmdCallAgent(agentName, instruction string) mockResponse {
 }
 
 func cmdTaskComplete() mockResponse {
-	return mockToolCall("task_complete", json.RawMessage(`{}`))
+	return mockToolCall("task_complete", json.RawMessage(`{"summary":"Task completed successfully."}`))
 }
 
 func cmdTaskCompleteFail(reason string) mockResponse {

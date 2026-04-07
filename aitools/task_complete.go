@@ -27,6 +27,7 @@ type TaskCompleteTool struct {
 	completed     bool
 	succeeded     bool
 	failureReason string
+	summary       string
 	// SubtaskChecker returns (total, incomplete) subtask counts.
 	// If set, task_complete will fail when incomplete > 0.
 	SubtaskChecker func() (total int, incomplete int)
@@ -65,6 +66,10 @@ func (t *TaskCompleteTool) ToolPayloadSchema() Schema {
 		"succeed": {
 			Type:        TypeBoolean,
 			Description: "Whether the task completed successfully. Defaults to true. Set to false to mark the task as failed.",
+		},
+		"summary": {
+			Type:        TypeString,
+			Description: "A concise summary of what was accomplished, key findings, and important results. This summary will be provided as context to downstream dependent tasks. Required when succeed=true.",
 		},
 		"reason": {
 			Type:        TypeString,
@@ -106,6 +111,7 @@ func (t *TaskCompleteTool) Call(ctx context.Context, params string) string {
 	if params != "" && params != "{}" {
 		var input struct {
 			Succeed       *bool             `json:"succeed"`
+			Summary       string            `json:"summary"`
 			Reason        string            `json:"reason"`
 			Route         string            `json:"route"`
 			MissionInputs map[string]string `json:"mission_inputs"`
@@ -114,6 +120,7 @@ func (t *TaskCompleteTool) Call(ctx context.Context, params string) string {
 			if input.Succeed != nil {
 				succeed = *input.Succeed
 			}
+			t.summary = input.Summary
 			reason = input.Reason
 			route = input.Route
 			missionInputs = input.MissionInputs
@@ -244,4 +251,9 @@ func (t *TaskCompleteTool) IsMissionRoute() bool {
 // MissionInputs returns the inputs provided for a mission route, or nil.
 func (t *TaskCompleteTool) MissionInputs() map[string]string {
 	return t.missionInputs
+}
+
+// Summary returns the task summary provided by the commander.
+func (t *TaskCompleteTool) Summary() string {
+	return t.summary
 }

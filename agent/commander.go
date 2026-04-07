@@ -305,6 +305,7 @@ type Commander struct {
 	datasetCursor      *aitools.DatasetCursor      // Cursor for sequential dataset iteration (nil if not sequential)
 	submitOutput       *aitools.SubmitOutputTool   // Universal output submission tool
 	taskComplete       *aitools.TaskCompleteTool   // Tool to signal task completion
+	loopExitReason     string                     // Why the commander loop exited (for failure diagnostics)
 	sessionLogger      SessionLogger               // Session persistence (nil if not tracking)
 	sessionID          string                 // Store session ID (empty if not tracking)
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
@@ -897,9 +898,18 @@ func (s *Commander) IsTaskSucceeded() bool {
 	return s.taskComplete.IsSucceeded()
 }
 
-// TaskFailureReason returns the reason provided when task_complete was called with succeed=false.
+// TaskSummary returns the summary provided by the commander when completing the task.
+func (s *Commander) TaskSummary() string {
+	return s.taskComplete.Summary()
+}
+
+// TaskFailureReason returns the reason the task failed. Checks task_complete failure reason first,
+// then falls back to the loop exit reason (e.g., max_tokens, no tool call).
 func (s *Commander) TaskFailureReason() string {
-	return s.taskComplete.FailureReason()
+	if reason := s.taskComplete.FailureReason(); reason != "" {
+		return reason
+	}
+	return s.loopExitReason
 }
 
 // ChosenRoute returns the route chosen by the commander, or "" if none.
@@ -1136,6 +1146,7 @@ func (s *Commander) AddRestoredActiveAgent(agentName string, a *Agent, sessionID
 // When resume=true, the first LLM call uses ContinueStream (no new user message,
 // no store logging) because the session already has a pending user message.
 func (s *Commander) runLoop(ctx context.Context, currentInput string, resume bool, streamer CommanderStreamer) error {
+	firstTurn := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -1162,17 +1173,26 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		}
 
 		if resume {
-			// First turn of resume — LLM responds to existing state.
-			// Don't log to session store (the pending message is already stored).
+			// Resume — no new user message needed.
 			resp, err = s.session.ContinueStream(ctx, onChunk)
 			resume = false
-		} else {
-			// Normal turn — log user message, then send
+		} else if firstTurn {
+			// First turn — send the objective as a user message
 			if s.sessionLogger != nil && s.sessionID != "" {
 				now := time.Now()
 				s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput, now, now)
 			}
 			resp, err = s.session.SendStream(ctx, currentInput, onChunk)
+			firstTurn = false
+		} else {
+			// Subsequent turns — tool results are already in the session via AddToolResults.
+			// Send a brief continuation prompt (not the full objective) so the model knows to keep going.
+			continueMsg := "Continue. Remember: you MUST call task_complete when done."
+			if s.sessionLogger != nil && s.sessionID != "" {
+				now := time.Now()
+				s.sessionLogger.AppendMessage(s.sessionID, "user", continueMsg, now, now)
+			}
+			resp, err = s.session.SendStream(ctx, continueMsg, onChunk)
 		}
 
 		if s.debugLogger != nil {
@@ -1233,9 +1253,15 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			return err
 		}
 
-		// Log assistant response to session store
+		// Log assistant response to session store (include tool calls in content)
 		if s.sessionLogger != nil && s.sessionID != "" && resp != nil {
-			s.sessionLogger.AppendMessage(s.sessionID, "assistant", resp.Content, llmStart, time.Now())
+			logContent := resp.Content
+			for _, block := range resp.ContentBlocks {
+				if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+					logContent += fmt.Sprintf("\n[tool_use: %s(%s)]", block.ToolUse.Name, string(block.ToolUse.Input))
+				}
+			}
+			s.sessionLogger.AppendMessage(s.sessionID, "assistant", logContent, llmStart, time.Now())
 		}
 
 		// Extract tool calls from the response ContentBlocks
@@ -1259,8 +1285,14 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			s.turnLogger.LogTurn(firstToolName, s.session.SnapshotMessages())
 		}
 
-		// If no tool calls, we're done
+		// If response was truncated, record it as the exit reason
+		if resp != nil && resp.FinishReason == "max_tokens" && len(toolUses) == 0 {
+			s.loopExitReason = "LLM response hit max output tokens — tool call was truncated"
+		}
+
+		// If no tool calls, the commander has stopped acting
 		if len(toolUses) == 0 {
+			s.loopExitReason = "commander produced a text response with no tool call (task_complete was not called)"
 			break
 		}
 
@@ -1345,6 +1377,14 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		// Send tool results back to the session (must happen before exit
 		// so the session always has matching tool_result for every tool_use)
 		s.session.AddToolResults(toolResults)
+
+		// Log tool results to session store
+		if s.sessionLogger != nil && s.sessionID != "" {
+			for _, tr := range toolResults {
+				now := time.Now()
+				s.sessionLogger.AppendMessage(s.sessionID, "tool_result", fmt.Sprintf("[%s] %s", tr.ToolUseID, tr.Content), now, now)
+			}
+		}
 
 		// If task is complete, exit the loop
 		if s.taskComplete.IsCompleted() {

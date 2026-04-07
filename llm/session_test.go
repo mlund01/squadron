@@ -121,9 +121,9 @@ func TestRetry_ExponentialBackoff(t *testing.T) {
 	if resp.Content != "ok" {
 		t.Fatalf("expected content 'ok', got %q", resp.Content)
 	}
-	// 3 retries: 5s + 10s + 20s = 35s minimum
-	if elapsed < 30*time.Second {
-		t.Fatalf("expected at least 30s of backoff, got %s", elapsed)
+	// 3 retries: 2s + 4s + 8s = 14s minimum
+	if elapsed < 13*time.Second {
+		t.Fatalf("expected at least 13s of backoff, got %s", elapsed)
 	}
 	if provider.callCount != 4 {
 		t.Fatalf("expected 4 calls (3 failures + 1 success), got %d", provider.callCount)

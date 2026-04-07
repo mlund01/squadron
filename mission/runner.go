@@ -1831,6 +1831,18 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	// Individual iteration outputs already persisted via OnSubmitOutput callbacks
 	updateTaskDone(true, nil, nil)
 
+	// Store summary for iterated tasks
+	// Parallel iterations: aggregated factual summary (individual commanders don't share state)
+	// Sequential iterations: use the commander's own summary from task_complete
+	if task.Iterator.Parallel {
+		iterSummary := fmt.Sprintf("Iterated task '%s' completed %d/%d iterations successfully. Objective: %s. Use query_task_output to access individual iteration results.",
+			task.Name, successCount, len(iterations), task.RawObjective)
+		r.mu.Lock()
+		r.taskSummaries[task.Name] = iterSummary
+		r.stores.Missions.UpdateTaskSummary(taskID, iterSummary)
+		r.mu.Unlock()
+	}
+
 	streamer.TaskIterationCompleted(task.Name, len(iterations))
 	streamer.TaskCompleted(task.Name)
 
@@ -2839,11 +2851,6 @@ func (r *Runner) queryAncestorsForContext(ctx context.Context, taskName string, 
 	defer r.mu.RUnlock()
 
 	for _, depTaskName := range depChain {
-		// Skip iterated tasks — output schema info is injected separately
-		if _, isIterated := r.iterationCommanders[depTaskName]; isIterated {
-			continue
-		}
-
 		// Use the stored push summary from the completed task
 		if summary, ok := r.taskSummaries[depTaskName]; ok && summary != "" {
 			depSummaries = append(depSummaries, agent.DependencySummary{

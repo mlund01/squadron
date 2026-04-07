@@ -293,8 +293,11 @@ func (p *AnthropicProvider) convertMessages(messages []Message, promptCaching bo
 
 // buildContentBlocks converts a Message to Anthropic content blocks
 func (p *AnthropicProvider) buildContentBlocks(m Message) []anthropic.ContentBlockParamUnion {
-	// If no Parts, use simple text content
+	// If no Parts, use simple text content (skip empty blocks)
 	if !m.HasParts() {
+		if m.Content == "" {
+			return []anthropic.ContentBlockParamUnion{}
+		}
 		return []anthropic.ContentBlockParamUnion{anthropic.NewTextBlock(m.Content)}
 	}
 

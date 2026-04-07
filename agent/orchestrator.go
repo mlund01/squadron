@@ -127,9 +127,8 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			if chunk.Content != "" {
 				parser.ProcessChunk(chunk.Content)
 			}
-			if chunk.ToolCallStart != nil {
-				o.streamer.CallingTool(chunk.ToolCallStart.ID, chunk.ToolCallStart.Name, "")
-			}
+			// Note: tool call start events are emitted later with full payload (line ~290)
+			// Don't emit here to avoid duplicate events
 		}
 
 		if resume {

@@ -39,14 +39,14 @@ Only the chosen branch executes. If the commander picks "none", no branch activa
 
 ### How It Works
 
-Routing is built into the `task_complete` tool as a two-phase flow:
+Route options are injected as a system prompt when the commander starts, so it knows the available routes upfront. When calling `task_complete`, the commander includes a `route` parameter alongside the `summary`:
 
-1. Commander calls `task_complete` → the tool returns route options as a JSON list (plus a "none" option)
-2. Commander evaluates the options (it can call agents for more info before deciding)
-3. Commander calls `task_complete` again with a `route` parameter to select a route
+1. Commander sees route options in its system prompt (injected automatically from the `router` config)
+2. Commander does its work, delegating to agents as needed
+3. Commander calls `task_complete` with `summary` and `route` — choosing the route whose condition best matches the results, or `none` if no route applies
 4. The chosen route's target task is activated; unchosen branches never execute
 
-No extra LLM call is needed — the routing decision happens in the existing commander conversation.
+This happens in a single tool call — no extra turns needed for route selection.
 
 ### Chained Routers
 

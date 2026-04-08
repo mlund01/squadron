@@ -439,6 +439,108 @@ var _ = Describe("Runner Integration", func() {
 	})
 
 	// -----------------------------------------------------------------------
+	// h2) Sequential iterated task WITHOUT output schema
+	// -----------------------------------------------------------------------
+	Describe("sequential iterated task without output", func() {
+		It("completes successfully using dataset_next without submit_output", func() {
+			task := testTask("seq_no_output", "Process items without submitting output")
+			task.Iterator = &config.TaskIterator{
+				Dataset:  "items",
+				Parallel: false,
+			}
+			// No task.Output — no submit_output tool
+
+			mission := testMission("test_seq_no_output", []config.Task{task})
+			mission.Datasets = []config.Dataset{
+				{
+					Name:        "items",
+					Description: "Items to process",
+					Items: []cty.Value{
+						cty.ObjectVal(map[string]cty.Value{"n": cty.StringVal("1")}),
+						cty.ObjectVal(map[string]cty.Value{"n": cty.StringVal("2")}),
+						cty.ObjectVal(map[string]cty.Value{"n": cty.StringVal("3")}),
+					},
+				},
+			}
+			cfg := buildTestConfig(mission, testAgent("worker"))
+
+			provider := newMockProvider(
+				// Item 1: dataset_next → call_agent
+				cmdDatasetNext(),
+				cmdCallAgent("worker", "Process item 1"),
+				agentAnswer("Done 1."),
+				// Item 2
+				cmdDatasetNext(),
+				cmdCallAgent("worker", "Process item 2"),
+				agentAnswer("Done 2."),
+				// Item 3
+				cmdDatasetNext(),
+				cmdCallAgent("worker", "Process item 3"),
+				agentAnswer("Done 3."),
+				// Exhausted → task_complete
+				cmdDatasetNext(),
+				cmdTaskComplete(),
+			)
+
+			streamer, err := runMission(cfg, "test_seq_no_output", provider, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(streamer.hasEvent("mission_completed")).To(BeTrue())
+		})
+	})
+
+	// -----------------------------------------------------------------------
+	// h3) Commander no-tool-call correction
+	// -----------------------------------------------------------------------
+	Describe("no-tool-call correction", func() {
+		It("retries with correction when commander produces text instead of tool call", func() {
+			mission := testMission("test_correction", []config.Task{
+				testTask("work", "Do something"),
+			})
+			cfg := buildTestConfig(mission, testAgent("worker"))
+
+			// Turn 1: commander calls agent (normal)
+			// Turn 2: agent answers (normal)
+			// Turn 3: commander produces TEXT with no tool call (bad!)
+			// Correction message sent → commander calls task_complete (recovered)
+			provider := newMockProvider(
+				cmdCallAgent("worker", "Do the work"),
+				agentAnswer("Work done."),
+				// Bad response: text only, no tool call
+				mockResponse{Content: "The work is complete! Everything went well."},
+				// After correction: commander calls task_complete
+				cmdTaskComplete(),
+			)
+
+			streamer, err := runMission(cfg, "test_correction", provider, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(streamer.hasEvent("mission_completed")).To(BeTrue())
+		})
+
+		It("fails after 3 correction attempts", func() {
+			mission := testMission("test_correction_fail", []config.Task{
+				testTask("work", "Do something"),
+			})
+			cfg := buildTestConfig(mission, testAgent("worker"))
+
+			// Commander never produces a tool call — always text
+			provider := newMockProvider(
+				// Every response is text-only, including corrections
+				mockResponse{Content: "I'll get right on that."},
+				mockResponse{Content: "Working on it..."},
+				mockResponse{Content: "Almost there..."},
+				mockResponse{Content: "Still working..."},
+				mockResponse{Content: "Let me try again..."},
+				mockResponse{Content: "I think I'm done."},
+				mockResponse{Content: "Really done now."},
+			)
+
+			streamer, err := runMission(cfg, "test_correction_fail", provider, nil)
+			Expect(err).To(HaveOccurred())
+			Expect(streamer.hasEvent("task_failed")).To(BeTrue())
+		})
+	})
+
+	// -----------------------------------------------------------------------
 	// i) Dataset creation and consumption
 	// -----------------------------------------------------------------------
 	Describe("dataset creation and consumption", func() {

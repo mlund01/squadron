@@ -306,6 +306,7 @@ type Commander struct {
 	submitOutput       *aitools.SubmitOutputTool   // Universal output submission tool
 	taskComplete       *aitools.TaskCompleteTool   // Tool to signal task completion
 	loopExitReason     string                     // Why the commander loop exited (for failure diagnostics)
+	noToolCallRetries  int                        // Count of consecutive no-tool-call retries
 	sessionLogger      SessionLogger               // Session persistence (nil if not tracking)
 	sessionID          string                 // Store session ID (empty if not tracking)
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
@@ -498,6 +499,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		nextTool := aitools.NewDatasetNextTool(sup.datasetCursor)
 		if sup.submitOutput != nil {
 			nextTool.OutputCounter = sup.submitOutput.ResultCount
+			nextTool.HasOutput = true
 		}
 		sup.tools["dataset_next"] = nextTool
 		sup.injectSequentialDatasetInstructions(len(opts.SequentialDataset))
@@ -935,6 +937,14 @@ func (s *Commander) TaskSummary() string {
 	return s.taskComplete.Summary()
 }
 
+// DatasetCursorIndex returns the number of items processed by the dataset cursor, or 0 if not sequential.
+func (s *Commander) DatasetCursorIndex() int {
+	if s.datasetCursor == nil {
+		return 0
+	}
+	return s.datasetCursor.CurrentIndex() + 1
+}
+
 // TaskFailureReason returns the reason the task failed. Checks task_complete failure reason first,
 // then falls back to the loop exit reason (e.g., max_tokens, no tool call).
 func (s *Commander) TaskFailureReason() string {
@@ -986,29 +996,53 @@ func (s *Commander) GetCurrentDatasetIndex() *int {
 
 // injectSequentialDatasetInstructions adds instructions for processing a sequential dataset
 func (s *Commander) injectSequentialDatasetInstructions(itemCount int) {
+	hasSubmitOutput := s.submitOutput != nil
+
+	var toolsList, workflow, rules string
+	if hasSubmitOutput {
+		toolsList = `**Tools:**
+- dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
+- submit_output: Submit structured output for the current item. Required before calling dataset_next again.
+- set_subtasks: **MANDATORY** — define subtasks for each item after calling dataset_next.
+- complete_subtask: Mark the current subtask as done. You MUST call this for each subtask.`
+
+		workflow = `**Workflow (follow this exactly for EVERY item):**
+1. Call dataset_next to get an item
+2. Call set_subtasks to define subtasks for this item — this is REQUIRED, not optional
+3. Work through each subtask, calling complete_subtask after finishing each one
+4. Call submit_output with the structured output for this item
+5. Repeat from step 1 until dataset_next returns "exhausted"
+6. Call task_complete when all items are processed`
+
+		rules = `You MUST call submit_output before dataset_next or you will get an error.
+You MUST use set_subtasks and complete_subtask for every item — do not skip them.`
+	} else {
+		toolsList = `**Tools:**
+- dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
+- set_subtasks: **MANDATORY** — define subtasks for each item after calling dataset_next.
+- complete_subtask: Mark the current subtask as done. You MUST call this for each subtask.`
+
+		workflow = `**Workflow (follow this exactly for EVERY item):**
+1. Call dataset_next to get an item
+2. Call set_subtasks to define subtasks for this item — this is REQUIRED, not optional
+3. Work through each subtask, calling complete_subtask after finishing each one
+4. Call dataset_next to get the next item, or if all items are processed, call task_complete`
+
+		rules = `You MUST use set_subtasks and complete_subtask for every item — do not skip them.`
+	}
+
 	prompt := fmt.Sprintf(`## Sequential Dataset Processing
 
 You have a dataset of %d items to process sequentially in this single session.
 
 **IMPORTANT: For sequential dataset tasks, the normal "set_subtasks as first action" rule is replaced by the workflow below. Follow these steps exactly.**
 
-**Tools:**
-- dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
-- submit_output: Submit output for current item. Required before calling dataset_next again.
-- set_subtasks: **MANDATORY** — define subtasks for each item after calling dataset_next.
-- complete_subtask: Mark the current subtask as done. You MUST call this for each subtask.
+%s
 
-**Workflow (follow this exactly for EVERY item):**
-1. Call dataset_next to get an item
-2. Call set_subtasks to define subtasks for this item — this is REQUIRED, not optional
-3. Work through each subtask, calling complete_subtask after finishing each one
-4. Call submit_output with the structured output for this item
-5. Repeat from step 1 until dataset_next returns "exhausted"
-6. Call task_complete when all items are processed
+%s
 
-You MUST call submit_output before dataset_next or you will get an error.
-You MUST use set_subtasks and complete_subtask for every item — do not skip them.
-`, itemCount)
+%s
+`, itemCount, toolsList, workflow, rules)
 
 	s.session.AddSystemPrompt(prompt)
 }
@@ -1218,13 +1252,8 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			firstTurn = false
 		} else {
 			// Subsequent turns — tool results are already in the session via AddToolResults.
-			// Send a brief continuation prompt (not the full objective) so the model knows to keep going.
-			continueMsg := "Continue. Remember: you MUST call task_complete when done."
-			if s.sessionLogger != nil && s.sessionID != "" {
-				now := time.Now()
-				s.sessionLogger.AppendMessage(s.sessionID, "user", continueMsg, now, now)
-			}
-			resp, err = s.session.SendStream(ctx, continueMsg, onChunk)
+			// The tool_result messages serve as the user turn, so just continue.
+			resp, err = s.session.ContinueStream(ctx, onChunk)
 		}
 
 		if s.debugLogger != nil {
@@ -1322,10 +1351,33 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			s.loopExitReason = "LLM response hit max output tokens — tool call was truncated"
 		}
 
-		// If no tool calls, the commander has stopped acting
+		// If no tool calls, the commander produced text instead of calling a tool.
+		// Send a correction and retry, up to 3 times.
 		if len(toolUses) == 0 {
-			s.loopExitReason = "commander produced a text response with no tool call (task_complete was not called)"
-			break
+			s.noToolCallRetries++
+			if s.noToolCallRetries > 3 {
+				s.loopExitReason = "commander failed to make a tool call after 3 correction attempts"
+				break
+			}
+			log.Printf("[Commander] No tool call on turn for task '%s' (attempt %d/3), sending correction...", s.TaskName, s.noToolCallRetries)
+			correction := "Invalid response. You must make a tool call. Either call additional tools to continue your work, or call task_complete if you are done."
+			resp, err = s.session.SendStream(ctx, correction, onChunk)
+			if err != nil {
+				return err
+			}
+			// Re-extract tool calls from the correction response
+			toolUses = nil
+			if resp != nil {
+				for _, block := range resp.ContentBlocks {
+					if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+						toolUses = append(toolUses, *block.ToolUse)
+					}
+				}
+			}
+			if len(toolUses) == 0 {
+				continue // Loop back to try again (up to 3 times)
+			}
+			s.noToolCallRetries = 0 // Reset on success
 		}
 
 		// Execute all tool calls and collect results
@@ -2248,10 +2300,19 @@ func (t *queryTaskOutputTool) ToolPayloadSchema() aitools.Schema {
 			"filters": {
 				Type:        aitools.TypeArray,
 				Description: "Filter conditions: [{field, op, value}]. Ops: eq, ne, gt, lt, gte, lte, contains",
+				Items: &aitools.Property{
+					Type: aitools.TypeObject,
+					Properties: aitools.PropertyMap{
+						"field": {Type: aitools.TypeString, Description: "Field name to filter on"},
+						"op":    {Type: aitools.TypeString, Description: "Operator: eq, ne, gt, lt, gte, lte, contains"},
+						"value": {Type: aitools.TypeString, Description: "Value to compare against"},
+					},
+				},
 			},
 			"item_ids": {
 				Type:        aitools.TypeArray,
 				Description: "Specific item IDs to retrieve (for iterated tasks)",
+				Items:       &aitools.Property{Type: aitools.TypeString},
 			},
 			"limit": {
 				Type:        aitools.TypeInteger,

@@ -2086,12 +2086,24 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 				Error:   err,
 			}}
 		}
-		// No results but no error - something went wrong
-		return []IterationResult{{
-			Index:   0,
-			Success: false,
-			Error:   fmt.Errorf("no results from sequential dataset processing"),
-		}}
+		// No submit_output results — task has no output schema.
+		// Build success results based on how many items were processed.
+		processedCount := sup.DatasetCursorIndex()
+		if processedCount == 0 {
+			return []IterationResult{{
+				Index:   0,
+				Success: false,
+				Error:   fmt.Errorf("no items processed from sequential dataset"),
+			}}
+		}
+		iterations := make([]IterationResult, processedCount)
+		for i := 0; i < processedCount; i++ {
+			iterations[i] = IterationResult{
+				Index:   i,
+				Success: true,
+			}
+		}
+		return iterations
 	}
 
 	// Convert SubmitResult to IterationResult

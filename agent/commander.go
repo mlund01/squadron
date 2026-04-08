@@ -693,59 +693,64 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 	})
 }
 
-// injectDependencyContext adds a secondary system prompt with dependency summaries and output schemas
+// injectDependencyContext adds system prompts for each dependency task's summary and output schema.
+// Each dependency gets its own system prompt to avoid confusion from mixed markdown formatting.
 func (s *Commander) injectDependencyContext(summaries []DependencySummary, outputSchemas []DependencyOutputSchema) {
-	var sb strings.Builder
-	sb.WriteString("## Completed Dependency Tasks\n\n")
-
-	// Add summaries
-	if len(summaries) > 0 {
-		sb.WriteString("The following tasks have been completed. Use their summaries for context.\n\n")
-		for _, summary := range summaries {
-			sb.WriteString(fmt.Sprintf("### Task: %s\n", summary.TaskName))
-			sb.WriteString(fmt.Sprintf("%s\n\n", summary.Summary))
-		}
+	// Build a set of tasks that have output schemas for quick lookup
+	schemaByTask := make(map[string]*DependencyOutputSchema)
+	for i := range outputSchemas {
+		schemaByTask[outputSchemas[i].TaskName] = &outputSchemas[i]
 	}
 
-	// Add output schemas with query instructions
-	if len(outputSchemas) > 0 {
-		sb.WriteString("## Queryable Task Outputs\n\n")
-		sb.WriteString("Use `query_task_output` to access structured data from these completed tasks:\n\n")
+	// Inject each dependency summary as its own system prompt
+	for _, summary := range summaries {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("[Completed Dependency Task: %s]\n\n", summary.TaskName))
+		sb.WriteString(summary.Summary)
 
-		for _, schema := range outputSchemas {
-			if schema.IsIterated {
-				sb.WriteString(fmt.Sprintf("### Task: %s (iterated, %d items)\n", schema.TaskName, schema.ItemCount))
-			} else {
-				sb.WriteString(fmt.Sprintf("### Task: %s\n", schema.TaskName))
-			}
-
-			if len(schema.OutputFields) > 0 {
-				sb.WriteString("**Output fields:**\n")
-				for _, field := range schema.OutputFields {
-					req := ""
-					if field.Required {
-						req = " (required)"
-					}
-					desc := ""
-					if field.Description != "" {
-						desc = " - " + field.Description
-					}
-					sb.WriteString(fmt.Sprintf("- `%s` (%s%s)%s\n", field.Name, field.Type, req, desc))
-				}
-			}
-
-			sb.WriteString("\n**Example queries:**\n")
-			sb.WriteString(fmt.Sprintf("- Get all: `{\"task\": \"%s\"}`\n", schema.TaskName))
-			if schema.IsIterated && len(schema.OutputFields) > 0 {
-				field := schema.OutputFields[0].Name
-				sb.WriteString(fmt.Sprintf("- Filter: `{\"task\": \"%s\", \"filters\": [{\"field\": \"%s\", \"op\": \"gt\", \"value\": 0}]}`\n", schema.TaskName, field))
-				sb.WriteString(fmt.Sprintf("- Aggregate: `{\"task\": \"%s\", \"aggregate\": {\"op\": \"avg\", \"field\": \"%s\"}}`\n", schema.TaskName, field))
-			}
-			sb.WriteString("\n")
+		// If this task also has an output schema, append query info
+		if schema, ok := schemaByTask[summary.TaskName]; ok {
+			sb.WriteString("\n\n---\n")
+			sb.WriteString(fmt.Sprintf("This task has queryable structured output. Use query_task_output to access it.\n\n"))
+			s.appendOutputSchemaInfo(&sb, schema)
+			delete(schemaByTask, summary.TaskName)
 		}
+
+		s.session.AddSystemPrompt(sb.String())
 	}
 
-	s.session.AddSystemPrompt(sb.String())
+	// Inject any remaining output schemas that didn't have summaries
+	for _, schema := range outputSchemas {
+		if _, handled := schemaByTask[schema.TaskName]; !handled {
+			continue
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("[Completed Dependency Task: %s — Queryable Output]\n\n", schema.TaskName))
+		sb.WriteString("Use query_task_output to access structured data from this task.\n\n")
+		s.appendOutputSchemaInfo(&sb, &schema)
+		s.session.AddSystemPrompt(sb.String())
+	}
+}
+
+func (s *Commander) appendOutputSchemaInfo(sb *strings.Builder, schema *DependencyOutputSchema) {
+	if schema.IsIterated {
+		sb.WriteString(fmt.Sprintf("Type: iterated (%d items)\n", schema.ItemCount))
+	}
+	if len(schema.OutputFields) > 0 {
+		sb.WriteString("Fields:\n")
+		for _, field := range schema.OutputFields {
+			req := ""
+			if field.Required {
+				req = " (required)"
+			}
+			desc := ""
+			if field.Description != "" {
+				desc = " — " + field.Description
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s%s)%s\n", field.Name, field.Type, req, desc))
+		}
+	}
+	sb.WriteString(fmt.Sprintf("\nExample: {\"task\": \"%s\"}\n", schema.TaskName))
 }
 
 // formatFieldType returns a human-readable type string including nested type info

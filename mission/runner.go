@@ -1387,6 +1387,11 @@ func (r *Runner) getDependencyChain(taskName string) []string {
 		result = append(result, dep)
 	}
 
+	// Reverse so ancestors appear in execution order (earliest first)
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
+	}
+
 	return result
 }
 
@@ -1841,6 +1846,22 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 		r.taskSummaries[task.Name] = iterSummary
 		r.stores.Missions.UpdateTaskSummary(taskID, iterSummary)
 		r.mu.Unlock()
+	} else {
+		// Sequential: get summary from the shared commander
+		r.mu.RLock()
+		if iterSups, ok := r.iterationCommanders[task.Name]; ok {
+			if sup, ok := iterSups[0]; ok {
+				if summary := sup.TaskSummary(); summary != "" {
+					r.mu.RUnlock()
+					r.mu.Lock()
+					r.taskSummaries[task.Name] = summary
+					r.stores.Missions.UpdateTaskSummary(taskID, summary)
+					r.mu.Unlock()
+					r.mu.RLock()
+				}
+			}
+		}
+		r.mu.RUnlock()
 	}
 
 	streamer.TaskIterationCompleted(task.Name, len(iterations))

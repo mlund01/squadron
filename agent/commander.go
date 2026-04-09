@@ -1783,23 +1783,8 @@ func (s *Commander) ExecuteAggregation(ctx context.Context, prompt string) (stri
 func resolveCommander(cfg *config.Config, modelKey string) (*config.Model, string, error) {
 	for i := range cfg.Models {
 		m := &cfg.Models[i]
-		supportedModels, ok := config.SupportedModels[m.Provider]
-		if !ok {
-			continue
-		}
-
-		for _, allowedKey := range m.AllowedModels {
-			if allowedKey == modelKey {
-				if actualModel, ok := supportedModels[modelKey]; ok {
-					return m, actualModel, nil
-				}
-				// For providers like Ollama that allow arbitrary models,
-				// use the key itself as the API model name
-				if m.Provider == config.ProviderOllama {
-					return m, modelKey, nil
-				}
-				return nil, "", fmt.Errorf("model key '%s' not found in supported models for provider '%s'", modelKey, m.Provider)
-			}
+		if apiName, ok := m.AvailableModels()[modelKey]; ok {
+			return m, apiName, nil
 		}
 	}
 

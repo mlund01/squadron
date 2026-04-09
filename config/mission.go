@@ -786,10 +786,8 @@ func parseJSONObject(strVal string) (cty.Value, error) {
 // isValidModelRef checks if a model reference (e.g., "claude_sonnet_4") is valid
 func isValidModelRef(modelRef string, models []Model) bool {
 	for _, m := range models {
-		for _, allowed := range m.AllowedModels {
-			if allowed == modelRef {
-				return true
-			}
+		if _, ok := m.AvailableModels()[modelRef]; ok {
+			return true
 		}
 	}
 	return false

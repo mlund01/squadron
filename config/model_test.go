@@ -230,5 +230,115 @@ model "openai" {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("api_key is required"))
 		})
+
+		It("accepts cloud provider with no allowed_models (all models available)", func() {
+			m := config.Model{
+				Name:     "anthropic",
+				Provider: config.ProviderAnthropic,
+				APIKey:   "k",
+			}
+			Expect(m.Validate()).To(Succeed())
+		})
+	})
+
+	Describe("AvailableModels", func() {
+		It("returns all supported models when allowed_models is empty", func() {
+			m := config.Model{
+				Name:     "openai",
+				Provider: config.ProviderOpenAI,
+				APIKey:   "k",
+			}
+			available := m.AvailableModels()
+			Expect(available).To(HaveKey("gpt_4o"))
+			Expect(available).To(HaveKey("gpt_5"))
+			Expect(available["gpt_4o"]).To(Equal("gpt-4o"))
+		})
+
+		It("returns only allowed_models when specified", func() {
+			m := config.Model{
+				Name:          "openai",
+				Provider:      config.ProviderOpenAI,
+				AllowedModels: []string{"gpt_4o"},
+				APIKey:        "k",
+			}
+			available := m.AvailableModels()
+			Expect(available).To(HaveKey("gpt_4o"))
+			Expect(available).NotTo(HaveKey("gpt_5"))
+		})
+
+		It("returns aliases for ollama provider", func() {
+			m := config.Model{
+				Name:     "ollama",
+				Provider: config.ProviderOllama,
+				BaseURL:  "http://localhost:11434/v1",
+				Aliases: map[string]string{
+					"gemma4_26b": "gemma4:26b",
+					"nemotron":   "nemotron-cascade-2:30b",
+				},
+			}
+			available := m.AvailableModels()
+			Expect(available).To(HaveLen(2))
+			Expect(available["gemma4_26b"]).To(Equal("gemma4:26b"))
+			Expect(available["nemotron"]).To(Equal("nemotron-cascade-2:30b"))
+		})
+
+		It("aliases override internal mappings", func() {
+			m := config.Model{
+				Name:     "anthropic",
+				Provider: config.ProviderAnthropic,
+				APIKey:   "k",
+				Aliases: map[string]string{
+					"claude_sonnet_4": "my-custom-sonnet",
+				},
+			}
+			available := m.AvailableModels()
+			Expect(available["claude_sonnet_4"]).To(Equal("my-custom-sonnet"))
+		})
+	})
+
+	Describe("ResolveModel with aliases", func() {
+		It("resolves agent model through aliases", func() {
+			models := []config.Model{
+				{
+					Name:     "ollama",
+					Provider: config.ProviderOllama,
+					BaseURL:  "http://localhost:11434/v1",
+					Aliases:  map[string]string{"gemma4_26b": "gemma4:26b"},
+				},
+			}
+			a := config.Agent{Model: "gemma4_26b"}
+			m, apiName, err := a.ResolveModel(models)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(m.Name).To(Equal("ollama"))
+			Expect(apiName).To(Equal("gemma4:26b"))
+		})
+
+		It("resolves cloud model without allowed_models", func() {
+			models := []config.Model{
+				{
+					Name:     "openai",
+					Provider: config.ProviderOpenAI,
+					APIKey:   "k",
+				},
+			}
+			a := config.Agent{Model: "gpt_4o"}
+			m, apiName, err := a.ResolveModel(models)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(m.Name).To(Equal("openai"))
+			Expect(apiName).To(Equal("gpt-4o"))
+		})
+
+		It("fails for unknown model key", func() {
+			models := []config.Model{
+				{
+					Name:     "openai",
+					Provider: config.ProviderOpenAI,
+					APIKey:   "k",
+				},
+			}
+			a := config.Agent{Model: "nonexistent"}
+			_, _, err := a.ResolveModel(models)
+			Expect(err).To(HaveOccurred())
+		})
 	})
 })

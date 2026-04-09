@@ -94,6 +94,7 @@ func (t *SetDatasetTool) ToolPayloadSchema() Schema {
 			"items": {
 				Type:        TypeArray,
 				Description: "The list of items to set in the dataset. Each item should match the dataset's schema.",
+				Items:       &Property{Type: TypeObject},
 			},
 			"append": {
 				Type:        TypeBoolean,

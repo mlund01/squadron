@@ -14,7 +14,13 @@ import (
 	schemafunc "squadron/config/functions"
 	"squadron/internal/paths"
 	"squadron/plugin"
+
+	"github.com/zclconf/go-cty/cty/function"
 )
+
+// configFuncs holds the HCL functions map for the current config load.
+// Set at the start of loadFromFiles and used by all buildXxxContext helpers.
+var configFuncs map[string]function.Function
 
 // Config holds all configuration
 type Config struct {
@@ -24,6 +30,7 @@ type Config struct {
 	CustomTools []CustomTool `hcl:"tool,block"`
 	Plugins     []Plugin     `hcl:"plugin,block"`
 	Missions   []Mission   `hcl:"mission,block"`
+	Skills     []Skill     `hcl:"-"`
 
 	// Storage configuration (optional, defaults to memory backend)
 	Storage *StorageConfig `hcl:"-"`
@@ -305,6 +312,82 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate global skills
+	for _, s := range c.Skills {
+		if err := s.Validate(); err != nil {
+			return fmt.Errorf("skill '%s': %w", s.Name, err)
+		}
+		for _, toolRef := range s.Tools {
+			if !validToolRefs[toolRef] {
+				return fmt.Errorf("skill '%s': unknown tool '%s'", s.Name, toolRef)
+			}
+		}
+	}
+
+	// Build global skill names set for validation
+	globalSkillNames := make(map[string]bool)
+	for _, s := range c.Skills {
+		globalSkillNames[s.Name] = true
+	}
+
+	// Validate agent skill references and agent-scoped skills
+	for _, a := range c.Agents {
+		for _, skillRef := range a.Skills {
+			name := strings.TrimPrefix(skillRef, "skills.")
+			if !globalSkillNames[name] {
+				return fmt.Errorf("agent '%s': unknown skill '%s'", a.Name, name)
+			}
+		}
+		for _, ls := range a.LocalSkills {
+			if err := ls.Validate(); err != nil {
+				return fmt.Errorf("agent '%s' skill '%s': %w", a.Name, ls.Name, err)
+			}
+			if globalSkillNames[ls.Name] {
+				return fmt.Errorf("agent '%s': agent-scoped skill '%s' conflicts with global skill of the same name", a.Name, ls.Name)
+			}
+			for _, toolRef := range ls.Tools {
+				if !validToolRefs[toolRef] {
+					return fmt.Errorf("agent '%s' skill '%s': unknown tool '%s'", a.Name, ls.Name, toolRef)
+				}
+			}
+		}
+	}
+
+	// Validate mission-scoped agent skill references
+	for _, m := range c.Missions {
+		for _, a := range m.LocalAgents {
+			for _, skillRef := range a.Skills {
+				name := strings.TrimPrefix(skillRef, "skills.")
+				if !globalSkillNames[name] {
+					// Check if it's an agent-local skill
+					found := false
+					for _, ls := range a.LocalSkills {
+						if ls.Name == name {
+							found = true
+							break
+						}
+					}
+					if !found {
+						return fmt.Errorf("mission '%s' agent '%s': unknown skill '%s'", m.Name, a.Name, name)
+					}
+				}
+			}
+			for _, ls := range a.LocalSkills {
+				if err := ls.Validate(); err != nil {
+					return fmt.Errorf("mission '%s' agent '%s' skill '%s': %w", m.Name, a.Name, ls.Name, err)
+				}
+				if globalSkillNames[ls.Name] {
+					return fmt.Errorf("mission '%s' agent '%s': agent-scoped skill '%s' conflicts with global skill", m.Name, a.Name, ls.Name)
+				}
+				for _, toolRef := range ls.Tools {
+					if !validToolRefs[toolRef] {
+						return fmt.Errorf("mission '%s' agent '%s' skill '%s': unknown tool '%s'", m.Name, a.Name, ls.Name, toolRef)
+					}
+				}
+			}
+		}
+	}
+
 	// Build mission names set for cross-mission route validation
 	allMissionNames := make(map[string]bool, len(c.Missions))
 	for _, m := range c.Missions {
@@ -382,10 +465,17 @@ type parsedBlocks struct {
 	CommandCenter []*hcl.Block
 	SharedFolders []*hcl.Block
 	MCP           []*hcl.Block
+	Skills        []*hcl.Block
 }
 
 // loadFromFiles implements staged loading: variables → models → agents → tools
 func loadFromFiles(files []string) (*Config, error) {
+	// Build config functions map: schema helpers + load()
+	// Set package-level configFuncs so buildXxxContext helpers can access it
+	configDir := filepath.Dir(files[0])
+	configFuncs = schemafunc.SchemaFunctions()
+	configFuncs["load"] = schemafunc.MakeLoadFunc(configDir)
+
 	// Parse all files and extract all block types in a single pass
 	parser := hclparse.NewParser()
 	var allParsedBlocks []parsedBlocks
@@ -409,6 +499,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "command_center"},
 				{Type: "shared_folder", LabelNames: []string{"name"}},
 				{Type: "mcp"},
+				{Type: "skill", LabelNames: []string{"name"}},
 			},
 		})
 		if diags.HasErrors() {
@@ -438,6 +529,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.SharedFolders = append(pb.SharedFolders, block)
 			case "mcp":
 				pb.MCP = append(pb.MCP, block)
+			case "skill":
+				pb.Skills = append(pb.Skills, block)
 			}
 		}
 		allParsedBlocks = append(allParsedBlocks, pb)
@@ -675,7 +768,7 @@ func loadFromFiles(files []string) (*Config, error) {
 	// Wrap with schema functions so tools can use inputs = { field = string(...) } shorthand.
 	toolSchemaCtx := modelsCtx.NewChild()
 	toolSchemaCtx.Variables = schemafunc.SchemaTypeVars()
-	toolSchemaCtx.Functions = schemafunc.SchemaFunctions()
+	toolSchemaCtx.Functions = configFuncs
 	var allTools []CustomTool
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Tools {
@@ -690,11 +783,26 @@ func loadFromFiles(files []string) (*Config, error) {
 	// Build tools context (add to models context) - includes both internal and custom tools
 	fullCtx := buildToolsContext(modelsCtx, allTools)
 
-	// Stage 4: Load agents (with vars + models + tools context)
+	// Stage 3.5: Load global skills (with full context so tool refs resolve)
+	var allSkills []Skill
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.Skills {
+			s, err := parseSkillBlock(block, fullCtx)
+			if err != nil {
+				return nil, err
+			}
+			allSkills = append(allSkills, *s)
+		}
+	}
+
+	// Build skills context (adds skills.X namespace)
+	skillsCtx := buildSkillsContext(fullCtx, allSkills)
+
+	// Stage 4: Load agents (with vars + models + tools + skills context)
 	var allAgents []Agent
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Agents {
-			a, err := parseAgentBlock(block, fullCtx)
+			a, err := parseAgentBlock(block, skillsCtx)
 			if err != nil {
 				return nil, err
 			}
@@ -703,7 +811,7 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 
 	// Build agents context (add to full context)
-	agentsCtx := buildAgentsContext(fullCtx, allAgents)
+	agentsCtx := buildAgentsContext(skillsCtx, allAgents)
 
 	// Add shared_folders namespace for mission references
 	if len(allSharedFolders) > 0 {
@@ -726,7 +834,7 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 	missionsCtx := &hcl.EvalContext{
 		Variables: make(map[string]cty.Value),
-		Functions: schemafunc.SchemaFunctions(),
+		Functions: configFuncs,
 	}
 	for k, v := range agentsCtx.Variables {
 		missionsCtx.Variables[k] = v
@@ -759,6 +867,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		CustomTools:    allTools,
 		Plugins:        allPlugins,
 		Missions:      allMissions,
+		Skills:         allSkills,
 		Storage:        &storageConfig,
 		CommandCenter:  commandCenterConfig,
 		MCP:            mcpConfig,
@@ -930,7 +1039,7 @@ func buildVarsContext(vars []Variable) (*hcl.EvalContext, map[string]cty.Value) 
 
 	return &hcl.EvalContext{
 		Variables: baseVars,
-		Functions: schemafunc.SchemaFunctions(),
+		Functions: configFuncs,
 	}, varsMap
 }
 
@@ -954,7 +1063,7 @@ func buildModelsContext(ctx *hcl.EvalContext, models []Model) *hcl.EvalContext {
 
 	return &hcl.EvalContext{
 		Variables: newVars,
-		Functions: schemafunc.SchemaFunctions(),
+		Functions: configFuncs,
 	}
 }
 
@@ -977,7 +1086,7 @@ func buildToolsContext(ctx *hcl.EvalContext, customTools []CustomTool) *hcl.Eval
 
 	return &hcl.EvalContext{
 		Variables: newVars,
-		Functions: schemafunc.SchemaFunctions(),
+		Functions: configFuncs,
 	}
 }
 
@@ -1022,7 +1131,7 @@ func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.
 
 	return &hcl.EvalContext{
 		Variables: newVars,
-		Functions: schemafunc.SchemaFunctions(),
+		Functions: configFuncs,
 	}
 }
 
@@ -1046,6 +1155,27 @@ func (c *Config) GetPluginTool(implements string) (*plugin.PluginClient, string,
 
 // buildAgentsContext adds agents namespace to existing context
 // Creates agents.{agent_name} references
+func buildSkillsContext(ctx *hcl.EvalContext, skills []Skill) *hcl.EvalContext {
+	if len(skills) == 0 {
+		return ctx
+	}
+	skillsMap := make(map[string]cty.Value)
+	for _, s := range skills {
+		skillsMap[s.Name] = cty.StringVal(fmt.Sprintf("skills.%s", s.Name))
+	}
+
+	newVars := make(map[string]cty.Value)
+	for k, v := range ctx.Variables {
+		newVars[k] = v
+	}
+	newVars["skills"] = cty.ObjectVal(skillsMap)
+
+	return &hcl.EvalContext{
+		Variables: newVars,
+		Functions: configFuncs,
+	}
+}
+
 func buildAgentsContext(ctx *hcl.EvalContext, agents []Agent) *hcl.EvalContext {
 	agentsMap := make(map[string]cty.Value)
 	for _, a := range agents {
@@ -1061,7 +1191,7 @@ func buildAgentsContext(ctx *hcl.EvalContext, agents []Agent) *hcl.EvalContext {
 
 	return &hcl.EvalContext{
 		Variables: newVars,
-		Functions: schemafunc.SchemaFunctions(),
+		Functions: configFuncs,
 	}
 }
 
@@ -1076,14 +1206,147 @@ type missionTaskBlock struct {
 // parseMissionBlock parses a mission block with its nested task blocks
 // parseAgentBlock parses an agent HCL block into an Agent struct.
 // Used for both global agents and mission-scoped agents.
-func parseAgentBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Agent, error) {
-	var a Agent
-	a.Name = block.Labels[0]
-	diags := gohcl.DecodeBody(block.Body, ctx, &a)
+func parseSkillBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Skill, error) {
+	var s Skill
+	s.Name = block.Labels[0]
+	diags := gohcl.DecodeBody(block.Body, ctx, &s)
 	if diags.HasErrors() {
-		return nil, fmt.Errorf("agent '%s': %w", a.Name, diags)
+		return nil, fmt.Errorf("skill '%s': %w", s.Name, diags)
 	}
-	return &a, nil
+	return &s, nil
+}
+
+func parseAgentBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Agent, error) {
+	// Use PartialContent to split the agent body into known parts.
+	// gohcl cannot handle labeled sub-blocks (skill "name" {}) so we parse manually.
+	content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "model", Required: true},
+			{Name: "personality", Required: true},
+			{Name: "role", Required: true},
+			{Name: "tools"},
+			{Name: "skills"},
+		},
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "skill", LabelNames: []string{"name"}},
+			{Type: "pruning"},
+			{Type: "compaction"},
+			{Type: "tool_response"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("agent '%s': %w", block.Labels[0], diags)
+	}
+
+	// Parse agent-scoped skill blocks first (needed for skills context)
+	var localSkills []Skill
+	for _, b := range content.Blocks {
+		if b.Type != "skill" {
+			continue
+		}
+		s, err := parseSkillBlock(b, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("agent '%s': %w", block.Labels[0], err)
+		}
+		localSkills = append(localSkills, *s)
+	}
+
+	// Build augmented context with local skill names
+	agentCtx := ctx
+	if len(localSkills) > 0 {
+		skillsMap := make(map[string]cty.Value)
+		if existing, ok := ctx.Variables["skills"]; ok && existing.Type().IsObjectType() {
+			for k, v := range existing.AsValueMap() {
+				skillsMap[k] = v
+			}
+		}
+		for _, s := range localSkills {
+			skillsMap[s.Name] = cty.StringVal(fmt.Sprintf("skills.%s", s.Name))
+		}
+		newVars := make(map[string]cty.Value)
+		for k, v := range ctx.Variables {
+			newVars[k] = v
+		}
+		newVars["skills"] = cty.ObjectVal(skillsMap)
+		agentCtx = &hcl.EvalContext{
+			Variables: newVars,
+			Functions: configFuncs,
+		}
+	}
+
+	a := &Agent{Name: block.Labels[0], LocalSkills: localSkills}
+
+	// Decode attributes
+	if attr, ok := content.Attributes["model"]; ok {
+		val, d := attr.Expr.Value(agentCtx)
+		if d.HasErrors() {
+			return nil, fmt.Errorf("agent '%s' model: %w", a.Name, d)
+		}
+		a.Model = val.AsString()
+	}
+	if attr, ok := content.Attributes["personality"]; ok {
+		val, d := attr.Expr.Value(agentCtx)
+		if d.HasErrors() {
+			return nil, fmt.Errorf("agent '%s' personality: %w", a.Name, d)
+		}
+		a.Personality = val.AsString()
+	}
+	if attr, ok := content.Attributes["role"]; ok {
+		val, d := attr.Expr.Value(agentCtx)
+		if d.HasErrors() {
+			return nil, fmt.Errorf("agent '%s' role: %w", a.Name, d)
+		}
+		a.Role = val.AsString()
+	}
+	if attr, ok := content.Attributes["tools"]; ok {
+		val, d := attr.Expr.Value(agentCtx)
+		if d.HasErrors() {
+			return nil, fmt.Errorf("agent '%s' tools: %w", a.Name, d)
+		}
+		for it := val.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			a.Tools = append(a.Tools, v.AsString())
+		}
+	}
+	if attr, ok := content.Attributes["skills"]; ok {
+		val, d := attr.Expr.Value(agentCtx)
+		if d.HasErrors() {
+			return nil, fmt.Errorf("agent '%s' skills: %w", a.Name, d)
+		}
+		for it := val.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			a.Skills = append(a.Skills, v.AsString())
+		}
+	}
+
+	// Decode sub-blocks
+	for _, b := range content.Blocks {
+		switch b.Type {
+		case "pruning":
+			var p Pruning
+			d := gohcl.DecodeBody(b.Body, agentCtx, &p)
+			if d.HasErrors() {
+				return nil, fmt.Errorf("agent '%s' pruning: %w", a.Name, d)
+			}
+			a.Pruning = &p
+		case "compaction":
+			var c Compaction
+			d := gohcl.DecodeBody(b.Body, agentCtx, &c)
+			if d.HasErrors() {
+				return nil, fmt.Errorf("agent '%s' compaction: %w", a.Name, d)
+			}
+			a.Compaction = &c
+		case "tool_response":
+			var tr ToolResponseConfig
+			d := gohcl.DecodeBody(b.Body, agentCtx, &tr)
+			if d.HasErrors() {
+				return nil, fmt.Errorf("agent '%s' tool_response: %w", a.Name, d)
+			}
+			a.ToolResponse = &tr
+		}
+	}
+
+	return a, nil
 }
 
 func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error) {
@@ -1360,7 +1623,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 	inputsType := mission.BuildInputsCtyType()
 	inputsCtx := &hcl.EvalContext{
 		Variables: make(map[string]cty.Value),
-		Functions: schemafunc.SchemaFunctions(),
+		Functions: configFuncs,
 	}
 	for k, v := range ctx.Variables {
 		inputsCtx.Variables[k] = v
@@ -1396,7 +1659,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 	// Add tasks, inputs, datasets, and item namespaces to context
 	taskCtx := &hcl.EvalContext{
 		Variables: make(map[string]cty.Value),
-		Functions: schemafunc.SchemaFunctions(),
+		Functions: configFuncs,
 	}
 	for k, v := range missionCtx.Variables {
 		taskCtx.Variables[k] = v

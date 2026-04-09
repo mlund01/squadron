@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/mlund01/squadron-wire/protocol"
 	"github.com/zclconf/go-cty/cty"
 
@@ -306,6 +305,8 @@ type Commander struct {
 	datasetCursor      *aitools.DatasetCursor      // Cursor for sequential dataset iteration (nil if not sequential)
 	submitOutput       *aitools.SubmitOutputTool   // Universal output submission tool
 	taskComplete       *aitools.TaskCompleteTool   // Tool to signal task completion
+	loopExitReason     string                     // Why the commander loop exited (for failure diagnostics)
+	noToolCallRetries  int                        // Count of consecutive no-tool-call retries
 	sessionLogger      SessionLogger               // Session persistence (nil if not tracking)
 	sessionID          string                 // Store session ID (empty if not tracking)
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
@@ -399,8 +400,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (opts.PruneOn == 0 || (opts.PruneOn-opts.PruneTo) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
-	// Set stop sequences to prevent LLM from hallucinating observations
-	session.SetStopSequences([]string{"___STOP___"})
+	// Note: tools are set on the session in SetToolCallbacks after all tools are registered
 
 	if opts.DebugFile != "" {
 		if err := session.EnableDebug(opts.DebugFile); err != nil {
@@ -483,6 +483,11 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	}
 	sup.tools["task_complete"] = sup.taskComplete
 
+	// Inject routing options as a system prompt so the commander knows upfront
+	if len(opts.Routes) > 0 {
+		sup.injectRouteOptions(opts.Routes)
+	}
+
 	// If there's previous iteration output (sequential iterations), inject it
 	if len(opts.PrevIterationOutput) > 0 {
 		sup.injectPrevIterationOutput(opts.PrevIterationOutput)
@@ -494,6 +499,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		nextTool := aitools.NewDatasetNextTool(sup.datasetCursor)
 		if sup.submitOutput != nil {
 			nextTool.OutputCounter = sup.submitOutput.ResultCount
+			nextTool.HasOutput = true
 		}
 		sup.tools["dataset_next"] = nextTool
 		sup.injectSequentialDatasetInstructions(len(opts.SequentialDataset))
@@ -667,10 +673,8 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		}
 	}
 
-	// Inject commander tools as a system prompt so the LLM knows about them
-	if toolsPrompt := prompts.FormatCommanderTools(s.tools); toolsPrompt != "" {
-		s.session.AddSystemPrompt(toolsPrompt)
-	}
+	// Set tools on session for native tool calling (all tools are now registered)
+	s.session.SetTools(aitools.ToolsToDefinitions(s.tools))
 
 	// Initialize AgentManager
 	s.agentMgr = NewAgentManager(AgentManagerConfig{
@@ -691,59 +695,64 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 	})
 }
 
-// injectDependencyContext adds a secondary system prompt with dependency summaries and output schemas
+// injectDependencyContext adds system prompts for each dependency task's summary and output schema.
+// Each dependency gets its own system prompt to avoid confusion from mixed markdown formatting.
 func (s *Commander) injectDependencyContext(summaries []DependencySummary, outputSchemas []DependencyOutputSchema) {
-	var sb strings.Builder
-	sb.WriteString("## Completed Dependency Tasks\n\n")
-
-	// Add summaries
-	if len(summaries) > 0 {
-		sb.WriteString("The following tasks have been completed. Use their summaries for context.\n\n")
-		for _, summary := range summaries {
-			sb.WriteString(fmt.Sprintf("### Task: %s\n", summary.TaskName))
-			sb.WriteString(fmt.Sprintf("%s\n\n", summary.Summary))
-		}
+	// Build a set of tasks that have output schemas for quick lookup
+	schemaByTask := make(map[string]*DependencyOutputSchema)
+	for i := range outputSchemas {
+		schemaByTask[outputSchemas[i].TaskName] = &outputSchemas[i]
 	}
 
-	// Add output schemas with query instructions
-	if len(outputSchemas) > 0 {
-		sb.WriteString("## Queryable Task Outputs\n\n")
-		sb.WriteString("Use `query_task_output` to access structured data from these completed tasks:\n\n")
+	// Inject each dependency summary as its own system prompt
+	for _, summary := range summaries {
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("[Completed Dependency Task: %s]\n\n", summary.TaskName))
+		sb.WriteString(summary.Summary)
 
-		for _, schema := range outputSchemas {
-			if schema.IsIterated {
-				sb.WriteString(fmt.Sprintf("### Task: %s (iterated, %d items)\n", schema.TaskName, schema.ItemCount))
-			} else {
-				sb.WriteString(fmt.Sprintf("### Task: %s\n", schema.TaskName))
-			}
-
-			if len(schema.OutputFields) > 0 {
-				sb.WriteString("**Output fields:**\n")
-				for _, field := range schema.OutputFields {
-					req := ""
-					if field.Required {
-						req = " (required)"
-					}
-					desc := ""
-					if field.Description != "" {
-						desc = " - " + field.Description
-					}
-					sb.WriteString(fmt.Sprintf("- `%s` (%s%s)%s\n", field.Name, field.Type, req, desc))
-				}
-			}
-
-			sb.WriteString("\n**Example queries:**\n")
-			sb.WriteString(fmt.Sprintf("- Get all: `{\"task\": \"%s\"}`\n", schema.TaskName))
-			if schema.IsIterated && len(schema.OutputFields) > 0 {
-				field := schema.OutputFields[0].Name
-				sb.WriteString(fmt.Sprintf("- Filter: `{\"task\": \"%s\", \"filters\": [{\"field\": \"%s\", \"op\": \"gt\", \"value\": 0}]}`\n", schema.TaskName, field))
-				sb.WriteString(fmt.Sprintf("- Aggregate: `{\"task\": \"%s\", \"aggregate\": {\"op\": \"avg\", \"field\": \"%s\"}}`\n", schema.TaskName, field))
-			}
-			sb.WriteString("\n")
+		// If this task also has an output schema, append query info
+		if schema, ok := schemaByTask[summary.TaskName]; ok {
+			sb.WriteString("\n\n---\n")
+			sb.WriteString(fmt.Sprintf("This task has queryable structured output. Use query_task_output to access it.\n\n"))
+			s.appendOutputSchemaInfo(&sb, schema)
+			delete(schemaByTask, summary.TaskName)
 		}
+
+		s.session.AddSystemPrompt(sb.String())
 	}
 
-	s.session.AddSystemPrompt(sb.String())
+	// Inject any remaining output schemas that didn't have summaries
+	for _, schema := range outputSchemas {
+		if _, handled := schemaByTask[schema.TaskName]; !handled {
+			continue
+		}
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("[Completed Dependency Task: %s — Queryable Output]\n\n", schema.TaskName))
+		sb.WriteString("Use query_task_output to access structured data from this task.\n\n")
+		s.appendOutputSchemaInfo(&sb, &schema)
+		s.session.AddSystemPrompt(sb.String())
+	}
+}
+
+func (s *Commander) appendOutputSchemaInfo(sb *strings.Builder, schema *DependencyOutputSchema) {
+	if schema.IsIterated {
+		sb.WriteString(fmt.Sprintf("Type: iterated (%d items)\n", schema.ItemCount))
+	}
+	if len(schema.OutputFields) > 0 {
+		sb.WriteString("Fields:\n")
+		for _, field := range schema.OutputFields {
+			req := ""
+			if field.Required {
+				req = " (required)"
+			}
+			desc := ""
+			if field.Description != "" {
+				desc = " — " + field.Description
+			}
+			sb.WriteString(fmt.Sprintf("- %s (%s%s)%s\n", field.Name, field.Type, req, desc))
+		}
+	}
+	sb.WriteString(fmt.Sprintf("\nExample: {\"task\": \"%s\"}\n", schema.TaskName))
 }
 
 // formatFieldType returns a human-readable type string including nested type info
@@ -826,6 +835,23 @@ func writeExampleJSON(field OutputFieldSchema) string {
 	}
 }
 
+// injectRouteOptions adds a system prompt describing the available routing options.
+func (s *Commander) injectRouteOptions(routes []aitools.RouteOption) {
+	var sb strings.Builder
+	sb.WriteString("## Routing Options\n\n")
+	sb.WriteString("When you call `task_complete`, you MUST include a `route` parameter. Choose the route whose condition best matches your task results, or `none` if no route applies.\n\n")
+	sb.WriteString("**Available routes:**\n")
+	for _, r := range routes {
+		if r.IsMission {
+			sb.WriteString(fmt.Sprintf("- `%s` (mission) — %s\n", r.Target, r.Condition))
+		} else {
+			sb.WriteString(fmt.Sprintf("- `%s` — %s\n", r.Target, r.Condition))
+		}
+	}
+	sb.WriteString("- `none` — No route applies, complete without branching\n")
+	s.session.AddSystemPrompt(sb.String())
+}
+
 // injectOutputSchemaInstructions adds instructions for producing structured output via submit_output tool
 func (s *Commander) injectOutputSchemaInstructions(schema []OutputFieldSchema) {
 	var sb strings.Builder
@@ -897,13 +923,35 @@ func (s *Commander) GetSessionID() string {
 }
 
 // IsTaskSucceeded returns whether task_complete was called with succeed=true (or default).
+// isFullyCompleted returns true when the commander has finished all work.
+func (s *Commander) isFullyCompleted() bool {
+	return s.taskComplete.IsCompleted()
+}
+
 func (s *Commander) IsTaskSucceeded() bool {
 	return s.taskComplete.IsSucceeded()
 }
 
-// TaskFailureReason returns the reason provided when task_complete was called with succeed=false.
+// TaskSummary returns the summary provided by the commander when completing the task.
+func (s *Commander) TaskSummary() string {
+	return s.taskComplete.Summary()
+}
+
+// DatasetCursorIndex returns the number of items processed by the dataset cursor, or 0 if not sequential.
+func (s *Commander) DatasetCursorIndex() int {
+	if s.datasetCursor == nil {
+		return 0
+	}
+	return s.datasetCursor.CurrentIndex() + 1
+}
+
+// TaskFailureReason returns the reason the task failed. Checks task_complete failure reason first,
+// then falls back to the loop exit reason (e.g., max_tokens, no tool call).
 func (s *Commander) TaskFailureReason() string {
-	return s.taskComplete.FailureReason()
+	if reason := s.taskComplete.FailureReason(); reason != "" {
+		return reason
+	}
+	return s.loopExitReason
 }
 
 // ChosenRoute returns the route chosen by the commander, or "" if none.
@@ -948,29 +996,53 @@ func (s *Commander) GetCurrentDatasetIndex() *int {
 
 // injectSequentialDatasetInstructions adds instructions for processing a sequential dataset
 func (s *Commander) injectSequentialDatasetInstructions(itemCount int) {
+	hasSubmitOutput := s.submitOutput != nil
+
+	var toolsList, workflow, rules string
+	if hasSubmitOutput {
+		toolsList = `**Tools:**
+- dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
+- submit_output: Submit structured output for the current item. Required before calling dataset_next again.
+- set_subtasks: **MANDATORY** — define subtasks for each item after calling dataset_next.
+- complete_subtask: Mark the current subtask as done. You MUST call this for each subtask.`
+
+		workflow = `**Workflow (follow this exactly for EVERY item):**
+1. Call dataset_next to get an item
+2. Call set_subtasks to define subtasks for this item — this is REQUIRED, not optional
+3. Work through each subtask, calling complete_subtask after finishing each one
+4. Call submit_output with the structured output for this item
+5. Repeat from step 1 until dataset_next returns "exhausted"
+6. Call task_complete when all items are processed`
+
+		rules = `You MUST call submit_output before dataset_next or you will get an error.
+You MUST use set_subtasks and complete_subtask for every item — do not skip them.`
+	} else {
+		toolsList = `**Tools:**
+- dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
+- set_subtasks: **MANDATORY** — define subtasks for each item after calling dataset_next.
+- complete_subtask: Mark the current subtask as done. You MUST call this for each subtask.`
+
+		workflow = `**Workflow (follow this exactly for EVERY item):**
+1. Call dataset_next to get an item
+2. Call set_subtasks to define subtasks for this item — this is REQUIRED, not optional
+3. Work through each subtask, calling complete_subtask after finishing each one
+4. Call dataset_next to get the next item, or if all items are processed, call task_complete`
+
+		rules = `You MUST use set_subtasks and complete_subtask for every item — do not skip them.`
+	}
+
 	prompt := fmt.Sprintf(`## Sequential Dataset Processing
 
 You have a dataset of %d items to process sequentially in this single session.
 
 **IMPORTANT: For sequential dataset tasks, the normal "set_subtasks as first action" rule is replaced by the workflow below. Follow these steps exactly.**
 
-**Tools:**
-- dataset_next: Get the next item. Returns {"status": "ok", "index": N, "total": M, "item": {...}} or {"status": "exhausted"}
-- submit_output: Submit output for current item. Required before calling dataset_next again.
-- set_subtasks: **MANDATORY** — define subtasks for each item after calling dataset_next.
-- complete_subtask: Mark the current subtask as done. You MUST call this for each subtask.
+%s
 
-**Workflow (follow this exactly for EVERY item):**
-1. Call dataset_next to get an item
-2. Call set_subtasks to define subtasks for this item — this is REQUIRED, not optional
-3. Work through each subtask, calling complete_subtask after finishing each one
-4. Call submit_output with the structured output for this item
-5. Repeat from step 1 until dataset_next returns "exhausted"
-6. Call task_complete when all items are processed
+%s
 
-You MUST call submit_output before dataset_next or you will get an error.
-You MUST use set_subtasks and complete_subtask for every item — do not skip them.
-`, itemCount)
+%s
+`, itemCount, toolsList, workflow, rules)
 
 	s.session.AddSystemPrompt(prompt)
 }
@@ -991,10 +1063,9 @@ func (s *Commander) ExecuteOrResume(ctx context.Context, objective string, strea
 
 // ResumeTask resumes an interrupted task from stored session messages.
 // It analyzes the last stored message to determine where to pick up:
-// - Last message is user: LLM was interrupted mid-response — use ContinueStream
-// - Last message is assistant with call_agent ACTION: re-execute (agent resumes from its own session)
-// - Last message is assistant with other ACTION: inject placeholder observation
-// - Last message is assistant with no action: task was already complete
+// - Last message is user (with tool results): LLM was interrupted mid-response — use ContinueStream
+// - Last message is assistant with tool_use blocks: tool call was in-flight
+// - Last message is assistant with no tool calls: task was already complete
 func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) error {
 	msgs := s.session.GetHistory()
 	if len(msgs) == 0 {
@@ -1008,14 +1079,16 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 		return s.runLoop(ctx, "", true, streamer)
 	}
 
-	// Last message is assistant
-	parser := newCommanderParser(streamer)
-	parser.ProcessChunk(last.Content)
-	parser.Finish()
+	// Last message is assistant — check for tool_use blocks in Parts
+	var toolUses []llm.ToolUseBlock
+	for _, part := range last.Parts {
+		if part.Type == llm.ContentTypeToolUse && part.ToolUse != nil {
+			toolUses = append(toolUses, *part.ToolUse)
+		}
+	}
 
-	action := parser.GetAction()
-	if action == "" {
-		// No action — consider done
+	if len(toolUses) == 0 {
+		// No tool calls — consider done
 		if s.turnLogger != nil {
 			s.turnLogger.Close()
 		}
@@ -1025,22 +1098,28 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 		return nil
 	}
 
-	// Tool call was in-flight — handle based on tool type
-	actionInput := parser.GetActionInput()
-	var currentInput string
+	// Tool calls were in-flight — execute them and collect results
+	var toolResults []llm.ToolResultBlock
+	for _, tc := range toolUses {
+		actionInput := string(tc.Input)
 
-	if action == "call_agent" {
-		// EXCEPTION: re-execute call_agent — agent resumes from its own stored session
-		tool := s.tools[action]
-		if tool == nil {
-			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found.\n</OBSERVATION>", action)
-		} else {
-			tcID := uuid.New().String()
-			streamer.CallingTool(tcID, action, actionInput)
+		if tc.Name == "call_agent" {
+			// EXCEPTION: re-execute call_agent — agent resumes from its own stored session
+			tool := s.tools[tc.Name]
+			if tool == nil {
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   fmt.Sprintf("Error: Tool '%s' not found.", tc.Name),
+					IsError:   true,
+				})
+				continue
+			}
+
+			streamer.CallingTool(tc.ID, tc.Name, actionInput)
 
 			var toolRecordID string
 			if s.sessionLogger != nil && s.sessionID != "" {
-				toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tcID, action, actionInput)
+				toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tc.ID, tc.Name, actionInput)
 			}
 
 			result := tool.Call(ctx, actionInput)
@@ -1049,21 +1128,34 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 				s.sessionLogger.CompleteToolCall(toolRecordID, result)
 			}
 
-			var observationContent string
-			currentInput, observationContent = s.formatObservation(action, result)
-			streamer.ToolComplete(tcID, action, observationContent)
+			resultContent := result
+			if s.interceptor != nil {
+				ir := s.interceptor.Intercept(tc.Name, result)
+				resultContent = ir.Data
+				if ir.Metadata != "" {
+					resultContent += "\n\n---\n" + ir.Metadata
+				}
+			}
+
+			streamer.ToolComplete(tc.ID, tc.Name, resultContent)
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content:   resultContent,
+			})
+		} else {
+			// DEFAULT: result was lost, tell the LLM
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content: fmt.Sprintf("The result of this %s call was lost due to an interruption. "+
+					"You may need to run it again or attempt to verify whether the call was successful.", tc.Name),
+				IsError: true,
+			})
 		}
-	} else {
-		// DEFAULT: result was lost, tell the LLM
-		currentInput = fmt.Sprintf(
-			"<OBSERVATION>\nThe result of this %s call was lost due to an interruption. "+
-				"You may need to run it again or attempt to verify whether the call was successful.\n</OBSERVATION>",
-			action,
-		)
 	}
 
-	// Continue the loop with the observation (normal send, not resume)
-	return s.runLoop(ctx, currentInput, false, streamer)
+	// Add tool results and continue the loop
+	s.session.AddToolResults(toolResults)
+	return s.runLoop(ctx, "", true, streamer)
 }
 
 // LoadSessionMessages loads persisted messages into the commander's session.
@@ -1120,6 +1212,7 @@ func (s *Commander) AddRestoredActiveAgent(agentName string, a *Agent, sessionID
 // When resume=true, the first LLM call uses ContinueStream (no new user message,
 // no store logging) because the session already has a pending user message.
 func (s *Commander) runLoop(ctx context.Context, currentInput string, resume bool, streamer CommanderStreamer) error {
+	firstTurn := true
 	for {
 		select {
 		case <-ctx.Done():
@@ -1127,8 +1220,8 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		default:
 		}
 
-		// Create parser for this message
-		parser := newCommanderParser(streamer)
+		// Create reasoning parser for this turn
+		parser := newCommanderReasoningParser(streamer)
 
 		if s.debugLogger != nil {
 			s.debugLogger.LogEvent("commander_llm_start", map[string]any{"task": s.TaskName})
@@ -1138,26 +1231,29 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		var resp *llm.ChatResponse
 		var err error
 
+		// Callback for streaming chunks — routes text to reasoning parser
+		onChunk := func(chunk llm.StreamChunk) {
+			if chunk.Content != "" {
+				parser.ProcessChunk(chunk.Content)
+			}
+		}
+
 		if resume {
-			// First turn of resume — LLM responds to existing state.
-			// Don't log to session store (the pending message is already stored).
-			resp, err = s.session.ContinueStream(ctx, func(chunk llm.StreamChunk) {
-				if chunk.Content != "" {
-					parser.ProcessChunk(chunk.Content)
-				}
-			})
+			// Resume — no new user message needed.
+			resp, err = s.session.ContinueStream(ctx, onChunk)
 			resume = false
-		} else {
-			// Normal turn — log user message, then send
+		} else if firstTurn {
+			// First turn — send the objective as a user message
 			if s.sessionLogger != nil && s.sessionID != "" {
 				now := time.Now()
 				s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput, now, now)
 			}
-			resp, err = s.session.SendStream(ctx, currentInput, func(chunk llm.StreamChunk) {
-				if chunk.Content != "" {
-					parser.ProcessChunk(chunk.Content)
-				}
-			})
+			resp, err = s.session.SendStream(ctx, currentInput, onChunk)
+			firstTurn = false
+		} else {
+			// Subsequent turns — tool results are already in the session via AddToolResults.
+			// The tool_result messages serve as the user turn, so just continue.
+			resp, err = s.session.ContinueStream(ctx, onChunk)
 		}
 
 		if s.debugLogger != nil {
@@ -1218,76 +1314,163 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			return err
 		}
 
-		// Log assistant response to session store
+		// Log assistant response to session store (include tool calls in content)
 		if s.sessionLogger != nil && s.sessionID != "" && resp != nil {
-			s.sessionLogger.AppendMessage(s.sessionID, "assistant", resp.Content, llmStart, time.Now())
+			logContent := resp.Content
+			for _, block := range resp.ContentBlocks {
+				if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+					logContent += fmt.Sprintf("\n[tool_use: %s(%s)]", block.ToolUse.Name, string(block.ToolUse.Input))
+				}
+			}
+			s.sessionLogger.AppendMessage(s.sessionID, "assistant", logContent, llmStart, time.Now())
 		}
 
-		// Determine action for turn logging
-		action := parser.GetAction()
+		// Extract tool calls from the response ContentBlocks
+		var toolUses []llm.ToolUseBlock
+		if resp != nil {
+			for _, block := range resp.ContentBlocks {
+				if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+					toolUses = append(toolUses, *block.ToolUse)
+				}
+			}
+		}
+
+		// Determine first tool name for turn logging
+		var firstToolName string
+		if len(toolUses) > 0 {
+			firstToolName = toolUses[0].Name
+		}
 
 		// Log turn snapshot
 		if s.turnLogger != nil {
-			s.turnLogger.LogTurn(action, s.session.SnapshotMessages())
+			s.turnLogger.LogTurn(firstToolName, s.session.SnapshotMessages())
 		}
 
-		if action == "" {
-			break // No tool call, done with this turn
+		// If response was truncated, record it as the exit reason
+		if resp != nil && resp.FinishReason == "max_tokens" && len(toolUses) == 0 {
+			s.loopExitReason = "LLM response hit max output tokens — tool call was truncated"
 		}
 
-		actionInput := parser.GetActionInput()
-		tcID := uuid.New().String()
-		streamer.CallingTool(tcID, action, actionInput)
+		// If no tool calls, the commander produced text instead of calling a tool.
+		// Send a correction and retry, up to 3 times.
+		if len(toolUses) == 0 {
+			s.noToolCallRetries++
+			if s.noToolCallRetries > 3 {
+				s.loopExitReason = "commander failed to make a tool call after 3 correction attempts"
+				break
+			}
+			log.Printf("[Commander] No tool call on turn for task '%s' (attempt %d/3), sending correction...", s.TaskName, s.noToolCallRetries)
+			correction := "Invalid response. You must make a tool call. Either call additional tools to continue your work, or call task_complete if you are done."
+			resp, err = s.session.SendStream(ctx, correction, onChunk)
+			if err != nil {
+				return err
+			}
+			// Re-extract tool calls from the correction response
+			toolUses = nil
+			if resp != nil {
+				for _, block := range resp.ContentBlocks {
+					if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+						toolUses = append(toolUses, *block.ToolUse)
+					}
+				}
+			}
+			if len(toolUses) == 0 {
+				continue // Loop back to try again (up to 3 times)
+			}
+			s.noToolCallRetries = 0 // Reset on success
+		}
 
-		// Log tool call event
-		if s.debugLogger != nil {
-			s.debugLogger.LogEvent("tool_call", map[string]any{
-				"task":   s.TaskName,
-				"tool":   action,
-				"input":  actionInput,
+		// Execute all tool calls and collect results
+		var toolResults []llm.ToolResultBlock
+		for _, tc := range toolUses {
+			actionInput := string(tc.Input)
+
+			// Emit event with pre-injection params
+			streamer.CallingTool(tc.ID, tc.Name, actionInput)
+
+			// Log tool call event
+			if s.debugLogger != nil {
+				s.debugLogger.LogEvent("tool_call", map[string]any{
+					"task":  s.TaskName,
+					"tool":  tc.Name,
+					"input": actionInput,
+				})
+			}
+
+			// Look up the tool
+			tool := s.tools[tc.Name]
+			if tool == nil {
+				errMsg := fmt.Sprintf("Error: Tool '%s' not found", tc.Name)
+				streamer.ToolComplete(tc.ID, tc.Name, errMsg)
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   errMsg,
+					IsError:   true,
+				})
+				continue
+			}
+
+			// Write-ahead: record tool call before execution
+			var toolRecordID string
+			if s.sessionLogger != nil && s.sessionID != "" {
+				toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tc.ID, tc.Name, actionInput)
+			}
+
+			// Execute the tool
+			toolStart := time.Now()
+			result := tool.Call(ctx, actionInput)
+
+			// Complete the tool call record
+			if toolRecordID != "" {
+				s.sessionLogger.CompleteToolCall(toolRecordID, result)
+			}
+
+			// Apply result interception for large results
+			resultContent := result
+			if s.interceptor != nil {
+				ir := s.interceptor.Intercept(tc.Name, result)
+				resultContent = ir.Data
+				if ir.Metadata != "" {
+					resultContent += "\n\n---\n" + ir.Metadata
+				}
+			}
+
+			streamer.ToolComplete(tc.ID, tc.Name, resultContent)
+
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content:   resultContent,
 			})
+
+			// Log tool result event
+			if s.debugLogger != nil {
+				s.debugLogger.LogEvent("tool_result", map[string]any{
+					"task":        s.TaskName,
+					"tool":        tc.Name,
+					"result":      result,
+					"duration_ms": time.Since(toolStart).Milliseconds(),
+				})
+			}
+
+			// Check if task_complete was called
+			if s.isFullyCompleted() {
+				break
+			}
 		}
 
-		// Look up the tool
-		tool := s.tools[action]
-		if tool == nil {
-			errMsg := fmt.Sprintf("Error: Tool '%s' not found. Available tools: call_agent, ask_agent", action)
-			streamer.ToolComplete(tcID, action, errMsg)
-			currentInput = fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", errMsg)
-			continue
-		}
+		// Send tool results back to the session (must happen before exit
+		// so the session always has matching tool_result for every tool_use)
+		s.session.AddToolResults(toolResults)
 
-		// Write-ahead: record tool call before execution
-		var toolRecordID string
+		// Log tool results to session store
 		if s.sessionLogger != nil && s.sessionID != "" {
-			toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tcID, action, actionInput)
+			for _, tr := range toolResults {
+				now := time.Now()
+				s.sessionLogger.AppendMessage(s.sessionID, "tool_result", fmt.Sprintf("[%s] %s", tr.ToolUseID, tr.Content), now, now)
+			}
 		}
 
-		// Execute the tool
-		toolStart := time.Now()
-		result := tool.Call(ctx, actionInput)
-
-		// Complete the tool call record
-		if toolRecordID != "" {
-			s.sessionLogger.CompleteToolCall(toolRecordID, result)
-		}
-
-		// Format observation (may intercept/truncate large results)
-		var observationContent string
-		currentInput, observationContent = s.formatObservation(action, result)
-		streamer.ToolComplete(tcID, action, observationContent)
-
-		// Log tool result event
-		if s.debugLogger != nil {
-			s.debugLogger.LogEvent("tool_result", map[string]any{
-				"task":        s.TaskName,
-				"tool":        action,
-				"result":      result,
-				"duration_ms": time.Since(toolStart).Milliseconds(),
-			})
-		}
-
-		// Check if task_complete was called
+		// If task is complete, exit the loop
 		if s.taskComplete.IsCompleted() {
 			break
 		}
@@ -1512,7 +1695,13 @@ Provide a concise, factual answer based on what you learned during your task exe
 Wrap your final answer in <ANSWER> tags.
 </QUESTION>`, question)
 
-	// Run execution loop to handle any tool calls
+	// First turn: send the question
+	resp, err := s.session.Send(ctx, currentInput)
+	if err != nil {
+		return "", err
+	}
+
+	// Loop to handle tool calls
 	for {
 		select {
 		case <-ctx.Done():
@@ -1520,57 +1709,53 @@ Wrap your final answer in <ANSWER> tags.
 		default:
 		}
 
-		resp, err := s.session.Send(ctx, currentInput)
+		// Extract tool calls from ContentBlocks
+		var toolUses []llm.ToolUseBlock
+		for _, block := range resp.ContentBlocks {
+			if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+				toolUses = append(toolUses, *block.ToolUse)
+			}
+		}
+
+		if len(toolUses) == 0 {
+			return s.extractAnswer(resp.Content), nil
+		}
+
+		// Execute tool calls and collect results
+		var toolResults []llm.ToolResultBlock
+		for _, tc := range toolUses {
+			tool := s.tools[tc.Name]
+			if tool == nil {
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   fmt.Sprintf("Error: Tool '%s' not found. Available tools: ask_agent", tc.Name),
+					IsError:   true,
+				})
+				continue
+			}
+
+			result := tool.Call(ctx, string(tc.Input))
+			resultContent := result
+			if s.interceptor != nil {
+				ir := s.interceptor.Intercept(tc.Name, result)
+				resultContent = ir.Data
+				if ir.Metadata != "" {
+					resultContent += "\n\n---\n" + ir.Metadata
+				}
+			}
+			toolResults = append(toolResults, llm.ToolResultBlock{
+				ToolUseID: tc.ID,
+				Content:   resultContent,
+			})
+		}
+
+		// Send tool results and get next response
+		s.session.AddToolResults(toolResults)
+		resp, err = s.session.ContinueStream(ctx, func(chunk llm.StreamChunk) {})
 		if err != nil {
 			return "", err
 		}
-
-		content := resp.Content
-
-		// Check if there's an action to call
-		action, actionInput := s.parseActionFromContent(content)
-		if action == "" {
-			// No tool call, extract and return the answer
-			return s.extractAnswer(content), nil
-		}
-
-		// Look up and execute the tool
-		tool := s.tools[action]
-		if tool == nil {
-			currentInput = fmt.Sprintf("<OBSERVATION>\nError: Tool '%s' not found. Available tools: ask_agent\n</OBSERVATION>", action)
-			continue
-		}
-
-		result := tool.Call(ctx, actionInput)
-		currentInput, _ = s.formatObservation(action, result)
 	}
-}
-
-// parseActionFromContent extracts ACTION and ACTION_INPUT from a response
-func (s *Commander) parseActionFromContent(content string) (action, actionInput string) {
-	// Find <ACTION>...</ACTION>
-	actionStart := strings.Index(content, "<ACTION>")
-	if actionStart == -1 {
-		return "", ""
-	}
-	actionEnd := strings.Index(content[actionStart:], "</ACTION>")
-	if actionEnd == -1 {
-		return "", ""
-	}
-	action = strings.TrimSpace(content[actionStart+8 : actionStart+actionEnd])
-
-	// Find <ACTION_INPUT>...</ACTION_INPUT>
-	inputStart := strings.Index(content, "<ACTION_INPUT>")
-	if inputStart == -1 {
-		return action, ""
-	}
-	inputEnd := strings.Index(content[inputStart:], "</ACTION_INPUT>")
-	if inputEnd == -1 {
-		return action, ""
-	}
-	actionInput = strings.TrimSpace(content[inputStart+14 : inputStart+inputEnd])
-
-	return action, actionInput
 }
 
 // extractAnswer extracts the answer content from a response
@@ -1584,20 +1769,6 @@ func (s *Commander) extractAnswer(content string) string {
 	return strings.TrimSpace(content)
 }
 
-// formatObservation formats a tool result as an observation, with optional metadata.
-// Returns the formatted observation string and the observation content (what the LLM sees inside the tags).
-func (s *Commander) formatObservation(toolName, result string) (formatted string, content string) {
-	if s.interceptor == nil {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", result), result
-	}
-
-	ir := s.interceptor.Intercept(toolName, result)
-	if ir.Metadata == "" {
-		return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>", ir.Data), ir.Data
-	}
-
-	return fmt.Sprintf("<OBSERVATION>\n%s\n</OBSERVATION>\n<OBSERVATION_METADATA>\n%s\n</OBSERVATION_METADATA>", ir.Data, ir.Metadata), ir.Data
-}
 
 // ExecuteAggregation performs a simple LLM call for summary aggregation (no tools)
 func (s *Commander) ExecuteAggregation(ctx context.Context, prompt string) (string, error) {
@@ -1656,148 +1827,92 @@ func createCommanderProvider(ctx context.Context, modelConfig *config.Model) (ll
 }
 
 // =============================================================================
-// Commander Parser - parses ReAct-formatted streaming output
+// Commander Reasoning Parser - parses REASONING XML tags from streaming output
 // =============================================================================
 
-// commanderParserState represents the current parsing state
-type commanderParserState int
-
-const (
-	commanderStateNone commanderParserState = iota
-	commanderStateReasoning
-	commanderStateAction
-	commanderStateActionInput
-)
-
-// commanderParser parses ReAct-formatted streaming output for commanders
-type commanderParser struct {
+// commanderReasoningParser parses <REASONING> tags from streaming text content.
+// Tool calls are handled via native SDK tool calling (ContentBlocks), not parsed from text.
+type commanderReasoningParser struct {
 	streamer         CommanderStreamer
-	state            commanderParserState
+	inReasoning      bool
 	buffer           strings.Builder
 	reasoningStarted bool
-	actionName       string
-	actionInput      string
 	reasoningText    strings.Builder
 }
 
-// newCommanderParser creates a new parser with the given streamer
-func newCommanderParser(streamer CommanderStreamer) *commanderParser {
-	return &commanderParser{
+// newCommanderReasoningParser creates a new reasoning-only parser
+func newCommanderReasoningParser(streamer CommanderStreamer) *commanderReasoningParser {
+	return &commanderReasoningParser{
 		streamer: streamer,
-		state:    commanderStateNone,
 	}
 }
 
-// ProcessChunk processes an incoming chunk of streamed content
-func (p *commanderParser) ProcessChunk(chunk string) {
+// ProcessChunk processes an incoming chunk of streamed text content
+func (p *commanderReasoningParser) ProcessChunk(chunk string) {
 	p.buffer.WriteString(chunk)
 	p.processBuffer()
 }
 
-// GetAction returns the parsed action name
-func (p *commanderParser) GetAction() string {
-	return p.actionName
-}
-
-// GetActionInput returns the parsed action input
-func (p *commanderParser) GetActionInput() string {
-	return p.actionInput
-}
-
 // Finish signals that streaming is complete
-func (p *commanderParser) Finish() {
-	// Nothing special needed
+func (p *commanderReasoningParser) Finish() {
+	// If we're still in reasoning when stream ends, emit what we have
+	if p.inReasoning && p.reasoningText.Len() > 0 {
+		p.streamer.ReasoningCompleted(p.reasoningText.String())
+	}
 }
 
-func (p *commanderParser) processBuffer() {
+func (p *commanderReasoningParser) processBuffer() {
 	content := p.buffer.String()
 
 	for {
-		switch p.state {
-		case commanderStateNone:
-			// Look for opening tags
+		if !p.inReasoning {
+			// Look for <REASONING> opening tag
 			if idx := strings.Index(content, "<REASONING>"); idx != -1 {
 				p.streamer.ReasoningStarted()
-				p.state = commanderStateReasoning
+				p.inReasoning = true
 				content = content[idx+11:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			if idx := strings.Index(content, "<ACTION>"); idx != -1 {
-				p.state = commanderStateAction
-				content = content[idx+8:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			if idx := strings.Index(content, "<ACTION_INPUT>"); idx != -1 {
-				p.state = commanderStateActionInput
-				content = content[idx+14:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			return
-
-		case commanderStateReasoning:
-			if !p.reasoningStarted {
-				content = strings.TrimLeft(content, "\n")
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				if len(content) > 0 {
-					p.reasoningStarted = true
-				}
-			}
-
-			if idx := strings.Index(content, "</REASONING>"); idx != -1 {
-				finalContent := strings.TrimRight(content[:idx], "\n")
-				if len(finalContent) > 0 {
-					p.reasoningText.WriteString(finalContent)
-				}
-				if p.reasoningText.Len() > 0 {
-					p.streamer.ReasoningCompleted(p.reasoningText.String())
-				}
-				p.reasoningText.Reset()
-				p.reasoningStarted = false
-				p.state = commanderStateNone
-				content = content[idx+12:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			// Buffer content for reasoning
-			if len(content) > 12 {
-				safeLen := len(content) - 12
-				p.reasoningText.WriteString(content[:safeLen])
-				content = content[safeLen:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-			}
-			return
-
-		case commanderStateAction:
-			if idx := strings.Index(content, "</ACTION>"); idx != -1 {
-				p.actionName = strings.TrimSpace(content[:idx])
-				p.state = commanderStateNone
-				content = content[idx+9:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			return
-
-		case commanderStateActionInput:
-			if idx := strings.Index(content, "</ACTION_INPUT>"); idx != -1 {
-				p.actionInput = strings.TrimSpace(content[:idx])
-				p.state = commanderStateNone
-				content = content[idx+15:]
 				p.buffer.Reset()
 				p.buffer.WriteString(content)
 				continue
 			}
 			return
 		}
+
+		// Inside reasoning — buffer until </REASONING>
+		if !p.reasoningStarted {
+			content = strings.TrimLeft(content, "\n")
+			p.buffer.Reset()
+			p.buffer.WriteString(content)
+			if len(content) > 0 {
+				p.reasoningStarted = true
+			}
+		}
+
+		if idx := strings.Index(content, "</REASONING>"); idx != -1 {
+			finalContent := strings.TrimRight(content[:idx], "\n")
+			if len(finalContent) > 0 {
+				p.reasoningText.WriteString(finalContent)
+			}
+			if p.reasoningText.Len() > 0 {
+				p.streamer.ReasoningCompleted(p.reasoningText.String())
+			}
+			p.reasoningText.Reset()
+			p.reasoningStarted = false
+			p.inReasoning = false
+			content = content[idx+12:]
+			p.buffer.Reset()
+			p.buffer.WriteString(content)
+			continue
+		}
+		// Buffer content for reasoning, keeping enough to detect split tag
+		if len(content) > 12 {
+			safeLen := len(content) - 12
+			p.reasoningText.WriteString(content[:safeLen])
+			content = content[safeLen:]
+			p.buffer.Reset()
+			p.buffer.WriteString(content)
+		}
+		return
 	}
 }
 
@@ -2191,10 +2306,19 @@ func (t *queryTaskOutputTool) ToolPayloadSchema() aitools.Schema {
 			"filters": {
 				Type:        aitools.TypeArray,
 				Description: "Filter conditions: [{field, op, value}]. Ops: eq, ne, gt, lt, gte, lte, contains",
+				Items: &aitools.Property{
+					Type: aitools.TypeObject,
+					Properties: aitools.PropertyMap{
+						"field": {Type: aitools.TypeString, Description: "Field name to filter on"},
+						"op":    {Type: aitools.TypeString, Description: "Operator: eq, ne, gt, lt, gte, lte, contains"},
+						"value": {Type: aitools.TypeString, Description: "Value to compare against"},
+					},
+				},
 			},
 			"item_ids": {
 				Type:        aitools.TypeArray,
 				Description: "Specific item IDs to retrieve (for iterated tasks)",
+				Items:       &aitools.Property{Type: aitools.TypeString},
 			},
 			"limit": {
 				Type:        aitools.TypeInteger,

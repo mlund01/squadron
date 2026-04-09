@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -18,6 +19,7 @@ type Session struct {
 	messages      []Message
 	debugFile     *os.File
 	stopSequences []string
+	tools         []ToolDefinition // Tool definitions for native tool calling
 	promptCaching        bool
 	conversationCaching  bool // Whether to cache conversation history (disabled when pruning is active)
 }
@@ -58,34 +60,77 @@ func isRetryableError(err error) bool {
 	return false
 }
 
-// chatStreamWithRetry wraps provider.ChatStream with exponential backoff for
-// transient errors (429, 5xx). Retries for up to ~10 minutes before giving up.
-func (s *Session) chatStreamWithRetry(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
-	backoff := 5 * time.Second
-	maxBackoff := 2 * time.Minute
-	deadline := time.Now().Add(10 * time.Minute)
+// retryBackoffs defines the exponential backoff schedule for retries.
+var retryBackoffs = []time.Duration{2, 4, 8, 16, 32, 64}
 
-	for {
+// chatStreamWithRetry wraps provider.ChatStream with exponential backoff for
+// transient errors (429, 5xx). Retries up to 6 times with 2, 4, 8, 16, 32, 64 second delays.
+func (s *Session) chatStreamWithRetry(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
+	for attempt := 0; ; attempt++ {
 		stream, err := s.provider.ChatStream(ctx, req)
 		if err == nil {
 			return stream, nil
 		}
 
-		if !isRetryableError(err) || time.Now().Add(backoff).After(deadline) {
+		if !isRetryableError(err) || attempt >= len(retryBackoffs) {
 			return nil, err
 		}
 
-		log.Printf("[LLM] Retryable error (%v), retrying in %s...", err, backoff)
+		backoff := retryBackoffs[attempt] * time.Second
+		log.Printf("[LLM] Retryable error (attempt %d/%d: %v), retrying in %s...", attempt+1, len(retryBackoffs), err, backoff)
 
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-time.After(backoff):
 		}
+	}
+}
 
-		backoff = backoff * 2
-		if backoff > maxBackoff {
-			backoff = maxBackoff
+// streamWithRetry handles the full stream lifecycle with retries.
+// Connection and mid-stream errors are retried with backoff.
+// On retry, the onChunk callback is suppressed to avoid sending
+// duplicate/garbled chunks to the UI — only the final successful
+// stream delivers chunks.
+func (s *Session) streamWithRetry(ctx context.Context, req *ChatRequest, onChunk func(StreamChunk)) (streamResult, error) {
+	for attempt := 0; ; attempt++ {
+		stream, err := s.provider.ChatStream(ctx, req)
+		if err != nil {
+			if !isRetryableError(err) || attempt >= len(retryBackoffs) {
+				return streamResult{}, err
+			}
+			backoff := retryBackoffs[attempt] * time.Second
+			log.Printf("[LLM] Retryable connection error (attempt %d/%d: %v), retrying in %s...", attempt+1, len(retryBackoffs), err, backoff)
+			select {
+			case <-ctx.Done():
+				return streamResult{}, ctx.Err()
+			case <-time.After(backoff):
+			}
+			continue
+		}
+
+		// On first attempt, use the real callback. On retries, suppress
+		// chunks since the UI already received partial data from the failed attempt.
+		cb := onChunk
+		if attempt > 0 {
+			cb = nil
+		}
+
+		sr, streamErr := readStream(ctx, stream, cb)
+		if streamErr == nil {
+			return sr, nil
+		}
+
+		if !isRetryableError(streamErr) || attempt >= len(retryBackoffs) {
+			return streamResult{}, streamErr
+		}
+
+		backoff := retryBackoffs[attempt] * time.Second
+		log.Printf("[LLM] Retryable stream error (attempt %d/%d: %v), retrying in %s...", attempt+1, len(retryBackoffs), streamErr, backoff)
+		select {
+		case <-ctx.Done():
+			return streamResult{}, ctx.Err()
+		case <-time.After(backoff):
 		}
 	}
 }
@@ -129,8 +174,36 @@ func (s *Session) AddSystemPrompt(prompt string) {
 	s.logMessage(fmt.Sprintf("System Prompt %d", len(s.systemPrompts)), prompt)
 }
 
+
 func (s *Session) SetStopSequences(sequences []string) {
 	s.stopSequences = sequences
+}
+
+// SetTools configures tool definitions for this session.
+// Tools are automatically included in all chat requests.
+func (s *Session) SetTools(tools []ToolDefinition) {
+	s.tools = tools
+}
+
+// GetTools returns the session's configured tool definitions
+func (s *Session) GetTools() []ToolDefinition {
+	return s.tools
+}
+
+// AddToolResults appends a user message with tool result content blocks.
+// Each result corresponds to a tool_use block from the previous assistant message.
+func (s *Session) AddToolResults(results []ToolResultBlock) {
+	parts := make([]ContentBlock, len(results))
+	for i, r := range results {
+		parts[i] = ContentBlock{
+			Type:       ContentTypeToolResult,
+			ToolResult: &r,
+		}
+	}
+	s.messages = append(s.messages, Message{
+		Role:  RoleUser,
+		Parts: parts,
+	})
 }
 
 // stripStopSequences removes any stop sequence text from response content.
@@ -210,6 +283,22 @@ func (s *Session) Clone() *Session {
 						MediaType: part.ImageData.MediaType,
 					}
 				}
+				if part.ToolUse != nil {
+					inputCopy := make(json.RawMessage, len(part.ToolUse.Input))
+					copy(inputCopy, part.ToolUse.Input)
+					messagesCopy[i].Parts[j].ToolUse = &ToolUseBlock{
+						ID:    part.ToolUse.ID,
+						Name:  part.ToolUse.Name,
+						Input: inputCopy,
+					}
+				}
+				if part.ToolResult != nil {
+					messagesCopy[i].Parts[j].ToolResult = &ToolResultBlock{
+						ToolUseID: part.ToolResult.ToolUseID,
+						Content:   part.ToolResult.Content,
+						IsError:   part.ToolResult.IsError,
+					}
+				}
 			}
 		}
 		if msg.Metadata != nil {
@@ -225,12 +314,17 @@ func (s *Session) Clone() *Session {
 	stopSequencesCopy := make([]string, len(s.stopSequences))
 	copy(stopSequencesCopy, s.stopSequences)
 
+	// Copy tools
+	toolsCopy := make([]ToolDefinition, len(s.tools))
+	copy(toolsCopy, s.tools)
+
 	return &Session{
 		provider:      s.provider, // Shared - providers are thread-safe
 		model:         s.model,
 		systemPrompts: systemPromptsCopy,
 		messages:      messagesCopy,
 		stopSequences: stopSequencesCopy,
+		tools:         toolsCopy,
 		debugFile:     nil, // Don't share debug file - clones are for isolated queries
 	}
 }
@@ -264,6 +358,7 @@ func (s *Session) Send(ctx context.Context, userMessage string) (*ChatResponse, 
 		Model:         s.model,
 		Messages:      s.buildMessages(userMessage),
 		StopSequences: s.stopSequences,
+		Tools:         s.tools,
 		PromptCaching:       s.promptCaching,
 		ConversationCaching: s.conversationCaching,
 	}
@@ -279,9 +374,43 @@ func (s *Session) Send(ctx context.Context, userMessage string) (*ChatResponse, 
 
 	// Append user message and assistant response to history
 	s.messages = append(s.messages, Message{Role: RoleUser, Content: userMessage})
-	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: resp.Content})
+	s.messages = append(s.messages, s.buildAssistantMessage(resp.Content, resp.ContentBlocks))
 
 	return resp, nil
+}
+
+// buildAssistantMessage constructs the assistant message for session history.
+// If contentBlocks contain tool_use blocks, the message uses Parts for structured content.
+// Otherwise, it falls back to simple text content.
+func (s *Session) buildAssistantMessage(textContent string, contentBlocks []ContentBlock) Message {
+	hasToolUse := false
+	for _, b := range contentBlocks {
+		if b.Type == ContentTypeToolUse {
+			hasToolUse = true
+			break
+		}
+	}
+
+	if !hasToolUse {
+		return Message{Role: RoleAssistant, Content: textContent}
+	}
+
+	// Build Parts: include text block(s) and tool_use blocks
+	var parts []ContentBlock
+	if textContent != "" {
+		parts = append(parts, ContentBlock{Type: ContentTypeText, Text: textContent})
+	}
+	for _, b := range contentBlocks {
+		if b.Type == ContentTypeToolUse {
+			parts = append(parts, b)
+		}
+	}
+
+	return Message{
+		Role:    RoleAssistant,
+		Content: textContent, // Keep for backward compat
+		Parts:   parts,
+	}
 }
 
 func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk func(StreamChunk)) (*ChatResponse, error) {
@@ -291,42 +420,36 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 		Model:         s.model,
 		Messages:      s.buildMessages(userMessage),
 		StopSequences: s.stopSequences,
+		Tools:         s.tools,
 		PromptCaching:       s.promptCaching,
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.chatStreamWithRetry(ctx, req)
+	sr, err := s.streamWithRetry(ctx, req, onChunk)
 	if err != nil {
 		return nil, err
 	}
 
-	accumulated, lastChunk, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
-		if onChunk != nil {
-			onChunk(chunk)
-		}
-	})
-	if streamErr != nil {
-		return nil, streamErr
-	}
-
-	content := s.stripStopSequences(accumulated)
+	content := s.stripStopSequences(sr.TextContent)
 
 	s.logMessage("LLM Response", content)
 
 	// Build the final response
 	resp := &ChatResponse{
-		ID:      uuid.New().String(),
-		Content: content,
+		ID:            uuid.New().String(),
+		Content:       content,
+		ContentBlocks: sr.ContentBlocks,
+		FinishReason:  sr.StopReason,
 	}
 
 	// Capture usage from the final chunk if provider included it
-	if lastChunk.Usage != nil {
-		resp.Usage = *lastChunk.Usage
+	if sr.LastChunk.Usage != nil {
+		resp.Usage = *sr.LastChunk.Usage
 	}
 
 	// Append user message and assistant response to history
 	s.messages = append(s.messages, Message{Role: RoleUser, Content: userMessage})
-	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: content})
+	s.messages = append(s.messages, s.buildAssistantMessage(content, sr.ContentBlocks))
 
 	return resp, nil
 }
@@ -342,41 +465,35 @@ func (s *Session) ContinueStream(ctx context.Context, onChunk func(StreamChunk))
 		Model:         s.model,
 		Messages:      s.buildCurrentMessages(),
 		StopSequences: s.stopSequences,
+		Tools:         s.tools,
 		PromptCaching:       s.promptCaching,
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.chatStreamWithRetry(ctx, req)
+	sr, err := s.streamWithRetry(ctx, req, onChunk)
 	if err != nil {
 		return nil, err
 	}
 
-	accumulated, lastChunk, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
-		if onChunk != nil {
-			onChunk(chunk)
-		}
-	})
-	if streamErr != nil {
-		return nil, streamErr
-	}
-
-	content := s.stripStopSequences(accumulated)
+	content := s.stripStopSequences(sr.TextContent)
 
 	s.logMessage("LLM Response", content)
 
 	// Build the final response
 	resp := &ChatResponse{
-		ID:      uuid.New().String(),
-		Content: content,
+		ID:            uuid.New().String(),
+		Content:       content,
+		ContentBlocks: sr.ContentBlocks,
+		FinishReason:  sr.StopReason,
 	}
 
 	// Capture usage from the final chunk if provider included it
-	if lastChunk.Usage != nil {
-		resp.Usage = *lastChunk.Usage
+	if sr.LastChunk.Usage != nil {
+		resp.Usage = *sr.LastChunk.Usage
 	}
 
 	// Append ONLY the assistant response (no user message — it's already in history)
-	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: content})
+	s.messages = append(s.messages, s.buildAssistantMessage(content, sr.ContentBlocks))
 
 	return resp, nil
 }
@@ -537,9 +654,18 @@ func (s *Session) buildCompactionSummary(messages []Message) string {
 		}
 		content := msg.GetTextContent()
 
-		// Skip tool results (observations)
-		if strings.Contains(content, "<OBSERVATION>") {
-			continue
+		// Skip tool results
+		if msg.HasParts() {
+			isToolResult := false
+			for _, part := range msg.Parts {
+				if part.Type == ContentTypeToolResult {
+					isToolResult = true
+					break
+				}
+			}
+			if isToolResult {
+				continue
+			}
 		}
 
 		// First user message is the original task
@@ -568,16 +694,11 @@ func (s *Session) buildCompactionSummary(messages []Message) string {
 		msg := messages[i]
 		content := msg.GetTextContent()
 
-		// Extract tool calls from user messages (observations)
-		if msg.Role == RoleUser && strings.Contains(content, "<OBSERVATION>") {
-			// Try to identify what tool was called by looking at the previous assistant message
-			if i > 0 && messages[i-1].Role == RoleAssistant {
-				prevContent := messages[i-1].GetTextContent()
-				if actionStart := strings.Index(prevContent, "<ACTION>"); actionStart != -1 {
-					if actionEnd := strings.Index(prevContent[actionStart:], "</ACTION>"); actionEnd != -1 {
-						toolName := prevContent[actionStart+8 : actionStart+actionEnd]
-						toolCalls = append(toolCalls, toolName)
-					}
+		// Extract tool calls from assistant messages with native tool_use blocks
+		if msg.Role == RoleAssistant && msg.HasParts() {
+			for _, part := range msg.Parts {
+				if part.Type == ContentTypeToolUse && part.ToolUse != nil {
+					toolCalls = append(toolCalls, part.ToolUse.Name)
 				}
 			}
 		}
@@ -649,68 +770,116 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 		Model:         s.model,
 		Messages:      s.buildMessagesWithMessage(userMsg),
 		StopSequences: s.stopSequences,
+		Tools:         s.tools,
 		PromptCaching:       s.promptCaching,
 		ConversationCaching: s.conversationCaching,
 	}
 
-	stream, err := s.chatStreamWithRetry(ctx, req)
+	sr, err := s.streamWithRetry(ctx, req, onChunk)
 	if err != nil {
 		return nil, err
 	}
 
-	accumulated, lastChunk, streamErr := readStream(ctx, stream, func(chunk StreamChunk) {
-		if onChunk != nil {
-			onChunk(chunk)
-		}
-	})
-	if streamErr != nil {
-		return nil, streamErr
-	}
-
-	content := s.stripStopSequences(accumulated)
+	content := s.stripStopSequences(sr.TextContent)
 
 	s.logMessage("LLM Response", content)
 
 	// Build the final response
 	resp := &ChatResponse{
-		ID:      uuid.New().String(),
-		Content: content,
+		ID:            uuid.New().String(),
+		Content:       content,
+		ContentBlocks: sr.ContentBlocks,
+		FinishReason:  sr.StopReason,
 	}
 
 	// Capture usage from the final chunk if provider included it
-	if lastChunk.Usage != nil {
-		resp.Usage = *lastChunk.Usage
+	if sr.LastChunk.Usage != nil {
+		resp.Usage = *sr.LastChunk.Usage
 	}
 
 	// Append user message and assistant response to history
 	s.messages = append(s.messages, userMsg)
-	s.messages = append(s.messages, Message{Role: RoleAssistant, Content: content})
+	s.messages = append(s.messages, s.buildAssistantMessage(content, sr.ContentBlocks))
 
 	return resp, nil
 }
 
+// streamResult holds the accumulated result of reading a stream
+type streamResult struct {
+	TextContent   string
+	ContentBlocks []ContentBlock
+	StopReason    string
+	LastChunk     StreamChunk
+}
+
 // readStream reads chunks from a stream channel, respecting context cancellation.
-// Returns the accumulated content and the last chunk, or an error.
-func readStream(ctx context.Context, stream <-chan StreamChunk, onChunk func(StreamChunk)) (string, StreamChunk, error) {
+// Accumulates both text content and structured content blocks (including tool calls).
+func readStream(ctx context.Context, stream <-chan StreamChunk, onChunk func(StreamChunk)) (streamResult, error) {
+	var result streamResult
 	var contentBuilder strings.Builder
-	var lastChunk StreamChunk
+
+	// Track tool calls being accumulated from stream deltas
+	var currentToolID string
+	var currentToolName string
+	var currentToolInput strings.Builder
 
 	for {
 		select {
 		case <-ctx.Done():
-			return contentBuilder.String(), lastChunk, ctx.Err()
+			result.TextContent = contentBuilder.String()
+			return result, ctx.Err()
 		case chunk, ok := <-stream:
 			if !ok {
-				return contentBuilder.String(), lastChunk, nil
+				result.TextContent = contentBuilder.String()
+				return result, nil
 			}
 			if chunk.Error != nil {
-				return contentBuilder.String(), lastChunk, chunk.Error
+				result.TextContent = contentBuilder.String()
+				return result, chunk.Error
 			}
-			contentBuilder.WriteString(chunk.Content)
+
+			// Accumulate text content
+			if chunk.Content != "" {
+				contentBuilder.WriteString(chunk.Content)
+			}
+
+			// Track tool call streaming
+			if chunk.ToolCallStart != nil {
+				currentToolID = chunk.ToolCallStart.ID
+				currentToolName = chunk.ToolCallStart.Name
+				currentToolInput.Reset()
+			}
+			if chunk.ToolCallDelta != "" {
+				currentToolInput.WriteString(chunk.ToolCallDelta)
+			}
+			if chunk.ToolCallDone != nil {
+				// Finalize the tool call block
+				result.ContentBlocks = append(result.ContentBlocks, ContentBlock{
+					Type: ContentTypeToolUse,
+					ToolUse: &ToolUseBlock{
+						ID:    currentToolID,
+						Name:  currentToolName,
+						Input: json.RawMessage(currentToolInput.String()),
+					},
+				})
+				currentToolID = ""
+				currentToolName = ""
+				currentToolInput.Reset()
+			}
+
 			if onChunk != nil {
 				onChunk(chunk)
 			}
-			lastChunk = chunk
+
+			if chunk.Done {
+				result.StopReason = chunk.StopReason
+				// Use provider-accumulated ContentBlocks if available, otherwise use ours
+				if len(chunk.ContentBlocks) > 0 {
+					result.ContentBlocks = chunk.ContentBlocks
+				}
+			}
+
+			result.LastChunk = chunk
 		}
 	}
 }

@@ -56,43 +56,45 @@ Completes the first non-completed subtask in order. All subtasks must be complet
 
 #### task_complete
 
-Signal that the task is done. Call this when all subtasks are completed and all work is finished.
+Signal that the task is done. Always include a `summary` of key findings and results — this is passed as context to downstream dependent tasks.
 
-```json
-{}
-```
-
-**With routing:** If the task has a `router` block, `task_complete` triggers a two-phase routing flow instead of immediately completing:
-
-1. **First call** — returns route options:
 ```json
 {
-  "status": "routing",
-  "message": "Choose the most appropriate route, or 'none'.",
-  "options": [
-    {"key": "handle_billing", "condition": "The request is about billing"},
-    {"key": "handle_support", "condition": "The request is technical support"},
-    {"key": "none", "condition": "No route applies"}
-  ]
+  "summary": "Analyzed the data and found 3 key trends...",
+  "succeed": true
 }
 ```
 
-2. **Second call** — commander selects a route:
+**With routing:** If the task has a `router` block, route options are injected as a system prompt. The commander must include a `route` parameter when calling `task_complete`:
+
 ```json
 {
+  "summary": "Classified request as billing issue based on keyword analysis.",
   "route": "handle_billing"
 }
 ```
 
-For **cross-mission routes**, the options include `required_inputs` and the second call includes `mission_inputs`:
+Use `"route": "none"` if no route condition applies.
+
+For **cross-mission routes**, include `mission_inputs` for the target mission's required inputs:
 
 ```json
 {
+  "summary": "Escalation required due to severity.",
   "route": "escalation_mission",
   "mission_inputs": {
     "complaint_summary": "Customer demands refund for defective product",
     "severity": "critical"
   }
+}
+```
+
+**Failure:**
+
+```json
+{
+  "succeed": false,
+  "reason": "Unable to complete — external API is unreachable."
 }
 ```
 

@@ -90,7 +90,9 @@ Each task gets a commander that:
 
 ## Context from Dependencies
 
-Commanders receive context from completed dependency tasks. They can query structured data using `query_task_output` and ask follow-up questions to previous commanders using `ask_commander`.
+When a task completes, the commander provides a `summary` in `task_complete`. This summary is automatically passed as context to all dependent tasks — no extra LLM calls needed.
+
+Commanders can also query structured data from dependencies using `query_task_output`, and ask follow-up questions to previous commanders using `ask_commander` if the summary doesn't have enough detail.
 
 ```hcl
 task "step_2" {

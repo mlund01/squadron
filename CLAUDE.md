@@ -278,11 +278,8 @@ route {
 }
 ```
 
-**How it works at runtime (`task_complete` two-phase flow):**
-1. Commander calls `task_complete` → tool returns route options as a JSON list (plus "none"). Mission targets include `required_inputs`.
-2. Commander evaluates options (can call agents for more info first)
-3. Commander calls `task_complete` again with `route` parameter to select a route. For mission targets, also provides `mission_inputs`.
-4. The chosen route's target task is activated (or target mission is launched); unchosen branches never execute
+**How it works at runtime:**
+Route options are injected as a system prompt when the commander starts, so it knows the available routes upfront. When calling `task_complete`, the commander includes both a `summary` and a `route` parameter in a single call. If routes are configured but no `route` is provided, `task_complete` returns an error prompting the commander to include one.
 
 #### Dynamic activation: `send_to` (unconditional push)
 
@@ -455,10 +452,10 @@ Missions orchestrate multi-agent task execution with dependency management.
 1. **Runner** resolves task dependencies (topological sort), filtering out dynamically-activated tasks (router/send_to targets with no `depends_on`)
 2. **Static tasks** execute in parallel when all `depends_on` dependencies are satisfied
 3. **Commander** manages each task:
-   - Queries ancestor commanders for context (`queryAncestorsForContext`) — ancestors include `depends_on` parents and the `routerParent` that activated it
+   - Receives push summaries from ancestor tasks as static context (no LLM queries needed)
+   - Can use `ask_commander` to get more detail from ancestor commanders if summaries aren't enough
    - Delegates work to agents via `call_agent` tool
-   - Produces structured output via `<OUTPUT>` blocks
-   - If task has a `router`, `task_complete` triggers two-phase route selection
+   - Calls `task_complete` with a `summary` (and `route` if routing is configured)
 4. **Dynamic activation**: After a task completes, its `send_to` targets are immediately queued. If it chose a route, the route target is queued. (See "Task Connectivity" in HCL Config section for full rules.)
 5. **Agents** execute ReAct loops:
    - Reason → Act (tool call) → Observe (tool result) → Repeat
@@ -468,8 +465,9 @@ Missions orchestrate multi-agent task execution with dependency management.
 
 - Static dependencies: `depends_on = [tasks.previous_task]` — task waits for all listed tasks
 - Dynamic dependencies: `router`/`send_to` targets get the activating task as their ancestor
-- When a task starts, Runner queries each ancestor commander with the new task's objective
-- Ancestors provide targeted context based on what they learned
+- When a task completes, the commander provides a `summary` in `task_complete` — stored in DB and in-memory `taskSummaries` map
+- When a dependent task starts, it receives static summaries from all ancestors (no LLM queries needed — instant)
+- Commanders can use `ask_commander` to query ancestor commanders for more detail if summaries aren't enough
 - Structured outputs are stored in KnowledgeStore for `query_task_output` queries
 
 ### Iterated Tasks

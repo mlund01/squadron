@@ -1,6 +1,9 @@
 package llm
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 type Role string
 
@@ -14,8 +17,10 @@ const (
 type ContentType string
 
 const (
-	ContentTypeText  ContentType = "text"
-	ContentTypeImage ContentType = "image"
+	ContentTypeText       ContentType = "text"
+	ContentTypeImage      ContentType = "image"
+	ContentTypeToolUse    ContentType = "tool_use"
+	ContentTypeToolResult ContentType = "tool_result"
 )
 
 // ImageBlock represents base64-encoded image data
@@ -24,11 +29,34 @@ type ImageBlock struct {
 	MediaType string // MIME type: "image/png", "image/jpeg", "image/gif", "image/webp"
 }
 
-// ContentBlock represents a single piece of content (text or image)
+// ToolDefinition is a provider-agnostic tool definition passed in API requests
+type ToolDefinition struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
+}
+
+// ToolUseBlock represents the model requesting a tool call
+type ToolUseBlock struct {
+	ID    string          `json:"id"`
+	Name  string          `json:"name"`
+	Input json.RawMessage `json:"input"`
+}
+
+// ToolResultBlock represents the result of a tool call
+type ToolResultBlock struct {
+	ToolUseID string `json:"tool_use_id"`
+	Content   string `json:"content"`
+	IsError   bool   `json:"is_error,omitempty"`
+}
+
+// ContentBlock represents a single piece of content (text, image, tool use, or tool result)
 type ContentBlock struct {
-	Type      ContentType
-	Text      string      // Used when Type == ContentTypeText
-	ImageData *ImageBlock // Used when Type == ContentTypeImage
+	Type       ContentType
+	Text       string           // Used when Type == ContentTypeText
+	ImageData  *ImageBlock      // Used when Type == ContentTypeImage
+	ToolUse    *ToolUseBlock    // Used when Type == ContentTypeToolUse
+	ToolResult *ToolResultBlock // Used when Type == ContentTypeToolResult
 }
 
 // MessageMetadata holds tracking information for messages
@@ -86,11 +114,26 @@ func NewMultimodalMessage(role Role, parts ...ContentBlock) Message {
 	return Message{Role: role, Parts: parts}
 }
 
+// ToolCallStartChunk signals that a new tool_use block is starting in the stream
+type ToolCallStartChunk struct {
+	ID   string
+	Name string
+}
+
 type StreamChunk struct {
 	Content string
 	Done    bool
 	Error   error
 	Usage   *Usage // Only populated on final chunk (Done=true)
+
+	// Tool call streaming fields
+	ToolCallStart *ToolCallStartChunk // Signals a new tool_use block starting
+	ToolCallDelta string              // Incremental JSON input for the current tool call
+	ToolCallDone  *string             // Tool call ID when its input is complete
+
+	// Final response metadata (populated on Done=true)
+	StopReason    string         // "end_turn", "tool_use", "stop_sequence", etc.
+	ContentBlocks []ContentBlock // Accumulated structured content blocks
 }
 
 type ChatRequest struct {
@@ -101,13 +144,15 @@ type ChatRequest struct {
 	StopSequences       []string
 	PromptCaching       bool // Cache system prompts
 	ConversationCaching bool // Cache conversation history (last user message breakpoint)
+	Tools               []ToolDefinition // Tool definitions for native tool calling
 }
 
 type ChatResponse struct {
-	ID           string
-	Content      string
-	FinishReason string
-	Usage        Usage
+	ID            string
+	Content       string         // Text content (backward compat: concatenation of text blocks)
+	ContentBlocks []ContentBlock // Full structured response (text + tool_use blocks)
+	FinishReason  string
+	Usage         Usage
 }
 
 type Usage struct {

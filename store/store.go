@@ -35,6 +35,7 @@ type MissionStore interface {
 	UpdateMissionStatusCAS(id, expectedOldStatus, newStatus string) (bool, error)
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
 	UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error
+	UpdateTaskSummary(id, summary string) error
 	// UpdateTaskStatusCAS atomically transitions a task status, returning false if current status doesn't match expected.
 	UpdateTaskStatusCAS(id, expectedOldStatus, newStatus string, outputJSON, errMsg *string) (bool, error)
 	GetTask(id string) (*MissionTask, error)
@@ -70,6 +71,7 @@ type MissionTask struct {
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	OutputJSON *string    `json:"outputJson,omitempty"`
+	Summary    *string    `json:"summary,omitempty"`
 	Error      *string    `json:"error,omitempty"`
 }
 

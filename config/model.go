@@ -75,7 +75,6 @@ func BuildPricingOverrides(models []Model) map[string]*ModelPricingConfig {
 type Model struct {
 	Name           string            `hcl:"name,label"`
 	Provider       Provider          `hcl:"provider"`
-	AllowedModels  []string          `hcl:"allowed_models,optional"` // Optional — cloud providers auto-populate from SupportedModels
 	Aliases        map[string]string `hcl:"-"`                       // HCL key → API model name (parsed manually)
 	APIKey         string            `hcl:"api_key,optional"`
 	BaseURL        string            `hcl:"base_url,optional"`
@@ -84,23 +83,14 @@ type Model struct {
 }
 
 // AvailableModels returns all model keys available for this provider.
-// Combines: SupportedModels entries listed in AllowedModels + Aliases keys.
+// Combines: all SupportedModels for this provider + Aliases.
 func (m *Model) AvailableModels() map[string]string {
 	result := make(map[string]string)
 
-	// Add internal mappings for allowed_models keys
+	// Add all internal mappings for this provider
 	if supported, ok := SupportedModels[m.Provider]; ok {
-		if len(m.AllowedModels) > 0 {
-			for _, key := range m.AllowedModels {
-				if apiName, ok := supported[key]; ok {
-					result[key] = apiName
-				}
-			}
-		} else {
-			// No allowed_models specified — include all supported models for this provider
-			for key, apiName := range supported {
-				result[key] = apiName
-			}
+		for key, apiName := range supported {
+			result[key] = apiName
 		}
 	}
 
@@ -147,14 +137,6 @@ func (m *Model) Validate() error {
 	// Cloud providers require an API key
 	if m.APIKey == "" {
 		return fmt.Errorf("api_key is required for provider '%s'", m.Provider)
-	}
-
-	// Validate allowed_models against supported models
-	supportedForProvider := SupportedModels[m.Provider]
-	for _, modelName := range m.AllowedModels {
-		if _, ok := supportedForProvider[modelName]; !ok {
-			return fmt.Errorf("unsupported model '%s' for provider '%s'. Supported: %v", modelName, m.Provider, getKeys(supportedForProvider))
-		}
 	}
 
 	return nil

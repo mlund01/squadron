@@ -28,7 +28,6 @@ storage { backend = "sqlite" }
 				"models.hcl": minimalVarsHCL() + `
 model "test" {
   provider       = "openai"
-  allowed_models = ["gpt_4o"]
   api_key        = vars.test_api_key
 }
 `,
@@ -74,7 +73,6 @@ storage { backend = "sqlite" }
 variable "k" { default = "key" }
 model "m1" {
   provider       = "openai"
-  allowed_models = ["gpt_4o"]
   api_key        = vars.k
 }
 `,
@@ -114,7 +112,6 @@ variable "my_key" { default = "resolved-api-key" }
 storage { backend = "sqlite" }
 model "test" {
   provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4"]
   api_key        = vars.my_key
 }
 `

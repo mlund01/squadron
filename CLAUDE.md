@@ -74,9 +74,8 @@ variable "anthropic_api_key" {
 
 # models.hcl
 model "anthropic" {
-  provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4", "claude_opus_4"]
-  api_key        = vars.anthropic_api_key
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
 }
 
 # plugins.hcl

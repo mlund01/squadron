@@ -4,59 +4,54 @@ title: Models
 
 # Models
 
-Models define connections to LLM providers and which models are available.
+Models define connections to LLM providers. Cloud providers (Anthropic, OpenAI, Gemini) have built-in model lists — just add your API key and all supported models are automatically available. Local providers (Ollama) use `aliases` to map HCL-friendly keys to model names.
 
-## Defining Models
-
-### Cloud Providers
+## Cloud Providers
 
 ```hcl
 model "anthropic" {
-  provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4", "claude_3_5_haiku", "claude_opus_4"]
-  api_key        = vars.anthropic_api_key
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
 }
 
 model "openai" {
-  provider       = "openai"
-  allowed_models = ["gpt_4o", "gpt_4o_mini", "gpt_4_turbo"]
-  api_key        = vars.openai_api_key
+  provider = "openai"
+  api_key  = vars.openai_api_key
 }
 
 model "gemini" {
-  provider       = "gemini"
-  allowed_models = ["gemini_2_0_flash", "gemini_1_5_pro"]
-  api_key        = vars.gemini_api_key
+  provider = "gemini"
+  api_key  = vars.gemini_api_key
 }
 ```
 
-### Local Models (Ollama)
+All supported models for each provider are available automatically — no need to list them.
 
-The `ollama` provider connects to any OpenAI-compatible local inference server. No API key is required.
+## Local Models (Ollama)
+
+The `ollama` provider connects to any OpenAI-compatible local inference server. Use `aliases` to define which models are available and map HCL-safe keys to the actual model names.
 
 ```hcl
 model "local" {
-  provider       = "ollama"
-  base_url       = "http://localhost:11434/v1"
-  allowed_models = ["gemma_4"]
+  provider = "ollama"
+  base_url = "http://localhost:11434/v1"
+  aliases = {
+    gemma4     = "gemma4"
+    gemma4_26b = "gemma4:26b"
+    nemotron   = "nemotron-cascade-2:30b"
+  }
 }
 ```
 
-You can use any model that your local server supports. Model keys in `allowed_models` become the HCL reference names, and for arbitrary (non-predefined) model names the key is sent directly to the server as the model identifier:
+The alias key (left side) becomes the HCL reference name. The value (right side) is the exact model name sent to the server. This handles models with colons or hyphens that aren't valid in HCL identifiers.
 
 ```hcl
-model "local" {
-  provider       = "ollama"
-  base_url       = "http://localhost:11434/v1"
-  allowed_models = ["gemma_4", "llama3", "mistral", "deepseek_r1"]
-}
-
 agent "researcher" {
-  model = models.local.llama3       # sends "llama3" to Ollama
+  model = models.local.gemma4_26b   # sends "gemma4:26b" to Ollama
 }
 
 agent "writer" {
-  model = models.local.gemma_4      # sends "gemma4" (predefined mapping)
+  model = models.local.nemotron     # sends "nemotron-cascade-2:30b" to Ollama
 }
 ```
 
@@ -74,9 +69,9 @@ The `base_url` should point to the OpenAI-compatible API endpoint. Common values
 | Attribute | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `provider` | string | yes | Provider name: `anthropic`, `openai`, `gemini`, or `ollama` |
-| `allowed_models` | list | yes | Model keys that can be used with this config |
 | `api_key` | string | cloud providers | API key (required for `anthropic`, `openai`, `gemini`) |
 | `base_url` | string | `ollama` only | URL for the OpenAI-compatible API endpoint |
+| `aliases` | map | `ollama` only | Map of HCL key → API model name |
 | `prompt_caching` | bool | no | Enable prompt caching (default: `true`) |
 
 ## Supported Models
@@ -124,18 +119,6 @@ The `base_url` should point to the OpenAI-compatible API endpoint. Common values
 | `gemini_1_5_pro` | gemini-1.5-pro |
 | `gemini_1_5_flash` | gemini-1.5-flash |
 
-### Ollama (Local Models)
-
-The Ollama provider has one predefined convenience key:
-
-| Key | Model |
-|-----|-------|
-| `gemma_4` | gemma4 |
-
-Unlike cloud providers, the Ollama provider accepts **any model name** in `allowed_models`. If a key isn't in the predefined list above, it's sent directly to the server as-is. This means you can use whatever models you've pulled into Ollama (or any other OpenAI-compatible server) without waiting for Squadron to add explicit support.
-
-For example, `allowed_models = ["llama3", "codestral"]` will send `llama3` and `codestral` to the server as model identifiers.
-
 ## Referencing Models
 
 Use `models.<config_name>.<model_key>` to reference a model:
@@ -146,7 +129,7 @@ agent "assistant" {
 }
 
 agent "local_researcher" {
-  model = models.local.gemma_4
+  model = models.local.gemma4_26b
 }
 
 mission "pipeline" {
@@ -156,48 +139,54 @@ mission "pipeline" {
 }
 ```
 
-The `<model_key>` is whatever you put in `allowed_models`. For Ollama, this means custom model names work as references too — if you set `allowed_models = ["deepseek_r1"]`, you reference it as `models.local.deepseek_r1`.
-
 ## Multiple Configs Per Provider
 
-You can have multiple model configs for the same provider:
+You can have multiple model configs for the same provider with different API keys:
 
 ```hcl
 model "anthropic_prod" {
-  provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4"]
-  api_key        = vars.anthropic_prod_key
+  provider = "anthropic"
+  api_key  = vars.anthropic_prod_key
 }
 
 model "anthropic_dev" {
-  provider       = "anthropic"
-  allowed_models = ["claude_3_5_haiku"]
-  api_key        = vars.anthropic_dev_key
+  provider = "anthropic"
+  api_key  = vars.anthropic_dev_key
+}
+```
+
+## Custom Aliases for Cloud Providers
+
+Cloud providers can also use `aliases` to add custom model name mappings or override the built-in ones:
+
+```hcl
+model "anthropic" {
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
+  aliases = {
+    sonnet = "claude-sonnet-4-20250514"
+  }
+}
+
+agent "assistant" {
+  model = models.anthropic.sonnet  # custom alias
 }
 ```
 
 ## Pricing Overrides
 
-Squadron includes built-in pricing for all supported models to estimate costs per turn. If you have custom pricing (volume discounts, enterprise agreements, etc.), you can override the defaults per model using `pricing` blocks:
+Squadron includes built-in pricing for all supported models to estimate costs per turn. Override with custom pricing using `pricing` blocks:
 
 ```hcl
 model "anthropic" {
-  provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4_6", "claude_haiku_4_5"]
-  api_key        = vars.anthropic_api_key
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
 
   pricing "claude_sonnet_4_6" {
     input       = 2.50   # per 1M tokens
     output      = 12.00
     cache_read  = 0.25
     cache_write = 3.00
-  }
-
-  pricing "claude_haiku_4_5" {
-    input       = 0.80
-    output      = 4.00
-    cache_read  = 0.08
-    cache_write = 1.00
   }
 }
 ```
@@ -209,9 +198,7 @@ model "anthropic" {
 | `cache_read` | number | Cost per 1M cached input tokens (optional, default: 0) |
 | `cache_write` | number | Cost per 1M cache write tokens (optional, default: 0) |
 
-The pricing block label must match a model key from `allowed_models`. Costs are shown in the command center's Costs tab and the per-mission cost breakdown.
-
-If no pricing override is specified, Squadron uses its built-in pricing table which is updated with each release.
+The pricing block label must match a model key. Costs are shown in the command center's Costs tab.
 
 ### Local Models and Cost Tracking
 

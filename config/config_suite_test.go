@@ -72,7 +72,6 @@ func minimalModelHCL() string {
 	return `
 model "anthropic" {
   provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4"]
   api_key        = vars.test_api_key
 }
 `

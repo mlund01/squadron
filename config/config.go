@@ -602,7 +602,6 @@ func loadFromFiles(files []string) (*Config, error) {
 		content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 			Attributes: []hcl.AttributeSchema{
 				{Name: "provider", Required: true},
-				{Name: "allowed_models"},
 				{Name: "aliases"},
 				{Name: "api_key"},
 				{Name: "base_url"},
@@ -624,16 +623,6 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 		m.Provider = Provider(providerVal.AsString())
 
-		if attr, ok := content.Attributes["allowed_models"]; ok {
-			modelsVal, d := attr.Expr.Value(ctx)
-			if d.HasErrors() {
-				return nil, d
-			}
-			for it := modelsVal.ElementIterator(); it.Next(); {
-				_, v := it.Element()
-				m.AllowedModels = append(m.AllowedModels, v.AsString())
-			}
-		}
 
 		if attr, ok := content.Attributes["aliases"]; ok {
 			aliasesVal, d := attr.Expr.Value(ctx)

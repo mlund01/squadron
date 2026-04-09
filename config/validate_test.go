@@ -90,7 +90,6 @@ variable "bad_secret" {
 			hcl := minimalVarsHCL() + `
 model "bad" {
   provider       = "llama"
-  allowed_models = ["llama_3"]
   api_key        = vars.test_api_key
 }
 `

@@ -602,7 +602,8 @@ func loadFromFiles(files []string) (*Config, error) {
 		content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 			Attributes: []hcl.AttributeSchema{
 				{Name: "provider", Required: true},
-				{Name: "allowed_models", Required: true},
+				{Name: "allowed_models"},
+				{Name: "aliases"},
 				{Name: "api_key"},
 				{Name: "base_url"},
 				{Name: "prompt_caching"},
@@ -623,13 +624,27 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 		m.Provider = Provider(providerVal.AsString())
 
-		modelsVal, d := content.Attributes["allowed_models"].Expr.Value(ctx)
-		if d.HasErrors() {
-			return nil, d
+		if attr, ok := content.Attributes["allowed_models"]; ok {
+			modelsVal, d := attr.Expr.Value(ctx)
+			if d.HasErrors() {
+				return nil, d
+			}
+			for it := modelsVal.ElementIterator(); it.Next(); {
+				_, v := it.Element()
+				m.AllowedModels = append(m.AllowedModels, v.AsString())
+			}
 		}
-		for it := modelsVal.ElementIterator(); it.Next(); {
-			_, v := it.Element()
-			m.AllowedModels = append(m.AllowedModels, v.AsString())
+
+		if attr, ok := content.Attributes["aliases"]; ok {
+			aliasesVal, d := attr.Expr.Value(ctx)
+			if d.HasErrors() {
+				return nil, d
+			}
+			m.Aliases = make(map[string]string)
+			for it := aliasesVal.ElementIterator(); it.Next(); {
+				k, v := it.Element()
+				m.Aliases[k.AsString()] = v.AsString()
+			}
 		}
 
 		if attr, ok := content.Attributes["api_key"]; ok {
@@ -1048,8 +1063,8 @@ func buildModelsContext(ctx *hcl.EvalContext, models []Model) *hcl.EvalContext {
 	modelsMap := make(map[string]cty.Value)
 	for _, m := range models {
 		providerModels := make(map[string]cty.Value)
-		for _, modelKey := range m.AllowedModels {
-			providerModels[modelKey] = cty.StringVal(modelKey)
+		for key := range m.AvailableModels() {
+			providerModels[key] = cty.StringVal(key)
 		}
 		modelsMap[m.Name] = cty.ObjectVal(providerModels)
 	}

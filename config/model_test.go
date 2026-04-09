@@ -76,13 +76,15 @@ storage {
 	})
 
 	Describe("ollama parsing", func() {
-		It("parses an ollama model block with base_url and no api_key", func() {
+		It("parses an ollama model block with aliases and base_url", func() {
 			hcl := `
 variable "unused" { default = "x" }
 model "local" {
-  provider       = "ollama"
-  base_url       = "http://localhost:11434/v1"
-  allowed_models = ["gemma_4"]
+  provider = "ollama"
+  base_url = "http://localhost:11434/v1"
+  aliases = {
+    gemma4 = "gemma4"
+  }
 }
 storage {
   backend = "sqlite"
@@ -96,16 +98,19 @@ storage {
 			Expect(cfg.Models[0].Provider).To(Equal(config.ProviderOllama))
 			Expect(cfg.Models[0].BaseURL).To(Equal("http://localhost:11434/v1"))
 			Expect(cfg.Models[0].APIKey).To(Equal(""))
-			Expect(cfg.Models[0].AllowedModels).To(ConsistOf("gemma_4"))
+			Expect(cfg.Models[0].Aliases).To(HaveKeyWithValue("gemma4", "gemma4"))
 		})
 
-		It("parses an ollama model with arbitrary model names", func() {
+		It("parses ollama aliases with colon model names", func() {
 			hcl := `
 variable "unused" { default = "x" }
 model "local" {
-  provider       = "ollama"
-  base_url       = "http://localhost:11434/v1"
-  allowed_models = ["llama3", "mistral", "gemma_4"]
+  provider = "ollama"
+  base_url = "http://localhost:11434/v1"
+  aliases = {
+    gemma4_26b = "gemma4:26b"
+    nemotron   = "nemotron-cascade-2:30b"
+  }
 }
 storage {
   backend = "sqlite"
@@ -114,7 +119,8 @@ storage {
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Models[0].AllowedModels).To(ConsistOf("llama3", "mistral", "gemma_4"))
+			Expect(cfg.Models[0].Aliases).To(HaveKeyWithValue("gemma4_26b", "gemma4:26b"))
+			Expect(cfg.Models[0].Aliases).To(HaveKeyWithValue("nemotron", "nemotron-cascade-2:30b"))
 		})
 	})
 
@@ -132,7 +138,7 @@ model "bad" {
 			Expect(err).NotTo(HaveOccurred())
 			err = cfg.Validate()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("Unsupported provider"))
+			Expect(err.Error()).To(ContainSubstring("unsupported provider"))
 		})
 
 		It("rejects unsupported model key for a valid provider", func() {
@@ -148,7 +154,7 @@ model "openai" {
 			Expect(err).NotTo(HaveOccurred())
 			err = cfg.Validate()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("Unsupported model"))
+			Expect(err.Error()).To(ContainSubstring("unsupported model"))
 			Expect(err.Error()).To(ContainSubstring("nonexistent_model"))
 		})
 
@@ -182,25 +188,36 @@ model "openai" {
 			Expect(m.Validate()).To(Succeed())
 		})
 
-		It("accepts ollama provider with arbitrary model names and base_url", func() {
+		It("accepts ollama provider with aliases and base_url", func() {
 			m := config.Model{
-				Name:          "local",
-				Provider:      config.ProviderOllama,
-				AllowedModels: []string{"gemma_4", "llama3", "my_custom_model"},
-				BaseURL:       "http://localhost:11434/v1",
+				Name:     "local",
+				Provider: config.ProviderOllama,
+				Aliases:  map[string]string{"gemma4": "gemma4", "nemotron": "nemotron-cascade-2:30b"},
+				BaseURL:  "http://localhost:11434/v1",
 			}
 			Expect(m.Validate()).To(Succeed())
 		})
 
 		It("rejects ollama provider without base_url", func() {
 			m := config.Model{
-				Name:          "local",
-				Provider:      config.ProviderOllama,
-				AllowedModels: []string{"gemma_4"},
+				Name:     "local",
+				Provider: config.ProviderOllama,
+				Aliases:  map[string]string{"gemma4": "gemma4"},
 			}
 			err := m.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("base_url is required"))
+		})
+
+		It("rejects ollama provider without aliases", func() {
+			m := config.Model{
+				Name:     "local",
+				Provider: config.ProviderOllama,
+				BaseURL:  "http://localhost:11434/v1",
+			}
+			err := m.Validate()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("aliases are required"))
 		})
 
 		It("rejects cloud provider without api_key", func() {

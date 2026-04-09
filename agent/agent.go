@@ -144,8 +144,10 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		}
 	}
 
-	// Build tools map
+	// Build tools map and add sanitized aliases so LLM tool calls
+	// (which use API-safe names like "plugins_shell_echo") resolve correctly
 	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+	aitools.AddSanitizedAliases(tools)
 
 	// Create result store and interceptor for large results
 	resultStore := aitools.NewMemoryResultStore()
@@ -186,7 +188,9 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			AvailableSkills: availableSkills,
 			AgentTools:      tools,
 			ToolBuilder: func(toolRefs []string) map[string]aitools.Tool {
-				return config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+				t := config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, opts.DatasetStore)
+				aitools.AddSanitizedAliases(t)
+				return t
 			},
 			LoadedSkills: make(map[string]*aitools.SkillState),
 		}
@@ -217,7 +221,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			Description: s.Description,
 		})
 	}
-	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(tools, mode, promptSecrets, promptSkills))
+	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(mode, promptSecrets, promptSkills))
 	systemPrompts = append(systemPrompts,
 		fmt.Sprintf("Personality: %s", agentCfg.Personality),
 		fmt.Sprintf("Role: %s", agentCfg.Role),
@@ -242,13 +246,13 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (agentCfg.GetPruneOn() == 0 || (agentCfg.GetPruneOn()-agentCfg.GetPruneTo()) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
+	// Set tools on session for native tool calling
+	session.SetTools(aitools.ToolsToDefinitions(tools))
+
 	// Wire session into skill manager for system prompt injection/removal
 	if skillMgr != nil {
 		skillMgr.Session = session
 	}
-
-	// Set stop sequences to prevent LLM from hallucinating observations
-	session.SetStopSequences([]string{"___STOP___"})
 
 	if opts.DebugFile != "" {
 		if err := session.EnableDebug(opts.DebugFile); err != nil {

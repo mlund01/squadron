@@ -181,6 +181,8 @@ github.com/mlund01/squadron-sdk v0.0.30 h1:/tG12XwmqPNXOmEx1EV8ELgFIYkCkSeSU2Ntg
 github.com/mlund01/squadron-sdk v0.0.30/go.mod h1:OIbaq0s33LUPN8OUtJLVLVXGgizTU5jS6CH5yPFY+go=
 github.com/mlund01/squadron-wire v0.0.38 h1:sHKYpaykmaDuVaJqYvvkrgfzbjGs6uXhPq6NfDQstPA=
 github.com/mlund01/squadron-wire v0.0.38/go.mod h1:BmgUAhEkibCiJ2Cre+qfLs/KjeqTmm4BkfcMu6M+jLU=
+github.com/mlund01/squadron-wire v0.0.39 h1:V/2ndKdmeqRlvGRN+D2w3XsfDaLWD1i1M4W64J8DMPE=
+github.com/mlund01/squadron-wire v0.0.39/go.mod h1:BmgUAhEkibCiJ2Cre+qfLs/KjeqTmm4BkfcMu6M+jLU=
 github.com/mtibben/percent v0.2.1 h1:5gssi8Nqo8QU/r2pynCm+hBQHpkB/uNK7BJCFogWdzs=
 github.com/mtibben/percent v0.2.1/go.mod h1:KG9uO+SZkUp+VkRHsCdYQV3XSZrrSpR3O9ibNBTZrns=
 github.com/muesli/reflow v0.3.0 h1:IFsN6K9NfGtjeggFP+68I4chLZV2yIKsXJFNZ+eWh6s=

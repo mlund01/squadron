@@ -19,7 +19,7 @@ import (
 	"squadron/config"
 	"squadron/config/vault"
 	"squadron/internal/paths"
-	squadronmcp "squadron/mcp"
+	"squadron/mcphost"
 	"squadron/scheduler"
 	"squadron/store"
 	"squadron/wsbridge"
@@ -155,10 +155,10 @@ func runServe(cmd *cobra.Command, args []string) {
 		sched.UpdateConfig(newCfg)
 	}
 
-	// Start MCP server if enabled
-	var mcpServer *squadronmcp.Server
-	if cfg.MCP != nil && cfg.MCP.Enabled {
-		mcpDeps := squadronmcp.Deps{
+	// Start MCP host if enabled
+	var mcpServer *mcphost.Server
+	if cfg.MCPHost != nil && cfg.MCPHost.Enabled {
+		mcpDeps := mcphost.Deps{
 			Config:       client.GetConfig,
 			Stores:       stores,
 			Version:      Version,
@@ -166,13 +166,13 @@ func runServe(cmd *cobra.Command, args []string) {
 			RunMission:   client.RunMissionDirect,
 			ReloadConfig: client.ReloadConfig,
 		}
-		mcpSrv := squadronmcp.NewServer(mcpDeps)
+		mcpSrv := mcphost.NewServer(mcpDeps)
 		var err error
-		mcpServer, err = squadronmcp.StartSSE(mcpSrv, cfg.MCP.Port, cfg.MCP.Secret)
+		mcpServer, err = mcphost.StartSSE(mcpSrv, cfg.MCPHost.Port, cfg.MCPHost.Secret)
 		if err != nil {
-			log.Printf("Warning: MCP server failed to start: %v", err)
+			log.Printf("Warning: MCP host failed to start: %v", err)
 		} else {
-			fmt.Printf("MCP server listening on http://localhost:%d/sse\n", cfg.MCP.Port)
+			fmt.Printf("MCP host listening on http://localhost:%d/sse\n", cfg.MCPHost.Port)
 		}
 	}
 

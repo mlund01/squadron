@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	squadronmcp "squadron/mcp"
 	"squadron/plugin"
 )
 
@@ -19,14 +20,16 @@ var rootCmd = &cobra.Command{
 }
 
 func Execute() {
-	// Ensure all plugins are cleaned up on exit
+	// Ensure all plugins and MCP servers are cleaned up on exit
 	defer plugin.CloseAll()
+	defer squadronmcp.CloseAll()
 
-	// Also clean up plugins on signals (SIGKILL can't be caught, but SIGINT/SIGTERM can)
+	// Also clean up on signals (SIGKILL can't be caught, but SIGINT/SIGTERM can)
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt)
 	go func() {
 		<-sigCh
+		squadronmcp.CloseAll()
 		plugin.CloseAll()
 		os.Exit(1)
 	}()

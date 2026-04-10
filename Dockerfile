@@ -9,7 +9,10 @@ RUN CGO_ENABLED=0 go build -ldflags="-s -w -X squadron/cmd.Version=${VERSION}" -
 FROM alpine:latest
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /build/squadron /usr/local/bin/squadron
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENV SQUADRON_HOME=/data/squadron
 WORKDIR /config
-VOLUME ["/config", "/data/squadron"]
-ENTRYPOINT ["squadron"]
+# No VOLUME directive: we want the entrypoint to fail fast if /config or
+# /data/squadron aren't mounted. Declaring VOLUME would cause Docker to
+# create anonymous volumes automatically, defeating the mount check.
+ENTRYPOINT ["docker-entrypoint.sh"]

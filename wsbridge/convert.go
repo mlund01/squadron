@@ -5,6 +5,7 @@ import (
 
 	"squadron/aitools"
 	"squadron/config"
+	squadronmcp "squadron/mcp"
 	"squadron/plugin"
 
 	"github.com/mlund01/squadron-wire/protocol"
@@ -195,6 +196,7 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Name:    namespace,
 			Path:    "builtin",
 			Builtin: true,
+			Kind:    "builtin",
 		}
 		for _, toolName := range tools {
 			ref := "builtins." + namespace + "." + toolName
@@ -213,11 +215,30 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Name:    p.Name,
 			Path:    p.Source,
 			Version: p.Version,
+			Kind:    "plugin",
 		}
 		if client, ok := cfg.LoadedPlugins[p.Name]; ok {
 			if tools, err := client.ListTools(); err == nil {
 				for _, t := range tools {
 					pi.Tools = append(pi.Tools, pluginToolInfoToProtocol(t))
+				}
+			}
+		}
+		ic.Plugins = append(ic.Plugins, pi)
+	}
+
+	// Add MCP servers (consumer-side) — display alongside plugins.
+	for _, s := range cfg.MCPServers {
+		pi := protocol.PluginInfo{
+			Name:    s.Name,
+			Path:    mcpDisplayPath(s),
+			Version: s.Version,
+			Kind:    "mcp",
+		}
+		if client, ok := cfg.LoadedMCPClients[s.Name]; ok {
+			if tools, err := client.ListTools(); err == nil {
+				for _, t := range tools {
+					pi.Tools = append(pi.Tools, mcpToolInfoToProtocol(t))
 				}
 			}
 		}
@@ -290,6 +311,28 @@ func pluginToolInfoToProtocol(t *plugin.ToolInfo) protocol.ToolInfo {
 		Description: t.Description,
 		Parameters:  convertAIToolSchema(t.Schema),
 	}
+}
+
+// mcpToolInfoToProtocol converts an mcp.ToolInfo to protocol.ToolInfo.
+func mcpToolInfoToProtocol(t *squadronmcp.ToolInfo) protocol.ToolInfo {
+	return protocol.ToolInfo{
+		Name:        t.Name,
+		Description: t.Description,
+		Parameters:  convertAIToolSchema(t.Schema),
+	}
+}
+
+// mcpDisplayPath returns a human-readable origin for an MCP server config.
+func mcpDisplayPath(s config.MCPServer) string {
+	switch {
+	case s.Source != "":
+		return s.Source
+	case s.URL != "":
+		return s.URL
+	case s.Command != "":
+		return s.Command
+	}
+	return ""
 }
 
 func convertMissionInput(inp config.MissionInput) protocol.MissionInputInfo {

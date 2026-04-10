@@ -303,7 +303,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 		case RoleSystem:
 			msgs = append(msgs, openai.SystemMessage(m.Content))
 		case RoleUser:
-			msgs = append(msgs, p.buildUserMessage(m))
+			msgs = append(msgs, p.buildUserMessages(m)...)
 		case RoleAssistant:
 			msgs = append(msgs, p.buildAssistantMessage(m))
 		}
@@ -312,11 +312,13 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 	return msgs
 }
 
-// buildUserMessage creates an OpenAI user message, handling multimodal content and tool results
-func (p *OpenAIProvider) buildUserMessage(m Message) openai.ChatCompletionMessageParamUnion {
-	// Check if this message contains tool results — these need separate tool messages
+// buildUserMessages creates one or more OpenAI messages from a single squadron user
+// message. A bundle of N tool results expands into N separate tool messages
+// (OpenAI requires one tool message per tool_call_id), while plain text /
+// multimodal content collapses to a single user message.
+func (p *OpenAIProvider) buildUserMessages(m Message) []openai.ChatCompletionMessageParamUnion {
 	if m.HasParts() {
-		// Check if ALL parts are tool results
+		// If ALL parts are tool results, emit one tool message per part.
 		allToolResults := true
 		for _, part := range m.Parts {
 			if part.Type != ContentTypeToolResult {
@@ -324,18 +326,22 @@ func (p *OpenAIProvider) buildUserMessage(m Message) openai.ChatCompletionMessag
 				break
 			}
 		}
-
-		// If it's a pure tool result message, return the first one
-		// (OpenAI tool messages are one per tool call, so caller should handle multiple)
 		if allToolResults && len(m.Parts) > 0 {
-			tr := m.Parts[0].ToolResult
-			return openai.ToolMessage(tr.Content, tr.ToolUseID)
+			out := make([]openai.ChatCompletionMessageParamUnion, 0, len(m.Parts))
+			for _, part := range m.Parts {
+				tr := part.ToolResult
+				if tr == nil {
+					continue
+				}
+				out = append(out, openai.ToolMessage(tr.Content, tr.ToolUseID))
+			}
+			return out
 		}
 	}
 
 	// If no Parts, use simple text content
 	if !m.HasParts() {
-		return openai.UserMessage(m.Content)
+		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(m.Content)}
 	}
 
 	// Build content parts from Parts
@@ -355,7 +361,7 @@ func (p *OpenAIProvider) buildUserMessage(m Message) openai.ChatCompletionMessag
 		}
 	}
 
-	return openai.UserMessage(parts)
+	return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(parts)}
 }
 
 // buildAssistantMessage creates an OpenAI assistant message, including tool calls if present

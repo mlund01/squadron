@@ -90,21 +90,13 @@ variable "bad_secret" {
 			hcl := minimalVarsHCL() + `
 model "bad" {
   provider       = "llama"
-  allowed_models = ["llama_3"]
   api_key        = vars.test_api_key
-}
-
-agent "test_agent" {
-  model       = models.bad.llama_3
-  personality = "Helpful"
-  role        = "Test"
-  tools       = [builtins.http.get]
 }
 `
 			dir, _ := writeFixture("config.hcl", hcl)
 			_, err := config.LoadAndValidate(dir)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("Unsupported provider"))
+			Expect(err.Error()).To(ContainSubstring("unsupported provider"))
 		})
 	})
 

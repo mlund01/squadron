@@ -119,13 +119,13 @@ func testConfig(wsURL string) *config.Config {
 			ReconnectInterval:  1,
 		},
 		Models: []config.Model{
-			{Name: "my-model", Provider: "openai", AllowedModels: []string{"gpt-4"}},
+			{Name: "my-model", Provider: "openai", APIKey: "k"},
 		},
 		Agents: []config.Agent{
-			{Name: "my-agent", Model: "my-model", Tools: []string{"web_search"}},
+			{Name: "my-agent", Model: "gpt_4o", Tools: []string{"web_search"}},
 		},
 		Missions: []config.Mission{
-			{Name: "my-mission", Commander: &config.MissionCommander{Model: "my-model"}, Agents: []string{"my-agent"}},
+			{Name: "my-mission", Commander: &config.MissionCommander{Model: "gpt_4o"}, Agents: []string{"my-agent"}},
 		},
 		Variables: []config.Variable{
 			{Name: "api_key", Secret: true},
@@ -337,11 +337,11 @@ func TestClientHandlesGetMissions(t *testing.T) {
 func TestConfigConversion(t *testing.T) {
 	cfg := &config.Config{
 		Models: []config.Model{
-			{Name: "m1", Provider: "anthropic", AllowedModels: []string{"claude-3"}},
-			{Name: "m2", Provider: "openai", AllowedModels: []string{"gpt-4", "gpt-3.5"}},
+			{Name: "m1", Provider: "anthropic", APIKey: "k"},
+			{Name: "m2", Provider: "openai", APIKey: "k"},
 		},
 		Agents: []config.Agent{
-			{Name: "agent1", Model: "m1", Tools: []string{"tool1", "tool2"}},
+			{Name: "agent1", Model: "claude_sonnet_4", Tools: []string{"tool1", "tool2"}},
 		},
 		Missions: []config.Mission{
 			{
@@ -374,8 +374,8 @@ func TestConfigConversion(t *testing.T) {
 	if ic.Models[0].Provider != "anthropic" {
 		t.Errorf("expected provider 'anthropic', got %q", ic.Models[0].Provider)
 	}
-	if ic.Models[1].Model != "gpt-4" {
-		t.Errorf("expected first allowed model 'gpt-4', got %q", ic.Models[1].Model)
+	if ic.Models[1].Model == "" {
+		t.Errorf("expected a model key for openai, got empty string")
 	}
 
 	if len(ic.Agents) != 1 {

@@ -40,7 +40,7 @@ Squadron is a declarative framework for building and running AI agent workflows.
 | `agent/` | Agent and Commander implementations, orchestration |
 | `aitools/` | Tool interface, schema definitions, result interception |
 | `config/` | HCL config loading with staged evaluation |
-| `llm/` | LLM provider abstraction (Anthropic, OpenAI, Gemini) |
+| `llm/` | LLM provider abstraction (Anthropic, OpenAI, Gemini, Ollama) |
 | `plugin/` | gRPC plugin system using hashicorp/go-plugin |
 | `mission/` | Mission runner, task execution, knowledge store |
 | `store/` | Persistence interfaces and SQLite implementation |
@@ -74,9 +74,8 @@ variable "anthropic_api_key" {
 
 # models.hcl
 model "anthropic" {
-  provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4", "claude_opus_4"]
-  api_key        = vars.anthropic_api_key
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
 }
 
 # plugins.hcl

@@ -135,7 +135,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		provider = opts.Provider
 		ownsProvider = false
 	} else {
-		if modelConfig.APIKey == "" {
+		if modelConfig.Provider != config.ProviderOllama && modelConfig.APIKey == "" {
 			return nil, fmt.Errorf("API key not set for model '%s'", modelConfig.Name)
 		}
 		provider, ownsProvider, err = createProvider(ctx, modelConfig)
@@ -442,6 +442,8 @@ func createProvider(ctx context.Context, modelConfig *config.Model) (llm.Provide
 			return nil, false, err
 		}
 		return provider, true, nil // Gemini provider needs to be closed
+	case config.ProviderOllama:
+		return llm.NewOpenAICompatibleProvider(modelConfig.BaseURL), false, nil
 	default:
 		return nil, false, fmt.Errorf("unknown provider: %s", modelConfig.Provider)
 	}

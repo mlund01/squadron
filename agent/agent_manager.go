@@ -265,7 +265,6 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 		OnCompaction:     onCompaction,
 		OnSessionTurn:    onSessionTurn,
 		PricingOverrides: m.pricingOverrides,
-		Provider:         m.provider,
 	})
 }
 

@@ -297,7 +297,6 @@ func buildTestConfig(mission config.Mission, agents ...config.Agent) *config.Con
 			{
 				Name:          "test",
 				Provider:      config.ProviderAnthropic,
-				AllowedModels: []string{"claude_sonnet_4"},
 				APIKey:        "test-key",
 				PromptCaching: &promptCaching,
 			},

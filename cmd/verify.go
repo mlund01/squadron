@@ -42,7 +42,12 @@ var verifyCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Printf("Found %d model(s)\n", len(cfg.Models))
 		for _, m := range cfg.Models {
-			fmt.Printf("  - %s (provider: %s, models: %v)\n", m.Name, m.Provider, m.AllowedModels)
+			available := m.AvailableModels()
+			keys := make([]string, 0, len(available))
+			for k := range available {
+				keys = append(keys, k)
+			}
+			fmt.Printf("  - %s (provider: %s, models: %v)\n", m.Name, m.Provider, keys)
 		}
 		fmt.Printf("Found %d variable(s)\n", len(cfg.Variables))
 		for _, v := range cfg.Variables {

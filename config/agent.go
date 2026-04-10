@@ -166,24 +166,13 @@ func (a *Agent) Validate() error {
 
 // ResolveModel finds the Model config that matches this agent's model key
 func (a *Agent) ResolveModel(models []Model) (*Model, string, error) {
-	// a.Model is the model key (e.g., "claude_sonnet_4")
-	// Find which provider supports this model and get the actual model name
+	// a.Model is the model key (e.g., "claude_sonnet_4" or "gemma4_26b")
+	// Search all model configs for one that has this key available
 	for i := range models {
 		m := &models[i]
-		supportedModels, ok := SupportedModels[m.Provider]
-		if !ok {
-			continue
-		}
-
-		// Check if this model key is in the provider's allowed models
-		for _, allowedKey := range m.AllowedModels {
-			if allowedKey == a.Model {
-				actualModel, ok := supportedModels[a.Model]
-				if !ok {
-					return nil, "", fmt.Errorf("model key '%s' not found in supported models for provider '%s'", a.Model, m.Provider)
-				}
-				return m, actualModel, nil
-			}
+		available := m.AvailableModels()
+		if apiName, ok := available[a.Model]; ok {
+			return m, apiName, nil
 		}
 	}
 

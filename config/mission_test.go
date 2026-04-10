@@ -348,7 +348,7 @@ mission "no_commander" {
 
 			It("rejects mission with zero tasks", func() {
 				m := config.Mission{Name: "empty", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Agents: []string{"a"}}
-				models := []config.Model{{Provider: "anthropic", AllowedModels: []string{"claude_sonnet_4"}}}
+				models := []config.Model{{Provider: "anthropic", APIKey: "k"}}
 				agents := []config.Agent{{Name: "a"}}
 				err := m.Validate(models, agents, nil, nil)
 				Expect(err).To(HaveOccurred())

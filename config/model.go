@@ -8,6 +8,7 @@ const (
 	ProviderOpenAI    Provider = "openai"
 	ProviderGemini    Provider = "gemini"
 	ProviderAnthropic Provider = "anthropic"
+	ProviderOllama    Provider = "ollama"
 )
 
 // SupportedModels maps provider to their supported model names
@@ -47,6 +48,7 @@ var SupportedModels = map[Provider]map[string]string{
 		"claude_3_5_haiku":  "claude-3-5-haiku-20241022",
 		"claude_3_5_sonnet": "claude-3-5-sonnet-20241022",
 	},
+	ProviderOllama: {},
 }
 
 // Model represents a model provider configuration
@@ -58,13 +60,11 @@ func BuildPricingOverrides(models []Model) map[string]*ModelPricingConfig {
 		if m.Pricing == nil {
 			continue
 		}
-		supported := SupportedModels[m.Provider]
+		available := m.AvailableModels()
 		for hclName, pc := range m.Pricing {
-			// Resolve HCL model name to API model name
-			if apiName, ok := supported[hclName]; ok {
+			if apiName, ok := available[hclName]; ok {
 				overrides[apiName] = pc
 			} else {
-				// User might have used the API name directly
 				overrides[hclName] = pc
 			}
 		}
@@ -75,10 +75,31 @@ func BuildPricingOverrides(models []Model) map[string]*ModelPricingConfig {
 type Model struct {
 	Name           string            `hcl:"name,label"`
 	Provider       Provider          `hcl:"provider"`
-	AllowedModels  []string          `hcl:"allowed_models"`
-	APIKey         string            `hcl:"api_key"`
+	Aliases        map[string]string `hcl:"-"`                       // HCL key → API model name (parsed manually)
+	APIKey         string            `hcl:"api_key,optional"`
+	BaseURL        string            `hcl:"base_url,optional"`
 	PromptCaching  *bool             `hcl:"prompt_caching,optional"`
 	Pricing        map[string]*ModelPricingConfig `json:"-"` // model name → pricing override
+}
+
+// AvailableModels returns all model keys available for this provider.
+// Combines: all SupportedModels for this provider + Aliases.
+func (m *Model) AvailableModels() map[string]string {
+	result := make(map[string]string)
+
+	// Add all internal mappings for this provider
+	if supported, ok := SupportedModels[m.Provider]; ok {
+		for key, apiName := range supported {
+			result[key] = apiName
+		}
+	}
+
+	// Aliases override/extend
+	for key, apiName := range m.Aliases {
+		result[key] = apiName
+	}
+
+	return result
 }
 
 // ModelPricingConfig holds per-million-token cost overrides for a model.
@@ -98,23 +119,26 @@ func (m *Model) IsPromptCachingEnabled() bool {
 }
 
 func (m *Model) Validate() error {
-	supportedForProvider, ok := SupportedModels[m.Provider]
-	if !ok {
-		return fmt.Errorf("Unsupported provider; Provider '%s' is not supported", m.Provider)
+	if _, ok := SupportedModels[m.Provider]; !ok {
+		return fmt.Errorf("unsupported provider '%s'", m.Provider)
 	}
 
-	for _, modelName := range m.AllowedModels {
-		found := false
-		for varName := range supportedForProvider {
-			if varName == modelName {
-				found = true
-				break
-			}
+	// Ollama (and other local providers) require base_url instead of api_key
+	if m.Provider == ProviderOllama {
+		if m.BaseURL == "" {
+			return fmt.Errorf("base_url is required for provider '%s'", m.Provider)
 		}
-		if !found {
-			return fmt.Errorf("Unsupported model; Model '%s' is not supported for provider '%s'. Supported models: %v", modelName, m.Provider, getKeys(supportedForProvider))
+		if len(m.Aliases) == 0 {
+			return fmt.Errorf("aliases are required for provider '%s' — define model mappings like: aliases = { gemma4 = \"gemma4\" }", m.Provider)
 		}
+		return nil
 	}
+
+	// Cloud providers require an API key
+	if m.APIKey == "" {
+		return fmt.Errorf("api_key is required for provider '%s'", m.Provider)
+	}
+
 	return nil
 }
 

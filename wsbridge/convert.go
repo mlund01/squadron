@@ -18,9 +18,11 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 	}
 
 	for _, m := range cfg.Models {
+		// Pick first available model name for display
 		model := ""
-		if len(m.AllowedModels) > 0 {
-			model = m.AllowedModels[0]
+		for key := range m.AvailableModels() {
+			model = key
+			break
 		}
 		ic.Models = append(ic.Models, protocol.ModelInfo{
 			Name:     m.Name,

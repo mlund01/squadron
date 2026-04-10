@@ -211,7 +211,6 @@ agent "all_http" {
 				{
 					Name:          "anthropic",
 					Provider:      config.ProviderAnthropic,
-					AllowedModels: []string{"claude_sonnet_4"},
 					APIKey:        "k",
 				},
 			}
@@ -227,7 +226,6 @@ agent "all_http" {
 				{
 					Name:          "anthropic",
 					Provider:      config.ProviderAnthropic,
-					AllowedModels: []string{"claude_sonnet_4"},
 					APIKey:        "k",
 				},
 			}

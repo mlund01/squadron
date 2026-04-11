@@ -108,6 +108,50 @@ func runServe(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	// Start the MCP host BEFORE the full config load so consumer-side
+	// `mcp` blocks can self-reference http://localhost:<port>/mcp without
+	// deadlocking. We parse only the mcp_host block here (no expression
+	// evaluation), bring up the listening socket, and wire its tool
+	// handlers via closures over variables assigned later in startup.
+	var (
+		sharedClient *wsbridge.Client
+		sharedStores *store.Bundle
+		mcpServer    *mcphost.Server
+	)
+	if hostCfg := config.LoadMCPHost(serveConfigPath); hostCfg != nil && hostCfg.Enabled {
+		mcpDeps := mcphost.Deps{
+			Config: func() *config.Config {
+				if sharedClient == nil {
+					return nil
+				}
+				return sharedClient.GetConfig()
+			},
+			Stores: func() *store.Bundle { return sharedStores },
+			RunMission: func(name string, inputs map[string]string) (string, error) {
+				if sharedClient == nil {
+					return "", fmt.Errorf("squadron is still starting up")
+				}
+				return sharedClient.RunMissionDirect(name, inputs)
+			},
+			ReloadConfig: func() error {
+				if sharedClient == nil {
+					return fmt.Errorf("squadron is still starting up")
+				}
+				return sharedClient.ReloadConfig()
+			},
+			Version:    Version,
+			ConfigPath: serveConfigPath,
+		}
+		mcpSrv := mcphost.NewServer(mcpDeps)
+		var err error
+		mcpServer, err = mcphost.StartStreamableHTTP(mcpSrv, hostCfg.Port, hostCfg.Secret)
+		if err != nil {
+			log.Printf("Warning: MCP host failed to start: %v", err)
+		} else {
+			fmt.Printf("MCP host listening on http://localhost:%d/mcp\n", hostCfg.Port)
+		}
+	}
+
 	// Try loading config — use partial load so vars/plugins show up even if validation fails
 	cfg, cfgErr := config.LoadPartial(serveConfigPath)
 	if cfgErr != nil {
@@ -155,26 +199,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		sched.UpdateConfig(newCfg)
 	}
 
-	// Start MCP host if enabled
-	var mcpServer *mcphost.Server
-	if cfg.MCPHost != nil && cfg.MCPHost.Enabled {
-		mcpDeps := mcphost.Deps{
-			Config:       client.GetConfig,
-			Stores:       stores,
-			Version:      Version,
-			ConfigPath:   serveConfigPath,
-			RunMission:   client.RunMissionDirect,
-			ReloadConfig: client.ReloadConfig,
-		}
-		mcpSrv := mcphost.NewServer(mcpDeps)
-		var err error
-		mcpServer, err = mcphost.StartStreamableHTTP(mcpSrv, cfg.MCPHost.Port, cfg.MCPHost.Secret)
-		if err != nil {
-			log.Printf("Warning: MCP host failed to start: %v", err)
-		} else {
-			fmt.Printf("MCP host listening on http://localhost:%d/mcp\n", cfg.MCPHost.Port)
-		}
-	}
+	// Wire deferred deps now that client + stores exist. The MCP host is
+	// already running (started above, before the full config load) so any
+	// in-flight tool calls coming through it will start succeeding now.
+	sharedClient = client
+	sharedStores = stores
 
 	// Connect immediately — even without valid config, the command center
 	// can show vars and config files so the user can fix things from the UI

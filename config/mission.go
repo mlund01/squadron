@@ -530,6 +530,10 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 		return err
 	}
 
+	if err := w.validateNoTransitiveDeps(); err != nil {
+		return err
+	}
+
 	// Validate schedules
 	for i, sched := range w.Schedules {
 		if err := sched.Validate(); err != nil {
@@ -944,6 +948,56 @@ func (w *Mission) IsRouterOnlyTask(name string) bool {
 	targets := w.GetRouterTargets()
 	_, isTarget := targets[name]
 	return isTarget
+}
+
+// validateNoTransitiveDeps rejects depends_on lists that include a task
+// already reachable through another listed dependency. depends_on must list
+// only direct predecessors so the declared graph stays in lockstep with the
+// effective execution order.
+func (w *Mission) validateNoTransitiveDeps() error {
+	direct := make(map[string][]string, len(w.Tasks))
+	for _, t := range w.Tasks {
+		if len(t.DependsOn) > 0 {
+			direct[t.Name] = t.DependsOn
+		}
+	}
+
+	ancestors := make(map[string]map[string]bool, len(w.Tasks))
+	var ancestorsOf func(name string) map[string]bool
+	ancestorsOf = func(name string) map[string]bool {
+		if cached, ok := ancestors[name]; ok {
+			return cached
+		}
+		out := make(map[string]bool)
+		for _, dep := range direct[name] {
+			out[dep] = true
+			for ancestor := range ancestorsOf(dep) {
+				out[ancestor] = true
+			}
+		}
+		ancestors[name] = out
+		return out
+	}
+
+	for _, t := range w.Tasks {
+		if len(t.DependsOn) < 2 {
+			continue
+		}
+		for i, depA := range t.DependsOn {
+			for j, depB := range t.DependsOn {
+				if i == j {
+					continue
+				}
+				if ancestorsOf(depB)[depA] {
+					return fmt.Errorf(
+						"task '%s': depends_on includes '%s', which is already a transitive dependency through '%s' — list only direct predecessors",
+						t.Name, depA, depB,
+					)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // ValidateDAG checks that the task dependencies form a valid DAG (no cycles)

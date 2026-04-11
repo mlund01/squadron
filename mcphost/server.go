@@ -14,19 +14,26 @@ import (
 	"squadron/store"
 )
 
-// Deps holds all dependencies needed by the MCP server.
+// Deps holds all dependencies needed by the MCP server. Every getter is a
+// function so the host can be wired up before the rest of the squadron
+// runtime exists — the cmd/serve.go startup uses this to spin up the
+// listening socket first, allowing consumer-side `mcp` blocks declared in
+// the same config to dial localhost without deadlocking on themselves.
 type Deps struct {
 	// Config returns the current config snapshot (may be hot-reloaded).
 	Config func() *config.Config
-	// Stores provides access to mission/task/event/session data.
-	Stores *store.Bundle
+	// Stores returns the active store bundle. May return nil before the full
+	// startup completes; tool handlers must check.
+	Stores func() *store.Bundle
 	// Version is the squadron CLI version string.
 	Version string
 	// ConfigPath is the path to the config directory.
 	ConfigPath string
-	// RunMission kicks off a mission by name with optional inputs, returning the mission ID.
+	// RunMission kicks off a mission by name with optional inputs, returning
+	// the mission ID. May be nil before the full startup completes.
 	RunMission func(name string, inputs map[string]string) (string, error)
-	// ReloadConfig re-reads and validates config from disk, swapping it in if valid.
+	// ReloadConfig re-reads and validates config from disk, swapping it in if
+	// valid. May be nil before the full startup completes.
 	ReloadConfig func() error
 }
 

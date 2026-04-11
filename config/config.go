@@ -72,6 +72,53 @@ func Load(path string) (*Config, error) {
 	return LoadFile(path)
 }
 
+// LoadMCPHost extracts only the mcp_host block from the config files at the
+// given path without evaluating any expressions or loading consumer MCP
+// servers. This is used by the serve command so the MCP host can start
+// before the full config load runs (which may include consumer mcp "name"
+// blocks that target the host's own URL — without this two-phase approach
+// the consumer would try to dial localhost:<port>/mcp before the host is
+// listening, deadlocking on itself).
+//
+// Returns nil (with no error) if the config files can't be found, can't be
+// parsed, or simply don't declare an mcp_host block. The caller is expected
+// to follow this up with a full Load — any real config errors will surface
+// there with a complete diagnostic.
+func LoadMCPHost(path string) *MCPHostConfig {
+	files, err := resolveConfigFiles(path)
+	if err != nil {
+		return nil
+	}
+
+	parser := hclparse.NewParser()
+	for _, file := range files {
+		hclFile, diags := parser.ParseHCLFile(file)
+		if diags.HasErrors() {
+			continue
+		}
+		content, _, diags := hclFile.Body.PartialContent(&hcl.BodySchema{
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "mcp_host"},
+			},
+		})
+		if diags.HasErrors() {
+			continue
+		}
+		for _, block := range content.Blocks {
+			if block.Type != "mcp_host" {
+				continue
+			}
+			var mc MCPHostConfig
+			if diags := gohcl.DecodeBody(block.Body, nil, &mc); diags.HasErrors() {
+				continue
+			}
+			mc.Defaults()
+			return &mc
+		}
+	}
+	return nil
+}
+
 // LoadPartial attempts a best-effort load of the config, returning whatever
 // could be parsed (variables, plugin definitions) even if full loading fails.
 // The returned Config is never nil. The error indicates whether the full load succeeded.

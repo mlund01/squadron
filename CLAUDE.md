@@ -119,8 +119,6 @@ mcp "remote_api" {
 }
 
 # mcp_host.hcl — OPPOSITE direction: Squadron hosts its own MCP server
-# (previously the `mcp { ... }` singleton, renamed in 2026-04 to free up the
-# `mcp` keyword for consumer blocks above)
 mcp_host {
   enabled = true
   port    = 8090
@@ -486,9 +484,7 @@ wants to run.
 
 The companion `mcphost/` package handles the opposite direction — Squadron
 acting AS an MCP server so other LLMs can consume its tools — and is
-controlled by the `mcp_host { ... }` singleton block. Before 2026-04 this was
-the `mcp { ... }` singleton; it was renamed to free up `mcp` for the
-consumer-side labeled blocks.
+controlled by the `mcp_host { ... }` singleton block.
 
 ### The four modes of `mcp "name" { ... }`
 

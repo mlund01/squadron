@@ -97,7 +97,7 @@ var varsDeleteCmd = &cobra.Command{
 
 var varsChangePassphraseCmd = &cobra.Command{
 	Use:   "change-passphrase",
-	Short: "Change the vault passphrase",
+	Short: "Change the vault passphrase (optionally switch provider)",
 	Run: func(cmd *cobra.Command, args []string) {
 		// Load current vars with old passphrase
 		vars, err := config.LoadVarsFromFile()
@@ -106,16 +106,30 @@ var varsChangePassphraseCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Generate or read new passphrase
+		// Determine target provider — defaults to the currently active one.
+		oldProvider, err := vault.ActiveProvider()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		newProviderName, _ := cmd.Flags().GetString("provider")
+		if newProviderName == "" {
+			newProviderName = oldProvider.Name()
+		}
+		newProvider, err := vault.ProviderByName(newProviderName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
 		var newPassphrase []byte
 		newPPFile, _ := cmd.Flags().GetString("new-passphrase-file")
 		if newPPFile != "" {
-			data, err := os.ReadFile(newPPFile)
+			newPassphrase, err = vault.ReadPassphraseFile(newPPFile)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error reading new passphrase file: %v\n", err)
 				os.Exit(1)
 			}
-			newPassphrase = data
 		} else {
 			newPassphrase, err = vault.GeneratePassphrase()
 			if err != nil {
@@ -139,13 +153,21 @@ var varsChangePassphraseCmd = &cobra.Command{
 			os.Exit(1)
 		}
 
-		// Update keyring — delete old entry first so the new one gets fresh ACLs (trusted app)
-		_ = vault.ClearKeyringPassphrase()
-		if err := vault.StorePassphrase(newPassphrase); err != nil {
-			fmt.Fprintf(os.Stderr, "Note: Could not store new passphrase in keychain: %v\n", err)
+		// Clear the target backend first so the keychain provider
+		// reissues a fresh ACL on the trusted-app entry.
+		_ = newProvider.Clear()
+		if err := newProvider.Store(newPassphrase); err != nil {
+			fmt.Fprintf(os.Stderr, "Note: Could not store new passphrase via %s provider: %v\n", newProvider.Name(), err)
 		}
 
-		// Update in-process cache
+		if newProvider.Name() != oldProvider.Name() {
+			if err := oldProvider.Clear(); err != nil {
+				fmt.Fprintf(os.Stderr, "Note: Could not clear old %s provider: %v\n", oldProvider.Name(), err)
+			}
+			fmt.Printf("Switched vault provider: %s -> %s\n", oldProvider.Name(), newProvider.Name())
+			fmt.Fprintf(os.Stderr, "Remember to update your HCL config's `vault` block: provider = %q\n", newProvider.Name())
+		}
+
 		vault.CachePassphrase(newPassphrase)
 
 		fmt.Println("Vault passphrase changed.")
@@ -178,4 +200,6 @@ func init() {
 	varsCmd.AddCommand(varsExportCmd)
 
 	varsChangePassphraseCmd.Flags().String("new-passphrase-file", "", "Path to file containing new passphrase")
+	varsChangePassphraseCmd.Flags().String("provider", "",
+		fmt.Sprintf("Switch to a different vault provider: %q or %q", vault.ProviderFile, vault.ProviderKeychain))
 }

@@ -1,0 +1,156 @@
+---
+title: MCP Host
+---
+
+# MCP Host
+
+Squadron can run as an MCP server, exposing its own missions, runs, agents, and documentation as tools for any [Model Context Protocol](https://modelcontextprotocol.io) client — Claude Desktop, Claude Code, Cursor, and any other MCP-compatible AI assistant.
+
+This lets you drive Squadron from inside your editor or AI tool: kick off missions, browse run history, inspect agent configs, and read the docs without leaving the client.
+
+```hcl
+mcp_host {
+  enabled = true
+  port    = 8090
+  secret  = vars.mcp_host_secret  # optional — enables Bearer token auth
+}
+```
+
+| Attribute | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `enabled` | bool | `false` | Must be `true` to start the host server |
+| `port` | number | `8090` | Port the MCP host listens on (1024–65535) |
+| `secret` | string | — | When set, all requests must include this as a Bearer token or `?token=` query param |
+
+The host server only starts when Squadron runs in `serve` mode. `squadron mission` and `squadron chat` do not start it.
+
+> Looking for the other direction — pulling tools **from** external MCP servers into your agents? See [MCP Tools](/config/mcp_tools).
+
+## Authentication
+
+When `secret` is set, clients must authenticate via one of:
+
+- **Authorization header**: `Authorization: Bearer <secret>`
+- **Query parameter**: `?token=<secret>`
+
+Requests without a valid token receive a `401 Unauthorized` response. If `secret` is omitted, the server is open (suitable for local-only use).
+
+## Available tools
+
+The host exposes Squadron itself as a collection of tools:
+
+### Documentation
+
+| Tool | Description |
+|------|-------------|
+| `list_version` | Get the squadron version |
+| `list_doc_pages` | List all available documentation pages |
+| `get_doc_page` | Get the contents of a documentation page by path |
+
+### Missions & runs
+
+| Tool | Description |
+|------|-------------|
+| `list_missions` | List all missions defined in config |
+| `get_mission_config` | Get the full configuration of a mission |
+| `run_mission` | Start a mission with optional inputs (returns mission ID) |
+| `list_runs` | List recent mission runs with optional filtering by name |
+| `get_run_details` | Get high-level details of a run including task summaries |
+| `get_run_config` | Get the config snapshot used for a specific run |
+| `get_run_task_details` | Get detailed task info including subtasks and outputs |
+
+### Agents & plugins
+
+| Tool | Description |
+|------|-------------|
+| `list_agents` | List all agents defined in config |
+| `get_agent_config` | Get the full configuration of an agent |
+| `list_plugins` | List all plugins defined in config |
+| `list_plugin_tools` | List all tools provided by a plugin |
+| `get_plugin_tool` | Get detailed info about a plugin tool including its schema |
+
+### Config operations
+
+| Tool | Description |
+|------|-------------|
+| `verify_config` | Validate config files on disk without applying changes |
+| `reload_config` | Re-read and apply config changes from disk |
+| `list_vars` | List all configuration variables (secrets masked) |
+| `get_var` | Get a single configuration variable (secrets masked) |
+
+The host speaks the [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) — the current MCP spec. Both GET (for server→client streaming) and POST (for client→server requests) are served at the same endpoint: `/mcp`.
+
+## Client setup
+
+### Claude Code
+
+Claude Code supports Streamable HTTP natively:
+
+```bash
+claude mcp add squadron --transport http http://localhost:8090/mcp
+```
+
+### Claude Desktop
+
+Claude Desktop only runs **stdio** MCP servers directly. Use the `mcp-remote` bridge to forward stdio over the wire. Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "squadron": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:8090/mcp"
+      ]
+    }
+  }
+}
+```
+
+With authentication, pass the token via the `--header` flag:
+
+```json
+{
+  "mcpServers": {
+    "squadron": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:8090/mcp",
+        "--header",
+        "Authorization: Bearer YOUR_SECRET"
+      ]
+    }
+  }
+}
+```
+
+Fully quit Claude Desktop (Cmd+Q) and reopen after editing the config — it only loads MCP settings on startup.
+
+### Cursor, Continue, and other clients
+
+Any MCP client that supports Streamable HTTP can connect directly to `http://localhost:8090/mcp`. Check your client's docs for the exact config format — the URL and (optionally) the Bearer token are all you need.
+
+## Running
+
+```hcl
+# variables.hcl
+variable "mcp_host_secret" {
+  secret = true
+}
+
+# mcp_host.hcl
+mcp_host {
+  enabled = true
+  port    = 8090
+  secret  = vars.mcp_host_secret
+}
+```
+
+```bash
+squadron serve -c ./config -w
+# MCP host is now available at http://localhost:8090/mcp
+```

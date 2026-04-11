@@ -14,6 +14,7 @@ import (
 	schemafunc "squadron/config/functions"
 	vaultpkg "squadron/config/vault"
 	"squadron/internal/paths"
+	squadronmcp "squadron/mcp"
 	"squadron/plugin"
 
 	"github.com/zclconf/go-cty/cty/function"
@@ -30,6 +31,7 @@ type Config struct {
 	Variables   []Variable   `hcl:"variable,block"`
 	CustomTools []CustomTool `hcl:"tool,block"`
 	Plugins     []Plugin     `hcl:"plugin,block"`
+	MCPServers  []MCPServer  `hcl:"-"`
 	Missions   []Mission   `hcl:"mission,block"`
 	Skills     []Skill     `hcl:"-"`
 
@@ -39,14 +41,18 @@ type Config struct {
 	// CommandCenter configuration (optional, nil when absent = standalone mode)
 	CommandCenter *CommandCenterConfig `hcl:"-"`
 
-	// MCP server configuration (optional, nil when absent = no MCP server)
-	MCP *MCPConfig `hcl:"-"`
+	// MCPHost configures Squadron acting AS an MCP server (was `mcp { ... }`,
+	// renamed to `mcp_host { ... }`). nil when the block is absent.
+	MCPHost *MCPHostConfig `hcl:"-"`
 
 	// File browser configurations (optional)
 	SharedFolders []SharedFolder `hcl:"-"`
 
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
+	// LoadedMCPClients holds the loaded consumer-side MCP clients, keyed by
+	// the HCL `mcp "name"` label.
+	LoadedMCPClients map[string]*squadronmcp.Client `hcl:"-"`
 	// ResolvedVars holds the resolved variable values for runtime use
 	ResolvedVars map[string]cty.Value `hcl:"-"`
 }
@@ -64,6 +70,53 @@ func Load(path string) (*Config, error) {
 		return LoadDir(path)
 	}
 	return LoadFile(path)
+}
+
+// LoadMCPHost extracts only the mcp_host block from the config files at the
+// given path without evaluating any expressions or loading consumer MCP
+// servers. This is used by the serve command so the MCP host can start
+// before the full config load runs (which may include consumer mcp "name"
+// blocks that target the host's own URL — without this two-phase approach
+// the consumer would try to dial localhost:<port>/mcp before the host is
+// listening, deadlocking on itself).
+//
+// Returns nil (with no error) if the config files can't be found, can't be
+// parsed, or simply don't declare an mcp_host block. The caller is expected
+// to follow this up with a full Load — any real config errors will surface
+// there with a complete diagnostic.
+func LoadMCPHost(path string) *MCPHostConfig {
+	files, err := resolveConfigFiles(path)
+	if err != nil {
+		return nil
+	}
+
+	parser := hclparse.NewParser()
+	for _, file := range files {
+		hclFile, diags := parser.ParseHCLFile(file)
+		if diags.HasErrors() {
+			continue
+		}
+		content, _, diags := hclFile.Body.PartialContent(&hcl.BodySchema{
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "mcp_host"},
+			},
+		})
+		if diags.HasErrors() {
+			continue
+		}
+		for _, block := range content.Blocks {
+			if block.Type != "mcp_host" {
+				continue
+			}
+			var mc MCPHostConfig
+			if diags := gohcl.DecodeBody(block.Body, nil, &mc); diags.HasErrors() {
+				continue
+			}
+			mc.Defaults()
+			return &mc
+		}
+	}
+	return nil
 }
 
 // LoadPartial attempts a best-effort load of the config, returning whatever
@@ -93,7 +146,8 @@ func LoadPartial(path string) (*Config, error) {
 				{Type: "variable", LabelNames: []string{"name"}},
 				{Type: "plugin", LabelNames: []string{"name"}},
 				{Type: "command_center"},
-				{Type: "mcp"},
+				{Type: "mcp_host"},
+				{Type: "mcp", LabelNames: []string{"name"}},
 			},
 		})
 		if diags.HasErrors() {
@@ -140,13 +194,21 @@ func LoadPartial(path string) (*Config, error) {
 						partial.CommandCenter = &cc
 					}
 				}
-			case "mcp":
-				if partial.MCP == nil {
-					var mc MCPConfig
+			case "mcp_host":
+				if partial.MCPHost == nil {
+					var mc MCPHostConfig
 					if diags := gohcl.DecodeBody(block.Body, nil, &mc); !diags.HasErrors() {
 						mc.Defaults()
-						partial.MCP = &mc
+						partial.MCPHost = &mc
 					}
+				}
+			case "mcp":
+				// Best-effort: record the name only. Consumer-side MCP blocks
+				// support HCL expressions in several fields that we can't
+				// evaluate in the nil-context partial loader — surfacing the
+				// name is enough for the error-display use case.
+				if len(block.Labels) > 0 {
+					partial.MCPServers = append(partial.MCPServers, MCPServer{Name: block.Labels[0]})
 				}
 			}
 		}
@@ -224,9 +286,28 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.MCP != nil {
-		if err := c.MCP.Validate(); err != nil {
-			return fmt.Errorf("mcp: %w", err)
+	if c.MCPHost != nil {
+		if err := c.MCPHost.Validate(); err != nil {
+			return fmt.Errorf("mcp_host: %w", err)
+		}
+	}
+
+	// Validate consumer-side MCP server blocks and check for name collisions
+	// with plugins.
+	mcpNames := make(map[string]bool, len(c.MCPServers))
+	for i := range c.MCPServers {
+		s := &c.MCPServers[i]
+		if err := s.Validate(); err != nil {
+			return err
+		}
+		if mcpNames[s.Name] {
+			return fmt.Errorf("duplicate mcp server name '%s'", s.Name)
+		}
+		mcpNames[s.Name] = true
+	}
+	for _, p := range c.Plugins {
+		if mcpNames[p.Name] {
+			return fmt.Errorf("name collision: plugin '%s' and mcp '%s' share the same name", p.Name, p.Name)
 		}
 	}
 
@@ -285,6 +366,17 @@ func (c *Config) Validate() error {
 		}
 		// Add "all" marker for loading all tools from this plugin
 		validToolRefs[fmt.Sprintf("plugins.%s.all", pluginName)] = true
+	}
+
+	// Add consumer-side MCP server tools
+	for mcpName, client := range c.LoadedMCPClients {
+		tools, err := client.ListTools()
+		if err == nil {
+			for _, t := range tools {
+				validToolRefs[fmt.Sprintf("mcp.%s.%s", mcpName, t.Name)] = true
+			}
+		}
+		validToolRefs[fmt.Sprintf("mcp.%s.all", mcpName)] = true
 	}
 
 	// Add custom tools (both tools.{name} and bare {name} for backwards compatibility)
@@ -462,11 +554,12 @@ type parsedBlocks struct {
 	Agents    []*hcl.Block
 	Tools     []*hcl.Block
 	Plugins   []*hcl.Block
+	MCPServers []*hcl.Block
 	Missions  []*hcl.Block
 	Storage       []*hcl.Block
 	CommandCenter []*hcl.Block
 	SharedFolders []*hcl.Block
-	MCP           []*hcl.Block
+	MCPHost       []*hcl.Block
 	Skills        []*hcl.Block
 }
 
@@ -501,7 +594,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "storage"},
 				{Type: "command_center"},
 				{Type: "shared_folder", LabelNames: []string{"name"}},
-				{Type: "mcp"},
+				{Type: "mcp_host"},
+				{Type: "mcp", LabelNames: []string{"name"}},
 				{Type: "skill", LabelNames: []string{"name"}},
 			},
 		})
@@ -532,8 +626,10 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.CommandCenter = append(pb.CommandCenter, block)
 			case "shared_folder":
 				pb.SharedFolders = append(pb.SharedFolders, block)
+			case "mcp_host":
+				pb.MCPHost = append(pb.MCPHost, block)
 			case "mcp":
-				pb.MCP = append(pb.MCP, block)
+				pb.MCPServers = append(pb.MCPServers, block)
 			case "skill":
 				pb.Skills = append(pb.Skills, block)
 			}
@@ -710,17 +806,19 @@ func loadFromFiles(files []string) (*Config, error) {
 		return m, nil
 	}
 
-	// Parse mcp block (optional singleton, with vars context)
-	var mcpConfig *MCPConfig
+	// Parse mcp_host block (optional singleton, with vars context). This used
+	// to be `mcp { ... }` but was renamed to free up the `mcp` keyword for
+	// labeled consumer-side blocks.
+	var mcpHostConfig *MCPHostConfig
 	for _, pb := range allParsedBlocks {
-		for _, block := range pb.MCP {
-			var mc MCPConfig
+		for _, block := range pb.MCPHost {
+			var mc MCPHostConfig
 			diags := gohcl.DecodeBody(block.Body, varsCtx, &mc)
 			if diags.HasErrors() {
-				return nil, fmt.Errorf("mcp: %w", diags)
+				return nil, fmt.Errorf("mcp_host: %w", diags)
 			}
 			mc.Defaults()
-			mcpConfig = &mc
+			mcpHostConfig = &mc
 		}
 	}
 
@@ -779,8 +877,41 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 	}
 
-	// Build plugins context for HCL evaluation
-	pluginsCtx := buildPluginsContext(varsCtx, loadedPlugins)
+	// Stage 1.5b: Load consumer-side MCP servers (same vars context as plugins).
+	// For source-backed servers this triggers the auto-installer on first load
+	// (npm install or github release download); cached installs skip the network.
+	var allMCPServers []MCPServer
+	loadedMCPClients := make(map[string]*squadronmcp.Client)
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.MCPServers {
+			srv, err := parseMCPServerBlock(block, varsCtx)
+			if err != nil {
+				return nil, err
+			}
+			if err := srv.Validate(); err != nil {
+				return nil, err
+			}
+			allMCPServers = append(allMCPServers, *srv)
+
+			client, err := squadronmcp.Load(srv.Name, squadronmcp.Spec{
+				Command: srv.Command,
+				URL:     srv.URL,
+				Headers: srv.Headers,
+				Source:  srv.Source,
+				Version: srv.Version,
+				Entry:   srv.Entry,
+				Args:    srv.Args,
+				Env:     srv.Env,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("mcp '%s' failed to load: %w", srv.Name, err)
+			}
+			loadedMCPClients[srv.Name] = client
+		}
+	}
+
+	// Build plugins + mcp context for HCL evaluation
+	pluginsCtx := buildPluginsContext(varsCtx, loadedPlugins, loadedMCPClients)
 
 	// Stage 2: Load models (with vars + plugins context)
 	var allModels []Model
@@ -894,19 +1025,21 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 
 	return &Config{
-		Variables:      allVars,
-		Models:         allModels,
-		Agents:         allAgents,
-		CustomTools:    allTools,
-		Plugins:        allPlugins,
-		Missions:      allMissions,
-		Skills:         allSkills,
-		Storage:        &storageConfig,
-		CommandCenter:  commandCenterConfig,
-		MCP:            mcpConfig,
-		SharedFolders:   allSharedFolders,
-		LoadedPlugins:  loadedPlugins,
-		ResolvedVars:   resolvedVars,
+		Variables:        allVars,
+		Models:           allModels,
+		Agents:           allAgents,
+		CustomTools:      allTools,
+		Plugins:          allPlugins,
+		MCPServers:       allMCPServers,
+		Missions:         allMissions,
+		Skills:           allSkills,
+		Storage:          &storageConfig,
+		CommandCenter:    commandCenterConfig,
+		MCPHost:          mcpHostConfig,
+		SharedFolders:    allSharedFolders,
+		LoadedPlugins:    loadedPlugins,
+		LoadedMCPClients: loadedMCPClients,
+		ResolvedVars:     resolvedVars,
 	}, nil
 }
 
@@ -1123,10 +1256,10 @@ func buildToolsContext(ctx *hcl.EvalContext, customTools []CustomTool) *hcl.Eval
 	}
 }
 
-// buildPluginsContext adds builtins and plugins namespaces to existing context
-// Creates builtins.{namespace}.{tool} references for built-in tools
-// Creates plugins.{plugin_name}.{tool_name} references for external plugins
-func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.PluginClient) *hcl.EvalContext {
+// buildPluginsContext adds builtins, plugins, and mcp namespaces to the
+// existing eval context. Each namespace exposes <ns>.<name>.<tool> and
+// <ns>.<name>.all references that HCL expressions can use in `tools = [...]`.
+func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.PluginClient, loadedMCPClients map[string]*squadronmcp.Client) *hcl.EvalContext {
 	// Build builtins namespace (bash, http, dataset, utils)
 	builtinsMap := make(map[string]cty.Value)
 	for namespace, tools := range BuiltinTools {
@@ -1152,7 +1285,21 @@ func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.
 		pluginsMap[pluginName] = cty.ObjectVal(toolsMap)
 	}
 
-	// Copy existing vars and add both namespaces
+	// Build mcp namespace (consumer-side MCP servers)
+	mcpMap := make(map[string]cty.Value)
+	for mcpName, client := range loadedMCPClients {
+		toolsMap := make(map[string]cty.Value)
+		tools, err := client.ListTools()
+		if err == nil {
+			for _, t := range tools {
+				toolsMap[t.Name] = cty.StringVal(fmt.Sprintf("mcp.%s.%s", mcpName, t.Name))
+			}
+		}
+		toolsMap["all"] = cty.StringVal(fmt.Sprintf("mcp.%s.all", mcpName))
+		mcpMap[mcpName] = cty.ObjectVal(toolsMap)
+	}
+
+	// Copy existing vars and add the three namespaces
 	newVars := make(map[string]cty.Value)
 	for k, v := range ctx.Variables {
 		newVars[k] = v
@@ -1160,6 +1307,9 @@ func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.
 	newVars["builtins"] = cty.ObjectVal(builtinsMap)
 	if len(pluginsMap) > 0 {
 		newVars["plugins"] = cty.ObjectVal(pluginsMap)
+	}
+	if len(mcpMap) > 0 {
+		newVars["mcp"] = cty.ObjectVal(mcpMap)
 	}
 
 	return &hcl.EvalContext{
@@ -2361,6 +2511,124 @@ func parsePluginBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Plugin, error) {
 
 	_ = remainBody // No remaining body expected
 	return p, nil
+}
+
+// parseMCPServerBlock parses a consumer-side `mcp "name" { ... }` block.
+// All fields are optional at parse time — Validate() on the returned struct
+// enforces the exactly-one-of command/url/source rule and the transport-gated
+// field rules.
+func parseMCPServerBlock(block *hcl.Block, ctx *hcl.EvalContext) (*MCPServer, error) {
+	name := block.Labels[0]
+
+	content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "command"},
+			{Name: "url"},
+			{Name: "source"},
+			{Name: "version"},
+			{Name: "entry"},
+			{Name: "args"},
+			{Name: "env"},
+			{Name: "headers"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("mcp '%s': %w", name, diags)
+	}
+
+	srv := &MCPServer{Name: name}
+
+	getString := func(key string) (string, error) {
+		attr, ok := content.Attributes[key]
+		if !ok {
+			return "", nil
+		}
+		val, d := attr.Expr.Value(ctx)
+		if d.HasErrors() {
+			return "", fmt.Errorf("mcp '%s': %s: %w", name, key, d)
+		}
+		if val.Type() != cty.String {
+			return "", fmt.Errorf("mcp '%s': %s must be a string", name, key)
+		}
+		return val.AsString(), nil
+	}
+
+	getStringList := func(key string) ([]string, error) {
+		attr, ok := content.Attributes[key]
+		if !ok {
+			return nil, nil
+		}
+		val, d := attr.Expr.Value(ctx)
+		if d.HasErrors() {
+			return nil, fmt.Errorf("mcp '%s': %s: %w", name, key, d)
+		}
+		var out []string
+		for it := val.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			if v.Type() != cty.String {
+				return nil, fmt.Errorf("mcp '%s': %s entries must be strings", name, key)
+			}
+			out = append(out, v.AsString())
+		}
+		return out, nil
+	}
+
+	getStringMap := func(key string) (map[string]string, error) {
+		attr, ok := content.Attributes[key]
+		if !ok {
+			return nil, nil
+		}
+		val, d := attr.Expr.Value(ctx)
+		if d.HasErrors() {
+			return nil, fmt.Errorf("mcp '%s': %s: %w", name, key, d)
+		}
+		out := make(map[string]string)
+		for it := val.ElementIterator(); it.Next(); {
+			k, v := it.Element()
+			if k.Type() != cty.String {
+				return nil, fmt.Errorf("mcp '%s': %s keys must be strings", name, key)
+			}
+			switch {
+			case v.Type() == cty.String:
+				out[k.AsString()] = v.AsString()
+			case v.Type() == cty.Bool:
+				out[k.AsString()] = fmt.Sprintf("%v", v.True())
+			case v.Type() == cty.Number:
+				out[k.AsString()] = v.AsBigFloat().String()
+			default:
+				return nil, fmt.Errorf("mcp '%s': %s values must be primitives", name, key)
+			}
+		}
+		return out, nil
+	}
+
+	var err error
+	if srv.Command, err = getString("command"); err != nil {
+		return nil, err
+	}
+	if srv.URL, err = getString("url"); err != nil {
+		return nil, err
+	}
+	if srv.Source, err = getString("source"); err != nil {
+		return nil, err
+	}
+	if srv.Version, err = getString("version"); err != nil {
+		return nil, err
+	}
+	if srv.Entry, err = getString("entry"); err != nil {
+		return nil, err
+	}
+	if srv.Args, err = getStringList("args"); err != nil {
+		return nil, err
+	}
+	if srv.Env, err = getStringMap("env"); err != nil {
+		return nil, err
+	}
+	if srv.Headers, err = getStringMap("headers"); err != nil {
+		return nil, err
+	}
+
+	return srv, nil
 }
 
 // extractExpressionSource reads the raw source text of an HCL expression from its source file.

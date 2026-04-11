@@ -47,6 +47,9 @@ Squadron is a declarative framework for building and running AI agent workflows.
 | `scheduler/` | Cron-based mission scheduling and next-fire calculation |
 | `streamers/` | Output streaming interfaces for CLI/TUI |
 | `wsbridge/` | WebSocket bridge client for command center communication |
+| `mcp/` | Consumer-side MCP client: loads external MCP servers (stdio/http/npm/github) declared in `mcp "name" { ... }` blocks and exposes their tools |
+| `mcphost/` | Host-side MCP server: exposes Squadron's own tools over MCP when `mcp_host { ... }` is enabled |
+| `internal/release/` | Shared GitHub-release download/extract helpers used by both plugin and MCP auto-install |
 | `cmd/` | CLI commands and plugin entry points |
 
 ---
@@ -56,10 +59,10 @@ Squadron is a declarative framework for building and running AI agent workflows.
 The config loading uses **staged evaluation** to support HCL expression references:
 
 1. **Stage 1**: Load `variable` blocks (no context needed)
-2. **Stage 1.5**: Load `plugin` blocks with `vars` context
-3. **Stage 2**: Load `model` blocks with `vars` + `plugins` context → enables `api_key = vars.anthropic_api_key`
-4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` context → enables `implements = builtins.http.get`
-5. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` context → enables `model = models.anthropic.claude_sonnet_4` and `tools = [plugins.playwright.all, tools.weather]`
+2. **Stage 1.5**: Load `plugin` blocks and `mcp "name"` blocks with `vars` context. Both happen in the same stage because both expose tools through HCL namespaces that later stages need to resolve against.
+3. **Stage 2**: Load `model` blocks with `vars` + `plugins` + `mcp` context → enables `api_key = vars.anthropic_api_key`
+4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` + `mcp` context → enables `implements = builtins.http.get`
+5. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` + `mcp` context → enables `tools = [plugins.playwright.all, mcp.filesystem.read_file, tools.weather]`
 6. **Stage 5**: Load `mission` blocks with full context
 
 Each stage uses partial structs with `hcl:",remain"` to ignore unknown block types during that pass.
@@ -83,12 +86,51 @@ plugin "playwright" {
   version = "local"
 }
 
+# mcp_servers.hcl — consumer-side MCP servers (Squadron pulling tools from external servers)
+#
+# Exactly one of `command`, `url`, or `source` per block.
+
+# Auto-installed npm package (cache at ~/.squadron/mcp/filesystem/2024.12.1/)
+mcp "filesystem" {
+  source  = "npm:@modelcontextprotocol/server-filesystem"
+  version = "2024.12.1"
+  args    = ["/tmp"]
+}
+
+# Auto-installed GitHub release binary
+mcp "custom" {
+  source  = "github.com/owner/mcp-custom"
+  version = "v1.0.0"
+  # entry = "bin/server"  # optional; disambiguates when the archive has multiple executables
+}
+
+# Bare command escape hatch — Squadron runs what you tell it, no install
+mcp "local" {
+  command = "./my-mcp-server"
+  args    = ["--debug"]
+}
+
+# HTTP transport — remote MCP server
+mcp "remote_api" {
+  url = "https://example.com/mcp"
+  headers = {
+    Authorization = "Bearer ${vars.api_key}"
+  }
+}
+
+# mcp_host.hcl — OPPOSITE direction: Squadron hosts its own MCP server
+mcp_host {
+  enabled = true
+  port    = 8090
+  secret  = vars.mcp_host_secret
+}
+
 # agents.hcl
 agent "browser_navigator" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Methodical and precise"
   role        = "Browser automation specialist"
-  tools       = [plugins.playwright.all]
+  tools       = [plugins.playwright.all, mcp.filesystem.read_file]
 }
 
 # missions.hcl
@@ -429,6 +471,100 @@ tools = [plugins.playwright.all]
 ### Plugin Registration
 
 Plugins are globally cached (`plugin/client.go:globalRegistry`) so plugin state (like browser sessions) persists across mission tasks. Use `plugin.CloseAll()` at program exit.
+
+---
+
+## MCP Consumer System (mcp/)
+
+The `mcp/` package lets Squadron pull tools from external MCP (Model Context
+Protocol) servers and expose them to agents as if they were native plugins.
+Used for `npm` packages like `@modelcontextprotocol/server-filesystem`, GitHub
+release binaries, remote HTTP MCP servers, and any local binary the user
+wants to run.
+
+The companion `mcphost/` package handles the opposite direction — Squadron
+acting AS an MCP server so other LLMs can consume its tools — and is
+controlled by the `mcp_host { ... }` singleton block.
+
+### The four modes of `mcp "name" { ... }`
+
+| Mode | Required | Optional | Install |
+|------|----------|----------|---------|
+| bare stdio | `command` | `args`, `env` | none — user runs their own binary |
+| HTTP | `url` | `headers` | none — remote |
+| npm | `source = "npm:..."`, `version` | `args`, `env` | `npm install --prefix <cache>` on first load |
+| GitHub binary | `source = "github.com/..."`, `version` | `args`, `env`, `entry` | download + checksum-verify + extract on first load |
+
+Exactly one of `command`, `url`, `source` per block. `env` is stdio-only;
+`headers` is http-only; `version` is required with `source` and forbidden
+otherwise; `entry` is only valid with `source = "github.com/..."`.
+
+### Cache layout
+
+Sits next to `~/.squadron/plugins/`:
+
+```
+~/.squadron/mcp/
+├── filesystem/2024.12.1/
+│   ├── runner.json
+│   └── node_modules/...
+└── custom/v1.0.0/
+    ├── runner.json
+    └── mcp-custom
+```
+
+`runner.json` is the "done" marker. Its presence short-circuits the installer
+on subsequent loads. Force a reinstall by `rm -rf ~/.squadron/mcp/<name>/<version>/`.
+
+### Agent reference syntax
+
+Once loaded, tools resolve through the `mcp` HCL namespace alongside
+`builtins`, `plugins`, and `tools`:
+
+```hcl
+agent "fs" {
+  tools = [
+    mcp.filesystem.read_file,    # specific tool
+    mcp.remote_api.all,          # every tool from that server
+    plugins.playwright.all,       # native plugins still work the same
+  ]
+}
+```
+
+Refs get sanitized to API-safe names via `aitools.AddSanitizedAliases` — e.g.
+`mcp.filesystem.read_file` → `mcp_filesystem_read_file` when the tool is sent
+to the provider.
+
+### Architecture
+
+| File | Purpose |
+|------|---------|
+| `mcp/client.go` | `Client` struct + `globalRegistry` + `Load`/`CloseAll` |
+| `mcp/tool.go` | `mcpTool` adapter implementing `aitools.Tool` |
+| `mcp/schema.go` | `convertSchema` — best-effort MCP → aitools.Schema |
+| `mcp/install.go` | `resolveRunner`, `installNPM`, `installGitHub`, `pickEntry` |
+| `mcp/paths.go` | cache-dir path helpers |
+
+### Lifecycle
+
+Mirrors native plugins. The registry is process-global — one subprocess per
+declared server, shared across all agents, skills, tasks, and missions in a
+single CLI invocation. Startup is eager (Stage 1.5 of config load); liveness
+is checked on reuse via `client.Ping`. Mid-run crashes are surfaced as
+tool-call errors and not auto-recovered in v1 (users re-run the command).
+`mcp.CloseAll()` is deferred in `cmd/root.go` alongside `plugin.CloseAll()`
+and invoked from the SIGINT handler.
+
+### Known limitations
+
+- Tool list is snapshot at load time; `tools/list_changed` is ignored.
+- MCP prompts and resources are not exposed — tools only.
+- Schema fidelity is best-effort. `oneOf`/`allOf`/`enum`/`$ref` lose info on
+  the way into `aitools.Schema`.
+- npm sources require `npm` and `node` on PATH; clear error if missing.
+- No Python/uv support — use the bare `command` escape hatch.
+- `version` must be pinned exactly; no semver ranges.
+- Hard squadron crash → orphaned subprocesses (same as plugins).
 
 ---
 

@@ -1,4 +1,4 @@
-package mcp
+package mcphost
 
 import (
 	"context"
@@ -177,7 +177,7 @@ func (h *handlers) listRuns(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	}
 	missionFilter, _ := args["mission_name"].(string)
 
-	records, total, err := h.deps.Stores.Missions.ListMissions(limit, offset)
+	records, total, err := h.deps.Stores().Missions.ListMissions(limit, offset)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list runs: %v", err)), nil
 	}
@@ -206,8 +206,8 @@ func (h *handlers) listRuns(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	runs := make([]runSummary, 0, len(records))
 	for _, r := range records {
-		tasks, _ := h.deps.Stores.Missions.GetTasksByMission(r.ID)
-		datasets, _ := h.deps.Stores.Datasets.ListDatasets(r.ID)
+		tasks, _ := h.deps.Stores().Missions.GetTasksByMission(r.ID)
+		datasets, _ := h.deps.Stores().Datasets.ListDatasets(r.ID)
 
 		var inputs any
 		if r.InputValuesJSON != "" && r.InputValuesJSON != "{}" {
@@ -254,7 +254,7 @@ func (h *handlers) getRunDetails(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError("run_id is required"), nil
 	}
 
-	record, err := h.deps.Stores.Missions.GetMission(runID)
+	record, err := h.deps.Stores().Missions.GetMission(runID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get run: %v", err)), nil
 	}
@@ -262,12 +262,12 @@ func (h *handlers) getRunDetails(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(fmt.Sprintf("run %q not found", runID)), nil
 	}
 
-	tasks, err := h.deps.Stores.Missions.GetTasksByMission(runID)
+	tasks, err := h.deps.Stores().Missions.GetTasksByMission(runID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get tasks: %v", err)), nil
 	}
 
-	datasets, _ := h.deps.Stores.Datasets.ListDatasets(runID)
+	datasets, _ := h.deps.Stores().Datasets.ListDatasets(runID)
 
 	var inputs any
 	if record.InputValuesJSON != "" && record.InputValuesJSON != "{}" {
@@ -313,7 +313,7 @@ func (h *handlers) getRunConfig(_ context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("run_id is required"), nil
 	}
 
-	record, err := h.deps.Stores.Missions.GetMission(runID)
+	record, err := h.deps.Stores().Missions.GetMission(runID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get run: %v", err)), nil
 	}
@@ -339,7 +339,7 @@ func (h *handlers) getRunTaskDetails(_ context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError("task_id is required"), nil
 	}
 
-	task, err := h.deps.Stores.Missions.GetTask(taskID)
+	task, err := h.deps.Stores().Missions.GetTask(taskID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get task: %v", err)), nil
 	}
@@ -347,17 +347,17 @@ func (h *handlers) getRunTaskDetails(_ context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("task %q not found", taskID)), nil
 	}
 
-	subtasks, err := h.deps.Stores.Missions.GetSubtasksByTask(taskID)
+	subtasks, err := h.deps.Stores().Missions.GetSubtasksByTask(taskID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get subtasks: %v", err)), nil
 	}
 
-	outputs, err := h.deps.Stores.Missions.GetTaskOutputs(taskID)
+	outputs, err := h.deps.Stores().Missions.GetTaskOutputs(taskID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get outputs: %v", err)), nil
 	}
 
-	inputs, err := h.deps.Stores.Missions.GetTaskInputs(taskID)
+	inputs, err := h.deps.Stores().Missions.GetTaskInputs(taskID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get inputs: %v", err)), nil
 	}

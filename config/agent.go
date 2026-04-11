@@ -16,8 +16,10 @@ const (
 	ModeMission AgentMode = "mission"
 )
 
-// ReservedBuiltinNamespaces are names reserved for built-in tools (cannot be used as plugin names).
-var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils"}
+// ReservedBuiltinNamespaces are names reserved for built-in tools (cannot be
+// used as plugin or mcp server names). "mcp" itself is reserved so that a
+// `plugin "mcp" { ... }` can't shadow the consumer-side namespace.
+var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils", "mcp"}
 
 // BuiltinTools maps built-in namespaces to their tools.
 // These are accessed as builtins.http.get, builtins.http.get, etc.

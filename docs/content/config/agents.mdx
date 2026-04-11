@@ -67,6 +67,19 @@ tools = [
 ]
 ```
 
+### MCP Server Tools
+
+Reference tools from a declared `mcp "name"` server through the `mcp.<name>.*` namespace. Use `.all` to expose every tool the server provides:
+
+```hcl
+tools = [
+  mcp.filesystem.read_text_file,   # single tool
+  mcp.remote_api.all,              # every tool from that server
+]
+```
+
+See [MCP](/config/mcp) for how to declare consumer-side MCP servers.
+
 ## Mission-Scoped Agents
 
 Agents can be defined inside a `mission` block, making them available only to that mission. This is useful for specialized agents that don't make sense as global definitions.

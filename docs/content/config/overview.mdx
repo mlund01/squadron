@@ -53,11 +53,13 @@ agent "assistant" {
 | `variable` | Define configuration variables |
 | `model` | Configure LLM providers |
 | `agent` | Define AI agents |
+| `skill` | Define on-demand capability packages for agents |
 | `tool` | Create custom tools |
 | `plugin` | Load external plugins |
+| `mcp "name"` | Pull tools from an external [MCP server](/config/mcp) (npm, github, http, or bare command) |
+| `mcp_host` | Start a built-in [MCP host](/config/mcp#host-mcp_host--block) to expose Squadron to AI clients |
 | `mission` | Define multi-task missions |
 | `commander` | Commander server connection config |
-| `mcp` | [MCP server](/config/mcp) settings for IDE/AI assistant integration |
 | `shared_folder` | Shared file folders accessible to missions |
 
 ## Expressions

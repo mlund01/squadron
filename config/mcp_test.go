@@ -281,10 +281,10 @@ var _ = Describe("MCP", func() {
 	})
 
 	Describe("HCL parsing", func() {
-		// Note: successful mcp block parsing is covered by integration (it spawns
-		// a real subprocess). These tests assert that blocks are extracted from
-		// HCL and reach the validation/loader stage — and that validation errors
-		// and loader errors surface correctly.
+		// Successful mcp consumer parsing is covered by integration — it spawns
+		// a real subprocess, which belongs in a higher-level suite. These tests
+		// cover the HCL wiring: host blocks parse and validation errors on
+		// consumer blocks surface through the loader.
 
 		It("parses an mcp_host block", func() {
 			hcl := minimalVarsHCL() + `
@@ -324,18 +324,6 @@ mcp "bad" {
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("version is required"))
-		})
-
-		It("surfaces loader errors for nonexistent stdio commands", func() {
-			hcl := minimalVarsHCL() + `
-mcp "nonexistent" {
-  command = "/nonexistent/path/to/mcp/server"
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("nonexistent"))
 		})
 	})
 })

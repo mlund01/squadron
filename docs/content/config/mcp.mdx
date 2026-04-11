@@ -39,7 +39,7 @@ agent "fs_worker" {
 }
 ```
 
-Every consumer block must pick **exactly one** of four modes via the `command`, `url`, or `source` attribute.
+Every consumer block must pick **exactly one** mode by setting `command`, `url`, or `source`. `source` has two sub-modes (npm or GitHub), for four modes total.
 
 ### Mode 1 — Auto-installed npm package
 
@@ -181,7 +181,7 @@ Mid-run crashes surface as tool-call errors inside the agent's loop and are not 
 
 ---
 
-## Host: `mcp_host { ... }` block
+## Host: `mcp_host`
 
 The host side is an opt-in singleton block that starts a built-in MCP server (SSE transport) exposing Squadron's missions, runs, agents, and documentation as tools for any MCP-compatible client.
 

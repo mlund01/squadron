@@ -38,9 +38,13 @@ type Spec struct {
 }
 
 // Client is a live handle to a loaded MCP server. Its tool list is snapshotted
-// at Initialize time.
+// at Initialize time. The Spec is retained so the client can respawn the
+// underlying transport on demand if the subprocess dies mid-run — see
+// ensureAlive.
 type Client struct {
 	name  string
+	spec  Spec
+	mu    sync.Mutex
 	inner *mcpgoclient.Client
 	tools []*ToolInfo
 }
@@ -63,13 +67,28 @@ func Load(name string, spec Spec) (*Client, error) {
 			return existing, nil
 		}
 		// Stale handle — close and evict before restarting.
-		_ = existing.inner.Close()
+		existing.Close()
 		delete(registry, name)
 	}
 
-	inner, err := startTransport(name, spec)
+	inner, tools, err := bringUpTransport(name, spec)
 	if err != nil {
 		return nil, err
+	}
+
+	c := &Client{name: name, spec: spec, inner: inner, tools: tools}
+	registry[name] = c
+	return c, nil
+}
+
+// bringUpTransport starts, initializes, and lists the tools for one MCP
+// server. It is shared by the initial Load call and by ensureAlive's respawn
+// path so that any subprocess restart mid-run goes through the exact same
+// startup sequence.
+func bringUpTransport(name string, spec Spec) (*mcpgoclient.Client, []*ToolInfo, error) {
+	inner, err := startTransport(name, spec)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// Start is idempotent (see mcp-go's Client.Start). Stdio auto-starts in
@@ -78,7 +97,7 @@ func Load(name string, spec Spec) (*Client, error) {
 	if err := inner.Start(startCtx); err != nil {
 		startCancel()
 		_ = inner.Close()
-		return nil, fmt.Errorf("mcp %q: start transport: %w", name, err)
+		return nil, nil, fmt.Errorf("mcp %q: start transport: %w", name, err)
 	}
 	startCancel()
 
@@ -90,27 +109,25 @@ func Load(name string, spec Spec) (*Client, error) {
 	initReq.Params.ClientInfo = mcpproto.Implementation{Name: "squadron", Version: "dev"}
 	if _, err := inner.Initialize(ctx, initReq); err != nil {
 		_ = inner.Close()
-		return nil, fmt.Errorf("mcp %q: initialize: %w", name, err)
+		return nil, nil, fmt.Errorf("mcp %q: initialize: %w", name, err)
 	}
 
 	listRes, err := inner.ListTools(ctx, mcpproto.ListToolsRequest{})
 	if err != nil {
 		_ = inner.Close()
-		return nil, fmt.Errorf("mcp %q: list tools: %w", name, err)
+		return nil, nil, fmt.Errorf("mcp %q: list tools: %w", name, err)
 	}
 
-	infos := make([]*ToolInfo, 0, len(listRes.Tools))
+	tools := make([]*ToolInfo, 0, len(listRes.Tools))
 	for _, t := range listRes.Tools {
-		infos = append(infos, &ToolInfo{
+		tools = append(tools, &ToolInfo{
 			Name:        t.Name,
 			Description: t.Description,
 			Schema:      convertSchema(t.InputSchema),
 		})
 	}
 
-	c := &Client{name: name, inner: inner, tools: infos}
-	registry[name] = c
-	return c, nil
+	return inner, tools, nil
 }
 
 // startTransport resolves the spec into a concrete mcpgoclient.Client. For
@@ -178,18 +195,67 @@ func envMapToList(env map[string]string) []string {
 // alive pings the underlying transport to detect dead subprocesses. A failed
 // ping causes Load to evict the cached entry and restart.
 func (c *Client) alive() bool {
+	c.mu.Lock()
+	inner := c.inner
+	c.mu.Unlock()
+	if inner == nil {
+		return false
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	return c.inner.Ping(ctx) == nil
+	return inner.Ping(ctx) == nil
 }
 
-// ListTools returns the tool snapshot captured at Initialize time.
+// ensureAlive pings the underlying transport and, if the ping fails, tears
+// down the dead client and spawns a fresh one using the original spec. This
+// lets long-running missions recover from a crashed stdio subprocess or a
+// blipped HTTP connection without requiring a full config reload.
+//
+// The restart goes through bringUpTransport, which re-runs Initialize and
+// ListTools. If the server's tool set has drifted across the restart, the
+// in-memory snapshot is refreshed.
+func (c *Client) ensureAlive() error {
+	if c.alive() {
+		return nil
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Re-check under the lock so concurrent callers collapse into a single
+	// respawn attempt.
+	if c.inner != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		alive := c.inner.Ping(ctx) == nil
+		cancel()
+		if alive {
+			return nil
+		}
+		_ = c.inner.Close()
+		c.inner = nil
+	}
+
+	inner, tools, err := bringUpTransport(c.name, c.spec)
+	if err != nil {
+		return fmt.Errorf("mcp %q: respawn failed: %w", c.name, err)
+	}
+	c.inner = inner
+	c.tools = tools
+	return nil
+}
+
+// ListTools returns the tool snapshot captured at Initialize time (or after
+// the most recent respawn).
 func (c *Client) ListTools() ([]*ToolInfo, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.tools, nil
 }
 
 // GetTool returns an aitools.Tool adapter for the named tool.
 func (c *Client) GetTool(toolName string) (aitools.Tool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	for _, t := range c.tools {
 		if t.Name == toolName {
 			return &mcpTool{client: c, info: t}, nil
@@ -201,6 +267,8 @@ func (c *Client) GetTool(toolName string) (aitools.Tool, error) {
 // GetAllTools returns every tool this server exposes, keyed by its original
 // name. Callers usually prefix the keys with "mcp.<name>." before merging.
 func (c *Client) GetAllTools() (map[string]aitools.Tool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	out := make(map[string]aitools.Tool, len(c.tools))
 	for _, t := range c.tools {
 		out[t.Name] = &mcpTool{client: c, info: t}
@@ -214,8 +282,11 @@ func (c *Client) Name() string { return c.name }
 // Close shuts down this client. Prefer CloseAll() at program exit rather than
 // per-client cleanup.
 func (c *Client) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.inner != nil {
 		_ = c.inner.Close()
+		c.inner = nil
 	}
 }
 
@@ -225,9 +296,7 @@ func CloseAll() {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 	for name, c := range registry {
-		if c.inner != nil {
-			_ = c.inner.Close()
-		}
+		c.Close()
 		delete(registry, name)
 	}
 }

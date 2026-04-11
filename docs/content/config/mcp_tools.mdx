@@ -1,26 +1,10 @@
 ---
-title: MCP
+title: MCP Tools
 ---
 
-# MCP
+# MCP Tools
 
-Squadron speaks the [Model Context Protocol](https://modelcontextprotocol.io) in **both directions**:
-
-- As a **consumer**, Squadron can pull tools from any MCP server — npm packages, GitHub release binaries, HTTP endpoints, or a local stdio command — and expose them to your agents as if they were native tools.
-- As a **host**, Squadron can expose its own missions, runs, agents, and docs as MCP tools for clients like Claude Desktop, Claude Code, or Cursor.
-
-The two sides use different HCL block names:
-
-| Direction | HCL block | Purpose |
-|-----------|-----------|---------|
-| Consumer (pull tools in) | `mcp "name" { ... }` | Connect to an external MCP server and hand its tools to agents |
-| Host (push tools out) | `mcp_host { ... }` | Start a built-in MCP server that exposes Squadron to other clients |
-
-Both are declared in any `.hcl` file in your config directory.
-
----
-
-## Consumer: `mcp "name"` blocks
+Squadron can pull tools from any [Model Context Protocol](https://modelcontextprotocol.io) server — npm packages, GitHub release binaries, HTTP endpoints, or a local stdio command — and expose them to your agents as if they were native tools.
 
 Declaring an `mcp "name" { ... }` block tells Squadron to start and connect to an external MCP server at config-load time. The server's tools become available to agents through the `mcp.<name>.*` HCL namespace alongside `builtins.*`, `plugins.*`, and `tools.*`.
 
@@ -41,7 +25,9 @@ agent "fs_worker" {
 
 Every consumer block must pick **exactly one** mode by setting `command`, `url`, or `source`. `source` has two sub-modes (npm or GitHub), for four modes total.
 
-### Mode 1 — Auto-installed npm package
+> Looking for the other direction — Squadron acting **as** an MCP server so external clients (Claude Desktop, Cursor, etc.) can call into your missions and agents? See [MCP Host](/config/mcp_host).
+
+## Mode 1 — Auto-installed npm package
 
 ```hcl
 mcp "filesystem" {
@@ -55,7 +41,7 @@ On first load, Squadron runs `npm install --prefix <cache>` to install the packa
 
 The `version` field is **required** and must be an exact version — no semver ranges. Pinning protects you from silent breakage when a server author publishes a broken release.
 
-### Mode 2 — Auto-installed GitHub release binary
+## Mode 2 — Auto-installed GitHub release binary
 
 ```hcl
 mcp "custom" {
@@ -67,7 +53,7 @@ mcp "custom" {
 
 Squadron downloads the release archive from GitHub, verifies the checksum, extracts it into the cache, and runs the entry binary. The `entry` field is only valid with GitHub sources.
 
-### Mode 3 — Remote HTTP transport
+## Mode 3 — Remote HTTP transport
 
 ```hcl
 mcp "remote_api" {
@@ -80,7 +66,7 @@ mcp "remote_api" {
 
 No auto-install — Squadron just makes HTTP requests to the remote endpoint. Use `headers` for authentication. `env` and `args` are **not** valid on HTTP servers.
 
-### Mode 4 — Bare local command
+## Mode 4 — Bare local command
 
 ```hcl
 mcp "local" {
@@ -94,7 +80,7 @@ mcp "local" {
 
 The escape hatch. Squadron runs whatever command you give it with no install step. Use this for servers you manage yourself (Python scripts via `uv run`, custom binaries, dev builds). `headers` is **not** valid on stdio servers.
 
-### Attribute reference
+## Attribute reference
 
 | Attribute | Type | Required | Valid with | Description |
 |-----------|------|----------|------------|-------------|
@@ -107,7 +93,7 @@ The escape hatch. Squadron runs whatever command you give it with no install ste
 | `env` | map(string) | no | stdio / source | Environment variables for the server process |
 | `headers` | map(string) | no | HTTP only | HTTP headers for the remote server |
 
-### Cache layout
+## Cache layout
 
 Auto-installed servers are cached next to plugins under `~/.squadron/mcp/`:
 
@@ -127,7 +113,7 @@ Auto-installed servers are cached next to plugins under `~/.squadron/mcp/`:
 rm -rf ~/.squadron/mcp/filesystem/2026.1.14/
 ```
 
-### Referencing MCP tools from agents and skills
+## Referencing MCP tools from agents and skills
 
 Once loaded, MCP tools are reachable through the `mcp` namespace:
 
@@ -153,7 +139,7 @@ skill "data_exploration" {
 
 Tool references get sanitized to API-safe names when sent to the LLM provider, so `mcp.filesystem.read_text_file` becomes `mcp_filesystem_read_text_file` in the actual tool call.
 
-### What's not supported
+## What's not supported
 
 - **Output schemas.** MCP servers may declare an `outputSchema` and return a typed `structuredContent` field on tool results. Squadron currently ignores both and passes the `content` blocks through as plain text (the same behavior as most mainstream MCP hosts). If you want structured output, reason over the returned text directly in your agent.
 - **`tools/list_changed` notifications.** Tool lists are snapshotted at load time. If a server adds or removes tools while running, you'll need to re-run Squadron.
@@ -161,7 +147,7 @@ Tool references get sanitized to API-safe names when sent to the LLM provider, s
 - **Semver ranges.** `version` must pin an exact version — `^1.0.0`, `~2.3`, `latest`, etc. are rejected.
 - **Python/uv sources.** No first-class support. Use mode 4 (bare command) with `uv run` instead.
 
-### macOS `/tmp` gotcha
+## macOS `/tmp` gotcha
 
 If you're running locally on macOS and pass `args = ["/tmp"]` to a filesystem MCP server, the server may reject all your file access because `/tmp` is a symlink to `/private/tmp`. Many servers resolve the allowed root internally and then compare literal paths. Use `/private/tmp` explicitly:
 
@@ -173,137 +159,10 @@ mcp "filesystem" {
 }
 ```
 
-### Error handling
+## Error handling and crash recovery
 
-If a server fails to install, fails to start, or crashes during initialize, config loading fails with a clear error. Squadron will not fall back to partial results or skip the server silently — an unavailable MCP server is a hard failure at config load, just like a missing plugin binary.
+If a server fails to install, fails to start, or crashes during `initialize`, config loading fails with a clear error. Squadron will not fall back to partial results or skip the server silently — an unavailable MCP server is a hard failure at config load, just like a missing plugin binary.
 
-Mid-run crashes surface as tool-call errors inside the agent's loop and are not auto-recovered in v1. Re-run your command to restart the server.
+**Mid-run crashes are automatically recovered.** If an MCP server's stdio subprocess dies or its HTTP transport drops between tool calls, Squadron detects the dead transport on the next call, respawns the server using the original `mcp "name" { ... }` spec (re-running `initialize` and refreshing the tool list), and retries the call once. Only if the retry also fails does the agent see an error. This mirrors how the plugin system handles crashes — you do not need to reload config or restart Squadron to recover from a crashed MCP server.
 
----
-
-## Host: `mcp_host`
-
-The host side is an opt-in singleton block that starts a built-in MCP server (SSE transport) exposing Squadron's missions, runs, agents, and documentation as tools for any MCP-compatible client.
-
-```hcl
-mcp_host {
-  enabled = true
-  port    = 8090
-  secret  = vars.mcp_host_secret  # optional — enables Bearer token auth
-}
-```
-
-| Attribute | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `enabled` | bool | `false` | Must be `true` to start the host server |
-| `port` | number | `8090` | Port for the SSE-based MCP server (1024–65535) |
-| `secret` | string | — | When set, all requests must include this as a Bearer token or `?token=` query param |
-
-The host server only starts when Squadron runs in `serve` mode. `squadron mission` and `squadron chat` do not start it.
-
-> Prior to 2026-04, this block was called `mcp { ... }` (singleton, no label). It was renamed to `mcp_host` to free up the `mcp "name" { ... }` form for consumer blocks. Update old configs by renaming the block — no other changes required.
-
-### Authentication
-
-When `secret` is set, clients must authenticate via one of:
-
-- **Authorization header**: `Authorization: Bearer <secret>`
-- **Query parameter**: `?token=<secret>`
-
-Requests without a valid token receive a `401 Unauthorized` response. If `secret` is omitted, the server is open (suitable for local-only use).
-
-### Available tools
-
-The host exposes Squadron itself as a collection of tools:
-
-**Documentation**
-
-| Tool | Description |
-|------|-------------|
-| `list_version` | Get the squadron version |
-| `list_doc_pages` | List all available documentation pages |
-| `get_doc_page` | Get the contents of a documentation page by path |
-
-**Missions & runs**
-
-| Tool | Description |
-|------|-------------|
-| `list_missions` | List all missions defined in config |
-| `get_mission_config` | Get the full configuration of a mission |
-| `run_mission` | Start a mission with optional inputs (returns mission ID) |
-| `list_runs` | List recent mission runs with optional filtering by name |
-| `get_run_details` | Get high-level details of a run including task summaries |
-| `get_run_config` | Get the config snapshot used for a specific run |
-| `get_run_task_details` | Get detailed task info including subtasks and outputs |
-
-**Agents & plugins**
-
-| Tool | Description |
-|------|-------------|
-| `list_agents` | List all agents defined in config |
-| `get_agent_config` | Get the full configuration of an agent |
-| `list_plugins` | List all plugins defined in config |
-| `list_plugin_tools` | List all tools provided by a plugin |
-| `get_plugin_tool` | Get detailed info about a plugin tool including its schema |
-
-**Config operations**
-
-| Tool | Description |
-|------|-------------|
-| `verify_config` | Validate config files on disk without applying changes |
-| `reload_config` | Re-read and apply config changes from disk |
-| `list_vars` | List all configuration variables (secrets masked) |
-| `get_var` | Get a single configuration variable (secrets masked) |
-
-### Client setup
-
-**Claude Desktop** — add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "squadron": {
-      "url": "http://localhost:8090/sse"
-    }
-  }
-}
-```
-
-With authentication:
-
-```json
-{
-  "mcpServers": {
-    "squadron": {
-      "url": "http://localhost:8090/sse?token=YOUR_SECRET"
-    }
-  }
-}
-```
-
-**Claude Code**:
-
-```bash
-claude mcp add squadron --transport sse http://localhost:8090/sse
-```
-
-### Running
-
-```hcl
-# variables.hcl
-variable "mcp_host_secret" {
-  secret = true
-}
-
-# mcp.hcl
-mcp_host {
-  enabled = true
-  port    = 8090
-  secret  = vars.mcp_host_secret
-}
-```
-
-```bash
-squadron serve -c ./config -w
-# MCP host is now available at http://localhost:8090/sse
-```
+If the respawn itself fails (the binary has gone missing, the remote HTTP endpoint is down, etc.), the tool call surfaces a clear `respawn failed` error to the agent so it can reason about the failure.

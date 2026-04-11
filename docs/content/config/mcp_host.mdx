@@ -19,7 +19,7 @@ mcp_host {
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `enabled` | bool | `false` | Must be `true` to start the host server |
-| `port` | number | `8090` | Port for the SSE-based MCP server (1024–65535) |
+| `port` | number | `8090` | Port the MCP host listens on (1024–65535) |
 | `secret` | string | — | When set, all requests must include this as a Bearer token or `?token=` query param |
 
 The host server only starts when Squadron runs in `serve` mode. `squadron mission` and `squadron chat` do not start it.
@@ -78,39 +78,61 @@ The host exposes Squadron itself as a collection of tools:
 | `list_vars` | List all configuration variables (secrets masked) |
 | `get_var` | Get a single configuration variable (secrets masked) |
 
+The host speaks the [Streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-03-26/basic/transports#streamable-http) — the current MCP spec. Both GET (for server→client streaming) and POST (for client→server requests) are served at the same endpoint: `/mcp`.
+
 ## Client setup
-
-### Claude Desktop
-
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
-
-```json
-{
-  "mcpServers": {
-    "squadron": {
-      "url": "http://localhost:8090/sse"
-    }
-  }
-}
-```
-
-With authentication:
-
-```json
-{
-  "mcpServers": {
-    "squadron": {
-      "url": "http://localhost:8090/sse?token=YOUR_SECRET"
-    }
-  }
-}
-```
 
 ### Claude Code
 
+Claude Code supports Streamable HTTP natively:
+
 ```bash
-claude mcp add squadron --transport sse http://localhost:8090/sse
+claude mcp add squadron --transport http http://localhost:8090/mcp
 ```
+
+### Claude Desktop
+
+Claude Desktop only runs **stdio** MCP servers directly. Use the `mcp-remote` bridge to forward stdio over the wire. Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "squadron": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:8090/mcp"
+      ]
+    }
+  }
+}
+```
+
+With authentication, pass the token via the `--header` flag:
+
+```json
+{
+  "mcpServers": {
+    "squadron": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "http://localhost:8090/mcp",
+        "--header",
+        "Authorization: Bearer YOUR_SECRET"
+      ]
+    }
+  }
+}
+```
+
+Fully quit Claude Desktop (Cmd+Q) and reopen after editing the config — it only loads MCP settings on startup.
+
+### Cursor, Continue, and other clients
+
+Any MCP client that supports Streamable HTTP can connect directly to `http://localhost:8090/mcp`. Check your client's docs for the exact config format — the URL and (optionally) the Bearer token are all you need.
 
 ## Running
 
@@ -130,5 +152,5 @@ mcp_host {
 
 ```bash
 squadron serve -c ./config -w
-# MCP host is now available at http://localhost:8090/sse
+# MCP host is now available at http://localhost:8090/mcp
 ```

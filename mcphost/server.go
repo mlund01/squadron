@@ -30,10 +30,10 @@ type Deps struct {
 	ReloadConfig func() error
 }
 
-// Server wraps the MCP server and SSE transport.
+// Server wraps the MCP server and its Streamable HTTP transport.
 type Server struct {
-	sse      *server.SSEServer
-	httpSrv  *http.Server // only set when using auth wrapper
+	streamable *server.StreamableHTTPServer
+	httpSrv    *http.Server // only set when using the auth wrapper
 }
 
 // NewServer creates a configured MCP server with all squadron tools registered.
@@ -50,19 +50,25 @@ func NewServer(deps Deps) *server.MCPServer {
 	return srv
 }
 
-// StartSSE starts an SSE-based MCP server on the given port.
-// If secret is non-empty, requests must provide it as a Bearer token or query param.
-// Returns a Server handle (for shutdown) and any startup error.
-func StartSSE(srv *server.MCPServer, port int, secret string) (*Server, error) {
+// StartStreamableHTTP starts an MCP server over the modern Streamable HTTP
+// transport on the given port. Both GET and POST are served at `/mcp`.
+//
+// If secret is non-empty, requests must provide it as a Bearer token header
+// or as a `?token=` query parameter. Returns a Server handle (for shutdown)
+// and any startup error.
+func StartStreamableHTTP(srv *server.MCPServer, port int, secret string) (*Server, error) {
 	addr := fmt.Sprintf(":%d", port)
 
-	sseServer := server.NewSSEServer(srv)
+	streamable := server.NewStreamableHTTPServer(srv)
 
 	if secret != "" {
-		// When using auth, we start our own HTTP server that wraps the SSE handler
+		// Auth path: wrap the streamable handler ourselves so we own the
+		// http.Server and can shut it down cleanly.
+		mux := http.NewServeMux()
+		mux.Handle("/mcp", authMiddleware(secret, streamable))
 		httpSrv := &http.Server{
 			Addr:    addr,
-			Handler: authMiddleware(secret, sseServer),
+			Handler: mux,
 		}
 
 		errCh := make(chan error, 1)
@@ -72,36 +78,37 @@ func StartSSE(srv *server.MCPServer, port int, secret string) (*Server, error) {
 
 		select {
 		case err := <-errCh:
-			return nil, fmt.Errorf("mcp server failed to start on %s: %w", addr, err)
+			return nil, fmt.Errorf("mcp host failed to start on %s: %w", addr, err)
 		default:
-			return &Server{sse: sseServer, httpSrv: httpSrv}, nil
+			return &Server{streamable: streamable, httpSrv: httpSrv}, nil
 		}
 	}
 
-	// No auth — let the SSE server manage its own HTTP server
+	// No auth — let the streamable server manage its own HTTP server.
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- sseServer.Start(addr)
+		errCh <- streamable.Start(addr)
 	}()
 
 	select {
 	case err := <-errCh:
-		return nil, fmt.Errorf("mcp server failed to start on %s: %w", addr, err)
+		return nil, fmt.Errorf("mcp host failed to start on %s: %w", addr, err)
 	default:
-		return &Server{sse: sseServer}, nil
+		return &Server{streamable: streamable}, nil
 	}
 }
 
-// Shutdown gracefully shuts down the MCP server.
+// Shutdown gracefully shuts down the MCP host.
 func (s *Server) Shutdown() error {
 	if s == nil {
 		return nil
 	}
+	ctx := context.Background()
 	if s.httpSrv != nil {
-		return s.httpSrv.Shutdown(context.Background())
+		return s.httpSrv.Shutdown(ctx)
 	}
-	if s.sse != nil {
-		return s.sse.Shutdown(context.Background())
+	if s.streamable != nil {
+		return s.streamable.Shutdown(ctx)
 	}
 	return nil
 }

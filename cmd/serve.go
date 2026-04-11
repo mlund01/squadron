@@ -168,11 +168,11 @@ func runServe(cmd *cobra.Command, args []string) {
 		}
 		mcpSrv := mcphost.NewServer(mcpDeps)
 		var err error
-		mcpServer, err = mcphost.StartSSE(mcpSrv, cfg.MCPHost.Port, cfg.MCPHost.Secret)
+		mcpServer, err = mcphost.StartStreamableHTTP(mcpSrv, cfg.MCPHost.Port, cfg.MCPHost.Secret)
 		if err != nil {
 			log.Printf("Warning: MCP host failed to start: %v", err)
 		} else {
-			fmt.Printf("MCP host listening on http://localhost:%d/sse\n", cfg.MCPHost.Port)
+			fmt.Printf("MCP host listening on http://localhost:%d/mcp\n", cfg.MCPHost.Port)
 		}
 	}
 

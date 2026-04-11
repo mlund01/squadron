@@ -12,6 +12,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	schemafunc "squadron/config/functions"
+	vaultpkg "squadron/config/vault"
 	"squadron/internal/paths"
 	squadronmcp "squadron/mcp"
 	"squadron/plugin"
@@ -500,6 +501,7 @@ func LoadDir(dir string) (*Config, error) {
 
 // parsedBlocks holds all blocks extracted from a file in one pass
 type parsedBlocks struct {
+	Vault     []*hcl.Block
 	Variables []*hcl.Block
 	Models    []*hcl.Block
 	Agents    []*hcl.Block
@@ -535,6 +537,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		// Extract all known block types in one PartialContent call
 		content, _, diags := hclFile.Body.PartialContent(&hcl.BodySchema{
 			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "vault"},
 				{Type: "variable", LabelNames: []string{"name"}},
 				{Type: "model", LabelNames: []string{"name"}},
 				{Type: "agent", LabelNames: []string{"name"}},
@@ -556,6 +559,8 @@ func loadFromFiles(files []string) (*Config, error) {
 		var pb parsedBlocks
 		for _, block := range content.Blocks {
 			switch block.Type {
+			case "vault":
+				pb.Vault = append(pb.Vault, block)
 			case "variable":
 				pb.Variables = append(pb.Variables, block)
 			case "model":
@@ -583,6 +588,30 @@ func loadFromFiles(files []string) (*Config, error) {
 			}
 		}
 		allParsedBlocks = append(allParsedBlocks, pb)
+	}
+
+	// Stage 0: vault block. Decoded with a nil context because it
+	// cannot reference vars — the block is what decides how to
+	// decrypt vars.vault in the first place.
+	var vaultConfig *VaultConfig
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.Vault {
+			if vaultConfig != nil {
+				return nil, fmt.Errorf("vault block declared more than once")
+			}
+			var vc VaultConfig
+			if diags := gohcl.DecodeBody(block.Body, nil, &vc); diags.HasErrors() {
+				return nil, fmt.Errorf("vault block: %w", diags)
+			}
+			vaultConfig = &vc
+		}
+	}
+	providerName := ""
+	if vaultConfig != nil {
+		providerName = vaultConfig.Provider
+	}
+	if err := vaultpkg.SetActiveProviderName(providerName); err != nil {
+		return nil, fmt.Errorf("vault block: %w", err)
 	}
 
 	// Stage 1: Load variables (no context needed)

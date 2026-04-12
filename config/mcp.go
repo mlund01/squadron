@@ -54,6 +54,23 @@ type MCPServer struct {
 	Env  map[string]string
 }
 
+// Location returns the human-readable "what does this server point at"
+// string used by `squadron mcp status` and `squadron verify`. For HTTP
+// servers it is the URL; for stdio servers it is the source or command.
+// Never wrapped in parens — callers compose it directly into their output.
+func (m *MCPServer) Location() string {
+	switch {
+	case m.URL != "":
+		return m.URL
+	case m.Source != "":
+		return m.Source
+	case m.Command != "":
+		return m.Command
+	default:
+		return "(unknown)"
+	}
+}
+
 // Validate enforces the cross-field rules for an MCPServer block.
 func (m *MCPServer) Validate() error {
 	if m.Name == "" {

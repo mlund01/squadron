@@ -51,8 +51,18 @@ type Config struct {
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
 	// LoadedMCPClients holds the loaded consumer-side MCP clients, keyed by
-	// the HCL `mcp "name"` label.
+	// the HCL `mcp "name"` label. Entries may be nil when a server failed
+	// to load — check LoadedMCPErrors for the reason. A name that is absent
+	// from both maps did not appear in the config at all.
 	LoadedMCPClients map[string]*squadronmcp.Client `hcl:"-"`
+	// LoadedMCPErrors holds per-server load failures, keyed by the same
+	// mcp "name" label. Populated for auth-required and transport errors
+	// that the config loader tolerates rather than failing the whole
+	// parse — see the Stage 1.5b load path in loadFromFiles for the exact
+	// tolerance rules. Consumers (squadron mcp status, chat/mission/serve
+	// tool resolution) use this to distinguish "MCP is anonymous and
+	// working" from "MCP is broken" without re-probing the server.
+	LoadedMCPErrors map[string]error `hcl:"-"`
 	// ResolvedVars holds the resolved variable values for runtime use
 	ResolvedVars map[string]cty.Value `hcl:"-"`
 }
@@ -117,6 +127,114 @@ func LoadMCPHost(path string) *MCPHostConfig {
 		}
 	}
 	return nil
+}
+
+// LoadMCPSpecs does a lightweight HCL walk of the config and returns every
+// mcp "name" { ... } block it finds, with variable references resolved. It
+// deliberately does NOT load plugins, dial MCP servers, resolve agents, or
+// do any other Stage 1.5+ work — the whole point is to give CLI commands
+// that only care about MCP block contents (squadron mcp status, squadron
+// mcp login, etc.) a fast, network-free way to read the config.
+//
+// Variable references inside mcp blocks are resolved against a minimal
+// vars context built from any variable "..." blocks declared in the
+// config, backed by the vault for values. Anything else (plugins, models,
+// agents, tools, missions) is ignored even if it's malformed — a user
+// whose entire config is broken can still run `squadron mcp status` to see
+// which MCP blocks they declared and the auth state of their tokens.
+//
+// Returns nil specs (not an error) when the config path is empty or
+// contains no mcp blocks. A non-nil error means HCL parsing itself failed
+// in a way we could not recover from.
+func LoadMCPSpecs(path string) ([]MCPServer, error) {
+	files, err := resolveConfigFiles(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	// buildVarsContext reads the package-global configFuncs. Save and
+	// restore it around our own load so we don't leave a stale load()
+	// bound to this call's directory for a later call from a different
+	// CWD (typical for CLI commands run across multiple projects).
+	prevFuncs := configFuncs
+	defer func() { configFuncs = prevFuncs }()
+	configDir := filepath.Dir(files[0])
+	configFuncs = schemafunc.SchemaFunctions()
+	configFuncs["load"] = schemafunc.MakeLoadFunc(configDir)
+
+	parser := hclparse.NewParser()
+
+	// First pass: collect variable and mcp blocks from every file. We
+	// tolerate parse errors inside individual files so one broken file
+	// cannot block the whole command — downstream callers will surface
+	// them via LoadAndValidate.
+	type fileBlocks struct {
+		variables []*hcl.Block
+		mcp       []*hcl.Block
+	}
+	perFile := make([]fileBlocks, 0, len(files))
+	for _, file := range files {
+		hclFile, diags := parser.ParseHCLFile(file)
+		if diags.HasErrors() {
+			continue
+		}
+		content, _, diags := hclFile.Body.PartialContent(&hcl.BodySchema{
+			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "variable", LabelNames: []string{"name"}},
+				{Type: "mcp", LabelNames: []string{"name"}},
+			},
+		})
+		if diags.HasErrors() {
+			continue
+		}
+		var fb fileBlocks
+		for _, block := range content.Blocks {
+			switch block.Type {
+			case "variable":
+				fb.variables = append(fb.variables, block)
+			case "mcp":
+				fb.mcp = append(fb.mcp, block)
+			}
+		}
+		perFile = append(perFile, fb)
+	}
+
+	// Decode all variable blocks. gohcl handles the schema for Variable
+	// directly, same as Stage 1 of the full loader.
+	var allVars []Variable
+	for _, pf := range perFile {
+		for _, block := range pf.variables {
+			var v Variable
+			v.Name = block.Labels[0]
+			if diags := gohcl.DecodeBody(block.Body, nil, &v); diags.HasErrors() {
+				continue
+			}
+			allVars = append(allVars, v)
+		}
+	}
+
+	varsCtx, _ := buildVarsContext(allVars)
+
+	// Decode all mcp blocks against the vars context. We reuse the same
+	// parseMCPServerBlock helper Stage 1.5b uses in the full loader so
+	// any future attribute additions flow through one place.
+	var servers []MCPServer
+	for _, pf := range perFile {
+		for _, block := range pf.mcp {
+			srv, err := parseMCPServerBlock(block, varsCtx)
+			if err != nil {
+				continue // skip malformed blocks rather than fail the whole call
+			}
+			if err := srv.Validate(); err != nil {
+				continue
+			}
+			servers = append(servers, *srv)
+		}
+	}
+	return servers, nil
 }
 
 // LoadPartial attempts a best-effort load of the config, returning whatever
@@ -368,12 +486,18 @@ func (c *Config) Validate() error {
 		validToolRefs[fmt.Sprintf("plugins.%s.all", pluginName)] = true
 	}
 
-	// Add consumer-side MCP server tools
+	// Add consumer-side MCP server tools. Clients may be nil when an
+	// HTTP MCP failed to load because it needs OAuth and hasn't been
+	// authorized yet — still register the ".all" reference so static
+	// HCL validation passes; resolving individual tool refs fails at
+	// agent wire-up, and the user gets a pointed error at runtime.
 	for mcpName, client := range c.LoadedMCPClients {
-		tools, err := client.ListTools()
-		if err == nil {
-			for _, t := range tools {
-				validToolRefs[fmt.Sprintf("mcp.%s.%s", mcpName, t.Name)] = true
+		if client != nil {
+			tools, err := client.ListTools()
+			if err == nil {
+				for _, t := range tools {
+					validToolRefs[fmt.Sprintf("mcp.%s.%s", mcpName, t.Name)] = true
+				}
 			}
 		}
 		validToolRefs[fmt.Sprintf("mcp.%s.all", mcpName)] = true
@@ -880,8 +1004,16 @@ func loadFromFiles(files []string) (*Config, error) {
 	// Stage 1.5b: Load consumer-side MCP servers (same vars context as plugins).
 	// For source-backed servers this triggers the auto-installer on first load
 	// (npm install or github release download); cached installs skip the network.
+	//
+	// Per-server load failures are tolerated: the error is recorded in
+	// loadedMCPErrors and a nil entry is stored in loadedMCPClients. An agent
+	// that references an unloaded MCP's tools sees an empty tool set and
+	// surfaces the failure when it tries to call one. This lets the rest of
+	// squadron (verify, status, login, missions that don't use the broken
+	// MCP) keep working while the user fixes or logs into the bad server.
 	var allMCPServers []MCPServer
 	loadedMCPClients := make(map[string]*squadronmcp.Client)
+	loadedMCPErrors := make(map[string]error)
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.MCPServers {
 			srv, err := parseMCPServerBlock(block, varsCtx)
@@ -904,7 +1036,9 @@ func loadFromFiles(files []string) (*Config, error) {
 				Env:     srv.Env,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("mcp '%s' failed to load: %w", srv.Name, err)
+				loadedMCPClients[srv.Name] = nil
+				loadedMCPErrors[srv.Name] = err
+				continue
 			}
 			loadedMCPClients[srv.Name] = client
 		}
@@ -1039,6 +1173,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		SharedFolders:    allSharedFolders,
 		LoadedPlugins:    loadedPlugins,
 		LoadedMCPClients: loadedMCPClients,
+		LoadedMCPErrors:  loadedMCPErrors,
 		ResolvedVars:     resolvedVars,
 	}, nil
 }
@@ -1285,14 +1420,20 @@ func buildPluginsContext(ctx *hcl.EvalContext, loadedPlugins map[string]*plugin.
 		pluginsMap[pluginName] = cty.ObjectVal(toolsMap)
 	}
 
-	// Build mcp namespace (consumer-side MCP servers)
+	// Build mcp namespace (consumer-side MCP servers). A nil client means
+	// this MCP failed to load (e.g. OAuth not yet authorized); we still
+	// register a namespace entry so references like `mcp.<name>.all` in
+	// agent blocks parse cleanly — they'll resolve to empty tool sets at
+	// wire-up time and surface the underlying error there.
 	mcpMap := make(map[string]cty.Value)
 	for mcpName, client := range loadedMCPClients {
 		toolsMap := make(map[string]cty.Value)
-		tools, err := client.ListTools()
-		if err == nil {
-			for _, t := range tools {
-				toolsMap[t.Name] = cty.StringVal(fmt.Sprintf("mcp.%s.%s", mcpName, t.Name))
+		if client != nil {
+			tools, err := client.ListTools()
+			if err == nil {
+				for _, t := range tools {
+					toolsMap[t.Name] = cty.StringVal(fmt.Sprintf("mcp.%s.%s", mcpName, t.Name))
+				}
 			}
 		}
 		toolsMap["all"] = cty.StringVal(fmt.Sprintf("mcp.%s.all", mcpName))

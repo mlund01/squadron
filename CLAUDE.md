@@ -19,6 +19,9 @@ go build -o squadron ./cmd/cli              # Build the CLI
 ./squadron serve -c <path> -w              # Launch local command center + connect
 ./squadron serve -c <path> -w --cc-port 9090  # Custom command center port
 ./squadron serve -c <path> -w --no-browser # Launch without opening browser
+./squadron mcp status                      # Show OAuth status for configured MCP servers
+./squadron mcp login <name>                # Authorize an MCP server via OAuth
+./squadron mcp logout <name>               # Forget stored OAuth token for an MCP server
 ./squadron upgrade                         # Upgrade to latest release
 ./squadron upgrade --version v0.0.13       # Upgrade to specific version
 ./squadron version                         # Print current version
@@ -535,13 +538,43 @@ Refs get sanitized to API-safe names via `aitools.AddSanitizedAliases` — e.g.
 `mcp.filesystem.read_file` → `mcp_filesystem_read_file` when the tool is sent
 to the provider.
 
+### OAuth for HTTP MCP servers
+
+HTTP MCP servers that require OAuth 2.1 are authenticated via `squadron mcp login`:
+
+```bash
+squadron mcp login linear    # discovery → DCR → PKCE → browser → token exchange
+squadron mcp status           # shows auth state for every configured MCP
+squadron mcp logout linear    # wipes token (keeps DCR credentials for faster relogin)
+```
+
+The HCL block is zero-config — just declare the URL:
+
+```hcl
+mcp "linear" {
+  url = "https://mcp.linear.app/sse"
+}
+```
+
+If the server returns 401 on load, Squadron surfaces an `AuthRequiredError` with a pointer to `squadron mcp login <name>`. Tokens live in the encrypted vault under `oauth:<name>:token`; mcp-go handles refresh transparently via the stored refresh token.
+
+The `mcp/oauth/` package houses:
+- `VaultTokenStore` — implements `transport.TokenStore` against the vault
+- `RunLoginFlow` — the orchestrator (discovery, DCR, PKCE, browser, exchange)
+- `LoopbackCallbackSource` — serves `/callback` on `127.0.0.1:0` for CLI mode
+- `CallbackSource` interface — Phase 2 adds a wsbridge-backed source for command-center mode
+
+SSE vs streamable HTTP is auto-detected from the URL path suffix (`/sse`). The OAuth transport is only engaged when a token is already stored — anonymous servers fall through to the plain client.
+
 ### Architecture
 
 | File | Purpose |
 |------|---------|
-| `mcp/client.go` | `Client` struct + `globalRegistry` + `Load`/`CloseAll` |
+| `mcp/client.go` | `Client` struct + `globalRegistry` + `Load`/`LoadWithContext`/`CloseAll` |
 | `mcp/tool.go` | `mcpTool` adapter implementing `aitools.Tool` |
-| `mcp/schema.go` | `convertSchema` — best-effort MCP → aitools.Schema |
+| `mcp/schema.go` | `convertSchema` — raw JSON Schema passthrough + best-effort typed projection |
+| `mcp/errors.go` | `AuthRequiredError` + `classifyAuthError` |
+| `mcp/oauth/` | OAuth token store, login orchestrator, loopback callback |
 | `mcp/install.go` | `resolveRunner`, `installNPM`, `installGitHub`, `pickEntry` |
 | `mcp/paths.go` | cache-dir path helpers |
 
@@ -559,8 +592,7 @@ and invoked from the SIGINT handler.
 
 - Tool list is snapshot at load time; `tools/list_changed` is ignored.
 - MCP prompts and resources are not exposed — tools only.
-- Schema fidelity is best-effort. `oneOf`/`allOf`/`enum`/`$ref` lose info on
-  the way into `aitools.Schema`.
+- Schema fidelity: raw JSON Schema bytes are preserved for LLM providers via `WithRawJSONSchema`; the typed `aitools.Schema` projection is lossy but only used for in-process introspection.
 - npm sources require `npm` and `node` on PATH; clear error if missing.
 - No Python/uv support — use the bare `command` escape hatch.
 - `version` must be pinned exactly; no semver ranges.

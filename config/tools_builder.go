@@ -76,7 +76,11 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 			parts := strings.Split(toolRef, ".")
 			if len(parts) == 3 {
 				mcpName := parts[1]
-				if client, ok := loadedMCPClients[mcpName]; ok {
+				// A nil client means the MCP failed to load (e.g. OAuth
+				// not yet authorized). Skip expansion — agents that
+				// depended on these tools will run without them, and
+				// any call attempt hits the tool-missing path downstream.
+				if client, ok := loadedMCPClients[mcpName]; ok && client != nil {
 					mcpTools, err := client.ListTools()
 					if err == nil {
 						for _, t := range mcpTools {
@@ -115,7 +119,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 			if len(parts) == 3 {
 				mcpName := parts[1]
 				toolName := parts[2]
-				if client, ok := loadedMCPClients[mcpName]; ok {
+				if client, ok := loadedMCPClients[mcpName]; ok && client != nil {
 					if tool, err := client.GetTool(toolName); err == nil {
 						tools[toolRef] = tool
 					}

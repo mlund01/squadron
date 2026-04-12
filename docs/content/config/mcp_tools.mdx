@@ -64,7 +64,9 @@ mcp "remote_api" {
 }
 ```
 
-No auto-install — Squadron just makes HTTP requests to the remote endpoint. Use `headers` for authentication. `env` and `args` are **not** valid on HTTP servers.
+No auto-install — Squadron just makes HTTP requests to the remote endpoint. Use `headers` for static tokens. `env` and `args` are **not** valid on HTTP servers.
+
+For servers that use OAuth 2.1 instead of a static token, see [OAuth authentication](#oauth-authentication) below — you don't need the `headers` block at all.
 
 ## Mode 4 — Bare local command
 
@@ -139,6 +141,59 @@ skill "data_exploration" {
 
 Tool references get sanitized to API-safe names when sent to the LLM provider, so `mcp.filesystem.read_text_file` becomes `mcp_filesystem_read_text_file` in the actual tool call.
 
+## OAuth authentication
+
+HTTP MCP servers that use OAuth 2.1 work with zero extra configuration in the HCL block — just declare the URL:
+
+```hcl
+mcp "linear" {
+  url = "https://mcp.linear.app/sse"
+}
+```
+
+The first time you try to use the server, Squadron will tell you it needs authorization:
+
+```
+mcp "linear": authorization required
+  This server uses OAuth. Run:
+    squadron mcp login linear
+```
+
+### `squadron mcp login <name>`
+
+Runs the full OAuth 2.1 flow:
+
+1. Discovers the authorization server from the MCP URL's `.well-known` metadata
+2. Registers Squadron as a client via [Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) (if no cached credentials exist)
+3. Opens your browser to the authorization page
+4. Waits for the redirect on a local loopback server
+5. Exchanges the authorization code (with PKCE) for an access token
+6. Stores the token and refresh token in the encrypted vault
+
+Subsequent runs pick up the token automatically — no login needed until the refresh token itself expires or is revoked.
+
+### `squadron mcp status`
+
+Shows every configured MCP server and its current auth state without making any network calls:
+
+```
+$ squadron mcp status
+NAME                 LOCATION                                           AUTH            EXPIRES
+filesystem           npm:@modelcontextprotocol/server-filesystem        n/a             -
+linear               https://mcp.linear.app/sse                         connected       in 167h
+self                 http://localhost:8090/mcp                          no token        -
+```
+
+States: `n/a` (stdio, no auth needed), `static header` (literal Authorization in HCL), `no token` (no stored token), `connected` (token valid), `expired` (will auto-refresh on next use).
+
+### `squadron mcp logout <name>`
+
+Removes the stored access and refresh tokens from the vault. The cached client registration is preserved so the next `login` skips the registration step.
+
+### Token lifecycle
+
+Tokens are stored in the encrypted vault alongside your other variables. Squadron automatically refreshes access tokens in the background before they expire — you don't need to re-run `login` unless the authorization itself is revoked in the provider's settings.
+
 ## What's not supported
 
 - **Output schemas.** MCP servers may declare an `outputSchema` and return a typed `structuredContent` field on tool results. Squadron currently ignores both and passes the `content` blocks through as plain text (the same behavior as most mainstream MCP hosts). If you want structured output, reason over the returned text directly in your agent.
@@ -161,8 +216,8 @@ mcp "filesystem" {
 
 ## Error handling and crash recovery
 
-If a server fails to install, fails to start, or crashes during `initialize`, config loading fails with a clear error. Squadron will not fall back to partial results or skip the server silently — an unavailable MCP server is a hard failure at config load, just like a missing plugin binary.
+If a server fails to install, fails to start, or crashes during `initialize`, the error is recorded but config loading continues — agents that don't reference the broken server's tools are unaffected. Agents that do reference it will see an empty tool set and surface the error at call time.
 
-**Mid-run crashes are automatically recovered.** If an MCP server's stdio subprocess dies or its HTTP transport drops between tool calls, Squadron detects the dead transport on the next call, respawns the server using the original `mcp "name" { ... }` spec (re-running `initialize` and refreshing the tool list), and retries the call once. Only if the retry also fails does the agent see an error. This mirrors how the plugin system handles crashes — you do not need to reload config or restart Squadron to recover from a crashed MCP server.
+**Mid-run crashes are automatically recovered.** If an MCP server's stdio subprocess dies or its HTTP transport drops between tool calls, Squadron detects the dead transport on the next call, respawns the server using the original `mcp "name" { ... }` spec (re-running `initialize` and refreshing the tool list), and retries the call once. Only if the retry also fails does the agent see an error.
 
 If the respawn itself fails (the binary has gone missing, the remote HTTP endpoint is down, etc.), the tool call surfaces a clear `respawn failed` error to the agent so it can reason about the failure.

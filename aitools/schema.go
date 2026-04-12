@@ -33,21 +33,36 @@ type Property struct {
 // PropertyMap is a map of property names to their definitions
 type PropertyMap map[string]Property
 
-// Schema represents a JSON Schema for tool parameters
+// Schema represents a JSON Schema for tool parameters. The typed fields
+// cover squadron's own tools; adapters ingesting richer external schemas
+// (MCP) should set a raw passthrough via WithRawJSONSchema so nothing is
+// lost on the way to the LLM.
 type Schema struct {
 	Type       PropertyType `json:"type"`
 	Properties PropertyMap  `json:"properties"`
 	Required   []string     `json:"required,omitempty"`
+
+	rawJSON json.RawMessage
 }
 
-// String returns the JSON representation of the schema
+// WithRawJSONSchema returns a copy of s with the given bytes set as the
+// passthrough payload for ToJSONSchema.
+func (s Schema) WithRawJSONSchema(raw json.RawMessage) Schema {
+	s.rawJSON = raw
+	return s
+}
+
 func (s Schema) String() string {
 	b, _ := json.Marshal(s)
 	return string(b)
 }
 
-// ToJSONSchema returns the schema as a json.RawMessage suitable for ToolDefinition.InputSchema
+// ToJSONSchema returns the raw passthrough bytes if set, otherwise
+// marshals the typed fields.
 func (s Schema) ToJSONSchema() json.RawMessage {
+	if len(s.rawJSON) > 0 {
+		return s.rawJSON
+	}
 	b, _ := json.Marshal(s)
 	return json.RawMessage(b)
 }

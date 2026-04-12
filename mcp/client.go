@@ -7,6 +7,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -15,6 +17,7 @@ import (
 	mcpproto "github.com/mark3labs/mcp-go/mcp"
 
 	"squadron/aitools"
+	"squadron/mcp/oauth"
 )
 
 // Spec describes one mcp block's desired configuration. Exactly one of
@@ -42,11 +45,12 @@ type Spec struct {
 // underlying transport on demand if the subprocess dies mid-run — see
 // ensureAlive.
 type Client struct {
-	name  string
-	spec  Spec
-	mu    sync.Mutex
-	inner *mcpgoclient.Client
-	tools []*ToolInfo
+	name        string
+	spec        Spec
+	mu          sync.Mutex
+	inner       *mcpgoclient.Client
+	tools       []*ToolInfo
+	stopRefresh context.CancelFunc // nil if no refresh loop is running
 }
 
 var (
@@ -54,11 +58,18 @@ var (
 	registryMu sync.Mutex
 )
 
-// Load returns a Client for the given name, starting and initializing the
-// underlying MCP server if it hasn't been loaded yet (or if a cached entry's
-// liveness check fails). Calls are idempotent — the same name always yields
-// the same process for the lifetime of this CLI invocation.
+// DefaultLoadTimeout bounds Start + Initialize + ListTools when the caller
+// has no deadline of its own.
+const DefaultLoadTimeout = 10 * time.Second
+
 func Load(name string, spec Spec) (*Client, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultLoadTimeout)
+	defer cancel()
+	return LoadWithContext(ctx, name, spec)
+}
+
+// LoadWithContext honours ctx's deadline for every network hop.
+func LoadWithContext(ctx context.Context, name string, spec Spec) (*Client, error) {
 	registryMu.Lock()
 	defer registryMu.Unlock()
 
@@ -71,44 +82,71 @@ func Load(name string, spec Spec) (*Client, error) {
 		delete(registry, name)
 	}
 
-	inner, tools, err := bringUpTransport(name, spec)
+	inner, tools, err := bringUpTransport(ctx, name, spec)
 	if err != nil {
 		return nil, err
 	}
 
 	c := &Client{name: name, spec: spec, inner: inner, tools: tools}
 	registry[name] = c
+
+	// Start a background refresh loop for OAuth-enabled HTTP MCPs. The loop
+	// refreshes the token before it expires and reconnects the transport
+	// (important for SSE whose GET stream holds a stale bearer token).
+	if spec.URL != "" && oauth.HasToken(name) {
+		refreshCtx, cancel := context.WithCancel(context.Background())
+		c.stopRefresh = cancel
+		oauth.StartRefreshLoop(refreshCtx, name, spec.URL, func() {
+			// Token was refreshed — reconnect the transport so the SSE
+			// stream picks up the new bearer token.
+			_ = c.reconnect()
+		})
+	}
+
 	return c, nil
 }
 
-// bringUpTransport starts, initializes, and lists the tools for one MCP
-// server. It is shared by the initial Load call and by ensureAlive's respawn
-// path so that any subprocess restart mid-run goes through the exact same
-// startup sequence.
-func bringUpTransport(name string, spec Spec) (*mcpgoclient.Client, []*ToolInfo, error) {
+// bringUpTransport runs the full Start + Initialize + ListTools sequence.
+// Shared by Load and ensureAlive so respawns go through identical startup.
+func bringUpTransport(ctx context.Context, name string, spec Spec) (*mcpgoclient.Client, []*ToolInfo, error) {
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultLoadTimeout)
+		defer cancel()
+	}
+
 	inner, err := startTransport(name, spec)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	// Start is idempotent (see mcp-go's Client.Start). Stdio auto-starts in
-	// NewStdioMCPClient; HTTP needs an explicit Start before Initialize.
-	startCtx, startCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// SSE's Start spawns a reader goroutine tied to the ctx we pass.
+	// Handing it the bounded load ctx kills the stream as soon as Load
+	// returns, which makes every subsequent CallTool hang waiting for a
+	// response over a dead stream. Use Background for stateful transports;
+	// Client.Close() at process exit still tears the stream down via
+	// mcp-go's stored cancel. Streamable HTTP is stateless per-request so
+	// it's fine to keep using ctx there.
+	startCtx := ctx
+	if spec.URL != "" && isSSEURL(spec.URL) {
+		startCtx = context.Background()
+	}
 	if err := inner.Start(startCtx); err != nil {
-		startCancel()
 		_ = inner.Close()
+		if authErr := classifyAuthError(name, spec.URL, err); authErr != nil {
+			return nil, nil, authErr
+		}
 		return nil, nil, fmt.Errorf("mcp %q: start transport: %w", name, err)
 	}
-	startCancel()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 
 	initReq := mcpproto.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcpproto.LATEST_PROTOCOL_VERSION
 	initReq.Params.ClientInfo = mcpproto.Implementation{Name: "squadron", Version: "dev"}
 	if _, err := inner.Initialize(ctx, initReq); err != nil {
 		_ = inner.Close()
+		if authErr := classifyAuthError(name, spec.URL, err); authErr != nil {
+			return nil, nil, authErr
+		}
 		return nil, nil, fmt.Errorf("mcp %q: initialize: %w", name, err)
 	}
 
@@ -139,11 +177,7 @@ func startTransport(name string, spec Spec) (*mcpgoclient.Client, error) {
 	}
 
 	if spec.URL != "" {
-		c, err := mcpgoclient.NewStreamableHttpClient(spec.URL, transport.WithHTTPHeaders(spec.Headers))
-		if err != nil {
-			return nil, fmt.Errorf("mcp %q: start http transport: %w", name, err)
-		}
-		return c, nil
+		return startHTTPTransport(name, spec)
 	}
 
 	c, err := mcpgoclient.NewStdioMCPClient(command, env, args...)
@@ -151,6 +185,65 @@ func startTransport(name string, spec Spec) (*mcpgoclient.Client, error) {
 		return nil, fmt.Errorf("mcp %q: start stdio transport: %w", name, err)
 	}
 	return c, nil
+}
+
+// startHTTPTransport picks one of mcp-go's four HTTP-family constructors
+// based on URL suffix (SSE if path ends in /sse) and stored-token presence.
+// Engaging the OAuth client without a stored token would make mcp-go error
+// out locally before any request leaves the machine, so anonymous MCPs
+// take the plain client path.
+func startHTTPTransport(name string, spec Spec) (*mcpgoclient.Client, error) {
+	sse := isSSEURL(spec.URL)
+	_, hasStaticAuth := spec.Headers["Authorization"]
+	useOAuth := !hasStaticAuth && oauth.HasToken(name)
+
+	var oauthCfg transport.OAuthConfig
+	if useOAuth {
+		oauthCfg = transport.OAuthConfig{
+			TokenStore:  oauth.NewVaultTokenStore(name),
+			PKCEEnabled: true,
+		}
+		if creds, err := oauth.LoadClientCredentials(name); err == nil && creds != nil {
+			oauthCfg.ClientID = creds.ClientID
+			oauthCfg.ClientSecret = creds.ClientSecret
+		}
+		// Work around mcp-go's broken .well-known URL construction (it
+		// appends the MCP path as a suffix, breaking RFC 8615). Do our
+		// own origin-level discovery and pass the result explicitly.
+		if metaURL, err := oauth.DiscoverAuthServerMetadataURL(context.Background(), spec.URL); err == nil {
+			oauthCfg.AuthServerMetadataURL = metaURL
+		}
+	}
+
+	var (
+		c   *mcpgoclient.Client
+		err error
+	)
+	switch {
+	case sse && useOAuth:
+		c, err = mcpgoclient.NewOAuthSSEClient(spec.URL, oauthCfg, transport.WithHeaders(spec.Headers))
+	case sse:
+		c, err = mcpgoclient.NewSSEMCPClient(spec.URL, transport.WithHeaders(spec.Headers))
+	case useOAuth:
+		c, err = mcpgoclient.NewOAuthStreamableHttpClient(spec.URL, oauthCfg, transport.WithHTTPHeaders(spec.Headers))
+	default:
+		c, err = mcpgoclient.NewStreamableHttpClient(spec.URL, transport.WithHTTPHeaders(spec.Headers))
+	}
+	if err != nil {
+		return nil, fmt.Errorf("mcp %q: start http transport: %w", name, err)
+	}
+	return c, nil
+}
+
+// isSSEURL returns true if the URL's path suffix is "/sse". Heuristic —
+// false positives surface as a loud mcp-go startup error.
+func isSSEURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	p := strings.TrimSuffix(u.Path, "/")
+	return strings.HasSuffix(p, "/sse")
 }
 
 // resolveSpawn picks the final (command, args, env) to hand to the stdio
@@ -235,7 +328,9 @@ func (c *Client) ensureAlive() error {
 		c.inner = nil
 	}
 
-	inner, tools, err := bringUpTransport(c.name, c.spec)
+	respawnCtx, cancel := context.WithTimeout(context.Background(), DefaultLoadTimeout)
+	defer cancel()
+	inner, tools, err := bringUpTransport(respawnCtx, c.name, c.spec)
 	if err != nil {
 		return fmt.Errorf("mcp %q: respawn failed: %w", c.name, err)
 	}
@@ -281,7 +376,31 @@ func (c *Client) Name() string { return c.name }
 
 // Close shuts down this client. Prefer CloseAll() at program exit rather than
 // per-client cleanup.
+// reconnect tears down the current transport and brings up a fresh one.
+// Called by the refresh loop after a token refresh so SSE streams pick up
+// the new bearer token.
+func (c *Client) reconnect() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.inner != nil {
+		_ = c.inner.Close()
+		c.inner = nil
+	}
+	respawnCtx, cancel := context.WithTimeout(context.Background(), DefaultLoadTimeout)
+	defer cancel()
+	inner, tools, err := bringUpTransport(respawnCtx, c.name, c.spec)
+	if err != nil {
+		return err
+	}
+	c.inner = inner
+	c.tools = tools
+	return nil
+}
+
 func (c *Client) Close() {
+	if c.stopRefresh != nil {
+		c.stopRefresh()
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.inner != nil {

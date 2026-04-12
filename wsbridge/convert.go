@@ -235,7 +235,7 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Version: s.Version,
 			Kind:    "mcp",
 		}
-		if client, ok := cfg.LoadedMCPClients[s.Name]; ok {
+		if client, ok := cfg.LoadedMCPClients[s.Name]; ok && client != nil {
 			if tools, err := client.ListTools(); err == nil {
 				for _, t := range tools {
 					pi.Tools = append(pi.Tools, mcpToolInfoToProtocol(t))

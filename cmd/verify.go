@@ -88,6 +88,21 @@ var verifyCmd = &cobra.Command{
 			}
 			fmt.Printf("  - %s (source: %s, version: %s, %s)\n", p.Name, p.Source, p.Version, loaded)
 		}
+		fmt.Printf("Found %d mcp server(s)\n", len(cfg.MCPServers))
+		for _, s := range cfg.MCPServers {
+			// A nil entry in LoadedMCPClients means load tolerated an
+			// AuthRequiredError — the block parsed fine but the server
+			// isn't authorized yet.
+			status := "NOT LOADED"
+			if client, ok := cfg.LoadedMCPClients[s.Name]; ok {
+				if client == nil {
+					status = "needs login"
+				} else {
+					status = "loaded"
+				}
+			}
+			fmt.Printf("  - %s (%s, %s)\n", s.Name, s.Location(), status)
+		}
 		fmt.Printf("Found %d mission(s)\n", len(cfg.Missions))
 		for _, w := range cfg.Missions {
 			fmt.Printf("  - %s (commander: %s, agents: %v, tasks: %d)\n", w.Name, w.Commander.Model, w.Agents, len(w.Tasks))

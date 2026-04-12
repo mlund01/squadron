@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"squadron/config"
 	"squadron/docs"
+	"squadron/mcp/oauth"
 	"squadron/store"
 )
 
@@ -701,4 +703,122 @@ func (h *handlers) getVar(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 	}
 
 	return toolResult(result)
+}
+
+// =============================================================================
+// MCP OAuth
+// =============================================================================
+
+func (h *handlers) mcpStatus(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	cfg := h.deps.Config()
+	if cfg == nil {
+		return mcp.NewToolResultError("config not loaded"), nil
+	}
+
+	snap, err := oauth.LoadVaultSnapshot()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to read vault: %v", err)), nil
+	}
+
+	type serverStatus struct {
+		Name     string `json:"name"`
+		Location string `json:"location"`
+		Auth     string `json:"auth"`
+		Expires  string `json:"expires"`
+	}
+
+	var servers []serverStatus
+	for _, s := range cfg.MCPServers {
+		auth, expires := describeMCPAuth(s, snap)
+		servers = append(servers, serverStatus{
+			Name:     s.Name,
+			Location: s.Location(),
+			Auth:     auth,
+			Expires:  expires,
+		})
+	}
+
+	return toolResult(map[string]any{"servers": servers})
+}
+
+func describeMCPAuth(spec config.MCPServer, snap *oauth.VaultSnapshot) (state, expires string) {
+	if spec.URL == "" {
+		return "n/a", "-"
+	}
+	if _, hasStatic := spec.Headers["Authorization"]; hasStatic {
+		return "static header", "-"
+	}
+	if !snap.HasToken(spec.Name) {
+		return "no token", "-"
+	}
+
+	tok, err := snap.Token(spec.Name)
+	if err != nil || tok == nil {
+		return "unreadable", "-"
+	}
+	if tok.ExpiresAt.IsZero() {
+		return "connected", "no expiry"
+	}
+	remaining := time.Until(tok.ExpiresAt)
+	if remaining <= 0 {
+		return "expired", "(refreshes on use)"
+	}
+	hours := int(remaining.Hours())
+	if hours > 0 {
+		return "connected", fmt.Sprintf("in %dh", hours)
+	}
+	mins := int(remaining.Minutes())
+	if mins > 0 {
+		return "connected", fmt.Sprintf("in %dm", mins)
+	}
+	return "connected", fmt.Sprintf("in %ds", int(remaining.Seconds()))
+}
+
+func (h *handlers) mcpLogout(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, _ := req.GetArguments()["name"].(string)
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+
+	if err := oauth.DeleteToken(name); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to delete token: %v", err)), nil
+	}
+
+	return toolResult(map[string]any{
+		"name":   name,
+		"status": "token removed",
+	})
+}
+
+func (h *handlers) mcpRefresh(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, _ := req.GetArguments()["name"].(string)
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+
+	cfg := h.deps.Config()
+	if cfg == nil {
+		return mcp.NewToolResultError("config not loaded"), nil
+	}
+
+	// Find the server URL from config.
+	var serverURL string
+	for _, s := range cfg.MCPServers {
+		if s.Name == name {
+			serverURL = s.URL
+			break
+		}
+	}
+	if serverURL == "" {
+		return mcp.NewToolResultError(fmt.Sprintf("mcp %q not found or is not an HTTP server", name)), nil
+	}
+
+	if err := oauth.ForceRefresh(ctx, name, serverURL); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("refresh failed: %v", err)), nil
+	}
+
+	return toolResult(map[string]any{
+		"name":   name,
+		"status": "token refreshed",
+	})
 }

@@ -105,4 +105,19 @@ func registerTools(srv *server.MCPServer, h *handlers) {
 		mcp.WithDescription("Get a single configuration variable. Secret values are masked."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Variable name")),
 	), h.getVar)
+
+	// MCP OAuth
+	srv.AddTool(mcp.NewTool("mcp_status",
+		mcp.WithDescription("Show OAuth connection status for all configured MCP servers. Returns auth state and token expiry for each server."),
+	), h.mcpStatus)
+
+	srv.AddTool(mcp.NewTool("mcp_logout",
+		mcp.WithDescription("Remove the stored OAuth token for an MCP server. Preserves client registration so the next login skips DCR."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("MCP server name")),
+	), h.mcpLogout)
+
+	srv.AddTool(mcp.NewTool("mcp_refresh",
+		mcp.WithDescription("Force-refresh the OAuth token for an MCP server using the stored refresh token."),
+		mcp.WithString("name", mcp.Required(), mcp.Description("MCP server name")),
+	), h.mcpRefresh)
 }

@@ -97,10 +97,10 @@ The escape hatch. Squadron runs whatever command you give it with no install ste
 
 ## Cache layout
 
-Auto-installed servers are cached next to plugins under `~/.squadron/mcp/`:
+Auto-installed servers are cached next to plugins under `.squadron/mcp/<platform>/`:
 
 ```
-~/.squadron/mcp/
+.squadron/mcp/darwin-arm64/
 ├── filesystem/2026.1.14/
 │   ├── runner.json
 │   └── node_modules/...
@@ -112,7 +112,7 @@ Auto-installed servers are cached next to plugins under `~/.squadron/mcp/`:
 `runner.json` is the "install complete" marker. To force a reinstall, delete the version directory:
 
 ```bash
-rm -rf ~/.squadron/mcp/filesystem/2026.1.14/
+rm -rf .squadron/mcp/darwin-arm64/filesystem/2026.1.14/
 ```
 
 ## Referencing MCP tools from agents and skills

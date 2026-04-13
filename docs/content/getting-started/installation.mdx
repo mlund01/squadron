@@ -87,7 +87,7 @@ docker pull ghcr.io/mlund01/squadron:latest-debian
 Run with your config mounted:
 
 ```bash
-docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
+docker run -v ./config:/config -p 8080:8080 \
   ghcr.io/mlund01/squadron serve --init -w --cc-port 8080 --no-browser
 ```
 
@@ -118,7 +118,7 @@ Before using Squadron, initialize the encrypted vault for secret storage:
 squadron init
 ```
 
-This creates `~/.squadron/` and sets up an encrypted vault with a passphrase stored in your OS keychain.
+This creates `.squadron/` in the current directory and sets up an encrypted vault with a passphrase stored in your OS keychain.
 
 ## API Keys
 
@@ -130,4 +130,4 @@ squadron vars set openai_api_key sk-...
 squadron vars set gemini_api_key AIza...
 ```
 
-Variables are encrypted at rest in `~/.squadron/vars.vault`.
+Variables are encrypted at rest in `.squadron/vars.vault`.

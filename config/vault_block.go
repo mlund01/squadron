@@ -1,7 +1,7 @@
 package config
 
 // VaultConfig is the HCL `vault` block. It selects which provider
-// stores the passphrase that encrypts SQUADRON_HOME/vars.vault.
+// stores the passphrase that encrypts .squadron/vars.vault.
 //
 //	vault {
 //	  provider = "file"   # or "keychain"

@@ -20,7 +20,7 @@ const (
 	ProviderFile     = "file"
 	ProviderKeychain = "keychain"
 
-	// Storage filenames under SQUADRON_HOME
+	// Storage filenames under .squadron/
 	KeyFileName   = "vault.key"
 	VaultFileName = "vars.vault"
 

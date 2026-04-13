@@ -14,7 +14,7 @@ func GetMCPDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get squadron home: %w", err)
 	}
-	return filepath.Join(sqHome, "mcp"), nil
+	return filepath.Join(sqHome, "mcp", paths.PlatformDir()), nil
 }
 
 // GetServerDir returns the cache dir for a specific (name, version) pair.

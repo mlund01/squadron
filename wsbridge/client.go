@@ -137,8 +137,6 @@ func (c *Client) Connect() error {
 }
 
 func (c *Client) connectToURL(url string) error {
-	log.Printf("Connecting to command center at %s...", url)
-
 	ws, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
 		return fmt.Errorf("dial command center: %w", err)
@@ -157,7 +155,6 @@ func (c *Client) connectToURL(url string) error {
 	}
 
 	c.connected = true
-	log.Printf("Registered with commander (instanceID=%s)", c.instanceID)
 	return nil
 }
 
@@ -331,7 +328,7 @@ func (c *Client) readPump() {
 	for {
 		_, message, err := c.ws.ReadMessage()
 		if err != nil {
-			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
+			if c.connected && websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				log.Printf("WebSocket read error: %v", err)
 			}
 			return

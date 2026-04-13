@@ -73,21 +73,21 @@ func RunLoginFlow(ctx context.Context, name, serverURL string, source CallbackSo
 		return fmt.Errorf("oauth %q: failed to load authorization server metadata: %w", name, err)
 	}
 
-	if handler.GetClientID() == "" {
-		if err := handler.RegisterClient(ctx, "squadron"); err != nil {
-			// DCR is optional — many servers accept authorization requests
-			// without a registered client_id, relying on PKCE + redirect_uri
-			// for client identity. Continue without it.
-			fmt.Printf("  Note: dynamic client registration not supported, continuing without it.\n")
-		} else {
-			if err := SaveClientCredentials(name, ClientCredentials{
-				ClientID:     handler.GetClientID(),
-				ClientSecret: handler.GetClientSecret(),
-			}); err != nil {
-				return fmt.Errorf("oauth %q: caching client credentials: %w", name, err)
-			}
+	// Always attempt DCR, even if we have cached creds. The redirect_uri
+	// includes an ephemeral port that changes every run, and some servers
+	// (Fellow) do a strict match against the registered value instead of
+	// accepting any loopback port per RFC 8252. Re-registering updates
+	// the redirect_uri to the current port.
+	if err := handler.RegisterClient(ctx, "squadron"); err == nil {
+		if err := SaveClientCredentials(name, ClientCredentials{
+			ClientID:     handler.GetClientID(),
+			ClientSecret: handler.GetClientSecret(),
+		}); err != nil {
+			return fmt.Errorf("oauth %q: caching client credentials: %w", name, err)
 		}
 	}
+	// If DCR fails, continue with whatever client_id we have (cached or empty).
+	// Some servers don't support DCR and accept authorization requests without one.
 
 	verifier, err := transport.GenerateCodeVerifier()
 	if err != nil {

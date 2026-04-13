@@ -159,13 +159,17 @@ func NewPostgresBundle(connStr string) (*Bundle, error) {
 	db.Exec(`CREATE TABLE IF NOT EXISTS task_inputs (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES mission_tasks(id), iteration_index INTEGER, objective TEXT NOT NULL, created_at TEXT)`)
 	db.Exec(`CREATE INDEX IF NOT EXISTS idx_task_inputs_task ON task_inputs(task_id)`)
 
+	batchingEvents := NewBatchingEventStore(&PgEventStore{db: db})
 	return &Bundle{
 		Missions: &PgMissionStore{db: db},
 		Datasets: &PgDatasetStore{db: db},
 		Sessions: &PgSessionStore{db: db},
-		Events:   &PgEventStore{db: db},
+		Events:   batchingEvents,
 		Costs:    &PgCostStore{db: db},
-		closer:   db.Close,
+		closer: func() error {
+			batchingEvents.Close()
+			return db.Close()
+		},
 	}, nil
 }
 
@@ -1121,6 +1125,26 @@ func (s *PgEventStore) StoreEvent(event MissionEvent) error {
 		`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		event.ID, event.MissionID, event.TaskID, event.SessionID, event.IterationIndex, event.EventType, event.DataJSON, tsFrom(event.CreatedAt),
 	)
+	return err
+}
+
+func (s *PgEventStore) StoreEvents(events []MissionEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	const cols = 8
+	args := make([]interface{}, 0, len(events)*cols)
+	buf := make([]byte, 0, 256)
+	buf = append(buf, "INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES "...)
+	for i, e := range events {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		base := i*cols + 1
+		buf = append(buf, fmt.Sprintf("($%d,$%d,$%d,$%d,$%d,$%d,$%d,$%d)", base, base+1, base+2, base+3, base+4, base+5, base+6, base+7)...)
+		args = append(args, e.ID, e.MissionID, e.TaskID, e.SessionID, e.IterationIndex, e.EventType, e.DataJSON, tsFrom(e.CreatedAt))
+	}
+	_, err := s.db.Exec(string(buf), args...)
 	return err
 }
 

@@ -10,7 +10,7 @@ import (
 )
 
 // FileProvider stores the vault passphrase as a plain file at
-// SQUADRON_HOME/vault.key with 0600 permissions. This is the default
+// .squadron/vault.key with 0600 permissions. This is the default
 // provider: the variable values are still encrypted at rest, but the
 // key sits next to the vault and requires no OS keychain interaction.
 type FileProvider struct{}

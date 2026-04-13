@@ -21,12 +21,13 @@ docker run --rm ghcr.io/mlund01/squadron version
 
 ## Running with Config
 
-Squadron in Docker uses two mount points:
+Squadron in Docker uses a single mount point:
 
 | Mount | Purpose |
 |-------|---------|
-| `/config` | Your HCL configuration files (bind mount from host) |
-| `/data/squadron` | Runtime state — vault, plugins, database (named volume or bind mount) |
+| `/config` | Your HCL configuration files and `.squadron/` state directory |
+
+All runtime state (vault, plugins, database) lives in `/config/.squadron/`, right alongside your HCL config files. This means you only need one mount.
 
 The container's working directory is `/config`, so the `-c` flag is not needed.
 
@@ -37,7 +38,6 @@ Use `--init` to automatically initialize the encrypted vault on first run:
 ```bash
 docker run \
   -v /path/to/your/config:/config \
-  -v squadron-data:/data/squadron \
   -p 8080:8080 \
   ghcr.io/mlund01/squadron serve --init -w --cc-port 8080 --no-browser
 ```
@@ -51,7 +51,6 @@ If your HCL config has a `commander` block, no port mapping is needed — Squadr
 ```bash
 docker run \
   -v /path/to/your/config:/config \
-  -v squadron-data:/data/squadron \
   ghcr.io/mlund01/squadron serve --init
 ```
 
@@ -60,7 +59,6 @@ docker run \
 ```bash
 docker run \
   -v /path/to/your/config:/config \
-  -v squadron-data:/data/squadron \
   ghcr.io/mlund01/squadron mission --init my_mission
 ```
 
@@ -72,13 +70,9 @@ services:
     image: ghcr.io/mlund01/squadron:latest
     volumes:
       - ./my-config:/config
-      - squadron-data:/data/squadron
     command: ["serve", "--init", "-w", "--cc-port", "8080", "--no-browser"]
     ports:
       - "8080:8080"
-
-volumes:
-  squadron-data:
 ```
 
 ```bash
@@ -87,7 +81,7 @@ docker compose up
 
 ## Setting Variables
 
-Variables are stored in an encrypted vault at `/data/squadron/vars.vault`. Set them by exec-ing into a running container:
+Variables are stored in an encrypted vault at `/config/.squadron/vars.vault`. Set them by exec-ing into a running container:
 
 ```bash
 docker exec <container> squadron vars set anthropic_api_key sk-ant-...
@@ -103,7 +97,6 @@ services:
     image: ghcr.io/mlund01/squadron:latest
     volumes:
       - ./my-config:/config
-      - squadron-data:/data/squadron
     command: ["serve", "--init", "-w", "--cc-port", "8080", "--no-browser"]
     secrets:
       - vault_passphrase
@@ -113,9 +106,6 @@ services:
 secrets:
   vault_passphrase:
     file: ./vault_passphrase.txt
-
-volumes:
-  squadron-data:
 ```
 
 Squadron automatically checks `/run/secrets/vault_passphrase`. If the file exists, it uses that passphrase instead of the fallback. Docker mounts secrets as tmpfs (RAM-backed), so the passphrase never touches the container's disk.
@@ -128,17 +118,6 @@ Use a version tag instead of `latest`:
 docker pull ghcr.io/mlund01/squadron:v0.0.45
 docker pull ghcr.io/mlund01/squadron:v0.0.45-debian
 ```
-
-## SQUADRON_HOME
-
-Inside the container, `SQUADRON_HOME` is set to `/data/squadron`. This consolidates all runtime state into a single directory. When `SQUADRON_HOME` is set:
-
-- The encrypted vault is stored at `$SQUADRON_HOME/vars.vault`
-- Plugins are downloaded to `$SQUADRON_HOME/plugins/`
-- The SQLite database defaults to `$SQUADRON_HOME/store.db`
-- Shared folder paths in HCL are resolved relative to `$SQUADRON_HOME/folders/`
-
-You can also use `SQUADRON_HOME` outside of Docker to consolidate state into a custom directory.
 
 ## Alpine vs Debian
 

@@ -13,7 +13,6 @@ import (
 
 	schemafunc "squadron/config/functions"
 	vaultpkg "squadron/config/vault"
-	"squadron/internal/paths"
 	squadronmcp "squadron/mcp"
 	"squadron/plugin"
 
@@ -818,13 +817,6 @@ func loadFromFiles(files []string) (*Config, error) {
 		return nil, fmt.Errorf("a storage block is required in the configuration, e.g.:\n\n  storage {\n    backend = \"sqlite\"\n  }\n")
 	}
 	storageConfig.Defaults()
-
-	// When SQUADRON_HOME is set, default SQLite path goes there instead of config dir
-	if storageConfig.Path == ".squadron/store.db" {
-		if sqHome, err := paths.SquadronHome(); err == nil && os.Getenv("SQUADRON_HOME") != "" {
-			storageConfig.Path = filepath.Join(sqHome, "store.db")
-		}
-	}
 
 	// Resolve relative SQLite path against config directory
 	if storageConfig.Backend == "sqlite" && !filepath.IsAbs(storageConfig.Path) && len(files) > 0 {

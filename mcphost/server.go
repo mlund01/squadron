@@ -91,17 +91,26 @@ func StartStreamableHTTP(srv *server.MCPServer, port int, secret string) (*Serve
 		}
 	}
 
-	// No auth — let the streamable server manage its own HTTP server.
+	// No auth — still use our own http.Server so we control the listener
+	// lifecycle and can shut it down cleanly before the streamable tries
+	// to send session-cleanup requests to itself.
+	mux := http.NewServeMux()
+	mux.Handle("/mcp", streamable)
+	httpSrv := &http.Server{
+		Addr:    addr,
+		Handler: mux,
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- streamable.Start(addr)
+		errCh <- httpSrv.ListenAndServe()
 	}()
 
 	select {
 	case err := <-errCh:
 		return nil, fmt.Errorf("mcp host failed to start on %s: %w", addr, err)
 	default:
-		return &Server{streamable: streamable}, nil
+		return &Server{streamable: streamable, httpSrv: httpSrv}, nil
 	}
 }
 
@@ -112,10 +121,7 @@ func (s *Server) Shutdown() error {
 	}
 	ctx := context.Background()
 	if s.httpSrv != nil {
-		return s.httpSrv.Shutdown(ctx)
-	}
-	if s.streamable != nil {
-		return s.streamable.Shutdown(ctx)
+		s.httpSrv.Shutdown(ctx)
 	}
 	return nil
 }

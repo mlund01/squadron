@@ -20,6 +20,7 @@ import (
 	"squadron/config/vault"
 	"squadron/internal/browser"
 	"squadron/internal/paths"
+	squadronmcp "squadron/mcp"
 	"squadron/mcphost"
 	"squadron/scheduler"
 	"squadron/store"
@@ -92,21 +93,21 @@ func runServe(cmd *cobra.Command, args []string) {
 	var pingDone chan struct{}
 	var localCC bool
 
+	// Channel signals when the command center is ready (port, proc, err).
+	type ccResult struct {
+		port int
+		proc *exec.Cmd
+		err  error
+	}
+	ccReady := make(chan ccResult, 1)
+
 	if serveCommandCenter {
-		var err error
-		ccPort, ccProc, err = launchCommandCenter()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error launching command center: %v\n", err)
-			os.Exit(1)
-		}
-		localCC = true
-
-		pingDone = make(chan struct{})
-		go keepAlivePinger(ccPort, pingDone)
-
-		if !serveNoBrowser {
-			openBrowser(fmt.Sprintf("http://localhost:%d", ccPort))
-		}
+		go func() {
+			port, proc, err := launchCommandCenter()
+			ccReady <- ccResult{port, proc, err}
+		}()
+	} else {
+		close(ccReady)
 	}
 
 	// Start the MCP host BEFORE the full config load so consumer-side
@@ -148,8 +149,6 @@ func runServe(cmd *cobra.Command, args []string) {
 		mcpServer, err = mcphost.StartStreamableHTTP(mcpSrv, hostCfg.Port, hostCfg.Secret)
 		if err != nil {
 			log.Printf("Warning: MCP host failed to start: %v", err)
-		} else {
-			fmt.Printf("MCP host listening on http://localhost:%d/mcp\n", hostCfg.Port)
 		}
 	}
 
@@ -158,6 +157,25 @@ func runServe(cmd *cobra.Command, args []string) {
 	if cfgErr != nil {
 		log.Printf("Config not ready: %v", cfgErr)
 		log.Println("Waiting for valid configuration (set variables or fix config files)...")
+	}
+
+	// Wait for command center if launching one
+	if serveCommandCenter {
+		result := <-ccReady
+		if result.err != nil {
+			fmt.Fprintf(os.Stderr, "Error launching command center: %v\n", result.err)
+			os.Exit(1)
+		}
+		ccPort = result.port
+		ccProc = result.proc
+		localCC = true
+
+		pingDone = make(chan struct{})
+		go keepAlivePinger(ccPort, pingDone)
+
+		if !serveNoBrowser {
+			openBrowser(fmt.Sprintf("http://localhost:%d", ccPort))
+		}
 	}
 
 	// When using local command center, override commander config
@@ -206,21 +224,21 @@ func runServe(cmd *cobra.Command, args []string) {
 	sharedClient = client
 	sharedStores = stores
 
-	// Connect immediately — even without valid config, the command center
+	// Connect — even without valid config, the command center
 	// can show vars and config files so the user can fix things from the UI
 	if localCC {
 		commanderURL := fmt.Sprintf("ws://localhost:%d/ws", ccPort)
 		if err := connectWithRetry2(client, commanderURL, true); err != nil {
 			log.Printf("Connection failed: %v", err)
 		} else {
-			fmt.Printf("Connected to command center (instance: %s)\n", client.InstanceID())
+			fmt.Printf("Squadron ready — http://localhost:%d\n", ccPort)
 		}
 	} else if cfg.CommandCenter != nil {
 		if err := connectWithRetry2(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {
 			log.Printf("Connection failed: %v (will retry when config changes)", err)
 		} else {
-			fmt.Printf("Connected to commander at %s (instance: %s, id: %s)\n",
-				cfg.CommandCenter.URL, cfg.CommandCenter.InstanceName, client.InstanceID())
+			fmt.Printf("Squadron ready — connected to %s (instance: %s)\n",
+				cfg.CommandCenter.URL, cfg.CommandCenter.InstanceName)
 		}
 	}
 
@@ -241,6 +259,9 @@ func runServe(cmd *cobra.Command, args []string) {
 	go func() {
 		for {
 			if err := client.Run(); err != nil {
+				if !client.IsConnected() {
+					return // shutting down
+				}
 				log.Printf("Connection lost: %v", err)
 				cfg := client.GetConfig()
 				if cfg != nil && cfg.CommandCenter != nil && cfg.CommandCenter.AutoReconnect {
@@ -259,10 +280,15 @@ func runServe(cmd *cobra.Command, args []string) {
 	}()
 
 	<-stop
-	fmt.Println("\nShutting down...")
+	fmt.Println("Shutting down...")
+
+	// Close the wsbridge client first so the reconnect goroutine won't
+	// try to reconnect when the command center process exits.
+	client.Close()
+
+	squadronmcp.CloseAll() // close MCP clients before stopping the host
 	mcpServer.Shutdown()
 	sched.Stop()
-	client.Close()
 
 	// Clean up command center
 	if pingDone != nil {
@@ -418,8 +444,6 @@ func launchCommandCenter() (int, *exec.Cmd, error) {
 		"-addr", fmt.Sprintf(":%d", port),
 		"-keep-alive", fmt.Sprintf("%d", ccKeepAlive),
 	)
-	proc.Stdout = os.Stdout
-	proc.Stderr = os.Stderr
 
 	if err := proc.Start(); err != nil {
 		return 0, nil, fmt.Errorf("failed to start command center: %w", err)
@@ -433,7 +457,6 @@ func launchCommandCenter() (int, *exec.Cmd, error) {
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
-				fmt.Printf("Command center running at http://localhost:%d\n", port)
 				return port, proc, nil
 			}
 		}
@@ -502,7 +525,7 @@ func ensureCommandCenter() (string, error) {
 	// Write current version
 	os.WriteFile(currentFile, []byte(version), 0644)
 
-	fmt.Printf("Installed command center %s\n", version)
+	fmt.Printf("Downloaded command center %s\n", version)
 	return binPath, nil
 }
 

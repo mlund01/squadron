@@ -21,13 +21,14 @@ var (
 var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Initialize Squadron (create encrypted vault for secrets)",
-	Long: `Initialize a Squadron instance by creating the SQUADRON_HOME directory
-and setting up an encrypted vault for secret storage.
+	Long: `Initialize a Squadron instance by creating the .squadron directory
+in the current working directory and setting up an encrypted vault for
+secret storage.
 
 A cryptographically random passphrase is generated and stored via the
 configured vault provider:
 
-  file     (default) — passphrase is written to $SQUADRON_HOME/vault.key
+  file     (default) — passphrase is written to .squadron/vault.key
                        (0600 perms). No OS keychain prompts.
   keychain          — passphrase is stored in the OS keychain (macOS
                        Keychain, Linux Secret Service, Windows Cred
@@ -36,7 +37,8 @@ configured vault provider:
                        process.
 
 Use --passphrase-file to provide your own passphrase instead of
-auto-generating one.
+auto-generating one. The .squadron directory is created in the
+current working directory.
 
 If variables already exist in vars.txt, they are migrated into the vault
 and vars.txt is deleted.`,

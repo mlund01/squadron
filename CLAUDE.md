@@ -93,7 +93,7 @@ plugin "playwright" {
 #
 # Exactly one of `command`, `url`, or `source` per block.
 
-# Auto-installed npm package (cache at ~/.squadron/mcp/filesystem/2024.12.1/)
+# Auto-installed npm package (cache at .squadron/mcp/filesystem/2024.12.1/)
 mcp "filesystem" {
   source  = "npm:@modelcontextprotocol/server-filesystem"
   version = "2024.12.1"
@@ -440,10 +440,10 @@ type ToolProvider interface {
 
 Plugins are stored in versioned directories:
 ```
-~/.squadron/plugins/<name>/<version>/plugin
+.squadron/plugins/<name>/<version>/plugin
 ```
 
-Example: `~/.squadron/plugins/playwright/local/plugin`
+Example: `.squadron/plugins/playwright/local/plugin`
 
 ### Building a Plugin
 
@@ -504,10 +504,10 @@ otherwise; `entry` is only valid with `source = "github.com/..."`.
 
 ### Cache layout
 
-Sits next to `~/.squadron/plugins/`:
+Sits next to `.squadron/plugins/`:
 
 ```
-~/.squadron/mcp/
+.squadron/mcp/
 ├── filesystem/2024.12.1/
 │   ├── runner.json
 │   └── node_modules/...
@@ -517,7 +517,7 @@ Sits next to `~/.squadron/plugins/`:
 ```
 
 `runner.json` is the "done" marker. Its presence short-circuits the installer
-on subsequent loads. Force a reinstall by `rm -rf ~/.squadron/mcp/<name>/<version>/`.
+on subsequent loads. Force a reinstall by `rm -rf .squadron/mcp/<name>/<version>/`.
 
 ### Agent reference syntax
 
@@ -775,7 +775,7 @@ When `--resume <missionID>` is used:
 
 ## Variable Storage
 
-Variables are encrypted at rest in `~/.squadron/vars.vault` using AES-256-GCM with an Argon2id-derived key. The encryption passphrase is stored in the OS keychain (macOS Keychain, Linux Secret Service/KeyCtl, Windows WinCred).
+Variables are encrypted at rest in `.squadron/vars.vault` using AES-256-GCM with an Argon2id-derived key. The encryption passphrase is stored in the OS keychain (macOS Keychain, Linux Secret Service/KeyCtl, Windows WinCred).
 
 Run `squadron init` before using vars commands. Commands `serve`, `chat`, and `mission` require init (or pass `--init` to auto-initialize).
 

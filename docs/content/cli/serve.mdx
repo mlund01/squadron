@@ -70,7 +70,7 @@ When using `-w` (local mode), no `command_center` block is needed — Squadron s
 Run the command center in a container:
 
 ```bash
-docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
+docker run -v ./config:/config -p 8080:8080 \
   ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
 ```
 

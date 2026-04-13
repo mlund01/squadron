@@ -45,7 +45,7 @@ agent "browser" {
 
 ## Plugin Paths
 
-Plugins are stored in `~/.squadron/plugins/<name>/<version>/plugin`.
+Plugins are stored in `.squadron/plugins/<platform>/<name>/<version>/plugin` (e.g. `.squadron/plugins/darwin-arm64/playwright/v0.0.2/plugin`).
 
 ## Creating Plugins
 
@@ -84,6 +84,6 @@ func main() {
 Build and install:
 
 ```bash
-mkdir -p ~/.squadron/plugins/myplugin/local
-go build -o ~/.squadron/plugins/myplugin/local/plugin .
+mkdir -p .squadron/plugins/darwin-arm64/myplugin/local
+go build -o .squadron/plugins/darwin-arm64/myplugin/local/plugin .
 ```

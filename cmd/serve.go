@@ -534,7 +534,7 @@ func commandCenterDir() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dir := filepath.Join(sqHome, "command-center")
+	dir := filepath.Join(sqHome, "command-center", paths.PlatformDir())
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}

@@ -31,18 +31,26 @@ var varsListCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
-		if len(vars) == 0 {
-			fmt.Println("No variables set")
-			return
-		}
+		printed := 0
 		for name, value := range vars {
+			if isInternalKey(name) {
+				continue
+			}
+			printed++
 			if isSecretName(name) {
 				fmt.Printf("%s=********\n", name)
 			} else {
 				fmt.Printf("%s=%s\n", name, value)
 			}
 		}
+		if printed == 0 {
+			fmt.Println("No variables set")
+		}
 	},
+}
+
+func isInternalKey(name string) bool {
+	return len(name) >= 6 && name[:6] == "oauth:"
 }
 
 func isSecretName(name string) bool {
@@ -60,6 +68,10 @@ var varsGetCmd = &cobra.Command{
 	Short: "Get a variable value",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if isInternalKey(args[0]) {
+			fmt.Fprintf(os.Stderr, "Error: variable '%s' not found\n", args[0])
+			os.Exit(1)
+		}
 		value, err := config.GetVar(args[0])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -185,6 +197,9 @@ var varsExportCmd = &cobra.Command{
 			os.Exit(1)
 		}
 		for name, value := range vars {
+			if isInternalKey(name) {
+				continue
+			}
 			fmt.Printf("%s=%s\n", name, value)
 		}
 	},

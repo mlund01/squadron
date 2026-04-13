@@ -1,8 +1,10 @@
 package paths
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 )
 
@@ -41,6 +43,12 @@ func EnsureHome() error {
 		return err
 	}
 	return os.MkdirAll(home, 0700)
+}
+
+// PlatformDir returns a platform-specific subdirectory name (e.g. "darwin-arm64", "linux-amd64").
+// Used for OS/arch-specific artifacts like plugins, MCP binaries, and command-center.
+func PlatformDir() string {
+	return fmt.Sprintf("%s-%s", runtime.GOOS, runtime.GOARCH)
 }
 
 // ResolveFolderPath resolves a folder path to an absolute path.

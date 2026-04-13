@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/hcl/v2"
 	"github.com/hashicorp/hcl/v2/gohcl"
@@ -986,8 +987,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				if len(emptySettings) > 0 {
 					return nil, fmt.Errorf("plugin '%s' failed to configure: settings %v are empty — check that the corresponding variables are set", p.Name, emptySettings)
 				}
-				if err := client.Configure(p.Settings); err != nil {
-					return nil, fmt.Errorf("plugin '%s' failed to configure: %w", p.Name, err)
+				if err := configureWithRetry(client, p.Name, p.Settings); err != nil {
+					return nil, err
 				}
 			}
 		}
@@ -1184,6 +1185,19 @@ type inputsBlock struct {
 }
 
 // parseToolBlock parses a single tool block with dynamic fields based on implemented tool schema
+// configureWithRetry retries plugin Configure() a few times to handle the case
+// where the gRPC process isn't fully ready immediately after launch.
+func configureWithRetry(client *plugin.PluginClient, name string, settings map[string]string) error {
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		if err = client.Configure(settings); err == nil {
+			return nil
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return fmt.Errorf("plugin '%s' failed to configure: %w", name, err)
+}
+
 func parseToolBlock(block *hcl.Block, baseCtx *hcl.EvalContext, loadedPlugins map[string]*plugin.PluginClient) (*CustomTool, error) {
 	toolName := block.Labels[0]
 

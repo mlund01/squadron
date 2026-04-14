@@ -88,8 +88,9 @@ func getModeInstructions(mode config.AgentMode) string {
 	switch mode {
 	case config.ModeMission:
 		return `**MISSION MODE:** You are running as part of an automated mission.
-- Use REASONING before every action or answer. Continue until the task is fully complete.
-- Only provide an ANSWER when done. Be autonomous — make reasonable assumptions.`
+- Use REASONING when the situation is complex or ambiguous. Skip it for straightforward actions.
+- Continue working until the task is fully complete. Only provide an ANSWER when done.
+- Be autonomous — make reasonable assumptions.`
 
 	case config.ModeChat:
 		fallthrough
@@ -106,8 +107,8 @@ func getResponsePatterns(mode config.AgentMode) string {
 	var sb strings.Builder
 
 	if mode == config.ModeMission {
-		sb.WriteString(`**Working:** Use REASONING tags, then call a tool via function calling.
-**Done:** Use REASONING tags, then ANSWER tags with your final result.
+		sb.WriteString(`**Working:** Optionally use REASONING tags for complex decisions, then call a tool via function calling.
+**Done:** Use ANSWER tags with your final result.
 **Need info:** Use ` + "`ask_commander`" + ` — only when critical details are missing.
 
 ## Commander Responses
@@ -128,8 +129,8 @@ func getRules(mode config.AgentMode) string {
 	var rules []string
 
 	if mode == config.ModeMission {
-		rules = append(rules, "**Always reason first.** Every response MUST start with a REASONING block.")
-		rules = append(rules, "**Complete the task.** Keep working (REASONING → tool call) until the task is done.")
+		rules = append(rules, "**Reason when it helps.** Use REASONING for complex decisions, ambiguous situations, or multi-step planning. Skip it for straightforward tool calls.")
+		rules = append(rules, "**Complete the task.** Keep working until the task is done.")
 		rules = append(rules, "**ANSWER means done.** Only use ANSWER when the entire task is complete.")
 		rules = append(rules, "**Be autonomous.** Don't ask questions - make reasonable assumptions and proceed.")
 	} else {

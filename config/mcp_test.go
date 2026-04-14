@@ -241,6 +241,61 @@ var _ = Describe("MCP", func() {
 				Expect(err.Error()).To(ContainSubstring("entry is only valid"))
 			})
 		})
+
+		Context("OAuth client credentials", func() {
+			It("accepts client_id on http servers", func() {
+				m := config.MCPServer{
+					Name:     "oauth",
+					URL:      "https://example.com/mcp",
+					ClientID: "my-client",
+				}
+				Expect(m.Validate()).To(Succeed())
+			})
+
+			It("accepts client_id and client_secret on http servers", func() {
+				m := config.MCPServer{
+					Name:         "oauth",
+					URL:          "https://example.com/mcp",
+					ClientID:     "my-client",
+					ClientSecret: "my-secret",
+				}
+				Expect(m.Validate()).To(Succeed())
+			})
+
+			It("rejects client_id on command servers", func() {
+				m := config.MCPServer{
+					Name:     "local",
+					Command:  "/bin/x",
+					ClientID: "my-client",
+				}
+				err := m.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("client_id is only valid on http"))
+			})
+
+			It("rejects client_id on source-backed servers", func() {
+				m := config.MCPServer{
+					Name:     "fs",
+					Source:   "npm:@modelcontextprotocol/server-filesystem",
+					Version:  "1.0.0",
+					ClientID: "my-client",
+				}
+				err := m.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("client_id is only valid on http"))
+			})
+
+			It("rejects client_secret without client_id", func() {
+				m := config.MCPServer{
+					Name:         "oauth",
+					URL:          "https://example.com/mcp",
+					ClientSecret: "orphan-secret",
+				}
+				err := m.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("client_secret requires client_id"))
+			})
+		})
 	})
 
 	Describe("MCPHostConfig", func() {

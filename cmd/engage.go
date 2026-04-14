@@ -10,15 +10,18 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"syscall"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"squadron/config"
 	"squadron/config/vault"
 	"squadron/internal/browser"
+	"squadron/internal/daemon"
 	"squadron/internal/paths"
 	squadronmcp "squadron/mcp"
 	"squadron/mcphost"
@@ -28,11 +31,12 @@ import (
 )
 
 var (
-	serveConfigPath    string
-	serveCommandCenter bool
-	serveCCPort        int
-	serveNoBrowser     bool
-	serveAutoInit bool
+	engageConfigPath string
+	engageHeadless   bool
+	engageCCPort     int
+	engageNoBrowser  bool
+	engageAutoInit   bool
+	engageForeground bool
 )
 
 const (
@@ -49,33 +53,129 @@ func ccBinaryName() string {
 	return "command-center"
 }
 
-var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Connect to a commander server and serve missions",
-	Long: `Start a long-running process that connects to a commander server via WebSocket.
-The instance registers with commander, allowing remote config inspection,
-mission execution, and history queries.
+var engageCmd = &cobra.Command{
+	Use:   "engage",
+	Short: "Start Squadron and connect to the command center",
+	Long: `Start Squadron as a background service with a local command center UI.
 
-Requires a "command_center" block in the config with url and instance_name,
-or use --command-center (-w) to automatically launch a local command center.`,
-	Run: runServe,
+By default, Squadron launches the command center web UI, runs in the background,
+and installs as a system service (launchd on macOS, systemd on Linux) so it
+starts automatically on boot.
+
+Use --headless (-h) to run without the command center UI.
+Use --foreground to run in the terminal instead of the background.
+Use 'squadron disengage' to stop Squadron and remove the system service.`,
+	Run: runEngage,
+}
+
+// Hidden backward-compat alias for "serve"
+var serveAliasCmd = &cobra.Command{
+	Use:    "serve",
+	Hidden: true,
+	Short:  "Alias for 'engage'",
+	Run:    runEngage,
 }
 
 func init() {
-	rootCmd.AddCommand(serveCmd)
-	serveCmd.Flags().StringVarP(&serveConfigPath, "config", "c", ".", "Path to config file or directory")
-	serveCmd.Flags().BoolVarP(&serveCommandCenter, "command-center", "w", false, "Launch a local command center instance")
-	serveCmd.Flags().IntVar(&serveCCPort, "cc-port", 8080, "Port for the command center")
-	serveCmd.Flags().BoolVar(&serveNoBrowser, "no-browser", false, "Don't auto-open browser")
-	serveCmd.Flags().BoolVar(&serveAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
+	rootCmd.AddCommand(engageCmd)
+	rootCmd.AddCommand(serveAliasCmd)
+
+	for _, cmd := range []*cobra.Command{engageCmd, serveAliasCmd} {
+		cmd.Flags().StringVarP(&engageConfigPath, "config", "c", ".", "Path to config file or directory")
+		cmd.Flags().BoolVar(&engageHeadless, "headless", false, "Run without the command center UI")
+		cmd.Flags().IntVar(&engageCCPort, "cc-port", 8080, "Port for the command center")
+		cmd.Flags().BoolVar(&engageNoBrowser, "no-browser", false, "Don't auto-open browser")
+		cmd.Flags().BoolVar(&engageAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
+		cmd.Flags().BoolVar(&engageForeground, "foreground", false, "Run in foreground (default: run as background service)")
+	}
 }
 
-func runServe(cmd *cobra.Command, args []string) {
-	// Init gate
-	if err := EnsureInitialized(serveAutoInit); err != nil {
+func runEngage(cmd *cobra.Command, args []string) {
+	// Quickstart wizard: only when no .hcl files AND no .squadron/ dir
+	hasHCL := hasHCLFiles(engageConfigPath)
+	hasSquadron := config.IsVaultInitialized()
+
+	if !hasSquadron && !hasHCL {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			fmt.Fprintf(os.Stderr, "No configuration found. Run 'squadron quickstart' interactively to set up.\n")
+			os.Exit(1)
+		}
+		dir, err := RunQuickstart(engageConfigPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+		engageConfigPath = dir
+	} else if !hasSquadron && hasHCL {
+		fmt.Println("Initializing Squadron...")
+		if err := EnsureInitialized(true); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// Init gate (handles case where .squadron exists but vault needs setup)
+	if err := EnsureInitialized(engageAutoInit); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
+
+	// Fork to background + install service unless --foreground
+	if !engageForeground && term.IsTerminal(int(os.Stdout.Fd())) {
+		absConfigPath, err := filepath.Abs(engageConfigPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error resolving config path: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Build extra flags to pass through
+		var extraFlags []string
+		if engageHeadless {
+			extraFlags = append(extraFlags, "--headless")
+		}
+		if engageCCPort != 8080 {
+			extraFlags = append(extraFlags, "--cc-port", fmt.Sprintf("%d", engageCCPort))
+		}
+		// Always suppress browser in daemon mode — it's already open from the parent
+		extraFlags = append(extraFlags, "--no-browser")
+
+		pid, err := daemon.Fork(absConfigPath, extraFlags)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error starting background process: %v\n", err)
+			os.Exit(1)
+		}
+
+		// Install as system service for boot persistence
+		if err := daemon.InstallService(absConfigPath); err != nil {
+			// Non-fatal — the process is already running
+			log.Printf("Note: could not install system service: %v", err)
+		}
+
+		fmt.Printf("Squadron engaged (PID %d). Starts automatically on boot.\n", pid)
+		fmt.Println("Use 'squadron disengage' to stop.")
+
+		// Open browser if command center is launching (not headless)
+		if !engageHeadless && !engageNoBrowser {
+			port := engageCCPort
+			// Wait for the command center to become ready
+			readyURL := fmt.Sprintf("http://localhost:%d/api/instances", port)
+			deadline := time.Now().Add(30 * time.Second)
+			for time.Now().Before(deadline) {
+				resp, err := http.Get(readyURL)
+				if err == nil {
+					resp.Body.Close()
+					if resp.StatusCode == 200 {
+						openBrowser(fmt.Sprintf("http://localhost:%d", port))
+						break
+					}
+				}
+				time.Sleep(500 * time.Millisecond)
+			}
+		}
+		return
+	}
+
+	// --- Foreground mode (existing serve logic) ---
 
 	// Cache passphrase for serve mode (resolved once, used for all var operations)
 	if config.IsVaultInitialized() {
@@ -101,7 +201,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 	ccReady := make(chan ccResult, 1)
 
-	if serveCommandCenter {
+	if !engageHeadless {
 		go func() {
 			port, proc, err := launchCommandCenter()
 			ccReady <- ccResult{port, proc, err}
@@ -120,7 +220,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		sharedStores *store.Bundle
 		mcpServer    *mcphost.Server
 	)
-	if hostCfg := config.LoadMCPHost(serveConfigPath); hostCfg != nil && hostCfg.Enabled {
+	if hostCfg := config.LoadMCPHost(engageConfigPath); hostCfg != nil && hostCfg.Enabled {
 		mcpDeps := mcphost.Deps{
 			Config: func() *config.Config {
 				if sharedClient == nil {
@@ -142,7 +242,7 @@ func runServe(cmd *cobra.Command, args []string) {
 				return sharedClient.ReloadConfig()
 			},
 			Version:    Version,
-			ConfigPath: serveConfigPath,
+			ConfigPath: engageConfigPath,
 		}
 		mcpSrv := mcphost.NewServer(mcpDeps)
 		var err error
@@ -153,14 +253,14 @@ func runServe(cmd *cobra.Command, args []string) {
 	}
 
 	// Try loading config — use partial load so vars/plugins show up even if validation fails
-	cfg, cfgErr := config.LoadPartial(serveConfigPath)
+	cfg, cfgErr := config.LoadPartial(engageConfigPath)
 	if cfgErr != nil {
 		log.Printf("Config not ready: %v", cfgErr)
 		log.Println("Waiting for valid configuration (set variables or fix config files)...")
 	}
 
 	// Wait for command center if launching one
-	if serveCommandCenter {
+	if !engageHeadless {
 		result := <-ccReady
 		if result.err != nil {
 			fmt.Fprintf(os.Stderr, "Error launching command center: %v\n", result.err)
@@ -173,7 +273,7 @@ func runServe(cmd *cobra.Command, args []string) {
 		pingDone = make(chan struct{})
 		go keepAlivePinger(ccPort, pingDone)
 
-		if !serveNoBrowser {
+		if !engageNoBrowser {
 			openBrowser(fmt.Sprintf("http://localhost:%d", ccPort))
 		}
 	}
@@ -186,7 +286,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	// Open store — use config storage if available, otherwise default
 	storageConfig := cfg.Storage
 	if storageConfig == nil {
-		storageConfig = config.DefaultStorageConfig(serveConfigPath)
+		storageConfig = config.DefaultStorageConfig(engageConfigPath)
 	}
 	stores, err := store.NewBundle(storageConfig)
 	if err != nil {
@@ -200,7 +300,7 @@ func runServe(cmd *cobra.Command, args []string) {
 	if cfgErr != nil {
 		cfgErrMsg = cfgErr.Error()
 	}
-	client := wsbridge.NewClient(cfg, cfgErr == nil, cfgErrMsg, serveConfigPath, stores, Version)
+	client := wsbridge.NewClient(cfg, cfgErr == nil, cfgErrMsg, engageConfigPath, stores, Version)
 
 	// Create scheduler — owns cron timers and concurrency tracking
 	sched := scheduler.New(client.RunScheduledMission)
@@ -249,12 +349,12 @@ func runServe(cmd *cobra.Command, args []string) {
 
 	// If config not fully valid, watch for changes to trigger reload
 	if cfgErr != nil {
-		go watchForConfigChanges(client, serveConfigPath)
+		go watchForConfigChanges(client, engageConfigPath)
 	}
 
 	// Graceful shutdown
 	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		for {
@@ -269,7 +369,7 @@ func runServe(cmd *cobra.Command, args []string) {
 					if err := connectWithRetry(client, cfg.CommandCenter); err != nil {
 						log.Printf("Reconnect failed: %v", err)
 						// Don't exit — wait for config changes
-						go watchForConfigChanges(client, serveConfigPath)
+						go watchForConfigChanges(client, engageConfigPath)
 						return
 					}
 					continue
@@ -304,6 +404,27 @@ func runServe(cmd *cobra.Command, args []string) {
 			ccProc.Process.Kill()
 		}
 	}
+}
+
+// hasHCLFiles checks if any .hcl files exist at the given path.
+func hasHCLFiles(configPath string) bool {
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return false
+	}
+	if !info.IsDir() {
+		return strings.HasSuffix(configPath, ".hcl")
+	}
+	entries, err := os.ReadDir(configPath)
+	if err != nil {
+		return false
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".hcl") {
+			return true
+		}
+	}
+	return false
 }
 
 // localCommandCenterConfig creates a command center config pointing at the local command center.
@@ -435,7 +556,7 @@ func launchCommandCenter() (int, *exec.Cmd, error) {
 		return 0, nil, err
 	}
 
-	port, err := findFreePort(serveCCPort)
+	port, err := findFreePort(engageCCPort)
 	if err != nil {
 		return 0, nil, fmt.Errorf("could not find free port: %w", err)
 	}

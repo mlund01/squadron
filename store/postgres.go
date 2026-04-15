@@ -231,6 +231,11 @@ func (s *PgMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMsg 
 	return err
 }
 
+func (s *PgMissionStore) UpdateTaskSummary(id, summary string) error {
+	_, err := s.db.Exec(`UPDATE mission_tasks SET summary = $1 WHERE id = $2`, summary, id)
+	return err
+}
+
 func (s *PgMissionStore) UpdateTaskStatusCAS(id, expectedOldStatus, newStatus string, outputJSON, errMsg *string) (bool, error) {
 	var finishedAt *string
 	if newStatus == "completed" || newStatus == "failed" {
@@ -267,7 +272,7 @@ func (s *PgMissionStore) UpdateMissionStatusCAS(id, expectedOldStatus, newStatus
 
 func (s *PgMissionStore) GetTasksByMission(missionID string) ([]MissionTask, error) {
 	rows, err := s.db.Query(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = $1`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, summary, error FROM mission_tasks WHERE mission_id = $1`,
 		missionID,
 	)
 	if err != nil {
@@ -280,9 +285,9 @@ func (s *PgMissionStore) GetTasksByMission(missionID string) ([]MissionTask, err
 		var t MissionTask
 		var configJSON sql.NullString
 		var startedAtStr, finishedAtStr sql.NullString
-		var outputJSON, errMsg sql.NullString
+		var outputJSON, summary, errMsg sql.NullString
 
-		if err := rows.Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &errMsg); err != nil {
+		if err := rows.Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &summary, &errMsg); err != nil {
 			return nil, err
 		}
 
@@ -316,12 +321,12 @@ func (s *PgMissionStore) GetTask(id string) (*MissionTask, error) {
 	var t MissionTask
 	var configJSON sql.NullString
 	var startedAtStr, finishedAtStr sql.NullString
-	var outputJSON, errMsg sql.NullString
+	var outputJSON, summary, errMsg sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE id = $1`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, summary, error FROM mission_tasks WHERE id = $1`,
 		id,
-	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &errMsg)
+	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &summary, &errMsg)
 	if err != nil {
 		return nil, fmt.Errorf("task %q not found: %w", id, err)
 	}
@@ -334,6 +339,9 @@ func (s *PgMissionStore) GetTask(id string) (*MissionTask, error) {
 	if outputJSON.Valid {
 		t.OutputJSON = &outputJSON.String
 	}
+	if summary.Valid {
+		t.Summary = &summary.String
+	}
 	if errMsg.Valid {
 		t.Error = &errMsg.String
 	}
@@ -345,12 +353,12 @@ func (s *PgMissionStore) GetTaskByName(missionID, taskName string) (*MissionTask
 	var t MissionTask
 	var configJSON sql.NullString
 	var startedAtStr, finishedAtStr sql.NullString
-	var outputJSON, errMsg sql.NullString
+	var outputJSON, summary, errMsg sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = $1 AND task_name = $2`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, summary, error FROM mission_tasks WHERE mission_id = $1 AND task_name = $2`,
 		missionID, taskName,
-	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &errMsg)
+	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &summary, &errMsg)
 	if err != nil {
 		return nil, fmt.Errorf("task '%s' not found: %w", taskName, err)
 	}
@@ -362,6 +370,9 @@ func (s *PgMissionStore) GetTaskByName(missionID, taskName string) (*MissionTask
 	t.FinishedAt, _ = tsParseNull(finishedAtStr)
 	if outputJSON.Valid {
 		t.OutputJSON = &outputJSON.String
+	}
+	if summary.Valid {
+		t.Summary = &summary.String
 	}
 	if errMsg.Valid {
 		t.Error = &errMsg.String

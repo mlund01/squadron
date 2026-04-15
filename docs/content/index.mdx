@@ -4,90 +4,75 @@ title: Introduction
 
 # Squadron
 
-Squadron is a declarative framework for building and running AI agent workflows — entirely from configuration, not code.
-
-Define LLM-powered agents, connect them to tools and plugins, and orchestrate multi-step missions where agents reason, act, and collaborate autonomously. Squadron handles the hard parts — agent orchestration, tool execution, state management, conditional branching, and crash recovery — so you describe *what* you want your agents to accomplish, not how to wire them together.
-
-## Why Squadron
-
-Most agentic frameworks require writing code to orchestrate multi-agent workflows — glue code, retry logic, state serialization, branching. Squadron takes a different approach: your entire agentic workflow — agents, their tools, how they collaborate, and what they produce — is defined as configuration.
-
-**Workflows are readable and reviewable.** A `.hcl` mission file describes the full task graph, agent assignments, branching conditions, and structured outputs. Anyone on the team can read it, diff it, and review it — no Python class hierarchies to decode.
-
-**Intelligent branching built in.** Workflows aren't always linear — sometimes the next step depends on what the LLM found. Squadron treats conditional routing as a first-class concept, so workflows like triage, classification, and escalation are part of the config, not custom code.
-
-**Structured data flows between tasks.** Tasks can define typed output schemas, and downstream tasks can query that data with filters, aggregations, and sorting. This means tasks don't just pass context through conversation — they produce and consume structured results that other tasks can reason over precisely.
-
-**Built for production, not just prototyping.** Persistent state means missions survive crashes and resume from where they failed. The command center gives you a web UI with DAG visualization, live execution monitoring, and run history.
-
-**Extensible through plugins.** Squadron ships with built-in tools for shell and HTTP, but anything beyond that is a plugin. Write plugins in any language, version them independently, and share them across projects. Custom tools let you wrap any plugin capability with a typed schema, so agents get clean interfaces instead of raw API calls.
-
-## How It Works
-
-Squadron separates *strategic thinking* from *tactical execution* using a two-tier agent architecture:
-
-- **Commanders** are LLM-powered orchestrators — they break down each task into subtasks, delegate work to agents, interpret results, query upstream context, and make routing decisions. They reason about *what* needs to happen.
-- **Agents** are LLM-powered executors — they use tools (plugins, APIs, shell, browser) in a ReAct loop to accomplish specific objectives. They reason about *how* to accomplish it.
-- **Missions** wire it all together — tasks form a dependency graph with static sequencing, conditional branching, and fan-out patterns. Each task gets a commander that autonomously manages the agents assigned to it.
-
-Different models can fill different roles. A fast model can handle routing while a capable model handles complex analysis. Agents and commanders can use different providers (Anthropic, OpenAI, Gemini) within the same mission.
-
-## Quick Example
+Squadron is an agents-as-config tool that lets you build, run, and version multi-agent AI workflows safely and reproducibly. This includes low-level components like individual agents, tools, and models, as well as high-level components like multi-step missions, conditional routing, and scheduled pipelines.
 
 ```hcl
 mission "research" {
-  commander {
-    model = models.anthropic.claude_sonnet_4
-  }
-  agents = [agents.researcher]
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents = [agents.researcher, agents.analyst]
 
   task "gather" {
-    objective = "Research the topic and collect key findings"
-    output {
-      field "summary" { type = "string"; required = true }
-    }
+    objective = "Find the top 5 papers on ${inputs.topic}"
+    agents    = [agents.researcher]
   }
 
   task "analyze" {
     depends_on = [tasks.gather]
-    objective  = "Analyze the findings and produce a report"
+    objective  = "Read each paper and extract the key findings"
+    agents     = [agents.analyst]
+
+    router {
+      route { target = tasks.deep_dive; condition = "Findings warrant deeper investigation" }
+      route { target = tasks.summarize; condition = "Findings are routine" }
+    }
   }
+
+  task "deep_dive" { objective = "Investigate the most promising lead in detail" }
+  task "summarize" { objective = "Write a one-page summary" }
 }
 ```
 
 ```bash
-squadron mission research -c ./config
+squadron mission research -c ./config --topic "post-quantum cryptography"
 ```
 
-Or launch the command center to run missions from a web UI:
+That's the entire workflow. No Python. No glue code. No state machines. Just config.
 
-```bash
-squadron serve -c ./config -w
-```
+## Why this matters
 
-## Features
+Every other agent framework asks you to write code: orchestration logic, retry loops, branching, state serialization. You end up with 500 lines of Python wrapping 50 lines of actual prompt — and six months later nobody can read it.
 
-- **[HCL configuration](/config/overview)** — declare agents, tools, and missions as version-controllable config files
-- **[Multi-provider](/config/models)** — Anthropic, OpenAI, and Google Gemini, with per-agent model assignment
-- **[Mission orchestration](/missions/overview)** — multi-task pipelines with dependency graphs, structured outputs, and commander-agent delegation
-- **[Conditional routing](/missions/routing)** — LLM-driven branching, unconditional fan-out, and cross-mission routing
-- **[Structured outputs](/missions/tasks)** — typed output schemas on tasks with downstream querying, filtering, and aggregation
-- **[Datasets and iteration](/missions/datasets)** — process collections in parallel or sequentially with concurrency controls and retries
-- **[Schedules & triggers](/missions/schedules)** — run missions on cron schedules or via webhook triggers with concurrency controls
-- **[Persistence and resume](/cli/mission)** — mission state is saved automatically; resume interrupted runs from where they failed
-- **[Command center](/cli/serve)** — web UI for running missions, viewing DAGs, and monitoring execution in real time
-- **[Plugin system](/config/plugins)** — extend agents with plugins for browser automation, APIs, and custom integrations
-- **[Custom tools](/config/tools)** — wrap any plugin capability with a typed schema and description
-- **[MCP server](/config/mcp)** — built-in Model Context Protocol server for integration with Claude Desktop, Claude Code, Cursor, and other AI assistants
-- **[Interactive chat](/cli/chat)** — chat directly with any configured agent from the terminal
-- **[Variables](/config/variables)** — manage API keys and configuration values with secret support
-- **[Self-upgrade](/cli/upgrade)** — update to the latest release with a single command
-- **[Docker support](/getting-started/docker)** — published Alpine and Debian images on every release, with multi-arch support
-- **Single binary** — one `curl` to install, no runtime dependencies
+Squadron is declarative from top to bottom. Your entire workflow — agents, tools, how they collaborate, the data flowing between them, the conditions that fire branches, what happens when things crash — is **described up front in one file you can diff in a pull request.**
 
-## Next Steps
+- **Readable.** A non-engineer can review a mission file. Workflow changes show up in code review like any other config change.
+- **Composable.** Define agents and tools once, reuse them across missions. Mix Anthropic, OpenAI, Gemini, and Ollama in the same run.
+- **Resilient.** State is persisted to SQLite as missions run. Crashes resume from where they failed.
+- **Branchable.** Conditional routing, unconditional fan-out, parallel iteration over datasets — all first-class.
+- **Typed data flow.** Tasks declare structured output schemas. Downstream tasks query that data with filters and aggregations instead of replaying conversation history.
 
-- [Installation](/getting-started/installation) — install Squadron in one command
-- [Quick Start](/getting-started/quickstart) — build your first agent in 5 minutes
-- [Configuration](/config/overview) — understand the config system
-- [Missions](/missions/overview) — build multi-step agent workflows
+## How it works
+
+Two tiers of LLMs, doing different jobs:
+
+- **Commanders** orchestrate. They break tasks into subtasks, delegate to agents, interpret results, and decide which branch to take next. They reason about *what* needs to happen.
+- **Agents** execute. They pick up objectives and use their tools until the job is done. They reason about *how* to do it.
+- **Missions** wire it together: a graph of tasks, structured outputs flowing between them, and conditional branches the commander chooses at runtime.
+
+Use a fast model for routing, a capable one for the hard stuff. Each role can use a different provider in the same mission.
+
+## What's in the box
+
+- **[Model providers](/config/supported-models)** — Anthropic, OpenAI, Google Gemini, and Ollama for local models, all out of the box; mix and match per agent or even per task
+- **[Web command center](/cli/engage)** — visualize your mission graph, watch it run live, browse past runs
+- **[Schedules & webhooks](/missions/schedules)** — run missions on a cron, or trigger them from an incoming HTTP request
+- **[Plugins](/config/plugins)** — the primary way to extend agents: fast, typed, native Go plugins for browser automation, shell, APIs, or anything you want to build
+- **[MCP tools](/config/mcp_tools)** — also supported, for when you want to pull in something from the MCP ecosystem; drop in a two-line block and Squadron auto-installs the server
+- **[MCP host](/config/mcp_host)** — plug Squadron itself into Claude Desktop, Claude Code, or Cursor so they can see your missions, kick off runs, and browse your config
+- **Single binary** — one command to install, no runtime dependencies, Docker images on every release
+
+## Get started
+
+- [Install](/getting-started/installation) — one command, single binary
+- [Quick start](/getting-started/quickstart) — first mission in 5 minutes
+- [Missions](/missions/overview) — the full workflow model
+- [Configuration](/config/overview) — every block, every field

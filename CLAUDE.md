@@ -19,6 +19,9 @@ go build -o squadron ./cmd/cli              # Build the CLI
 ./squadron serve -c <path> -w              # Launch local command center + connect
 ./squadron serve -c <path> -w --cc-port 9090  # Custom command center port
 ./squadron serve -c <path> -w --no-browser # Launch without opening browser
+./squadron mcp status                      # Show OAuth status for configured MCP servers
+./squadron mcp login <name>                # Authorize an MCP server via OAuth
+./squadron mcp logout <name>               # Forget stored OAuth token for an MCP server
 ./squadron upgrade                         # Upgrade to latest release
 ./squadron upgrade --version v0.0.13       # Upgrade to specific version
 ./squadron version                         # Print current version
@@ -40,13 +43,16 @@ Squadron is a declarative framework for building and running AI agent workflows.
 | `agent/` | Agent and Commander implementations, orchestration |
 | `aitools/` | Tool interface, schema definitions, result interception |
 | `config/` | HCL config loading with staged evaluation |
-| `llm/` | LLM provider abstraction (Anthropic, OpenAI, Gemini) |
+| `llm/` | LLM provider abstraction (Anthropic, OpenAI, Gemini, Ollama) |
 | `plugin/` | gRPC plugin system using hashicorp/go-plugin |
 | `mission/` | Mission runner, task execution, knowledge store |
 | `store/` | Persistence interfaces and SQLite implementation |
 | `scheduler/` | Cron-based mission scheduling and next-fire calculation |
 | `streamers/` | Output streaming interfaces for CLI/TUI |
 | `wsbridge/` | WebSocket bridge client for command center communication |
+| `mcp/` | Consumer-side MCP client: loads external MCP servers (stdio/http/npm/github) declared in `mcp "name" { ... }` blocks and exposes their tools |
+| `mcphost/` | Host-side MCP server: exposes Squadron's own tools over MCP when `mcp_host { ... }` is enabled |
+| `internal/release/` | Shared GitHub-release download/extract helpers used by both plugin and MCP auto-install |
 | `cmd/` | CLI commands and plugin entry points |
 
 ---
@@ -56,10 +62,10 @@ Squadron is a declarative framework for building and running AI agent workflows.
 The config loading uses **staged evaluation** to support HCL expression references:
 
 1. **Stage 1**: Load `variable` blocks (no context needed)
-2. **Stage 1.5**: Load `plugin` blocks with `vars` context
-3. **Stage 2**: Load `model` blocks with `vars` + `plugins` context → enables `api_key = vars.anthropic_api_key`
-4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` context → enables `implements = builtins.http.get`
-5. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` context → enables `model = models.anthropic.claude_sonnet_4` and `tools = [plugins.playwright.all, tools.weather]`
+2. **Stage 1.5**: Load `plugin` blocks and `mcp "name"` blocks with `vars` context. Both happen in the same stage because both expose tools through HCL namespaces that later stages need to resolve against.
+3. **Stage 2**: Load `model` blocks with `vars` + `plugins` + `mcp` context → enables `api_key = vars.anthropic_api_key`
+4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` + `mcp` context → enables `implements = builtins.http.get`
+5. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` + `mcp` context → enables `tools = [plugins.playwright.all, mcp.filesystem.read_file, tools.weather]`
 6. **Stage 5**: Load `mission` blocks with full context
 
 Each stage uses partial structs with `hcl:",remain"` to ignore unknown block types during that pass.
@@ -74,9 +80,8 @@ variable "anthropic_api_key" {
 
 # models.hcl
 model "anthropic" {
-  provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4", "claude_opus_4"]
-  api_key        = vars.anthropic_api_key
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
 }
 
 # plugins.hcl
@@ -84,12 +89,58 @@ plugin "playwright" {
   version = "local"
 }
 
+# mcp_servers.hcl — consumer-side MCP servers (Squadron pulling tools from external servers)
+#
+# Exactly one of `command`, `url`, or `source` per block.
+
+# Auto-installed npm package (cache at .squadron/mcp/filesystem/2024.12.1/)
+mcp "filesystem" {
+  source  = "npm:@modelcontextprotocol/server-filesystem"
+  version = "2024.12.1"
+  args    = ["/tmp"]
+}
+
+# Auto-installed GitHub release binary
+mcp "custom" {
+  source  = "github.com/owner/mcp-custom"
+  version = "v1.0.0"
+  # entry = "bin/server"  # optional; disambiguates when the archive has multiple executables
+}
+
+# Bare command escape hatch — Squadron runs what you tell it, no install
+mcp "local" {
+  command = "./my-mcp-server"
+  args    = ["--debug"]
+}
+
+# HTTP transport — remote MCP server
+mcp "remote_api" {
+  url = "https://example.com/mcp"
+  headers = {
+    Authorization = "Bearer ${vars.api_key}"
+  }
+}
+
+# HTTP transport with OAuth client credentials (for servers that don't support DCR)
+mcp "slack" {
+  url           = "https://tools.slack.dev/agent-tools-mcp/sse"
+  client_id     = vars.slack_client_id
+  client_secret = vars.slack_client_secret
+}
+
+# mcp_host.hcl — OPPOSITE direction: Squadron hosts its own MCP server
+mcp_host {
+  enabled = true
+  port    = 8090
+  secret  = vars.mcp_host_secret
+}
+
 # agents.hcl
 agent "browser_navigator" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Methodical and precise"
   role        = "Browser automation specialist"
-  tools       = [plugins.playwright.all]
+  tools       = [plugins.playwright.all, mcp.filesystem.read_file]
 }
 
 # missions.hcl
@@ -278,11 +329,8 @@ route {
 }
 ```
 
-**How it works at runtime (`task_complete` two-phase flow):**
-1. Commander calls `task_complete` → tool returns route options as a JSON list (plus "none"). Mission targets include `required_inputs`.
-2. Commander evaluates options (can call agents for more info first)
-3. Commander calls `task_complete` again with `route` parameter to select a route. For mission targets, also provides `mission_inputs`.
-4. The chosen route's target task is activated (or target mission is launched); unchosen branches never execute
+**How it works at runtime:**
+Route options are injected as a system prompt when the commander starts, so it knows the available routes upfront. When calling `task_complete`, the commander includes both a `summary` and a `route` parameter in a single call. If routes are configured but no `route` is provided, `task_complete` returns an error prompting the commander to include one.
 
 #### Dynamic activation: `send_to` (unconditional push)
 
@@ -399,10 +447,10 @@ type ToolProvider interface {
 
 Plugins are stored in versioned directories:
 ```
-~/.squadron/plugins/<name>/<version>/plugin
+.squadron/plugins/<name>/<version>/plugin
 ```
 
-Example: `~/.squadron/plugins/playwright/local/plugin`
+Example: `.squadron/plugins/playwright/local/plugin`
 
 ### Building a Plugin
 
@@ -436,6 +484,129 @@ Plugins are globally cached (`plugin/client.go:globalRegistry`) so plugin state 
 
 ---
 
+## MCP Consumer System (mcp/)
+
+The `mcp/` package lets Squadron pull tools from external MCP (Model Context
+Protocol) servers and expose them to agents as if they were native plugins.
+Used for `npm` packages like `@modelcontextprotocol/server-filesystem`, GitHub
+release binaries, remote HTTP MCP servers, and any local binary the user
+wants to run.
+
+The companion `mcphost/` package handles the opposite direction — Squadron
+acting AS an MCP server so other LLMs can consume its tools — and is
+controlled by the `mcp_host { ... }` singleton block.
+
+### The four modes of `mcp "name" { ... }`
+
+| Mode | Required | Optional | Install |
+|------|----------|----------|---------|
+| bare stdio | `command` | `args`, `env` | none — user runs their own binary |
+| HTTP | `url` | `headers` | none — remote |
+| npm | `source = "npm:..."`, `version` | `args`, `env` | `npm install --prefix <cache>` on first load |
+| GitHub binary | `source = "github.com/..."`, `version` | `args`, `env`, `entry` | download + checksum-verify + extract on first load |
+
+Exactly one of `command`, `url`, `source` per block. `env` is stdio-only;
+`headers` is http-only; `version` is required with `source` and forbidden
+otherwise; `entry` is only valid with `source = "github.com/..."`.
+
+### Cache layout
+
+Sits next to `.squadron/plugins/`:
+
+```
+.squadron/mcp/
+├── filesystem/2024.12.1/
+│   ├── runner.json
+│   └── node_modules/...
+└── custom/v1.0.0/
+    ├── runner.json
+    └── mcp-custom
+```
+
+`runner.json` is the "done" marker. Its presence short-circuits the installer
+on subsequent loads. Force a reinstall by `rm -rf .squadron/mcp/<name>/<version>/`.
+
+### Agent reference syntax
+
+Once loaded, tools resolve through the `mcp` HCL namespace alongside
+`builtins`, `plugins`, and `tools`:
+
+```hcl
+agent "fs" {
+  tools = [
+    mcp.filesystem.read_file,    # specific tool
+    mcp.remote_api.all,          # every tool from that server
+    plugins.playwright.all,       # native plugins still work the same
+  ]
+}
+```
+
+Refs get sanitized to API-safe names via `aitools.AddSanitizedAliases` — e.g.
+`mcp.filesystem.read_file` → `mcp_filesystem_read_file` when the tool is sent
+to the provider.
+
+### OAuth for HTTP MCP servers
+
+HTTP MCP servers that require OAuth 2.1 are authenticated via `squadron mcp login`:
+
+```bash
+squadron mcp login linear    # discovery → DCR → PKCE → browser → token exchange
+squadron mcp status           # shows auth state for every configured MCP
+squadron mcp logout linear    # wipes token (keeps DCR credentials for faster relogin)
+```
+
+The HCL block is zero-config — just declare the URL:
+
+```hcl
+mcp "linear" {
+  url = "https://mcp.linear.app/sse"
+}
+```
+
+If the server returns 401 on load, Squadron surfaces an `AuthRequiredError` with a pointer to `squadron mcp login <name>`. Tokens live in the encrypted vault under `oauth:<name>:token`; mcp-go handles refresh transparently via the stored refresh token.
+
+The `mcp/oauth/` package houses:
+- `VaultTokenStore` — implements `transport.TokenStore` against the vault
+- `RunLoginFlow` — the orchestrator (discovery, DCR, PKCE, browser, exchange)
+- `LoopbackCallbackSource` — serves `/callback` on `127.0.0.1:0` for CLI mode
+- `CallbackSource` interface — Phase 2 adds a wsbridge-backed source for command-center mode
+
+SSE vs streamable HTTP is auto-detected from the URL path suffix (`/sse`). The OAuth transport is only engaged when a token is already stored — anonymous servers fall through to the plain client.
+
+### Architecture
+
+| File | Purpose |
+|------|---------|
+| `mcp/client.go` | `Client` struct + `globalRegistry` + `Load`/`LoadWithContext`/`CloseAll` |
+| `mcp/tool.go` | `mcpTool` adapter implementing `aitools.Tool` |
+| `mcp/schema.go` | `convertSchema` — raw JSON Schema passthrough + best-effort typed projection |
+| `mcp/errors.go` | `AuthRequiredError` + `classifyAuthError` |
+| `mcp/oauth/` | OAuth token store, login orchestrator, loopback callback |
+| `mcp/install.go` | `resolveRunner`, `installNPM`, `installGitHub`, `pickEntry` |
+| `mcp/paths.go` | cache-dir path helpers |
+
+### Lifecycle
+
+Mirrors native plugins. The registry is process-global — one subprocess per
+declared server, shared across all agents, skills, tasks, and missions in a
+single CLI invocation. Startup is eager (Stage 1.5 of config load); liveness
+is checked on reuse via `client.Ping`. Mid-run crashes are surfaced as
+tool-call errors and not auto-recovered in v1 (users re-run the command).
+`mcp.CloseAll()` is deferred in `cmd/root.go` alongside `plugin.CloseAll()`
+and invoked from the SIGINT handler.
+
+### Known limitations
+
+- Tool list is snapshot at load time; `tools/list_changed` is ignored.
+- MCP prompts and resources are not exposed — tools only.
+- Schema fidelity: raw JSON Schema bytes are preserved for LLM providers via `WithRawJSONSchema`; the typed `aitools.Schema` projection is lossy but only used for in-process introspection.
+- npm sources require `npm` and `node` on PATH; clear error if missing.
+- No Python/uv support — use the bare `command` escape hatch.
+- `version` must be pinned exactly; no semver ranges.
+- Hard squadron crash → orphaned subprocesses (same as plugins).
+
+---
+
 ## Mission System (mission/)
 
 Missions orchestrate multi-agent task execution with dependency management.
@@ -455,10 +626,10 @@ Missions orchestrate multi-agent task execution with dependency management.
 1. **Runner** resolves task dependencies (topological sort), filtering out dynamically-activated tasks (router/send_to targets with no `depends_on`)
 2. **Static tasks** execute in parallel when all `depends_on` dependencies are satisfied
 3. **Commander** manages each task:
-   - Queries ancestor commanders for context (`queryAncestorsForContext`) — ancestors include `depends_on` parents and the `routerParent` that activated it
+   - Receives push summaries from ancestor tasks as static context (no LLM queries needed)
+   - Can use `ask_commander` to get more detail from ancestor commanders if summaries aren't enough
    - Delegates work to agents via `call_agent` tool
-   - Produces structured output via `<OUTPUT>` blocks
-   - If task has a `router`, `task_complete` triggers two-phase route selection
+   - Calls `task_complete` with a `summary` (and `route` if routing is configured)
 4. **Dynamic activation**: After a task completes, its `send_to` targets are immediately queued. If it chose a route, the route target is queued. (See "Task Connectivity" in HCL Config section for full rules.)
 5. **Agents** execute ReAct loops:
    - Reason → Act (tool call) → Observe (tool result) → Repeat
@@ -468,8 +639,9 @@ Missions orchestrate multi-agent task execution with dependency management.
 
 - Static dependencies: `depends_on = [tasks.previous_task]` — task waits for all listed tasks
 - Dynamic dependencies: `router`/`send_to` targets get the activating task as their ancestor
-- When a task starts, Runner queries each ancestor commander with the new task's objective
-- Ancestors provide targeted context based on what they learned
+- When a task completes, the commander provides a `summary` in `task_complete` — stored in DB and in-memory `taskSummaries` map
+- When a dependent task starts, it receives static summaries from all ancestors (no LLM queries needed — instant)
+- Commanders can use `ask_commander` to query ancestor commanders for more detail if summaries aren't enough
 - Structured outputs are stored in KnowledgeStore for `query_task_output` queries
 
 ### Iterated Tasks
@@ -610,7 +782,7 @@ When `--resume <missionID>` is used:
 
 ## Variable Storage
 
-Variables are encrypted at rest in `~/.squadron/vars.vault` using AES-256-GCM with an Argon2id-derived key. The encryption passphrase is stored in the OS keychain (macOS Keychain, Linux Secret Service/KeyCtl, Windows WinCred).
+Variables are encrypted at rest in `.squadron/vars.vault` using AES-256-GCM with an Argon2id-derived key. The encryption passphrase is stored in the OS keychain (macOS Keychain, Linux Secret Service/KeyCtl, Windows WinCred).
 
 Run `squadron init` before using vars commands. Commands `serve`, `chat`, and `mission` require init (or pass `--init` to auto-initialize).
 

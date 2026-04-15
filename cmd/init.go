@@ -13,21 +13,35 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var initPassphraseFile string
+var (
+	initPassphraseFile string
+	initVaultProvider  string
+)
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize Squadron (create encrypted vault for secrets)",
-	Long: `Initialize a Squadron instance by creating the SQUADRON_HOME directory
-and setting up an encrypted vault for secret storage.
+	Short: "Initialize the encrypted vault for secret storage",
+	Long: `Create the .squadron directory in the current working directory
+and set up an encrypted vault for secret storage.
 
-A cryptographically random passphrase is generated and stored in your
-OS keychain. Use --passphrase-file to provide your own passphrase instead.
+A cryptographically random passphrase is generated and stored via the
+configured vault provider:
 
-If variables already exist in vars.txt, they are migrated into the vault
-and vars.txt is deleted.`,
+  file     (default) — passphrase is written to .squadron/vault.key
+                       (0600 perms). No OS keychain prompts.
+  keychain          — passphrase is stored in the OS keychain (macOS
+                       Keychain, Linux Secret Service, Windows Cred
+                       Manager). More secure at rest but triggers a
+                       password / passkey prompt on first access per
+                       process.
+
+Use --passphrase-file to provide your own passphrase instead of
+auto-generating one.
+
+For guided setup that also picks a provider, stores an API key, and
+generates a starter mission, use 'squadron quickstart' instead.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		if err := RunInit(initPassphraseFile); err != nil {
+		if err := RunInit(initPassphraseFile, initVaultProvider); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
@@ -37,11 +51,13 @@ and vars.txt is deleted.`,
 func init() {
 	rootCmd.AddCommand(initCmd)
 	initCmd.Flags().StringVar(&initPassphraseFile, "passphrase-file", "", "Path to file containing vault passphrase")
+	initCmd.Flags().StringVar(&initVaultProvider, "vault-provider", vault.ProviderFile,
+		fmt.Sprintf("Vault provider: %q or %q", vault.ProviderFile, vault.ProviderKeychain))
 }
 
-// RunInit performs the initialization logic. Exported so --init flag on other commands can call it.
-func RunInit(passphraseFile string) error {
-	// Ensure home directory exists
+// RunInit performs the initialization logic. Called by quickstart and the
+// --init flag on engage/chat/mission.
+func RunInit(passphraseFile, providerName string) error {
 	if err := paths.EnsureHome(); err != nil {
 		return fmt.Errorf("creating squadron home: %w", err)
 	}
@@ -52,28 +68,27 @@ func RunInit(passphraseFile string) error {
 	}
 
 	v := vault.Open(vaultPath)
-
-	// Already initialized
 	if v.Exists() {
 		fmt.Println("Squadron is already initialized.")
 		return nil
 	}
 
-	// Resolve passphrase
+	provider, err := vault.ProviderByName(providerName)
+	if err != nil {
+		return err
+	}
+
 	var passphrase []byte
-	if passphraseFile != "" {
-		// Read from provided file
-		passphrase, err = os.ReadFile(passphraseFile)
+	switch {
+	case passphraseFile != "":
+		passphrase, err = vault.ReadPassphraseFile(passphraseFile)
 		if err != nil {
 			return fmt.Errorf("reading passphrase file: %w", err)
 		}
-		passphrase = []byte(strings.TrimSpace(string(passphrase)))
-	} else {
-		// Check Docker secret path
-		if data, readErr := os.ReadFile(vault.DockerSecretPath); readErr == nil {
-			passphrase = []byte(strings.TrimSpace(string(data)))
+	default:
+		if data, readErr := vault.ReadPassphraseFile(vault.DockerSecretPath); readErr == nil {
+			passphrase = data
 		} else {
-			// Auto-generate
 			passphrase, err = vault.GeneratePassphrase()
 			if err != nil {
 				return fmt.Errorf("generating passphrase: %w", err)
@@ -82,13 +97,11 @@ func RunInit(passphraseFile string) error {
 	}
 	defer vault.ZeroBytes(passphrase)
 
-	// Store in keyring (best effort — may fail in Docker/CI)
-	if storeErr := vault.StorePassphrase(passphrase); storeErr != nil {
-		// If we auto-generated and can't persist it anywhere, fall back to
-		// the hardcoded passphrase so other processes can also resolve it.
+	// Best effort: a keychain backend may fail in Docker / CI.
+	if storeErr := provider.Store(passphrase); storeErr != nil {
 		if passphraseFile == "" {
 			if _, dockerErr := os.Stat(vault.DockerSecretPath); dockerErr != nil {
-				fmt.Fprintf(os.Stderr, "Note: No keychain available. Using default passphrase.\n")
+				fmt.Fprintf(os.Stderr, "Note: %s provider unavailable (%v). Using default passphrase.\n", provider.Name(), storeErr)
 				passphrase = []byte(vault.FallbackPassphrase)
 			}
 		}
@@ -126,7 +139,7 @@ func RunInit(passphraseFile string) error {
 	// Cache for current process
 	vault.CachePassphrase(passphrase)
 
-	fmt.Println("Squadron initialized. Secrets are now encrypted at rest.")
+	fmt.Printf("Squadron initialized with %q vault provider. Secrets are now encrypted at rest.\n", provider.Name())
 	return nil
 }
 
@@ -138,14 +151,14 @@ func EnsureInitialized(autoInit bool) error {
 	}
 
 	if !autoInit {
-		return fmt.Errorf("squadron not initialized. Run 'squadron init' or pass --init")
+		return fmt.Errorf("squadron not initialized. Run 'squadron init' (or 'squadron quickstart' for guided setup), or pass --init")
 	}
 
 	fmt.Println("Auto-initializing Squadron...")
-	return RunInit("")
+	return RunInit("", vault.ProviderFile)
 }
 
-// promptYesNo asks a yes/no question (unused for now, available for future use).
+// promptYesNo asks a yes/no question on stdin; default is no.
 func promptYesNo(question string) bool {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Printf("%s [y/N]: ", question)

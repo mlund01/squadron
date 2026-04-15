@@ -35,7 +35,7 @@ func GetPluginsDir() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get squadron home: %w", err)
 	}
-	return filepath.Join(sqHome, "plugins"), nil
+	return filepath.Join(sqHome, "plugins", paths.PlatformDir()), nil
 }
 
 // GetPluginPath returns the path to a plugin executable

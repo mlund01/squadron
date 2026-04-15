@@ -1,8 +1,11 @@
 package wsbridge
 
 import (
+	"strings"
+
 	"squadron/aitools"
 	"squadron/config"
+	squadronmcp "squadron/mcp"
 	"squadron/plugin"
 
 	"github.com/mlund01/squadron-wire/protocol"
@@ -16,9 +19,11 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 	}
 
 	for _, m := range cfg.Models {
+		// Pick first available model name for display
 		model := ""
-		if len(m.AllowedModels) > 0 {
-			model = m.AllowedModels[0]
+		for key := range m.AvailableModels() {
+			model = key
+			break
 		}
 		ic.Models = append(ic.Models, protocol.ModelInfo{
 			Name:     m.Name,
@@ -28,24 +33,73 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 	}
 
 	for _, a := range cfg.Agents {
+		// Build skill names: explicit refs + local skill names
+		var skillNames []string
+		for _, ref := range a.Skills {
+			skillNames = append(skillNames, strings.TrimPrefix(ref, "skills."))
+		}
+		for _, ls := range a.LocalSkills {
+			skillNames = append(skillNames, ls.Name)
+		}
 		ic.Agents = append(ic.Agents, protocol.AgentInfo{
-			Name:  a.Name,
-			Role:  a.Role,
-			Model: a.Model,
-			Tools: a.Tools,
+			Name:   a.Name,
+			Role:   a.Role,
+			Model:  a.Model,
+			Tools:  a.Tools,
+			Skills: skillNames,
 		})
 	}
 
-	// Add mission-scoped agents
+	// Add global skills
+	for _, s := range cfg.Skills {
+		ic.Skills = append(ic.Skills, protocol.SkillInfo{
+			Name:         s.Name,
+			Description:  s.Description,
+			Instructions: s.Instructions,
+			Tools:        s.Tools,
+		})
+	}
+
+	// Add agent-scoped skills
+	for _, a := range cfg.Agents {
+		for _, s := range a.LocalSkills {
+			ic.Skills = append(ic.Skills, protocol.SkillInfo{
+				Name:         s.Name,
+				Description:  s.Description,
+				Instructions: s.Instructions,
+				Tools:        s.Tools,
+				Agent:        a.Name,
+			})
+		}
+	}
+
+	// Add mission-scoped agents and their local skills
 	for _, m := range cfg.Missions {
 		for _, a := range m.LocalAgents {
+			var mSkillNames []string
+			for _, ref := range a.Skills {
+				mSkillNames = append(mSkillNames, strings.TrimPrefix(ref, "skills."))
+			}
+			for _, ls := range a.LocalSkills {
+				mSkillNames = append(mSkillNames, ls.Name)
+			}
 			ic.Agents = append(ic.Agents, protocol.AgentInfo{
 				Name:    a.Name,
 				Role:    a.Role,
 				Model:   a.Model,
 				Tools:   a.Tools,
+				Skills:  mSkillNames,
 				Mission: m.Name,
 			})
+			for _, s := range a.LocalSkills {
+				ic.Skills = append(ic.Skills, protocol.SkillInfo{
+					Name:         s.Name,
+					Description:  s.Description,
+					Instructions: s.Instructions,
+					Tools:        s.Tools,
+					Agent:        a.Name,
+				})
+			}
 		}
 	}
 
@@ -142,6 +196,7 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Name:    namespace,
 			Path:    "builtin",
 			Builtin: true,
+			Kind:    "builtin",
 		}
 		for _, toolName := range tools {
 			ref := "builtins." + namespace + "." + toolName
@@ -160,11 +215,30 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Name:    p.Name,
 			Path:    p.Source,
 			Version: p.Version,
+			Kind:    "plugin",
 		}
 		if client, ok := cfg.LoadedPlugins[p.Name]; ok {
 			if tools, err := client.ListTools(); err == nil {
 				for _, t := range tools {
 					pi.Tools = append(pi.Tools, pluginToolInfoToProtocol(t))
+				}
+			}
+		}
+		ic.Plugins = append(ic.Plugins, pi)
+	}
+
+	// Add MCP servers (consumer-side) — display alongside plugins.
+	for _, s := range cfg.MCPServers {
+		pi := protocol.PluginInfo{
+			Name:    s.Name,
+			Path:    mcpDisplayPath(s),
+			Version: s.Version,
+			Kind:    "mcp",
+		}
+		if client, ok := cfg.LoadedMCPClients[s.Name]; ok && client != nil {
+			if tools, err := client.ListTools(); err == nil {
+				for _, t := range tools {
+					pi.Tools = append(pi.Tools, mcpToolInfoToProtocol(t))
 				}
 			}
 		}
@@ -237,6 +311,28 @@ func pluginToolInfoToProtocol(t *plugin.ToolInfo) protocol.ToolInfo {
 		Description: t.Description,
 		Parameters:  convertAIToolSchema(t.Schema),
 	}
+}
+
+// mcpToolInfoToProtocol converts an mcp.ToolInfo to protocol.ToolInfo.
+func mcpToolInfoToProtocol(t *squadronmcp.ToolInfo) protocol.ToolInfo {
+	return protocol.ToolInfo{
+		Name:        t.Name,
+		Description: t.Description,
+		Parameters:  convertAIToolSchema(t.Schema),
+	}
+}
+
+// mcpDisplayPath returns a human-readable origin for an MCP server config.
+func mcpDisplayPath(s config.MCPServer) string {
+	switch {
+	case s.Source != "":
+		return s.Source
+	case s.URL != "":
+		return s.URL
+	case s.Command != "":
+		return s.Command
+	}
+	return ""
 }
 
 func convertMissionInput(inp config.MissionInput) protocol.MissionInputInfo {

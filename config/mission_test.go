@@ -348,7 +348,7 @@ mission "no_commander" {
 
 			It("rejects mission with zero tasks", func() {
 				m := config.Mission{Name: "empty", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Agents: []string{"a"}}
-				models := []config.Model{{Provider: "anthropic", AllowedModels: []string{"claude_sonnet_4"}}}
+				models := []config.Model{{Provider: "anthropic", APIKey: "k"}}
 				agents := []config.Agent{{Name: "a"}}
 				err := m.Validate(models, agents, nil, nil)
 				Expect(err).To(HaveOccurred())
@@ -695,6 +695,110 @@ mission "diamond" {
   task "final" {
     objective  = "Final"
     depends_on = [tasks.left, tasks.right]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).NotTo(HaveOccurred())
+			})
+		})
+
+		Context("Transitive dependency rejection", func() {
+			It("rejects depends_on that includes a direct ancestor of another listed dep", func() {
+				hcl := fullBaseHCL() + `
+mission "transitive" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "a" { objective = "A" }
+  task "b" {
+    objective  = "B"
+    depends_on = [tasks.a]
+  }
+  task "c" {
+    objective  = "C"
+    depends_on = [tasks.a, tasks.b]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("transitive dependency"))
+				Expect(err.Error()).To(ContainSubstring("'a'"))
+				Expect(err.Error()).To(ContainSubstring("'b'"))
+			})
+
+			It("rejects depends_on that includes a deeper ancestor", func() {
+				hcl := fullBaseHCL() + `
+mission "deep_transitive" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "a" { objective = "A" }
+  task "b" {
+    objective  = "B"
+    depends_on = [tasks.a]
+  }
+  task "c" {
+    objective  = "C"
+    depends_on = [tasks.b]
+  }
+  task "d" {
+    objective  = "D"
+    depends_on = [tasks.a, tasks.c]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("transitive"))
+			})
+
+			It("accepts the diamond pattern (independent siblings, no transitive overlap)", func() {
+				hcl := fullBaseHCL() + `
+mission "diamond_ok" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "root" { objective = "Root" }
+  task "left" {
+    objective  = "Left"
+    depends_on = [tasks.root]
+  }
+  task "right" {
+    objective  = "Right"
+    depends_on = [tasks.root]
+  }
+  task "join" {
+    objective  = "Join"
+    depends_on = [tasks.left, tasks.right]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).NotTo(HaveOccurred())
+			})
+
+			It("accepts a fan-in from independent roots", func() {
+				hcl := fullBaseHCL() + `
+mission "fan_in" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "a" { objective = "A" }
+  task "b" { objective = "B" }
+  task "c" { objective = "C" }
+  task "join" {
+    objective  = "Join"
+    depends_on = [tasks.a, tasks.b, tasks.c]
   }
 }
 `

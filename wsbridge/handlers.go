@@ -411,6 +411,7 @@ func (c *Client) handleGetMission(env *protocol.Envelope) (*protocol.Envelope, e
 			Status:     t.Status,
 			ConfigJSON: t.ConfigJSON,
 			OutputJSON: t.OutputJSON,
+			Summary:    t.Summary,
 			Error:      t.Error,
 		}
 		if t.StartedAt != nil {
@@ -448,6 +449,7 @@ func (c *Client) handleGetTaskDetail(env *protocol.Envelope) (*protocol.Envelope
 		Status:     taskRecord.Status,
 		ConfigJSON: taskRecord.ConfigJSON,
 		OutputJSON: taskRecord.OutputJSON,
+		Summary:    taskRecord.Summary,
 		Error:      taskRecord.Error,
 	}
 	if taskRecord.StartedAt != nil {

@@ -42,7 +42,12 @@ var verifyCmd = &cobra.Command{
 		fmt.Println()
 		fmt.Printf("Found %d model(s)\n", len(cfg.Models))
 		for _, m := range cfg.Models {
-			fmt.Printf("  - %s (provider: %s, models: %v)\n", m.Name, m.Provider, m.AllowedModels)
+			available := m.AvailableModels()
+			keys := make([]string, 0, len(available))
+			for k := range available {
+				keys = append(keys, k)
+			}
+			fmt.Printf("  - %s (provider: %s, models: %v)\n", m.Name, m.Provider, keys)
 		}
 		fmt.Printf("Found %d variable(s)\n", len(cfg.Variables))
 		for _, v := range cfg.Variables {
@@ -82,6 +87,21 @@ var verifyCmd = &cobra.Command{
 				loaded = "NOT LOADED"
 			}
 			fmt.Printf("  - %s (source: %s, version: %s, %s)\n", p.Name, p.Source, p.Version, loaded)
+		}
+		fmt.Printf("Found %d mcp server(s)\n", len(cfg.MCPServers))
+		for _, s := range cfg.MCPServers {
+			// A nil entry in LoadedMCPClients means load tolerated an
+			// AuthRequiredError — the block parsed fine but the server
+			// isn't authorized yet.
+			status := "NOT LOADED"
+			if client, ok := cfg.LoadedMCPClients[s.Name]; ok {
+				if client == nil {
+					status = "needs login"
+				} else {
+					status = "loaded"
+				}
+			}
+			fmt.Printf("  - %s (%s, %s)\n", s.Name, s.Location(), status)
 		}
 		fmt.Printf("Found %d mission(s)\n", len(cfg.Missions))
 		for _, w := range cfg.Missions {

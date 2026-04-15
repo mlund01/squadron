@@ -1,0 +1,356 @@
+/* DEFCON 5 — military command terminal aesthetic
+ * Matches the command-center theme: green-on-dark-green, monospace, tight contrast.
+ */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+/* Force monospace globally */
+html,
+body {
+  font-family: 'JetBrains Mono', 'Courier New', ui-monospace, monospace;
+}
+
+/* ─── DEFCON 5 palette ─── */
+:root {
+  --defcon5-bg: #0a1f0a;
+  --defcon5-bg-elevated: #0d2a0d;
+  --defcon5-bg-inset: #081808;
+  --defcon5-fg: #4ade80;
+  --defcon5-fg-bright: #86efac;
+  --defcon5-fg-dim: #6b8f71;
+  --defcon5-border: #1a4a1a;
+  --defcon5-border-strong: #2a6a2a;
+  --defcon5-accent: #a3e635;
+  --defcon5-amber: #facc15;
+  --defcon5-red: #f87171;
+}
+
+.dark {
+  --defcon5-bg: #0a1f0a;
+  --defcon5-bg-elevated: #0d2a0d;
+  --defcon5-bg-inset: #081808;
+  --defcon5-fg: #4ade80;
+  --defcon5-fg-bright: #86efac;
+  --defcon5-fg-dim: #6b8f71;
+  --defcon5-border: #1a4a1a;
+  --defcon5-border-strong: #2a6a2a;
+}
+
+/* ─── Global body tint (dark theme) ─── */
+.dark body,
+.dark {
+  color: var(--defcon5-fg);
+}
+
+html.dark {
+  background: rgb(var(--nextra-bg));
+}
+
+/* ─── Navbar ─── */
+.nextra-navbar {
+  border-bottom: 1px solid var(--defcon5-border) !important;
+  background: rgba(10, 31, 10, 0.85) !important;
+  backdrop-filter: blur(8px);
+}
+
+.dark .nextra-navbar-blur {
+  background: rgba(10, 31, 10, 0.85) !important;
+}
+
+/* ─── Sidebar ─── */
+.dark .nextra-sidebar {
+  background: var(--defcon5-bg) !important;
+}
+
+.dark aside.nextra-sidebar-container {
+  border-right: 1px solid var(--defcon5-border);
+}
+
+.dark .nextra-sidebar a,
+.dark .nextra-sidebar button {
+  color: var(--defcon5-fg-dim);
+}
+
+.dark .nextra-sidebar a:hover,
+.dark .nextra-sidebar button:hover {
+  color: var(--defcon5-fg-bright);
+  background: rgba(74, 222, 128, 0.08) !important;
+}
+
+/* Active sidebar link */
+.dark .nextra-sidebar a[aria-current="page"],
+.dark .nextra-sidebar li.active > a,
+.dark .nextra-sidebar a[data-active="true"] {
+  background: rgba(74, 222, 128, 0.12) !important;
+  color: var(--defcon5-fg-bright) !important;
+  border-left: 2px solid var(--defcon5-fg);
+}
+
+/* ─── Table of contents ─── */
+.dark .nextra-toc a {
+  color: var(--defcon5-fg-dim);
+}
+
+.dark .nextra-toc a:hover {
+  color: var(--defcon5-fg-bright);
+}
+
+.dark .nextra-toc a[data-active="true"] {
+  color: var(--defcon5-fg) !important;
+}
+
+/* ─── Breadcrumb ─── */
+.dark .nextra-breadcrumb {
+  color: var(--defcon5-fg-dim);
+}
+
+/* ─── Prose content ─── */
+.dark .x\:prose,
+.dark .nextra-content {
+  color: var(--defcon5-fg);
+}
+
+/* Headings — brighter green, add a terminal prompt on h1 */
+.dark h1,
+.dark h2,
+.dark h3,
+.dark h4,
+.dark h5,
+.dark h6 {
+  color: var(--defcon5-fg-bright) !important;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  letter-spacing: -0.01em;
+}
+
+.dark article h1:first-child::before {
+  content: '$ ';
+  color: var(--defcon5-fg-dim);
+  font-weight: 400;
+}
+
+/* Links */
+.dark a {
+  color: var(--defcon5-accent);
+  text-decoration: underline;
+  text-decoration-color: rgba(163, 230, 53, 0.4);
+  text-underline-offset: 2px;
+}
+
+.dark a:hover {
+  color: var(--defcon5-fg-bright);
+  text-decoration-color: var(--defcon5-fg-bright);
+}
+
+/* Don't underline structural links */
+.dark .nextra-sidebar a,
+.dark .nextra-toc a,
+.dark .nextra-navbar a,
+.dark .nextra-breadcrumb a {
+  text-decoration: none;
+}
+
+/* ─── Inline code ─── */
+.dark code:not(pre code) {
+  background: rgba(74, 222, 128, 0.1) !important;
+  color: var(--defcon5-fg-bright) !important;
+  border: 1px solid var(--defcon5-border);
+  border-radius: 3px;
+  padding: 0.1em 0.35em;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  font-size: 0.88em;
+}
+
+/* ─── Code blocks ─── */
+.dark pre,
+.dark .nextra-code > pre,
+.dark figure[data-rehype-pretty-code-figure] pre {
+  background: var(--defcon5-bg-inset) !important;
+  border: 1px solid var(--defcon5-border) !important;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.05);
+}
+
+.dark pre code,
+.dark figure[data-rehype-pretty-code-figure] code {
+  color: var(--defcon5-fg) !important;
+  font-family: 'JetBrains Mono', 'Courier New', monospace !important;
+}
+
+/* Syntax highlighting — remap to green terminal palette */
+.dark .shiki,
+.dark figure[data-rehype-pretty-code-figure] pre {
+  --shiki-dark-bg: var(--defcon5-bg-inset) !important;
+  background-color: var(--defcon5-bg-inset) !important;
+}
+
+.dark code .line {
+  color: var(--defcon5-fg) !important;
+}
+
+/* Shiki tokens — override to green terminal palette */
+.dark .shiki span[style*="color"],
+.dark figure[data-rehype-pretty-code-figure] code span[style*="color"] {
+  color: var(--defcon5-fg) !important;
+}
+
+/* Use attribute selectors to retint common Shiki token colors to the green spectrum.
+ * Shiki inlines colors as style="--shiki-dark:#xxxxxx; color: var(--shiki-dark)" or raw color.
+ * We override a few common token families via their CSS variable hints. */
+.dark .shiki [style*="--shiki-dark:#C792EA"],
+.dark .shiki [style*="color:#C792EA"] { color: #86efac !important; } /* keywords → pale green */
+.dark .shiki [style*="--shiki-dark:#82AAFF"],
+.dark .shiki [style*="color:#82AAFF"] { color: #4ade80 !important; } /* functions → green */
+.dark .shiki [style*="--shiki-dark:#F07178"],
+.dark .shiki [style*="color:#F07178"] { color: #f87171 !important; } /* strings warn → keep soft red */
+.dark .shiki [style*="--shiki-dark:#C3E88D"],
+.dark .shiki [style*="color:#C3E88D"] { color: #a3e635 !important; } /* strings → lime */
+.dark .shiki [style*="--shiki-dark:#FFCB6B"],
+.dark .shiki [style*="color:#FFCB6B"] { color: #facc15 !important; } /* numbers → amber */
+.dark .shiki [style*="--shiki-dark:#89DDFF"],
+.dark .shiki [style*="color:#89DDFF"] { color: #86efac !important; } /* punctuation → pale green */
+.dark .shiki [style*="--shiki-dark:#676E95"],
+.dark .shiki [style*="color:#676E95"] { color: #2a6a2a !important; font-style: italic; } /* comments */
+.dark .shiki [style*="--shiki-dark:#EEFFFF"],
+.dark .shiki [style*="color:#EEFFFF"] { color: var(--defcon5-fg) !important; } /* default text */
+
+/* Code-block header (filename bar, copy button) */
+.dark figure[data-rehype-pretty-code-figure] figcaption {
+  background: var(--defcon5-bg-elevated) !important;
+  color: var(--defcon5-fg-dim) !important;
+  border-bottom: 1px solid var(--defcon5-border);
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+.dark [data-rehype-pretty-code-title] {
+  background: var(--defcon5-bg-elevated) !important;
+  color: var(--defcon5-fg-bright) !important;
+  border-bottom: 1px solid var(--defcon5-border) !important;
+}
+
+/* Line numbers / highlighted lines */
+.dark [data-highlighted-line] {
+  background: rgba(74, 222, 128, 0.08) !important;
+  border-left: 2px solid var(--defcon5-fg);
+}
+
+.dark [data-highlighted-chars] {
+  background: rgba(163, 230, 53, 0.15) !important;
+  border-radius: 2px;
+}
+
+/* ─── Tables ─── */
+.dark table {
+  border-color: var(--defcon5-border) !important;
+}
+
+.dark table th {
+  background: var(--defcon5-bg-elevated) !important;
+  color: var(--defcon5-fg-bright) !important;
+  border-color: var(--defcon5-border) !important;
+}
+
+.dark table td {
+  border-color: var(--defcon5-border) !important;
+}
+
+.dark table tr:nth-child(even) {
+  background: rgba(74, 222, 128, 0.03) !important;
+}
+
+/* ─── Blockquotes / callouts ─── */
+.dark blockquote {
+  border-left: 3px solid var(--defcon5-fg) !important;
+  background: rgba(74, 222, 128, 0.04);
+  color: var(--defcon5-fg-bright) !important;
+  padding-left: 1em;
+}
+
+.dark .nextra-callout {
+  border-color: var(--defcon5-border-strong) !important;
+  background: rgba(74, 222, 128, 0.06) !important;
+  color: var(--defcon5-fg) !important;
+}
+
+.dark .nextra-callout[data-type="info"] {
+  border-color: var(--defcon5-fg) !important;
+}
+
+.dark .nextra-callout[data-type="warning"] {
+  border-color: var(--defcon5-amber) !important;
+  background: rgba(250, 204, 21, 0.06) !important;
+}
+
+.dark .nextra-callout[data-type="error"] {
+  border-color: var(--defcon5-red) !important;
+  background: rgba(248, 113, 113, 0.06) !important;
+}
+
+/* ─── Horizontal rules ─── */
+.dark hr {
+  border-color: var(--defcon5-border) !important;
+}
+
+/* ─── Search ─── */
+.dark .nextra-search input {
+  background: var(--defcon5-bg-inset) !important;
+  border-color: var(--defcon5-border) !important;
+  color: var(--defcon5-fg) !important;
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+}
+
+.dark .nextra-search input:focus {
+  border-color: var(--defcon5-fg) !important;
+}
+
+.dark .nextra-search input::placeholder {
+  color: var(--defcon5-fg-dim);
+}
+
+/* ─── Selection ─── */
+::selection {
+  background: rgba(74, 222, 128, 0.3);
+  color: var(--defcon5-fg-bright);
+}
+
+/* ─── Scrollbars (webkit) ─── */
+.dark ::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.dark ::-webkit-scrollbar-track {
+  background: var(--defcon5-bg-inset);
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: var(--defcon5-border-strong);
+  border-radius: 0;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: var(--defcon5-fg-dim);
+}
+
+/* ─── Navbar logo: add the terminal prompt flourish ─── */
+.nextra-navbar b.defcon5-logo::before {
+  content: '> ';
+  color: var(--defcon5-fg);
+  font-weight: 400;
+}
+
+.nextra-navbar b.defcon5-logo {
+  font-family: 'JetBrains Mono', 'Courier New', monospace;
+  letter-spacing: 0.05em;
+  color: var(--defcon5-fg-bright);
+}
+
+/* Subtle scanline vibe — very low opacity so readability stays intact */
+html.dark body {
+  background-image: repeating-linear-gradient(
+    0deg,
+    rgba(74, 222, 128, 0.015) 0px,
+    rgba(74, 222, 128, 0.015) 1px,
+    transparent 1px,
+    transparent 3px
+  );
+}

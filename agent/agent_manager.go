@@ -154,16 +154,15 @@ func (m *AgentManager) RunAgent(ctx context.Context, name, task, response string
 		result, err = a.Chat(ctx, agentInput, handler)
 	}
 
-	// Notify completion
-	m.notifyComplete(name)
-
 	if err != nil {
+		m.notifyComplete(name)
 		m.completeSession(name, err)
 		return ChatResult{}, err
 	}
 
-	// If agent completed, move to completed map
+	// If agent completed, move to completed map and notify
 	if result.Complete {
+		m.notifyComplete(name)
 		m.completeSession(name, nil)
 		m.mu.Lock()
 		m.completed[name] = &completedAgent{agent: a, agentID: name}
@@ -266,7 +265,6 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 		OnCompaction:     onCompaction,
 		OnSessionTurn:    onSessionTurn,
 		PricingOverrides: m.pricingOverrides,
-		Provider:         m.provider,
 	})
 }
 

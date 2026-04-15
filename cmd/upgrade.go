@@ -163,7 +163,7 @@ func upgradeCC() error {
 	}
 
 	binPath := filepath.Join(versionDir, ccBinaryName())
-	if err := os.Rename(extractedPath, binPath); err != nil {
+	if err := moveFile(extractedPath, binPath); err != nil {
 		os.Remove(extractedPath)
 		return err
 	}
@@ -185,7 +185,7 @@ func replaceBinary(target, newBinary string) error {
 		return fmt.Errorf("could not replace binary at %s: %w\nTry: sudo squadron upgrade", target, err)
 	}
 
-	if err := os.Rename(newBinary, target); err != nil {
+	if err := moveFile(newBinary, target); err != nil {
 		// Rollback: restore the old binary
 		os.Rename(oldPath, target)
 		return fmt.Errorf("could not install new binary: %w", err)
@@ -195,3 +195,4 @@ func replaceBinary(target, newBinary string) error {
 	os.Remove(oldPath)
 	return nil
 }
+

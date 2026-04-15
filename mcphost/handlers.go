@@ -1,4 +1,4 @@
-package mcp
+package mcphost
 
 import (
 	"context"
@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"squadron/config"
 	"squadron/docs"
+	"squadron/mcp/oauth"
 	"squadron/store"
 )
 
@@ -177,7 +179,7 @@ func (h *handlers) listRuns(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	}
 	missionFilter, _ := args["mission_name"].(string)
 
-	records, total, err := h.deps.Stores.Missions.ListMissions(limit, offset)
+	records, total, err := h.deps.Stores().Missions.ListMissions(limit, offset)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to list runs: %v", err)), nil
 	}
@@ -206,8 +208,8 @@ func (h *handlers) listRuns(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 
 	runs := make([]runSummary, 0, len(records))
 	for _, r := range records {
-		tasks, _ := h.deps.Stores.Missions.GetTasksByMission(r.ID)
-		datasets, _ := h.deps.Stores.Datasets.ListDatasets(r.ID)
+		tasks, _ := h.deps.Stores().Missions.GetTasksByMission(r.ID)
+		datasets, _ := h.deps.Stores().Datasets.ListDatasets(r.ID)
 
 		var inputs any
 		if r.InputValuesJSON != "" && r.InputValuesJSON != "{}" {
@@ -254,7 +256,7 @@ func (h *handlers) getRunDetails(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError("run_id is required"), nil
 	}
 
-	record, err := h.deps.Stores.Missions.GetMission(runID)
+	record, err := h.deps.Stores().Missions.GetMission(runID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get run: %v", err)), nil
 	}
@@ -262,12 +264,12 @@ func (h *handlers) getRunDetails(_ context.Context, req mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(fmt.Sprintf("run %q not found", runID)), nil
 	}
 
-	tasks, err := h.deps.Stores.Missions.GetTasksByMission(runID)
+	tasks, err := h.deps.Stores().Missions.GetTasksByMission(runID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get tasks: %v", err)), nil
 	}
 
-	datasets, _ := h.deps.Stores.Datasets.ListDatasets(runID)
+	datasets, _ := h.deps.Stores().Datasets.ListDatasets(runID)
 
 	var inputs any
 	if record.InputValuesJSON != "" && record.InputValuesJSON != "{}" {
@@ -313,7 +315,7 @@ func (h *handlers) getRunConfig(_ context.Context, req mcp.CallToolRequest) (*mc
 		return mcp.NewToolResultError("run_id is required"), nil
 	}
 
-	record, err := h.deps.Stores.Missions.GetMission(runID)
+	record, err := h.deps.Stores().Missions.GetMission(runID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get run: %v", err)), nil
 	}
@@ -339,7 +341,7 @@ func (h *handlers) getRunTaskDetails(_ context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError("task_id is required"), nil
 	}
 
-	task, err := h.deps.Stores.Missions.GetTask(taskID)
+	task, err := h.deps.Stores().Missions.GetTask(taskID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get task: %v", err)), nil
 	}
@@ -347,17 +349,17 @@ func (h *handlers) getRunTaskDetails(_ context.Context, req mcp.CallToolRequest)
 		return mcp.NewToolResultError(fmt.Sprintf("task %q not found", taskID)), nil
 	}
 
-	subtasks, err := h.deps.Stores.Missions.GetSubtasksByTask(taskID)
+	subtasks, err := h.deps.Stores().Missions.GetSubtasksByTask(taskID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get subtasks: %v", err)), nil
 	}
 
-	outputs, err := h.deps.Stores.Missions.GetTaskOutputs(taskID)
+	outputs, err := h.deps.Stores().Missions.GetTaskOutputs(taskID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get outputs: %v", err)), nil
 	}
 
-	inputs, err := h.deps.Stores.Missions.GetTaskInputs(taskID)
+	inputs, err := h.deps.Stores().Missions.GetTaskInputs(taskID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to get inputs: %v", err)), nil
 	}
@@ -701,4 +703,122 @@ func (h *handlers) getVar(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 	}
 
 	return toolResult(result)
+}
+
+// =============================================================================
+// MCP OAuth
+// =============================================================================
+
+func (h *handlers) mcpStatus(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	cfg := h.deps.Config()
+	if cfg == nil {
+		return mcp.NewToolResultError("config not loaded"), nil
+	}
+
+	snap, err := oauth.LoadVaultSnapshot()
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to read vault: %v", err)), nil
+	}
+
+	type serverStatus struct {
+		Name     string `json:"name"`
+		Location string `json:"location"`
+		Auth     string `json:"auth"`
+		Expires  string `json:"expires"`
+	}
+
+	var servers []serverStatus
+	for _, s := range cfg.MCPServers {
+		auth, expires := describeMCPAuth(s, snap)
+		servers = append(servers, serverStatus{
+			Name:     s.Name,
+			Location: s.Location(),
+			Auth:     auth,
+			Expires:  expires,
+		})
+	}
+
+	return toolResult(map[string]any{"servers": servers})
+}
+
+func describeMCPAuth(spec config.MCPServer, snap *oauth.VaultSnapshot) (state, expires string) {
+	if spec.URL == "" {
+		return "n/a", "-"
+	}
+	if _, hasStatic := spec.Headers["Authorization"]; hasStatic {
+		return "static header", "-"
+	}
+	if !snap.HasToken(spec.Name) {
+		return "no token", "-"
+	}
+
+	tok, err := snap.Token(spec.Name)
+	if err != nil || tok == nil {
+		return "unreadable", "-"
+	}
+	if tok.ExpiresAt.IsZero() {
+		return "connected", "no expiry"
+	}
+	remaining := time.Until(tok.ExpiresAt)
+	if remaining <= 0 {
+		return "expired", "(refreshes on use)"
+	}
+	hours := int(remaining.Hours())
+	if hours > 0 {
+		return "connected", fmt.Sprintf("in %dh", hours)
+	}
+	mins := int(remaining.Minutes())
+	if mins > 0 {
+		return "connected", fmt.Sprintf("in %dm", mins)
+	}
+	return "connected", fmt.Sprintf("in %ds", int(remaining.Seconds()))
+}
+
+func (h *handlers) mcpLogout(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, _ := req.GetArguments()["name"].(string)
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+
+	if err := oauth.DeleteToken(name); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("failed to delete token: %v", err)), nil
+	}
+
+	return toolResult(map[string]any{
+		"name":   name,
+		"status": "token removed",
+	})
+}
+
+func (h *handlers) mcpRefresh(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	name, _ := req.GetArguments()["name"].(string)
+	if name == "" {
+		return mcp.NewToolResultError("name is required"), nil
+	}
+
+	cfg := h.deps.Config()
+	if cfg == nil {
+		return mcp.NewToolResultError("config not loaded"), nil
+	}
+
+	// Find the server URL from config.
+	var serverURL string
+	for _, s := range cfg.MCPServers {
+		if s.Name == name {
+			serverURL = s.URL
+			break
+		}
+	}
+	if serverURL == "" {
+		return mcp.NewToolResultError(fmt.Sprintf("mcp %q not found or is not an HTTP server", name)), nil
+	}
+
+	if err := oauth.ForceRefresh(ctx, name, serverURL); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("refresh failed: %v", err)), nil
+	}
+
+	return toolResult(map[string]any{
+		"name":   name,
+		"status": "token refreshed",
+	})
 }

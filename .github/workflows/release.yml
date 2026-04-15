@@ -39,3 +39,57 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  notify-discord:
+    needs: release
+    runs-on: ubuntu-latest
+    if: ${{ !failure() && !cancelled() }}
+    steps:
+      - name: Post release to Discord
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "DISCORD_WEBHOOK_URL secret is not set; skipping notification."
+            exit 0
+          fi
+
+          # Fetch release body; retry briefly in case goreleaser hasn't finished publishing
+          body=""
+          for i in 1 2 3 4 5; do
+            body=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.body' 2>/dev/null || true)
+            if [ -n "$body" ]; then break; fi
+            sleep 3
+          done
+          if [ -z "$body" ]; then
+            body="_Release notes unavailable._"
+          fi
+
+          # Discord embed description max is 4096 chars — truncate safely
+          max=3900
+          if [ ${#body} -gt $max ]; then
+            body="${body:0:$max}"$'\n\n…_truncated — see full release notes on GitHub_'
+          fi
+
+          url="https://github.com/$REPO/releases/tag/$TAG"
+
+          payload=$(jq -n \
+            --arg title "$REPO $TAG" \
+            --arg url "$url" \
+            --arg desc "$body" \
+            '{
+              username: "Squadron Releases",
+              embeds: [{
+                title: $title,
+                url: $url,
+                description: $desc,
+                color: 5814783
+              }]
+            }')
+
+          curl -fsS -H "Content-Type: application/json" \
+            -X POST -d "$payload" \
+            "$DISCORD_WEBHOOK_URL"

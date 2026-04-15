@@ -2,11 +2,14 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/packages/param"
+	"github.com/openai/openai-go/shared"
 )
 
 // modelSupportsStop returns false for models that reject the 'stop' parameter
@@ -32,6 +35,16 @@ func NewOpenAIProvider(apiKey string) *OpenAIProvider {
 	return &OpenAIProvider{client: &client}
 }
 
+// NewOpenAICompatibleProvider creates a provider that targets an OpenAI-compatible
+// API at the given base URL (e.g. Ollama at http://localhost:11434/v1).
+func NewOpenAICompatibleProvider(baseURL string) *OpenAIProvider {
+	client := openai.NewClient(
+		option.WithBaseURL(baseURL),
+		option.WithAPIKey("ollama"), // dummy key; local servers ignore it
+	)
+	return &OpenAIProvider{client: &client}
+}
+
 func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
 	msgs := p.convertMessages(req.Messages)
 
@@ -54,14 +67,40 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		}
 	}
 
+	if len(req.Tools) > 0 {
+		params.Tools = p.convertTools(req.Tools)
+	}
+
 	resp, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return nil, err
 	}
 
 	var content string
+	var contentBlocks []ContentBlock
 	if len(resp.Choices) > 0 {
-		content = resp.Choices[0].Message.Content
+		msg := resp.Choices[0].Message
+		content = msg.Content
+
+		// Add text content block if present
+		if content != "" {
+			contentBlocks = append(contentBlocks, ContentBlock{
+				Type: ContentTypeText,
+				Text: content,
+			})
+		}
+
+		// Add tool call content blocks
+		for _, tc := range msg.ToolCalls {
+			contentBlocks = append(contentBlocks, ContentBlock{
+				Type: ContentTypeToolUse,
+				ToolUse: &ToolUseBlock{
+					ID:    tc.ID,
+					Name:  tc.Function.Name,
+					Input: json.RawMessage(tc.Function.Arguments),
+				},
+			})
+		}
 	}
 
 	usage := Usage{
@@ -76,11 +115,17 @@ func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRespo
 		usage.InputTokens -= usage.CacheReadTokens
 	}
 
+	var finishReason string
+	if len(resp.Choices) > 0 {
+		finishReason = string(resp.Choices[0].FinishReason)
+	}
+
 	return &ChatResponse{
-		ID:           resp.ID,
-		Content:      content,
-		FinishReason: string(resp.Choices[0].FinishReason),
-		Usage:        usage,
+		ID:            resp.ID,
+		Content:       content,
+		ContentBlocks: contentBlocks,
+		FinishReason:  finishReason,
+		Usage:         usage,
 	}, nil
 }
 
@@ -110,6 +155,10 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 		}
 	}
 
+	if len(req.Tools) > 0 {
+		params.Tools = p.convertTools(req.Tools)
+	}
+
 	stream := p.client.Chat.Completions.NewStreaming(ctx, params)
 
 	chunks := make(chan StreamChunk)
@@ -118,6 +167,16 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 		defer close(chunks)
 
 		var finalUsage Usage
+		var stopReason string
+		var contentBlocks []ContentBlock
+
+		// Track in-progress tool calls by index
+		type toolCallState struct {
+			id        string
+			name      string
+			arguments string
+		}
+		toolCalls := make(map[int]*toolCallState)
 
 		for stream.Next() {
 			chunk := stream.Current()
@@ -133,18 +192,72 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 			}
 
 			if len(chunk.Choices) > 0 {
-				delta := chunk.Choices[0].Delta
+				choice := chunk.Choices[0]
+				delta := choice.Delta
+
+				// Stream text content
 				if delta.Content != "" {
 					chunks <- StreamChunk{
 						Content: delta.Content,
-						Done:    false,
 					}
 				}
 
-				if chunk.Choices[0].FinishReason != "" {
+				// Stream tool calls
+				for _, tc := range delta.ToolCalls {
+					idx := int(tc.Index)
+					state, exists := toolCalls[idx]
+					if !exists {
+						state = &toolCallState{}
+						toolCalls[idx] = state
+					}
+
+					if tc.ID != "" {
+						state.id = tc.ID
+					}
+					if tc.Function.Name != "" {
+						state.name = tc.Function.Name
+						// Emit tool call start
+						chunks <- StreamChunk{
+							ToolCallStart: &ToolCallStartChunk{
+								ID:   state.id,
+								Name: state.name,
+							},
+						}
+					}
+					if tc.Function.Arguments != "" {
+						state.arguments += tc.Function.Arguments
+						chunks <- StreamChunk{
+							ToolCallDelta: tc.Function.Arguments,
+						}
+					}
+				}
+
+				if choice.FinishReason != "" {
+					stopReason = string(choice.FinishReason)
+
+					// Finalize any tool calls
+					for _, state := range toolCalls {
+						if state.id != "" {
+							contentBlocks = append(contentBlocks, ContentBlock{
+								Type: ContentTypeToolUse,
+								ToolUse: &ToolUseBlock{
+									ID:    state.id,
+									Name:  state.name,
+									Input: json.RawMessage(state.arguments),
+								},
+							})
+							id := state.id
+							chunks <- StreamChunk{
+								ToolCallDone: &id,
+							}
+						}
+					}
+
 					chunks <- StreamChunk{
-						Done:  true,
-						Usage: &finalUsage,
+						Done:          true,
+						Usage:         &finalUsage,
+						StopReason:    stopReason,
+						ContentBlocks: contentBlocks,
 					}
 				}
 			}
@@ -161,6 +274,27 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 	return chunks, nil
 }
 
+// convertTools converts provider-agnostic ToolDefinitions to OpenAI tool params
+func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.ChatCompletionToolParam {
+	result := make([]openai.ChatCompletionToolParam, 0, len(tools))
+	for _, t := range tools {
+		// Parse the JSON schema into FunctionParameters (map[string]any)
+		var params shared.FunctionParameters
+		if err := json.Unmarshal(t.InputSchema, &params); err != nil {
+			continue
+		}
+
+		result = append(result, openai.ChatCompletionToolParam{
+			Function: shared.FunctionDefinitionParam{
+				Name:        t.Name,
+				Description: param.NewOpt(t.Description),
+				Parameters:  params,
+			},
+		})
+	}
+	return result
+}
+
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessageParamUnion {
 	var msgs []openai.ChatCompletionMessageParamUnion
 
@@ -169,20 +303,45 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 		case RoleSystem:
 			msgs = append(msgs, openai.SystemMessage(m.Content))
 		case RoleUser:
-			msgs = append(msgs, p.buildUserMessage(m))
+			msgs = append(msgs, p.buildUserMessages(m)...)
 		case RoleAssistant:
-			msgs = append(msgs, openai.AssistantMessage(m.GetTextContent()))
+			msgs = append(msgs, p.buildAssistantMessage(m))
 		}
 	}
 
 	return msgs
 }
 
-// buildUserMessage creates an OpenAI user message, handling multimodal content
-func (p *OpenAIProvider) buildUserMessage(m Message) openai.ChatCompletionMessageParamUnion {
+// buildUserMessages creates one or more OpenAI messages from a single squadron user
+// message. A bundle of N tool results expands into N separate tool messages
+// (OpenAI requires one tool message per tool_call_id), while plain text /
+// multimodal content collapses to a single user message.
+func (p *OpenAIProvider) buildUserMessages(m Message) []openai.ChatCompletionMessageParamUnion {
+	if m.HasParts() {
+		// If ALL parts are tool results, emit one tool message per part.
+		allToolResults := true
+		for _, part := range m.Parts {
+			if part.Type != ContentTypeToolResult {
+				allToolResults = false
+				break
+			}
+		}
+		if allToolResults && len(m.Parts) > 0 {
+			out := make([]openai.ChatCompletionMessageParamUnion, 0, len(m.Parts))
+			for _, part := range m.Parts {
+				tr := part.ToolResult
+				if tr == nil {
+					continue
+				}
+				out = append(out, openai.ToolMessage(tr.Content, tr.ToolUseID))
+			}
+			return out
+		}
+	}
+
 	// If no Parts, use simple text content
 	if !m.HasParts() {
-		return openai.UserMessage(m.Content)
+		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(m.Content)}
 	}
 
 	// Build content parts from Parts
@@ -202,5 +361,44 @@ func (p *OpenAIProvider) buildUserMessage(m Message) openai.ChatCompletionMessag
 		}
 	}
 
-	return openai.UserMessage(parts)
+	return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(parts)}
+}
+
+// buildAssistantMessage creates an OpenAI assistant message, including tool calls if present
+func (p *OpenAIProvider) buildAssistantMessage(m Message) openai.ChatCompletionMessageParamUnion {
+	if !m.HasParts() {
+		return openai.AssistantMessage(m.GetTextContent())
+	}
+
+	// Check if the message has tool use blocks
+	var toolCalls []openai.ChatCompletionMessageToolCallParam
+	var textContent string
+	for _, part := range m.Parts {
+		switch part.Type {
+		case ContentTypeText:
+			textContent += part.Text
+		case ContentTypeToolUse:
+			if part.ToolUse != nil {
+				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
+					ID: part.ToolUse.ID,
+					Function: openai.ChatCompletionMessageToolCallFunctionParam{
+						Name:      part.ToolUse.Name,
+						Arguments: string(part.ToolUse.Input),
+					},
+				})
+			}
+		}
+	}
+
+	if len(toolCalls) > 0 {
+		// Assistant message with tool calls
+		var assistant openai.ChatCompletionAssistantMessageParam
+		if textContent != "" {
+			assistant.Content.OfString = param.NewOpt(textContent)
+		}
+		assistant.ToolCalls = toolCalls
+		return openai.ChatCompletionMessageParamUnion{OfAssistant: &assistant}
+	}
+
+	return openai.AssistantMessage(textContent)
 }

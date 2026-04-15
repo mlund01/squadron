@@ -175,7 +175,7 @@ Commanders have access to special tools:
 - **call_agent** - Delegate work to an agent
 - **ask_agent** - Ask a completed agent follow-up questions
 - **submit_output** - Submit structured output matching the task's output schema
-- **task_complete** - Signal that the task is done
+- **task_complete** - Signal that the task is done (includes `summary` for downstream context, and `route` for routing tasks)
 - **query_task_output** - Query structured data from completed dependency tasks
 - **ask_commander** - Query a dependency task's commander for more context
 - **dataset_next** - Get the next item in sequential dataset processing

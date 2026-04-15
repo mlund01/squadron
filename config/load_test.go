@@ -28,7 +28,6 @@ storage { backend = "sqlite" }
 				"models.hcl": minimalVarsHCL() + `
 model "test" {
   provider       = "openai"
-  allowed_models = ["gpt_4o"]
   api_key        = vars.test_api_key
 }
 `,
@@ -62,6 +61,14 @@ model "test" {
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
 		})
+
+		It("defaults to sqlite storage when no storage block is defined", func() {
+			_, f := writeFixture("config.hcl", `variable "x" { default = "val" }`)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Storage).NotTo(BeNil())
+			Expect(cfg.Storage.Backend).To(Equal("sqlite"))
+		})
 	})
 
 	Describe("LoadDir", func() {
@@ -74,7 +81,6 @@ storage { backend = "sqlite" }
 variable "k" { default = "key" }
 model "m1" {
   provider       = "openai"
-  allowed_models = ["gpt_4o"]
   api_key        = vars.k
 }
 `,
@@ -114,7 +120,6 @@ variable "my_key" { default = "resolved-api-key" }
 storage { backend = "sqlite" }
 model "test" {
   provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4"]
   api_key        = vars.my_key
 }
 `

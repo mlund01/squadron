@@ -7,9 +7,11 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"squadron/internal/paths"
 )
 
-var origSquadronHome string
+var origDir string
 
 func TestConfig(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -17,19 +19,22 @@ func TestConfig(t *testing.T) {
 }
 
 var _ = BeforeSuite(func() {
-	// Isolate all config tests from the real vault/keychain
-	origSquadronHome = os.Getenv("SQUADRON_HOME")
+	// Isolate all config tests from the real vault/keychain by
+	// changing into a temp dir so .squadron/ resolves there.
+	var err error
+	origDir, err = os.Getwd()
+	Expect(err).NotTo(HaveOccurred())
+
 	tmpHome, err := os.MkdirTemp("", "squadron-test-*")
 	Expect(err).NotTo(HaveOccurred())
-	os.Setenv("SQUADRON_HOME", tmpHome)
+	Expect(os.MkdirAll(filepath.Join(tmpHome, ".squadron"), 0700)).To(Succeed())
+	Expect(os.Chdir(tmpHome)).To(Succeed())
+	paths.ResetHome()
 })
 
 var _ = AfterSuite(func() {
-	if origSquadronHome != "" {
-		os.Setenv("SQUADRON_HOME", origSquadronHome)
-	} else {
-		os.Unsetenv("SQUADRON_HOME")
-	}
+	Expect(os.Chdir(origDir)).To(Succeed())
+	paths.ResetHome()
 })
 
 // writeFixture writes an HCL file to a temp directory and returns the dir and file paths.
@@ -72,7 +77,6 @@ func minimalModelHCL() string {
 	return `
 model "anthropic" {
   provider       = "anthropic"
-  allowed_models = ["claude_sonnet_4"]
   api_key        = vars.test_api_key
 }
 `

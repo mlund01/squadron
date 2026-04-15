@@ -17,16 +17,24 @@ var versionCmd = &cobra.Command{
 	},
 }
 
+const banner = ` ███████  ██████  ██    ██  █████  ██████  ██████   ██████  ███    ██  ✈
+ ██      ██    ██ ██    ██ ██   ██ ██   ██ ██   ██ ██    ██ ████   ██   ✈
+ ███████ ██    ██ ██    ██ ███████ ██   ██ ██████  ██    ██ ██ ██  ██    ✈
+      ██ ██ ██ ██ ██    ██ ██   ██ ██   ██ ██   ██ ██    ██ ██  ██ ██   ✈
+ ███████  ██████   ██████  ██   ██ ██████  ██   ██  ██████  ██   ████  ✈`
+
+func printBanner() {
+	fmt.Println()
+	fmt.Println(banner)
+	fmt.Println()
+}
+
 func init() {
 	rootCmd.AddCommand(versionCmd)
 	rootCmd.Version = Version
 	rootCmd.SetVersionTemplate("{{.Version}}\n")
 	rootCmd.Long = fmt.Sprintf(`
- ███████  ██████  ██    ██  █████  ██████  ██████   ██████  ███    ██  ✈
- ██      ██    ██ ██    ██ ██   ██ ██   ██ ██   ██ ██    ██ ████   ██   ✈
- ███████ ██    ██ ██    ██ ███████ ██   ██ ██████  ██    ██ ██ ██  ██    ✈
-      ██ ██ ██ ██ ██    ██ ██   ██ ██   ██ ██   ██ ██    ██ ██  ██ ██   ✈
- ███████  ██████   ██████  ██   ██ ██████  ██   ██  ██████  ██   ████  ✈
+%s
 
  %s
 
@@ -36,8 +44,9 @@ Define agents, models, tools, and missions in HCL configuration files,
 then run them with simple commands.
 
 Get started:
-  squadron docs           Extract documentation to a local folder
+  squadron quickstart     Interactive setup wizard
+  squadron engage         Start Squadron with command center UI
   squadron verify <path>  Validate your configuration
   squadron chat <agent>   Chat with an agent
-  squadron mission <name> Run a mission`, Version)
+  squadron mission <name> Run a mission`, banner, Version)
 }

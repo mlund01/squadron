@@ -5,10 +5,6 @@ services:
       dockerfile: Dockerfile.debian
     volumes:
       - ./../workflows:/config
-      - squadron-data:/data/squadron
     command: ["serve", "--init", "-w", "--cc-port", "8080", "--no-browser"]
     ports:
       - "8080:8080"
-
-volumes:
-  squadron-data:

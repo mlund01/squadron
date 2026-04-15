@@ -45,6 +45,7 @@ type Runner struct {
 	mu                   sync.RWMutex
 	taskCommanders      map[string]*agent.Commander             // Commanders for completed tasks (for ask_commander queries)
 	iterationCommanders map[string]map[int]*agent.Commander     // Commanders for iterated tasks: taskName -> index -> commander
+	taskSummaries       map[string]string                       // Push summaries from completed tasks (taskName -> summary)
 
 	// Knowledge store for structured task outputs (reads from MissionStore)
 	knowledgeStore KnowledgeStore
@@ -200,6 +201,7 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		rawInputs:            inputs,
 		datasetIDs:           make(map[string]string),
 		taskCommanders:      make(map[string]*agent.Commander),
+		taskSummaries:       make(map[string]string),
 		iterationCommanders: make(map[string]map[int]*agent.Commander),
 		stores:               stores,
 		askCommanderStore: &askCommanderStore{
@@ -974,6 +976,9 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			r.iterationCommanders[taskName][0] = sup
 		} else {
 			r.taskCommanders[taskName] = sup
+			if summary := sup.TaskSummary(); summary != "" {
+				r.taskSummaries[taskName] = summary
+			}
 		}
 		r.mu.Unlock()
 	}
@@ -1310,9 +1315,13 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		}, fmt.Errorf("%s", errStr)
 	}
 
-	// Store commander for ask_commander queries from dependent tasks
+	// Store commander and summary for dependent tasks
 	r.mu.Lock()
 	r.taskCommanders[task.Name] = sup
+	if summary := sup.TaskSummary(); summary != "" {
+		r.taskSummaries[task.Name] = summary
+		r.stores.Missions.UpdateTaskSummary(taskID, summary)
+	}
 	r.mu.Unlock()
 
 	// Get output from submit_output tool
@@ -1376,6 +1385,11 @@ func (r *Runner) getDependencyChain(taskName string) []string {
 		}
 
 		result = append(result, dep)
+	}
+
+	// Reverse so ancestors appear in execution order (earliest first)
+	for i, j := 0, len(result)-1; i < j; i, j = i+1, j-1 {
+		result[i], result[j] = result[j], result[i]
 	}
 
 	return result
@@ -1822,6 +1836,34 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 	// Individual iteration outputs already persisted via OnSubmitOutput callbacks
 	updateTaskDone(true, nil, nil)
 
+	// Store summary for iterated tasks
+	// Parallel iterations: aggregated factual summary (individual commanders don't share state)
+	// Sequential iterations: use the commander's own summary from task_complete
+	if task.Iterator.Parallel {
+		iterSummary := fmt.Sprintf("Iterated task '%s' completed %d/%d iterations successfully. Objective: %s. Use query_task_output to access individual iteration results.",
+			task.Name, successCount, len(iterations), task.RawObjective)
+		r.mu.Lock()
+		r.taskSummaries[task.Name] = iterSummary
+		r.stores.Missions.UpdateTaskSummary(taskID, iterSummary)
+		r.mu.Unlock()
+	} else {
+		// Sequential: get summary from the shared commander
+		r.mu.RLock()
+		if iterSups, ok := r.iterationCommanders[task.Name]; ok {
+			if sup, ok := iterSups[0]; ok {
+				if summary := sup.TaskSummary(); summary != "" {
+					r.mu.RUnlock()
+					r.mu.Lock()
+					r.taskSummaries[task.Name] = summary
+					r.stores.Missions.UpdateTaskSummary(taskID, summary)
+					r.mu.Unlock()
+					r.mu.RLock()
+				}
+			}
+		}
+		r.mu.RUnlock()
+	}
+
 	streamer.TaskIterationCompleted(task.Name, len(iterations))
 	streamer.TaskCompleted(task.Name)
 
@@ -2044,12 +2086,24 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 				Error:   err,
 			}}
 		}
-		// No results but no error - something went wrong
-		return []IterationResult{{
-			Index:   0,
-			Success: false,
-			Error:   fmt.Errorf("no results from sequential dataset processing"),
-		}}
+		// No submit_output results — task has no output schema.
+		// Build success results based on how many items were processed.
+		processedCount := sup.DatasetCursorIndex()
+		if processedCount == 0 {
+			return []IterationResult{{
+				Index:   0,
+				Success: false,
+				Error:   fmt.Errorf("no items processed from sequential dataset"),
+			}}
+		}
+		iterations := make([]IterationResult, processedCount)
+		for i := 0; i < processedCount; i++ {
+			iterations[i] = IterationResult{
+				Index:   i,
+				Success: true,
+			}
+		}
+		return iterations
 	}
 
 	// Convert SubmitResult to IterationResult
@@ -2826,44 +2880,23 @@ func (r *Runner) queryAncestorsForContext(ctx context.Context, taskName string, 
 	depChain := r.getDependencyChain(taskName)
 	var depSummaries []agent.DependencySummary
 
-	for _, depTaskName := range depChain {
-		// Check if this is an iterated task
-		r.mu.RLock()
-		_, isIterated := r.iterationCommanders[depTaskName]
-		sup, hasRegularSup := r.taskCommanders[depTaskName]
-		r.mu.RUnlock()
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 
-		if isIterated {
-			// Skip pull query for iterated tasks
-			// Output schema info is injected separately via DepOutputSchemas
-			// Task can use ask_commander with index if it needs specific iteration context
+	for _, depTaskName := range depChain {
+		// Use the stored push summary from the completed task
+		if summary, ok := r.taskSummaries[depTaskName]; ok && summary != "" {
+			depSummaries = append(depSummaries, agent.DependencySummary{
+				TaskName: depTaskName,
+				Summary:  summary,
+			})
 			continue
 		}
 
-		if !hasRegularSup {
-			return nil, fmt.Errorf("commander for dependency '%s' not found", depTaskName)
-		}
-
-		// Create a clone for querying
-		clone := sup.CloneForQuery()
-
-		question := fmt.Sprintf(
-			"A dependent task needs your help. Their objective is:\n\n%s\n\n"+
-				"Based on what you learned during your task, what relevant context, "+
-				"findings, or information should they know to accomplish their objective?",
-			objective,
-		)
-
-		answer, err := clone.AnswerQueryIsolated(ctx, question)
-		clone.Close()
-
-		if err != nil {
-			return nil, fmt.Errorf("failed to query ancestor '%s': %w", depTaskName, err)
-		}
-
+		// Fallback: no summary available (task completed without providing one)
 		depSummaries = append(depSummaries, agent.DependencySummary{
 			TaskName: depTaskName,
-			Summary:  answer,
+			Summary:  "(No summary available — use ask_commander to query this task's commander for details.)",
 		})
 	}
 

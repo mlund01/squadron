@@ -28,7 +28,8 @@ type mockCall struct {
 
 // mockResponse is a scripted LLM response.
 type mockResponse struct {
-	Content string
+	Content       string
+	ContentBlocks []llm.ContentBlock
 	// Match optionally filters which request this response should be used for.
 	// When nil the response matches any request.
 	Match func(*llm.ChatRequest) bool
@@ -40,13 +41,11 @@ type mockProvider struct {
 	mu        sync.Mutex
 	responses []mockResponse
 	calls     []mockCall
-	fallback  string // returned when queue is empty (avoids panic in long exchanges)
 }
 
 func newMockProvider(responses ...mockResponse) *mockProvider {
 	return &mockProvider{
 		responses: responses,
-		fallback:  "<ACTION>task_complete</ACTION>\n<ACTION_INPUT>{}</ACTION_INPUT>",
 	}
 }
 
@@ -57,7 +56,7 @@ func (p *mockProvider) addResponses(responses ...mockResponse) {
 	p.responses = append(p.responses, responses...)
 }
 
-func (p *mockProvider) pickResponse(req *llm.ChatRequest) string {
+func (p *mockProvider) pickResponse(req *llm.ChatRequest) mockResponse {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -67,39 +66,44 @@ func (p *mockProvider) pickResponse(req *llm.ChatRequest) string {
 	for i, r := range p.responses {
 		if r.Match != nil && r.Match(req) {
 			p.responses = append(p.responses[:i], p.responses[i+1:]...)
-			return r.Content
+			return r
 		}
 	}
 	// Fall back to first unmatched response
 	for i, r := range p.responses {
 		if r.Match == nil {
 			p.responses = append(p.responses[:i], p.responses[i+1:]...)
-			return r.Content
+			return r
 		}
 	}
-	return p.fallback
+	// Default fallback: task_complete tool call
+	return mockToolCall("task_complete", json.RawMessage(`{}`))
 }
 
 func (p *mockProvider) Chat(_ context.Context, req *llm.ChatRequest) (*llm.ChatResponse, error) {
-	content := p.pickResponse(req)
+	r := p.pickResponse(req)
 	return &llm.ChatResponse{
-		ID:           "mock-resp",
-		Content:      content,
-		FinishReason: "end_turn",
-		Usage:        llm.Usage{InputTokens: 100, OutputTokens: 50},
+		ID:            "mock-resp",
+		Content:       r.Content,
+		ContentBlocks: r.ContentBlocks,
+		FinishReason:  "end_turn",
+		Usage:         llm.Usage{InputTokens: 100, OutputTokens: 50},
 	}, nil
 }
 
 func (p *mockProvider) ChatStream(_ context.Context, req *llm.ChatRequest) (<-chan llm.StreamChunk, error) {
-	content := p.pickResponse(req)
+	r := p.pickResponse(req)
 	ch := make(chan llm.StreamChunk, 2)
 	go func() {
 		defer close(ch)
-		ch <- llm.StreamChunk{Content: content, Done: false}
+		if r.Content != "" {
+			ch <- llm.StreamChunk{Content: r.Content, Done: false}
+		}
 		ch <- llm.StreamChunk{
-			Content: "",
-			Done:    true,
-			Usage:   &llm.Usage{InputTokens: 100, OutputTokens: 50},
+			Content:       "",
+			Done:          true,
+			Usage:         &llm.Usage{InputTokens: 100, OutputTokens: 50},
+			ContentBlocks: r.ContentBlocks,
 		}
 	}()
 	return ch, nil
@@ -293,7 +297,6 @@ func buildTestConfig(mission config.Mission, agents ...config.Agent) *config.Con
 			{
 				Name:          "test",
 				Provider:      config.ProviderAnthropic,
-				AllowedModels: []string{"claude_sonnet_4"},
 				APIKey:        "test-key",
 				PromptCaching: &promptCaching,
 			},
@@ -340,45 +343,78 @@ func testMission(name string, tasks []config.Task) config.Mission {
 }
 
 // ---------------------------------------------------------------------------
-// Response Builders — helpers to construct ReAct-formatted LLM responses
+// Response Builders — helpers to construct mock LLM responses with native tool calls
 // ---------------------------------------------------------------------------
 
-func cmdCallAgent(agentName, instruction string) string {
+var mockToolCallCounter int
+
+// mockToolCall creates a mockResponse with a single tool call ContentBlock.
+func mockToolCall(toolName string, input json.RawMessage) mockResponse {
+	mockToolCallCounter++
+	id := fmt.Sprintf("tc_%s_%d", toolName, mockToolCallCounter)
+	return mockResponse{
+		ContentBlocks: []llm.ContentBlock{
+			{
+				Type: llm.ContentTypeToolUse,
+				ToolUse: &llm.ToolUseBlock{
+					ID:    id,
+					Name:  toolName,
+					Input: input,
+				},
+			},
+		},
+	}
+}
+
+func cmdCallAgent(agentName, instruction string) mockResponse {
 	input, _ := json.Marshal(map[string]string{"name": agentName, "task": instruction})
-	return fmt.Sprintf("<ACTION>call_agent</ACTION>\n<ACTION_INPUT>%s</ACTION_INPUT>", string(input))
+	return mockToolCall("call_agent", input)
 }
 
-func cmdTaskComplete() string {
-	return "<ACTION>task_complete</ACTION>\n<ACTION_INPUT>{}</ACTION_INPUT>"
+func cmdTaskComplete() mockResponse {
+	return mockToolCall("task_complete", json.RawMessage(`{"summary":"Task completed successfully."}`))
 }
 
-func cmdTaskCompleteFail(reason string) string {
+func cmdTaskCompleteFail(reason string) mockResponse {
 	input, _ := json.Marshal(map[string]interface{}{"succeed": false, "reason": reason})
-	return fmt.Sprintf("<ACTION>task_complete</ACTION>\n<ACTION_INPUT>%s</ACTION_INPUT>", string(input))
+	return mockToolCall("task_complete", input)
 }
 
-func cmdTaskCompleteRoute(route string) string {
-	input, _ := json.Marshal(map[string]string{"route": route})
-	return fmt.Sprintf("<ACTION>task_complete</ACTION>\n<ACTION_INPUT>%s</ACTION_INPUT>", string(input))
+func cmdTaskCompleteRoute(route string) mockResponse {
+	input, _ := json.Marshal(map[string]string{"route": route, "summary": "Task completed, routing to " + route})
+	return mockToolCall("task_complete", input)
 }
 
-func cmdSubmitOutput(output map[string]interface{}) string {
+func cmdSubmitOutput(output map[string]interface{}) mockResponse {
 	input, _ := json.Marshal(map[string]interface{}{"output": output})
-	return fmt.Sprintf("<ACTION>submit_output</ACTION>\n<ACTION_INPUT>%s</ACTION_INPUT>", string(input))
+	return mockToolCall("submit_output", input)
 }
 
-func cmdSetDataset(datasetName string, items []map[string]interface{}) string {
+func cmdSetDataset(datasetName string, items []map[string]interface{}) mockResponse {
 	input, _ := json.Marshal(map[string]interface{}{
 		"name":  datasetName,
 		"items": items,
 	})
-	return fmt.Sprintf("<ACTION>set_dataset</ACTION>\n<ACTION_INPUT>%s</ACTION_INPUT>", string(input))
+	return mockToolCall("set_dataset", input)
 }
 
-func cmdDatasetNext() string {
-	return "<ACTION>dataset_next</ACTION>\n<ACTION_INPUT>{}</ACTION_INPUT>"
+func cmdDatasetNext() mockResponse {
+	return mockToolCall("dataset_next", json.RawMessage(`{}`))
 }
 
-func agentAnswer(answer string) string {
-	return fmt.Sprintf("<ANSWER>%s</ANSWER>", answer)
+func agentAnswer(answer string) mockResponse {
+	return mockResponse{
+		Content: fmt.Sprintf("<ANSWER>%s</ANSWER>", answer),
+	}
+}
+
+// withMatch adds a Match predicate to a mockResponse.
+func withMatch(r mockResponse, match func(*llm.ChatRequest) bool) mockResponse {
+	r.Match = match
+	return r
+}
+
+// textResponse creates a plain text mockResponse (no tool calls).
+func textResponse(content string) mockResponse {
+	return mockResponse{Content: content}
 }

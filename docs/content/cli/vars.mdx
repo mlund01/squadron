@@ -6,7 +6,7 @@ title: vars
 
 Manage configuration variables.
 
-Variables are stored in an encrypted vault at `~/.squadron/vars.vault` and can be referenced in HCL configs using `vars.name`. You must run `squadron init` before using vars commands.
+Variables are stored in an encrypted vault at `.squadron/vars.vault` and can be referenced in HCL configs using `vars.name`. The vault is initialized automatically the first time you run `squadron engage`.
 
 ## Commands
 
@@ -98,4 +98,4 @@ model "anthropic" {
 
 Variables are encrypted at rest using AES-256-GCM with an Argon2id-derived key. The encryption passphrase is stored in your OS keychain (macOS Keychain, Linux Secret Service/KeyCtl, Windows Credential Manager) and never written to disk.
 
-Run `squadron init` to set up encryption. See [squadron init](/cli/init) for details.
+The vault is initialized automatically the first time you run [squadron engage](/cli/engage).

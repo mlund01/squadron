@@ -260,6 +260,11 @@ func (s *SQLiteMissionStore) UpdateTaskStatus(id, status string, outputJSON, err
 	return err
 }
 
+func (s *SQLiteMissionStore) UpdateTaskSummary(id, summary string) error {
+	_, err := s.db.Exec(`UPDATE mission_tasks SET summary = ? WHERE id = ?`, summary, id)
+	return err
+}
+
 func (s *SQLiteMissionStore) UpdateTaskStatusCAS(id, expectedOldStatus, newStatus string, outputJSON, errMsg *string) (bool, error) {
 	var finishedAt *string
 	if newStatus == "completed" || newStatus == "failed" {
@@ -296,7 +301,7 @@ func (s *SQLiteMissionStore) UpdateMissionStatusCAS(id, expectedOldStatus, newSt
 
 func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask, error) {
 	rows, err := s.db.Query(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = ?`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, summary, error FROM mission_tasks WHERE mission_id = ?`,
 		missionID,
 	)
 	if err != nil {
@@ -309,9 +314,9 @@ func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 		var t MissionTask
 		var configJSON sql.NullString
 		var startedAtStr, finishedAtStr sql.NullString
-		var outputJSON, errMsg sql.NullString
+		var outputJSON, summary, errMsg sql.NullString
 
-		if err := rows.Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &errMsg); err != nil {
+		if err := rows.Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &summary, &errMsg); err != nil {
 			return nil, err
 		}
 
@@ -322,6 +327,9 @@ func (s *SQLiteMissionStore) GetTasksByMission(missionID string) ([]MissionTask,
 		t.FinishedAt, _ = tsParseNull(finishedAtStr)
 		if outputJSON.Valid {
 			t.OutputJSON = &outputJSON.String
+		}
+		if summary.Valid {
+			t.Summary = &summary.String
 		}
 		if errMsg.Valid {
 			t.Error = &errMsg.String
@@ -345,12 +353,12 @@ func (s *SQLiteMissionStore) GetTask(id string) (*MissionTask, error) {
 	var t MissionTask
 	var configJSON sql.NullString
 	var startedAtStr, finishedAtStr sql.NullString
-	var outputJSON, errMsg sql.NullString
+	var outputJSON, summary, errMsg sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE id = ?`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, summary, error FROM mission_tasks WHERE id = ?`,
 		id,
-	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &errMsg)
+	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &summary, &errMsg)
 	if err != nil {
 		return nil, fmt.Errorf("task %q not found: %w", id, err)
 	}
@@ -363,6 +371,9 @@ func (s *SQLiteMissionStore) GetTask(id string) (*MissionTask, error) {
 	if outputJSON.Valid {
 		t.OutputJSON = &outputJSON.String
 	}
+	if summary.Valid {
+		t.Summary = &summary.String
+	}
 	if errMsg.Valid {
 		t.Error = &errMsg.String
 	}
@@ -374,12 +385,12 @@ func (s *SQLiteMissionStore) GetTaskByName(missionID, taskName string) (*Mission
 	var t MissionTask
 	var configJSON sql.NullString
 	var startedAtStr, finishedAtStr sql.NullString
-	var outputJSON, errMsg sql.NullString
+	var outputJSON, summary, errMsg sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, error FROM mission_tasks WHERE mission_id = ? AND task_name = ?`,
+		`SELECT id, mission_id, task_name, status, config_json, started_at, finished_at, output_json, summary, error FROM mission_tasks WHERE mission_id = ? AND task_name = ?`,
 		missionID, taskName,
-	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &errMsg)
+	).Scan(&t.ID, &t.MissionID, &t.TaskName, &t.Status, &configJSON, &startedAtStr, &finishedAtStr, &outputJSON, &summary, &errMsg)
 	if err != nil {
 		return nil, fmt.Errorf("task '%s' not found: %w", taskName, err)
 	}
@@ -391,6 +402,9 @@ func (s *SQLiteMissionStore) GetTaskByName(missionID, taskName string) (*Mission
 	t.FinishedAt, _ = tsParseNull(finishedAtStr)
 	if outputJSON.Valid {
 		t.OutputJSON = &outputJSON.String
+	}
+	if summary.Valid {
+		t.Summary = &summary.String
 	}
 	if errMsg.Valid {
 		t.Error = &errMsg.String

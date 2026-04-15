@@ -16,7 +16,15 @@ const (
 	Argon2Threads = 4
 	Argon2KeyLen  = 32 // 256 bits
 
-	// Keyring
+	// Vault provider names
+	ProviderFile     = "file"
+	ProviderKeychain = "keychain"
+
+	// Storage filenames under .squadron/
+	KeyFileName   = "vault.key"
+	VaultFileName = "vars.vault"
+
+	// Keychain backend identifiers
 	KeyringService = "squadron"
 	KeyringKey     = "vault-passphrase"
 

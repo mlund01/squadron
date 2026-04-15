@@ -6,13 +6,10 @@ import (
 	"os"
 	"strings"
 	"sync"
-
-	"github.com/99designs/keyring"
 )
 
 var (
 	cachedPassphrase []byte
-	cacheOnce        sync.Once
 	cacheMu          sync.Mutex
 )
 
@@ -38,108 +35,44 @@ func CachedPassphrase() ([]byte, bool) {
 }
 
 // ResolvePassphrase resolves the vault passphrase using the following order:
-// 1. In-process cache
-// 2. --passphrase-file (if passphraseFile is non-empty)
-// 3. /run/secrets/vault_passphrase (Docker secret)
-// 4. OS keyring
-// 5. Hardcoded fallback (with warning)
+//  1. In-process cache
+//  2. --passphrase-file (if passphraseFile is non-empty)
+//  3. /run/secrets/vault_passphrase (Docker secret)
+//  4. The active vault provider (file or keychain)
+//  5. Hardcoded fallback (with warning)
 func ResolvePassphrase(passphraseFile string) ([]byte, error) {
-	// 1. Check cache
 	if p, ok := CachedPassphrase(); ok {
 		return p, nil
 	}
 
-	// 2. Check --passphrase-file
 	if passphraseFile != "" {
-		p, err := readPassphraseFile(passphraseFile)
+		p, err := ReadPassphraseFile(passphraseFile)
 		if err != nil {
 			return nil, fmt.Errorf("reading passphrase file: %w", err)
 		}
 		return p, nil
 	}
 
-	// 3. Check Docker secret path
-	if p, err := readPassphraseFile(DockerSecretPath); err == nil {
+	if p, err := ReadPassphraseFile(DockerSecretPath); err == nil {
 		return p, nil
 	}
 
-	// 4. Check OS keyring
-	if p, err := loadFromKeyring(); err == nil {
-		return p, nil
+	if provider, err := ActiveProvider(); err == nil {
+		if p, perr := provider.Resolve(); perr == nil {
+			return p, nil
+		}
 	}
 
-	// 5. Hardcoded fallback
 	log.Println("WARNING: Using default passphrase. Secrets are encrypted but not secure. Run 'squadron init' or provide --passphrase-file for full protection.")
 	return []byte(FallbackPassphrase), nil
 }
 
-// StorePassphrase saves the passphrase to the OS keyring.
-func StorePassphrase(passphrase []byte) error {
-	ring, err := openKeyring()
-	if err != nil {
-		return fmt.Errorf("opening keyring: %w", err)
-	}
-
-	err = ring.Set(keyring.Item{
-		Key:         KeyringKey,
-		Label:       "Squadron Vault Passphrase",
-		Description: "Encryption passphrase for Squadron's variable vault",
-		Data:        passphrase,
-	})
-	if err != nil {
-		return fmt.Errorf("storing passphrase in keyring: %w", err)
-	}
-
-	return nil
-}
-
-// ClearKeyringPassphrase removes the passphrase from the OS keyring.
-func ClearKeyringPassphrase() error {
-	ring, err := openKeyring()
-	if err != nil {
-		return fmt.Errorf("opening keyring: %w", err)
-	}
-
-	err = ring.Remove(KeyringKey)
-	if err != nil {
-		return fmt.Errorf("removing passphrase from keyring: %w", err)
-	}
-
-	return nil
-}
-
-func readPassphraseFile(path string) ([]byte, error) {
+// ReadPassphraseFile reads a passphrase from a file, trimming trailing
+// whitespace so a stray newline from an editor doesn't corrupt the key.
+func ReadPassphraseFile(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	// Trim whitespace/newlines
 	return []byte(strings.TrimSpace(string(data))), nil
-}
-
-func loadFromKeyring() ([]byte, error) {
-	ring, err := openKeyring()
-	if err != nil {
-		return nil, err
-	}
-
-	item, err := ring.Get(KeyringKey)
-	if err != nil {
-		return nil, err
-	}
-
-	return item.Data, nil
-}
-
-func openKeyring() (keyring.Keyring, error) {
-	return keyring.Open(keyring.Config{
-		ServiceName:              KeyringService,
-		KeychainTrustApplication: true,
-		AllowedBackends: []keyring.BackendType{
-			keyring.KeychainBackend,      // macOS
-			keyring.SecretServiceBackend, // Linux (D-Bus)
-			keyring.KeyCtlBackend,        // Linux (kernel keyring)
-			keyring.WinCredBackend,       // Windows
-		},
-	})
 }

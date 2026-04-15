@@ -1,0 +1,104 @@
+---
+title: Supported Models
+---
+
+# Supported Models
+
+Every model in this list works out of the box with Squadron. Add your API key to a `model` block and reference any of the keys below as `models.<config_name>.<key>`. See [Models](/config/models) for configuration details.
+
+Prices are per 1M tokens, last verified April 2026. Use `pricing` blocks on your `model` config to override them.
+
+## Anthropic
+
+```hcl
+model "anthropic" {
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
+}
+
+# Reference: models.anthropic.claude_sonnet_4_6
+```
+
+| Key | API name | Input | Output | Cache read | Cache write |
+|-----|----------|------:|-------:|-----------:|------------:|
+| `claude_opus_4_6` | `claude-opus-4-6` | $5.00 | $25.00 | $0.50 | $6.25 |
+| `claude_sonnet_4_6` | `claude-sonnet-4-6` | $3.00 | $15.00 | $0.30 | $3.75 |
+| `claude_haiku_4_5` | `claude-haiku-4-5-20251001` | $1.00 | $5.00 | $0.10 | $1.25 |
+| `claude_opus_4` | `claude-opus-4-20250514` | $15.00 | $75.00 | $1.50 | $18.75 |
+| `claude_sonnet_4` | `claude-sonnet-4-20250514` | $3.00 | $15.00 | $0.30 | $3.75 |
+| `claude_3_5_sonnet` | `claude-3-5-sonnet-20241022` | $3.00 | $15.00 | $0.30 | $3.75 |
+| `claude_3_5_haiku` | `claude-3-5-haiku-20241022` | $0.80 | $4.00 | $0.08 | $1.00 |
+
+## OpenAI
+
+```hcl
+model "openai" {
+  provider = "openai"
+  api_key  = vars.openai_api_key
+}
+
+# Reference: models.openai.gpt_5
+```
+
+| Key | API name | Input | Output | Cache read | Cache write |
+|-----|----------|------:|-------:|-----------:|------------:|
+| `gpt_5` | `gpt-5` | $2.50 | $15.00 | $0.25 | $2.50 |
+| `gpt_5_mini` | `gpt-5-mini` | $0.75 | $4.50 | $0.075 | $0.75 |
+| `gpt_5_nano` | `gpt-5-nano` | $0.20 | $1.25 | $0.02 | $0.20 |
+| `gpt_4_1` | `gpt-4.1` | $2.00 | $8.00 | $0.50 | $2.00 |
+| `gpt_4_1_mini` | `gpt-4.1-mini` | $0.40 | $1.60 | $0.10 | $0.40 |
+| `gpt_4_1_nano` | `gpt-4.1-nano` | $0.10 | $0.40 | $0.025 | $0.10 |
+| `gpt_4o` | `gpt-4o` | $2.50 | $10.00 | $1.25 | $2.50 |
+| `gpt_4o_mini` | `gpt-4o-mini` | $0.15 | $0.60 | $0.075 | $0.15 |
+| `gpt_4_turbo` | `gpt-4-turbo` | $10.00 | $30.00 | $10.00 | $10.00 |
+| `o1` | `o1` | $15.00 | $60.00 | $7.50 | $15.00 |
+| `o1_mini` | `o1-mini` | $1.10 | $4.40 | $0.55 | $1.10 |
+| `o3` | `o3` | $10.00 | $40.00 | $2.50 | $10.00 |
+| `o3_mini` | `o3-mini` | $1.10 | $4.40 | $0.55 | $1.10 |
+| `o4_mini` | `o4-mini` | $1.10 | $4.40 | $0.55 | $1.10 |
+
+## Google Gemini
+
+```hcl
+model "gemini" {
+  provider = "gemini"
+  api_key  = vars.gemini_api_key
+}
+
+# Reference: models.gemini.gemini_2_5_pro
+```
+
+| Key | API name | Input | Output | Cache read | Cache write |
+|-----|----------|------:|-------:|-----------:|------------:|
+| `gemini_2_5_pro` | `gemini-2.5-pro` | $1.25 | $10.00 | $0.125 | $1.25 |
+| `gemini_2_5_flash` | `gemini-2.5-flash` | $0.30 | $2.50 | $0.03 | $0.30 |
+| `gemini_2_5_flash_lite` | `gemini-2.5-flash-lite` | $0.10 | $0.40 | $0.01 | $0.10 |
+| `gemini_2_0_flash` | `gemini-2.0-flash` | $0.10 | $0.40 | $0.025 | $0.10 |
+| `gemini_2_0_flash_exp` | `gemini-2.0-flash-exp` | $0.10 | $0.40 | $0.025 | $0.10 |
+| `gemini_1_5_pro` | `gemini-1.5-pro` | $1.25 | $5.00 | $0.3125 | $1.25 |
+| `gemini_1_5_flash` | `gemini-1.5-flash` | $0.075 | $0.30 | $0.01875 | $0.075 |
+
+## Ollama (local models)
+
+The Ollama provider connects to any OpenAI-compatible local inference server — Ollama itself, vLLM, llama.cpp, LM Studio, and others. Because Squadron can't know what models you have installed, you define them with `aliases` instead of picking from a built-in list.
+
+```hcl
+model "local" {
+  provider = "ollama"
+  base_url = "http://localhost:11434/v1"
+  aliases = {
+    gemma4     = "gemma4"
+    gemma4_26b = "gemma4:26b"
+    nemotron   = "nemotron-cascade-2:30b"
+  }
+}
+
+# Reference: models.local.gemma4_26b
+```
+
+Token usage is tracked for every turn, but dollar cost is $0 — you're paying for the hardware, not the tokens.
+
+## Don't see the model you want?
+
+- Cloud providers (Anthropic, OpenAI, Gemini) support custom [aliases](/config/models#custom-aliases-for-cloud-providers) — you can point any HCL-friendly key at any API model name the provider exposes, even ones that aren't in the tables above.
+- For brand new releases that don't yet have built-in pricing, add a [pricing override](/config/models#pricing-overrides) on your `model` block and Squadron will use your numbers for cost tracking.

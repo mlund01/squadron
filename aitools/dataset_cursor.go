@@ -52,6 +52,8 @@ type DatasetNextTool struct {
 	OutputCounter func() int
 	// SubtaskChecker returns incomplete subtask count. If > 0, dataset_next is blocked.
 	SubtaskChecker func() (total int, incomplete int)
+	// HasOutput indicates whether submit_output is available for this task.
+	HasOutput bool
 }
 
 func NewDatasetNextTool(cursor *DatasetCursor) *DatasetNextTool {
@@ -63,13 +65,16 @@ func (t *DatasetNextTool) ToolName() string {
 }
 
 func (t *DatasetNextTool) ToolDescription() string {
-	return `Get the next item from the dataset for sequential processing.
+	desc := `Get the next item from the dataset for sequential processing.
 
 Returns:
 - {"status": "ok", "index": N, "total": M, "item": {...}} - The next item to process
-- {"status": "exhausted", "message": "..."} - No more items in dataset
+- {"status": "exhausted", "message": "..."} - No more items in dataset`
 
-You MUST call submit_output after processing each item before calling dataset_next again.`
+	if t.HasOutput {
+		desc += "\n\nYou MUST call submit_output after processing each item before calling dataset_next again."
+	}
+	return desc
 }
 
 func (t *DatasetNextTool) ToolPayloadSchema() Schema {

@@ -16,8 +16,10 @@ const (
 	ModeMission AgentMode = "mission"
 )
 
-// ReservedBuiltinNamespaces are names reserved for built-in tools (cannot be used as plugin names).
-var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils"}
+// ReservedBuiltinNamespaces are names reserved for built-in tools (cannot be
+// used as plugin or mcp server names). "mcp" itself is reserved so that a
+// `plugin "mcp" { ... }` can't shadow the consumer-side namespace.
+var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils", "mcp"}
 
 // BuiltinTools maps built-in namespaces to their tools.
 // These are accessed as builtins.http.get, builtins.http.get, etc.
@@ -100,6 +102,10 @@ type Agent struct {
 	Personality string   `hcl:"personality"`
 	Role        string   `hcl:"role"`
 	Tools       []string `hcl:"tools,optional"`
+	Skills      []string `hcl:"-"`
+
+	// Agent-scoped skills (parsed manually)
+	LocalSkills []Skill `hcl:"-" json:"localSkills,omitempty"`
 
 	// Pruning settings (optional block)
 	Pruning *Pruning `hcl:"pruning,block"`
@@ -160,24 +166,13 @@ func (a *Agent) Validate() error {
 
 // ResolveModel finds the Model config that matches this agent's model key
 func (a *Agent) ResolveModel(models []Model) (*Model, string, error) {
-	// a.Model is the model key (e.g., "claude_sonnet_4")
-	// Find which provider supports this model and get the actual model name
+	// a.Model is the model key (e.g., "claude_sonnet_4" or "gemma4_26b")
+	// Search all model configs for one that has this key available
 	for i := range models {
 		m := &models[i]
-		supportedModels, ok := SupportedModels[m.Provider]
-		if !ok {
-			continue
-		}
-
-		// Check if this model key is in the provider's allowed models
-		for _, allowedKey := range m.AllowedModels {
-			if allowedKey == a.Model {
-				actualModel, ok := supportedModels[a.Model]
-				if !ok {
-					return nil, "", fmt.Errorf("model key '%s' not found in supported models for provider '%s'", a.Model, m.Provider)
-				}
-				return m, actualModel, nil
-			}
+		available := m.AvailableModels()
+		if apiName, ok := available[a.Model]; ok {
+			return m, apiName, nil
 		}
 	}
 

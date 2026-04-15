@@ -35,6 +35,7 @@ type MissionStore interface {
 	UpdateMissionStatusCAS(id, expectedOldStatus, newStatus string) (bool, error)
 	CreateTask(missionID, taskName, configJSON string) (id string, err error)
 	UpdateTaskStatus(id, status string, outputJSON, errMsg *string) error
+	UpdateTaskSummary(id, summary string) error
 	// UpdateTaskStatusCAS atomically transitions a task status, returning false if current status doesn't match expected.
 	UpdateTaskStatusCAS(id, expectedOldStatus, newStatus string, outputJSON, errMsg *string) (bool, error)
 	GetTask(id string) (*MissionTask, error)
@@ -70,6 +71,7 @@ type MissionTask struct {
 	StartedAt  *time.Time `json:"startedAt,omitempty"`
 	FinishedAt *time.Time `json:"finishedAt,omitempty"`
 	OutputJSON *string    `json:"outputJson,omitempty"`
+	Summary    *string    `json:"summary,omitempty"`
 	Error      *string    `json:"error,omitempty"`
 }
 
@@ -267,23 +269,27 @@ type TurnCostRecord struct {
 
 // CostSummaryRow is an aggregated cost row grouped by a field (model, mission, date, etc.)
 type CostSummaryRow struct {
-	GroupKey       string  `json:"groupKey"`
-	Turns          int     `json:"turns"`
-	TotalCost      float64 `json:"totalCost"`
-	InputCost      float64 `json:"inputCost"`
-	OutputCost     float64 `json:"outputCost"`
-	CacheReadCost  float64 `json:"cacheReadCost"`
-	CacheWriteCost float64 `json:"cacheWriteCost"`
+	GroupKey          string  `json:"groupKey"`
+	Turns             int     `json:"turns"`
+	TotalCost         float64 `json:"totalCost"`
+	InputCost         float64 `json:"inputCost"`
+	OutputCost        float64 `json:"outputCost"`
+	CacheReadCost     float64 `json:"cacheReadCost"`
+	CacheWriteCost    float64 `json:"cacheWriteCost"`
+	TotalInputTokens  int     `json:"totalInputTokens"`
+	TotalOutputTokens int     `json:"totalOutputTokens"`
 }
 
 // MissionCostRow represents total cost for a single mission run.
 type MissionCostRow struct {
-	MissionID   string    `json:"missionId"`
-	MissionName string    `json:"missionName"`
-	Status      string    `json:"status"`
-	Turns       int       `json:"turns"`
-	TotalCost   float64   `json:"totalCost"`
-	StartedAt   time.Time `json:"startedAt"`
+	MissionID         string    `json:"missionId"`
+	MissionName       string    `json:"missionName"`
+	Status            string    `json:"status"`
+	Turns             int       `json:"turns"`
+	TotalCost         float64   `json:"totalCost"`
+	TotalInputTokens  int       `json:"totalInputTokens"`
+	TotalOutputTokens int       `json:"totalOutputTokens"`
+	StartedAt         time.Time `json:"startedAt"`
 }
 
 // DateFieldCostRow is a cost row grouped by date + a secondary field (model or mission).

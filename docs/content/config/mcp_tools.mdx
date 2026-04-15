@@ -1,0 +1,237 @@
+---
+title: MCP Tools
+---
+
+# MCP Tools
+
+Squadron can pull tools from any [Model Context Protocol](https://modelcontextprotocol.io) server — npm packages, GitHub release binaries, HTTP endpoints, or a local stdio command — and expose them to your agents as if they were native tools.
+
+Declaring an `mcp "name" { ... }` block tells Squadron to start and connect to an external MCP server at config-load time. The server's tools become available to agents through the `mcp.<name>.*` HCL namespace alongside `builtins.*`, `plugins.*`, and `tools.*`.
+
+```hcl
+mcp "filesystem" {
+  source  = "npm:@modelcontextprotocol/server-filesystem"
+  version = "2026.1.14"
+  args    = ["/tmp"]
+}
+
+agent "fs_worker" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Careful with files"
+  role        = "File system specialist"
+  tools       = [mcp.filesystem.all]
+}
+```
+
+Every consumer block must pick **exactly one** mode by setting `command`, `url`, or `source`. `source` has two sub-modes (npm or GitHub), for four modes total.
+
+> Looking for the other direction — Squadron acting **as** an MCP server so external clients (Claude Desktop, Cursor, etc.) can call into your missions and agents? See [MCP Host](/config/mcp_host).
+
+## Mode 1 — Auto-installed npm package
+
+```hcl
+mcp "filesystem" {
+  source  = "npm:@modelcontextprotocol/server-filesystem"
+  version = "2026.1.14"
+  args    = ["/tmp"]
+}
+```
+
+On first load, Squadron runs `npm install --prefix <cache>` to install the package into its MCP cache. Subsequent loads reuse the installed copy. Requires `node` and `npm` on `PATH`.
+
+The `version` field is **required** and must be an exact version — no semver ranges. Pinning protects you from silent breakage when a server author publishes a broken release.
+
+## Mode 2 — Auto-installed GitHub release binary
+
+```hcl
+mcp "custom" {
+  source  = "github.com/owner/mcp-custom"
+  version = "v1.0.0"
+  # entry = "bin/server"   # optional — disambiguates when the archive has multiple executables
+}
+```
+
+Squadron downloads the release archive from GitHub, verifies the checksum, extracts it into the cache, and runs the entry binary. The `entry` field is only valid with GitHub sources.
+
+## Mode 3 — Remote HTTP transport
+
+```hcl
+mcp "remote_api" {
+  url = "https://example.com/mcp"
+  headers = {
+    Authorization = "Bearer ${vars.api_key}"
+  }
+}
+```
+
+No auto-install — Squadron just makes HTTP requests to the remote endpoint. Use `headers` for static tokens. `env` and `args` are **not** valid on HTTP servers.
+
+For servers that use OAuth 2.1 instead of a static token, see [OAuth authentication](#oauth-authentication) below — you don't need the `headers` block at all.
+
+## Mode 4 — Bare local command
+
+```hcl
+mcp "local" {
+  command = "./my-mcp-server"
+  args    = ["--debug"]
+  env = {
+    LOG_LEVEL = "info"
+  }
+}
+```
+
+The escape hatch. Squadron runs whatever command you give it with no install step. Use this for servers you manage yourself (Python scripts via `uv run`, custom binaries, dev builds). `headers` is **not** valid on stdio servers.
+
+## Attribute reference
+
+| Attribute | Type | Required | Valid with | Description |
+|-----------|------|----------|------------|-------------|
+| `command` | string | one of three | bare stdio | Path/binary to run directly |
+| `url` | string | one of three | HTTP | Remote MCP server endpoint |
+| `source` | string | one of three | npm / github | `npm:<pkg>` or `github.com/<owner>/<repo>` |
+| `version` | string | with `source` | npm / github | Exact version pin (required when `source` is set, forbidden otherwise) |
+| `entry` | string | no | github only | Entry binary inside the release archive |
+| `args` | list(string) | no | stdio / source | Command-line arguments passed to the server |
+| `env` | map(string) | no | stdio / source | Environment variables for the server process |
+| `headers` | map(string) | no | HTTP only | HTTP headers for the remote server |
+
+## Cache layout
+
+Auto-installed servers are cached next to plugins under `.squadron/mcp/<platform>/`:
+
+```
+.squadron/mcp/darwin-arm64/
+├── filesystem/2026.1.14/
+│   ├── runner.json
+│   └── node_modules/...
+└── custom/v1.0.0/
+    ├── runner.json
+    └── mcp-custom
+```
+
+`runner.json` is the "install complete" marker. To force a reinstall, delete the version directory:
+
+```bash
+rm -rf .squadron/mcp/darwin-arm64/filesystem/2026.1.14/
+```
+
+## Referencing MCP tools from agents and skills
+
+Once loaded, MCP tools are reachable through the `mcp` namespace:
+
+```hcl
+agent "researcher" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Thorough"
+  role        = "Research assistant"
+  tools = [
+    mcp.filesystem.read_text_file,  # a single tool
+    mcp.remote_api.all,              # every tool from that server
+    plugins.shell.exec,              # native plugins still work
+    builtins.http.get,               # builtins still work
+  ]
+}
+
+skill "data_exploration" {
+  description  = "Load when you need to browse and search files"
+  instructions = "Use the filesystem tools to navigate..."
+  tools        = [mcp.filesystem.list_directory, mcp.filesystem.search_files]
+}
+```
+
+Tool references get sanitized to API-safe names when sent to the LLM provider, so `mcp.filesystem.read_text_file` becomes `mcp_filesystem_read_text_file` in the actual tool call.
+
+## OAuth authentication
+
+HTTP MCP servers that use OAuth 2.1 work with zero extra configuration in the HCL block — just declare the URL:
+
+```hcl
+mcp "linear" {
+  url = "https://mcp.linear.app/sse"
+}
+```
+
+The first time you try to use the server, Squadron will tell you it needs authorization:
+
+```
+mcp "linear": authorization required
+  This server uses OAuth. Run:
+    squadron mcp login linear
+```
+
+### Pre-registered client credentials
+
+Some OAuth servers don't support Dynamic Client Registration (DCR). For these, provide your own `client_id` (and optionally `client_secret`) directly in the HCL block:
+
+```hcl
+mcp "slack" {
+  url           = "https://tools.slack.dev/agent-tools-mcp/sse"
+  client_id     = vars.slack_client_id
+  client_secret = vars.slack_client_secret
+}
+```
+
+These credentials are saved to the encrypted vault at config load time and used automatically by `squadron mcp login`. CLI flags (`--client-id`, `--client-secret`) override the HCL values if both are provided.
+
+### `squadron mcp login <name>`
+
+Runs the full OAuth 2.1 flow:
+
+1. Discovers the authorization server from the MCP URL's `.well-known` metadata
+2. Registers Squadron as a client via [Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) (if no cached credentials or `client_id` in config)
+3. Opens your browser to the authorization page
+4. Waits for the redirect on a local loopback server
+5. Exchanges the authorization code (with PKCE) for an access token
+6. Stores the token and refresh token in the encrypted vault
+
+Subsequent runs pick up the token automatically — no login needed until the refresh token itself expires or is revoked.
+
+### `squadron mcp status`
+
+Shows every configured MCP server and its current auth state without making any network calls:
+
+```
+$ squadron mcp status
+NAME                 LOCATION                                           AUTH            EXPIRES
+filesystem           npm:@modelcontextprotocol/server-filesystem        n/a             -
+linear               https://mcp.linear.app/sse                         connected       in 167h
+self                 http://localhost:8090/mcp                          no token        -
+```
+
+States: `n/a` (stdio, no auth needed), `static header` (literal Authorization in HCL), `no token` (no stored token), `connected` (token valid), `expired` (will auto-refresh on next use).
+
+### `squadron mcp logout <name>`
+
+Removes the stored access and refresh tokens from the vault. The cached client registration is preserved so the next `login` skips the registration step.
+
+### Token lifecycle
+
+Tokens are stored in the encrypted vault alongside your other variables. Squadron automatically refreshes access tokens in the background before they expire — you don't need to re-run `login` unless the authorization itself is revoked in the provider's settings.
+
+## What's not supported
+
+- **Output schemas.** MCP servers may declare an `outputSchema` and return a typed `structuredContent` field on tool results. Squadron currently ignores both and passes the `content` blocks through as plain text (the same behavior as most mainstream MCP hosts). If you want structured output, reason over the returned text directly in your agent.
+- **`tools/list_changed` notifications.** Tool lists are snapshotted at load time. If a server adds or removes tools while running, you'll need to re-run Squadron.
+- **Prompts and resources.** Only tools are exposed. `prompts/*` and `resources/*` RPCs are not forwarded.
+- **Semver ranges.** `version` must pin an exact version — `^1.0.0`, `~2.3`, `latest`, etc. are rejected.
+- **Python/uv sources.** No first-class support. Use mode 4 (bare command) with `uv run` instead.
+
+## macOS `/tmp` gotcha
+
+If you're running locally on macOS and pass `args = ["/tmp"]` to a filesystem MCP server, the server may reject all your file access because `/tmp` is a symlink to `/private/tmp`. Many servers resolve the allowed root internally and then compare literal paths. Use `/private/tmp` explicitly:
+
+```hcl
+mcp "filesystem" {
+  source  = "npm:@modelcontextprotocol/server-filesystem"
+  version = "2026.1.14"
+  args    = ["/private/tmp"]
+}
+```
+
+## Error handling and crash recovery
+
+If a server fails to install, fails to start, or crashes during `initialize`, the error is recorded but config loading continues — agents that don't reference the broken server's tools are unaffected. Agents that do reference it will see an empty tool set and surface the error at call time.
+
+**Mid-run crashes are automatically recovered.** If an MCP server's stdio subprocess dies or its HTTP transport drops between tool calls, Squadron detects the dead transport on the next call, respawns the server using the original `mcp "name" { ... }` spec (re-running `initialize` and refreshing the tool list), and retries the call once. Only if the retry also fails does the agent see an error.
+
+If the respawn itself fails (the binary has gone missing, the remote HTTP endpoint is down, etc.), the tool call surfaces a clear `respawn failed` error to the agent so it can reason about the failure.

@@ -2,9 +2,12 @@ export default {
   overview: 'Overview',
   variables: 'Variables',
   models: 'Models',
+  'supported-models': 'Supported Models',
   agents: 'Agents',
+  skills: 'Skills',
   tools: 'Tools',
   functions: 'Functions',
   plugins: 'Plugins',
-  mcp: 'MCP Server',
+  mcp_tools: 'MCP Tools',
+  mcp_host: 'MCP Host',
 }

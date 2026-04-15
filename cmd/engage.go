@@ -122,9 +122,16 @@ func runEngage(cmd *cobra.Command, args []string) {
 	}
 
 	// --cc and a command_center block are two different sources of truth.
-	if engageCC && configHasCommandCenter(engageConfigPath) {
+	hasRemoteCC := configHasCommandCenter(engageConfigPath)
+	if engageCC && hasRemoteCC {
 		fmt.Fprintln(os.Stderr, "Error: --cc is incompatible with a command_center block in the config. Remove one or the other.")
 		os.Exit(1)
+	}
+	if !engageCC && !hasRemoteCC {
+		fmt.Fprintln(os.Stderr, "Warning: running in headless mode without a command center.")
+		fmt.Fprintln(os.Stderr, "  Squadron will run schedules and webhooks but has no UI and no remote control.")
+		fmt.Fprintln(os.Stderr, "  Pass --cc to launch the local UI, or add a command_center block to your config.")
+		fmt.Fprintln(os.Stderr)
 	}
 	launchLocalCC := engageCC
 

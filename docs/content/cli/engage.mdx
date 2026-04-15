@@ -12,9 +12,27 @@ Start Squadron as a long-running background service. By default, Squadron runs h
 squadron engage [flags]
 ```
 
-Run `engage` from the root of your Squadron project directory. State (vault, PID file, logs, store) lives in `<project>/.squadron/`, so the directory you're in determines which project the daemon belongs to.
+Run `engage` from the root of your Squadron project directory. All runtime state lives in a `.squadron/` folder created next to your HCL files, so the directory you're in determines which project the daemon belongs to.
 
 > **Important:** `squadron disengage` must be run from the **same directory** you engaged from — it finds the running daemon via `<project>/.squadron/engage.pid`. If you're somewhere else, either `cd` back or pass `-c /path/to/project`.
+
+## Project State (`.squadron/`)
+
+The first run creates `.squadron/` in the current directory. Everything Squadron tracks for this project lives there:
+
+| Path | Purpose |
+|------|---------|
+| `vars.vault` | Encrypted variable store (API keys, secrets) |
+| `vault.key` | Vault passphrase (file vault provider, `0600` perms) |
+| `store.db` | SQLite mission/task/session state for resume |
+| `plugins/<platform>/<name>/<version>/` | Cached plugin binaries |
+| `mcp/<platform>/<name>/<version>/` | Cached MCP server binaries |
+| `command-center/<platform>/<version>/` | Cached command center binary (when `--cc` is used) |
+| `engage.pid` | PID of the running daemon |
+| `engage.log` | Daemon stdout/stderr |
+| `engage.ready` | Ready signal file (parent ↔ child IPC during fork) |
+
+Multiple projects can run simultaneously on the same host — each gets its own `.squadron/`. Add `.squadron/` to your `.gitignore`.
 
 ## Flags
 

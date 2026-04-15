@@ -188,13 +188,17 @@ func NewSQLiteBundle(dbPath string) (*Bundle, error) {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 
+	batchingEvents := NewBatchingEventStore(&SQLiteEventStore{db: db})
 	return &Bundle{
 		Missions: &SQLiteMissionStore{db: db},
 		Datasets: &SQLiteDatasetStore{db: db},
 		Sessions: &SQLiteSessionStore{db: db},
-		Events:   &SQLiteEventStore{db: db},
+		Events:   batchingEvents,
 		Costs:    &SQLiteCostStore{db: db},
-		closer:   db.Close,
+		closer: func() error {
+			batchingEvents.Close()
+			return db.Close()
+		},
 	}, nil
 }
 
@@ -1149,6 +1153,25 @@ func (s *SQLiteEventStore) StoreEvent(event MissionEvent) error {
 		`INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID, event.MissionID, event.TaskID, event.SessionID, event.IterationIndex, event.EventType, event.DataJSON, tsFrom(event.CreatedAt),
 	)
+	return err
+}
+
+func (s *SQLiteEventStore) StoreEvents(events []MissionEvent) error {
+	if len(events) == 0 {
+		return nil
+	}
+	const cols = 8
+	args := make([]interface{}, 0, len(events)*cols)
+	buf := make([]byte, 0, 256)
+	buf = append(buf, "INSERT INTO mission_events (id, mission_id, task_id, session_id, iteration_index, event_type, data_json, created_at) VALUES "...)
+	for i, e := range events {
+		if i > 0 {
+			buf = append(buf, ',')
+		}
+		buf = append(buf, "(?,?,?,?,?,?,?,?)"...)
+		args = append(args, e.ID, e.MissionID, e.TaskID, e.SessionID, e.IterationIndex, e.EventType, e.DataJSON, tsFrom(e.CreatedAt))
+	}
+	_, err := s.db.Exec(string(buf), args...)
 	return err
 }
 

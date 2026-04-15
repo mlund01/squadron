@@ -16,6 +16,87 @@ func PidFilePath(configPath string) string {
 	return filepath.Join(resolveConfigDir(configPath), ".squadron", "engage.pid")
 }
 
+// ReadyFilePath returns the path to the ready signal file for a given config directory.
+func ReadyFilePath(configPath string) string {
+	return filepath.Join(resolveConfigDir(configPath), ".squadron", "engage.ready")
+}
+
+// Ready-file protocol. The child writes one of:
+//
+//	readyOK             — success, no command center launched
+//	readyOK + ":<port>" — success, command center bound to <port>
+//	readyErrPrefix + msg — failure; msg is shown to the user
+const (
+	readyOK        = "ok"
+	readyErrPrefix = "error: "
+)
+
+// SignalReady writes a success marker to the ready file. Pass ccPort=0 if no
+// command center was launched.
+func SignalReady(configPath string, ccPort int) {
+	content := readyOK
+	if ccPort > 0 {
+		content = fmt.Sprintf("%s:%d", readyOK, ccPort)
+	}
+	os.WriteFile(ReadyFilePath(configPath), []byte(content), 0644)
+}
+
+// SignalFailed writes the error message to the ready file so the parent can report it.
+func SignalFailed(configPath string, err error) {
+	os.WriteFile(ReadyFilePath(configPath), []byte(readyErrPrefix+err.Error()), 0644)
+}
+
+// ClearReady removes the ready file (called on startup before config loads).
+func ClearReady(configPath string) {
+	os.Remove(ReadyFilePath(configPath))
+}
+
+// CleanupFailedFork removes the PID and ready files for a fork where the child
+// signaled failure (and has already exited on its own).
+func CleanupFailedFork(configPath string) {
+	os.Remove(PidFilePath(configPath))
+	os.Remove(ReadyFilePath(configPath))
+}
+
+// ReadyResult reports what the child signaled back to the parent.
+type ReadyResult struct {
+	OK     bool
+	Error  string
+	CCPort int // command center port if the child launched one, else 0
+}
+
+// WaitReady polls for the ready file. On success returns OK=true with the
+// command center port (0 if none was launched). On failure returns OK=false
+// with the error message.
+// minWait ensures the caller's UI (e.g. spinner) displays for at least
+// a minimum duration even if the child signals instantly.
+func WaitReady(configPath string, timeout, minWait time.Duration) ReadyResult {
+	path := ReadyFilePath(configPath)
+	deadline := time.Now().Add(timeout)
+	earliest := time.Now().Add(minWait)
+	for time.Now().Before(deadline) {
+		data, err := os.ReadFile(path)
+		if err == nil {
+			content := strings.TrimSpace(string(data))
+			if rest, ok := strings.CutPrefix(content, readyErrPrefix); ok {
+				return ReadyResult{OK: false, Error: rest}
+			}
+			if content == readyOK || strings.HasPrefix(content, readyOK+":") {
+				if wait := time.Until(earliest); wait > 0 {
+					time.Sleep(wait)
+				}
+				port := 0
+				if rest, ok := strings.CutPrefix(content, readyOK+":"); ok {
+					port, _ = strconv.Atoi(rest)
+				}
+				return ReadyResult{OK: true, CCPort: port}
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return ReadyResult{OK: false, Error: "timed out waiting for config to load"}
+}
+
 // LogFilePath returns the path to the log file for a given config directory.
 func LogFilePath(configPath string) string {
 	return filepath.Join(resolveConfigDir(configPath), ".squadron", "engage.log")

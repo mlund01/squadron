@@ -4,62 +4,54 @@ title: Quick Start
 
 # Quick Start
 
-Create your first agent in 5 minutes.
+Get from zero to a running agent in under a minute.
 
-## 1. Create Config Directory
-
-```bash
-mkdir my-agents && cd my-agents
-```
-
-## 2. Define Variables
-
-`variables.hcl`:
-
-```hcl
-variable "anthropic_api_key" {
-  secret = true
-}
-```
-
-## 3. Define a Model
-
-`models.hcl`:
-
-```hcl
-model "anthropic" {
-  provider = "anthropic"
-  api_key  = vars.anthropic_api_key
-}
-```
-
-## 4. Define an Agent
-
-`agents.hcl`:
-
-```hcl
-agent "assistant" {
-  model       = models.anthropic.claude_sonnet_4
-  personality = "Helpful and concise"
-  role        = "General purpose assistant"
-  tools       = [builtins.http.get]
-}
-```
-
-## 5. Validate
+## 1. Create a Project Directory
 
 ```bash
-squadron verify .
+mkdir my-squadron && cd my-squadron
 ```
 
-## 6. Chat
+## 2. Run the Wizard
 
 ```bash
-squadron chat -c . assistant
+squadron quickstart
 ```
 
-## Next Steps
+The wizard walks you through:
 
-- [Agents](/config/agents) - Configure agent behavior
-- [Tools](/config/tools) - Add custom tools
-- [Missions](/missions/overview) - Build multi-step pipelines
+- Picking a provider (Anthropic, OpenAI, or Gemini)
+- Entering your API key (stored in an encrypted vault)
+- Generating a starter mission that fetches the Hacker News front page, researches the top 3 stories in parallel, and produces an executive summary
+
+This creates `squadron.hcl` and a `.squadron/` directory with the encrypted vault.
+
+## 3. Run the Starter Mission
+
+```bash
+squadron mission hn_research
+```
+
+You'll see the mission execute live in your terminal — fetching the page, processing each story in parallel, then summarizing.
+
+## 4. Or Launch the Command Center
+
+```bash
+squadron engage --cc
+```
+
+Launches a web UI in your browser where you can run missions, edit variables, watch live execution, and browse run history. Squadron runs in the background and starts automatically on boot.
+
+Stop it with:
+
+```bash
+squadron disengage
+```
+
+## What's Next
+
+- [engage](/cli/engage) — How the daemon works
+- [Agents](/config/agents) — Configure agent behavior
+- [Tools](/config/tools) — Add custom tools
+- [Missions](/missions/overview) — Build multi-step pipelines
+- [Docker](/getting-started/docker) — Run Squadron in containers

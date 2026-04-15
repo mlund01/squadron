@@ -20,10 +20,9 @@ var (
 
 var initCmd = &cobra.Command{
 	Use:   "init",
-	Short: "Initialize Squadron (create encrypted vault for secrets)",
-	Long: `Initialize a Squadron instance by creating the .squadron directory
-in the current working directory and setting up an encrypted vault for
-secret storage.
+	Short: "Initialize the encrypted vault for secret storage",
+	Long: `Create the .squadron directory in the current working directory
+and set up an encrypted vault for secret storage.
 
 A cryptographically random passphrase is generated and stored via the
 configured vault provider:
@@ -37,11 +36,10 @@ configured vault provider:
                        process.
 
 Use --passphrase-file to provide your own passphrase instead of
-auto-generating one. The .squadron directory is created in the
-current working directory.
+auto-generating one.
 
-If variables already exist in vars.txt, they are migrated into the vault
-and vars.txt is deleted.`,
+For guided setup that also picks a provider, stores an API key, and
+generates a starter mission, use 'squadron quickstart' instead.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		if err := RunInit(initPassphraseFile, initVaultProvider); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -57,7 +55,8 @@ func init() {
 		fmt.Sprintf("Vault provider: %q or %q", vault.ProviderFile, vault.ProviderKeychain))
 }
 
-// RunInit performs the initialization logic. Exported so --init flag on other commands can call it.
+// RunInit performs the initialization logic. Called by quickstart and the
+// --init flag on engage/chat/mission.
 func RunInit(passphraseFile, providerName string) error {
 	if err := paths.EnsureHome(); err != nil {
 		return fmt.Errorf("creating squadron home: %w", err)
@@ -152,14 +151,14 @@ func EnsureInitialized(autoInit bool) error {
 	}
 
 	if !autoInit {
-		return fmt.Errorf("squadron not initialized. Run 'squadron init' or pass --init")
+		return fmt.Errorf("squadron not initialized. Run 'squadron init' (or 'squadron quickstart' for guided setup), or pass --init")
 	}
 
 	fmt.Println("Auto-initializing Squadron...")
 	return RunInit("", vault.ProviderFile)
 }
 
-// promptYesNo asks a yes/no question (unused for now, available for future use).
+// promptYesNo asks a yes/no question on stdin; default is no.
 func promptYesNo(question string) bool {
 	reader := bufio.NewReader(os.Stdin)
 	fmt.Printf("%s [y/N]: ", question)

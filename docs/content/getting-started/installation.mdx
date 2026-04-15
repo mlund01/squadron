@@ -87,8 +87,8 @@ docker pull ghcr.io/mlund01/squadron:latest-debian
 Run with your config mounted:
 
 ```bash
-docker run -v ./config:/config -p 8080:8080 \
-  ghcr.io/mlund01/squadron serve --init -w --cc-port 8080 --no-browser
+docker run -v ./my-project:/config -p 8080:8080 \
+  ghcr.io/mlund01/squadron engage --cc
 ```
 
 See the [Docker guide](/getting-started/docker) for full setup details including Docker Compose.
@@ -110,24 +110,8 @@ sudo mv squadron /usr/local/bin/
 squadron --help
 ```
 
-## Initialize
+## Next Steps
 
-Before using Squadron, initialize the encrypted vault for secret storage:
+The fastest path to a running agent is the [Quick Start](/getting-started/quickstart) — `squadron quickstart` walks you through provider setup, API key entry, and generates a working starter mission in under a minute.
 
-```bash
-squadron init
-```
-
-This creates `.squadron/` in the current directory and sets up an encrypted vault with a passphrase stored in your OS keychain.
-
-## API Keys
-
-Set API keys for the providers you want to use:
-
-```bash
-squadron vars set anthropic_api_key sk-ant-...
-squadron vars set openai_api_key sk-...
-squadron vars set gemini_api_key AIza...
-```
-
-Variables are encrypted at rest in `.squadron/vars.vault`.
+If you'd rather set things up manually, see [Variables](/config/variables) for vault management and [Models](/config/models) for provider configuration.

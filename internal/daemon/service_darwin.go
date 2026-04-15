@@ -96,8 +96,11 @@ func InstallService(configPath string) error {
 		return fmt.Errorf("could not write plist: %w", err)
 	}
 
-	// Load the service
-	if err := exec.Command("launchctl", "load", plistPath()).Run(); err != nil {
+	// Load the service (suppress stderr — launchctl can emit warnings)
+	cmd := exec.Command("launchctl", "load", plistPath())
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("launchctl load failed: %w", err)
 	}
 

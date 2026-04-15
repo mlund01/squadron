@@ -1,0 +1,40 @@
+---
+title: disengage
+---
+
+# squadron disengage
+
+Stop a running Squadron daemon and remove its system service.
+
+## Usage
+
+```bash
+squadron disengage [flags]
+```
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c, --config` | Path to the project directory (default: `.`) |
+
+## What it does
+
+1. Reads the PID file at `<project>/.squadron/engage.pid`.
+2. Sends `SIGTERM` to the running Squadron process and waits up to 10 seconds for graceful shutdown (falls back to `SIGKILL`).
+3. Removes the system service (launchd plist or systemd user unit) so it no longer starts on boot.
+4. Cleans up the PID file.
+
+If nothing is running and no system service exists, prints `Squadron is not running.`
+
+## Per-Project
+
+Each Squadron project tracks its own daemon via `<project>/.squadron/engage.pid`. To stop a daemon running in a different project, pass `-c` with the project path:
+
+```bash
+squadron disengage -c /path/to/other-project
+```
+
+## See Also
+
+- [engage](/cli/engage) — Start the daemon

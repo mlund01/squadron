@@ -19,7 +19,6 @@ type providerInfo struct {
 	Provider string // HCL provider value
 	VarName  string // variable name for API key
 	ModelKey string // cheapest model key for starter mission
-	EnvHint  string // env var name hint
 }
 
 var providers = []providerInfo{
@@ -28,21 +27,18 @@ var providers = []providerInfo{
 		Provider: "anthropic",
 		VarName:  "anthropic_api_key",
 		ModelKey: "claude_haiku_4_5",
-		EnvHint:  "ANTHROPIC_API_KEY",
 	},
 	{
 		Name:     "OpenAI (GPT)",
 		Provider: "openai",
 		VarName:  "openai_api_key",
 		ModelKey: "gpt_4_1_mini",
-		EnvHint:  "OPENAI_API_KEY",
 	},
 	{
 		Name:     "Google (Gemini)",
 		Provider: "gemini",
 		VarName:  "gemini_api_key",
 		ModelKey: "gemini_2_5_flash_lite",
-		EnvHint:  "GEMINI_API_KEY",
 	},
 }
 
@@ -53,6 +49,15 @@ var quickstartCmd = &cobra.Command{
 Configures your LLM provider, stores your API key securely, and generates
 a starter mission that demonstrates Squadron's core features.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if warning, verr := validateConfigDir("."); verr != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", verr)
+			os.Exit(1)
+		} else if warning != "" {
+			fmt.Fprintf(os.Stderr, "Warning: %s\n\n", warning)
+			if !promptYesNo("Continue anyway?") {
+				return
+			}
+		}
 		dir, err := RunQuickstart(".")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
@@ -62,7 +67,7 @@ a starter mission that demonstrates Squadron's core features.`,
 		fmt.Println("\nTo run the starter mission:")
 		fmt.Printf("  squadron mission -c %s hn_research\n", dir)
 		fmt.Println("\nTo start the command center:")
-		fmt.Printf("  squadron engage -c %s -w\n", dir)
+		fmt.Printf("  squadron engage -c %s\n", dir)
 	},
 }
 
@@ -76,23 +81,12 @@ func RunQuickstart(configPath string) (string, error) {
 	reader := bufio.NewReader(os.Stdin)
 
 	// Welcome
+	printBanner()
 	fmt.Println()
-	fmt.Println("  ╔══════════════════════════════════════╗")
-	fmt.Println("  ║         Squadron Quickstart          ║")
-	fmt.Println("  ╚══════════════════════════════════════╝")
-	fmt.Println()
-	fmt.Println("  Squadron is a declarative framework for building")
-	fmt.Println("  and running AI agent workflows. Let's get you set up.")
+	fmt.Println("  Let's get you set up.")
 	fmt.Println()
 
-	// Step 1: Initialize vault
-	fmt.Println("Initializing Squadron...")
-	if err := RunInit("", vault.ProviderFile); err != nil {
-		return "", fmt.Errorf("initialization failed: %w", err)
-	}
-	fmt.Println()
-
-	// Step 2: Choose provider
+	// Step 1: Choose provider
 	fmt.Println("Which LLM provider would you like to use?")
 	fmt.Println()
 	for i, p := range providers {
@@ -104,7 +98,7 @@ func RunQuickstart(configPath string) (string, error) {
 	chosen := providers[provider]
 	fmt.Println()
 
-	// Step 3: API key
+	// Step 2: API key
 	fmt.Printf("Enter your %s API key:\n", chosen.Name)
 	fmt.Printf("  (You can find this at your provider's dashboard)\n")
 	fmt.Println()
@@ -113,53 +107,46 @@ func RunQuickstart(configPath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("could not read API key: %w", err)
 	}
-
-	// Store in vault
-	if err := config.SetVar(chosen.VarName, apiKey); err != nil {
-		return "", fmt.Errorf("could not store API key: %w", err)
-	}
-	fmt.Println("  API key stored securely in encrypted vault.")
 	fmt.Println()
 
-	// Step 4: Generate config
+	// Step 3: Starter mission
+	fmt.Println("Include a starter mission? (hn_research)")
+	fmt.Println("  Fetches Hacker News, researches top stories, creates a summary.")
+	fmt.Println()
+	includeStarter := promptYesNo("Include starter mission?")
+	fmt.Println()
+
+	// Step 4: Generate config files (before init so abort leaves no .squadron/)
 	configDir := configPath
 	if configDir == "." {
 		configDir, _ = os.Getwd()
 	}
 
-	if err := generateStarterConfig(configDir, chosen); err != nil {
+	if err := generateStarterConfig(configDir, chosen, includeStarter); err != nil {
 		return "", fmt.Errorf("could not generate config: %w", err)
 	}
 
-	fmt.Println("  Generated starter configuration:")
+	// Step 5: Initialize vault and store API key
+	if err := RunInit("", vault.ProviderFile); err != nil {
+		return "", fmt.Errorf("initialization failed: %w", err)
+	}
+
+	if err := config.SetVar(chosen.VarName, apiKey); err != nil {
+		return "", fmt.Errorf("could not store API key: %w", err)
+	}
+
+	fmt.Println("  Configuration complete:")
 	fmt.Printf("    %s/squadron.hcl\n", configDir)
-	fmt.Println()
-	fmt.Println("  Includes a starter mission (hn_research) that:")
-	fmt.Println("    1. Fetches the Hacker News front page")
-	fmt.Println("    2. Researches the top 3 stories in parallel")
-	fmt.Println("    3. Creates an executive summary")
+	fmt.Println("  API key stored in encrypted vault.")
+	if includeStarter {
+		fmt.Println()
+		fmt.Println("  Starter mission (hn_research):")
+		fmt.Println("    1. Fetches the Hacker News front page")
+		fmt.Println("    2. Researches the top 3 stories in parallel")
+		fmt.Println("    3. Creates an executive summary")
+	}
 
 	return configDir, nil
-}
-
-// needsQuickstart returns true when both: no .hcl files exist AND no .squadron/ dir exists.
-func needsQuickstart(configPath string) bool {
-	if hasHCLFiles(configPath) {
-		return false
-	}
-
-	// Check for .squadron/ directory
-	configDir := configPath
-	info, err := os.Stat(configDir)
-	if err == nil && !info.IsDir() {
-		configDir = filepath.Dir(configDir)
-	}
-	sqDir := filepath.Join(configDir, ".squadron")
-	if _, err := os.Stat(sqDir); err == nil {
-		return false
-	}
-
-	return true
 }
 
 // promptChoice asks the user to pick a numbered option. Returns 0-indexed.
@@ -199,19 +186,27 @@ func promptSecret(reader *bufio.Reader, prompt string) (string, error) {
 }
 
 // generateStarterConfig writes the starter HCL config file.
-func generateStarterConfig(dir string, p providerInfo) error {
-	hcl := starterHCL(p)
-
-	path := filepath.Join(dir, "squadron.hcl")
-	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("file already exists: %s", path)
+func generateStarterConfig(dir string, p providerInfo, includeStarter bool) error {
+	hcl := baseHCL(p)
+	if includeStarter {
+		hcl += "\n" + starterMissionHCL(p)
 	}
 
-	return os.WriteFile(path, []byte(hcl), 0644)
+	path := filepath.Join(dir, "squadron.hcl")
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		if os.IsExist(err) {
+			return fmt.Errorf("file already exists: %s", path)
+		}
+		return err
+	}
+	defer f.Close()
+	_, err = f.WriteString(hcl)
+	return err
 }
 
-// starterHCL generates the complete starter config for the given provider.
-func starterHCL(p providerInfo) string {
+// baseHCL generates the provider, model, and agent config.
+func baseHCL(p providerInfo) string {
 	return fmt.Sprintf(`variable "%s" {
   secret = true
 }
@@ -227,8 +222,13 @@ agent "researcher" {
   role        = "Web researcher that fetches and analyzes web content"
   tools       = [builtins.http.get]
 }
+`, p.VarName, p.Provider, p.Provider, p.VarName,
+		p.Provider, p.ModelKey)
+}
 
-mission "hn_research" {
+// starterMissionHCL generates the HN research starter mission.
+func starterMissionHCL(p providerInfo) string {
+	return fmt.Sprintf(`mission "hn_research" {
   directive = "Research the top stories on Hacker News"
 
   commander {
@@ -306,7 +306,5 @@ mission "hn_research" {
     }
   }
 }
-`, p.VarName, p.Provider, p.Provider, p.VarName,
-		p.Provider, p.ModelKey,
-		p.Provider, p.ModelKey)
+`, p.Provider, p.ModelKey)
 }

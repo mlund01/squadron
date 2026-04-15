@@ -10,6 +10,7 @@ FROM alpine:latest
 RUN apk add --no-cache ca-certificates tzdata
 COPY --from=builder /build/squadron /usr/local/bin/squadron
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+ENV SQUADRON_CONTAINER=1
 WORKDIR /config
 # No VOLUME directive: we want the entrypoint to fail fast if /config
 # isn't mounted. Declaring VOLUME would cause Docker to create anonymous

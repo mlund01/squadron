@@ -1,0 +1,123 @@
+---
+title: engage
+---
+
+# squadron engage
+
+Start Squadron as a long-running background service. By default, Squadron runs headless. Pass `--cc` to launch the local command center web UI, or declare a `command_center` block in your config to connect to a remote one.
+
+## Usage
+
+```bash
+squadron engage [flags]
+```
+
+## Flags
+
+| Flag | Description |
+|------|-------------|
+| `-c, --config` | Path to config directory (default: `.`) |
+| `--cc` | Launch the local command center UI |
+| `--cc-port` | Port for the command center (default: `8080`) |
+| `--foreground` | Run in the terminal instead of forking to background |
+| `--init` | Auto-initialize Squadron if not already initialized |
+
+`--cc` is an error if the config also defines a `command_center` block — pick one.
+
+## What it does
+
+1. **Validates the directory** — refuses to run inside `~`, `/`, `/tmp`, etc., and errors on nested `.squadron/` projects.
+2. **Runs the [quickstart wizard](/cli/quickstart)** if there's no `.hcl` config and no `.squadron/` directory (interactive terminals only).
+3. **Auto-initializes the vault** in all other first-run cases.
+4. **Forks to the background** unless `--foreground` is set.
+5. **Launches the command center UI** if `--cc` was passed.
+6. **Installs a system service** (launchd on macOS, systemd user unit on Linux) so Squadron starts automatically on boot.
+
+Each Squadron project gets its own PID file in `<project>/.squadron/engage.pid`, so multiple projects can run simultaneously on the same host.
+
+## Examples
+
+### Headless (default)
+
+```bash
+squadron engage
+```
+
+Runs in the background with no UI. Use this when missions run purely via schedules, webhooks, or remote command center.
+
+### With the command center UI
+
+```bash
+squadron engage --cc
+```
+
+Launches the local CC on `http://localhost:8080` and opens your browser.
+
+### Foreground mode
+
+```bash
+squadron engage --cc --foreground
+```
+
+Keeps the process attached to the terminal. Useful for debugging or when running inside Docker / systemd / a process manager.
+
+### Custom port
+
+```bash
+squadron engage --cc --cc-port 9090
+```
+
+## Stopping
+
+```bash
+squadron disengage
+```
+
+Sends SIGTERM to the running daemon, removes the system service, cleans up the command center process. See [disengage](/cli/disengage).
+
+## Remote Command Center
+
+If your config declares a `command_center` block:
+
+```hcl
+command_center {
+  url           = "ws://command-center.example.com/ws"
+  instance_name = "my-instance"
+}
+```
+
+…Squadron connects outbound to that command center. Do not pass `--cc` — Squadron will refuse to run both at once.
+
+## Behavior with Invalid Config
+
+`engage` is forgiving about config issues:
+
+- **HCL syntax errors or missing required fields** — Squadron starts in degraded mode and (if `--cc` was passed) the UI lets you fix files in place.
+- **Missing variables** — Squadron starts; the UI lets you add them.
+- **Storage open failure** — Squadron exits (this is a real environment problem, not user-fixable from the UI).
+
+This means you can deploy a half-finished config and finish setup through the browser.
+
+## Schedules & Triggers
+
+In engage mode, missions with `schedule` blocks run automatically on their cron timers. Missions with a `trigger` block expose a webhook through the command center.
+
+See [Schedules & Triggers](/missions/schedules) for details.
+
+## Docker
+
+The official image sets `SQUADRON_CONTAINER=1`, which tells Squadron to run in the foreground and skip browser auto-open. Pass `--cc` explicitly if you want the UI:
+
+```bash
+docker run -v ./my-project:/config -p 8080:8080 \
+  ghcr.io/mlund01/squadron engage --cc
+```
+
+See the [Docker guide](/getting-started/docker).
+
+## See Also
+
+- [quickstart](/cli/quickstart) — Interactive setup wizard
+- [disengage](/cli/disengage) — Stop the daemon
+- [Schedules & Triggers](/missions/schedules) — Automatic scheduling and webhooks
+- [Docker](/getting-started/docker) — Running in containers

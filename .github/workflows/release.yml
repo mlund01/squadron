@@ -71,9 +71,7 @@ jobs:
           # Discord embed description max is 4096 chars — truncate safely
           max=3900
           if [ ${#body} -gt $max ]; then
-            body="${body:0:$max}
-
-…_truncated — see full release notes on GitHub_"
+            body="${body:0:$max}"$'\n\n…_truncated — see full release notes on GitHub_'
           fi
 
           url="https://github.com/$REPO/releases/tag/$TAG"

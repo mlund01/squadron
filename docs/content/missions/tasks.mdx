@@ -173,7 +173,9 @@ Structured output is automatically captured and stored. Downstream tasks can que
 
 ## Routing
 
-Tasks can route to other tasks (or missions) after they complete. See [Routing](/missions/routing) for full details.
+Tasks can route to other tasks (or missions) after they complete. See [Routing](/missions/routing) for full details, including [when to use `depends_on` vs `router` vs `send_to`](/missions/routing#choosing-between-depends_on-router-and-send_to).
+
+> **Rule of thumb:** prefer `depends_on` and build a static DAG. Reach for `router` only when the LLM must choose a branch, and `send_to` only for fan-out or conditional fan-in to a shared task.
 
 ### Conditional Routing
 

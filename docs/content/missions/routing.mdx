@@ -6,6 +6,65 @@ title: Routing
 
 Routing lets the LLM decide what happens after a task completes. There are two routing mechanisms: **conditional** (`router`) and **unconditional** (`send_to`).
 
+## Choosing Between `depends_on`, `router`, and `send_to`
+
+These three mechanisms look similar but solve different problems. Pick the wrong one and you'll either lose context, fire work that shouldn't run, or hang the mission.
+
+**Default to `depends_on`. Build a static DAG whenever you can.**
+
+A `depends_on` edge tells the runner "this task waits for those tasks, then runs." The runner knows about it upfront from the topological sort, schedules it automatically, and gives it full ancestor context. This is the right tool for the vast majority of task relationships — sequential pipelines, fan-in from multiple predecessors, anything where every listed predecessor is expected to run.
+
+Reach for `send_to` or `router` only when a task genuinely should *not* always run — i.e. when the set of downstream tasks depends on what happened at runtime.
+
+| You want to... | Use |
+|----------------|-----|
+| Run task B after task A always completes | `depends_on = [tasks.A]` on B |
+| Run task C after A and B both complete (fan-in, both always run) | `depends_on = [tasks.A, tasks.B]` on C |
+| Pick one of several branches based on LLM judgment | `router` on the source |
+| Fan out — source always triggers multiple parallel branches | `send_to` on the source |
+| Multiple conditional sources converge on one shared handler (first-one-wins fan-in) | `send_to` (or `router`) from each source, pointing at the shared task |
+| Chain a sequence where every step always runs | `depends_on` all the way — not `send_to` |
+
+### Common mistake: using `send_to` for a static sequence
+
+```hcl
+# ❌ Wrong — send_to used for a linear pipeline that always runs end-to-end
+task "fetch" {
+  objective = "Fetch data"
+  send_to   = [tasks.process]
+}
+
+task "process" {
+  objective = "Process it"
+  send_to   = [tasks.publish]
+}
+
+task "publish" {
+  objective = "Publish result"
+}
+```
+
+This works, but it throws away the benefits of the static DAG. `process` and `publish` become dynamically activated — they can't be referenced by `depends_on` from anywhere else, they're invisible to the topological sort, and the runner has no upfront picture of the mission. Prefer:
+
+```hcl
+# ✅ Right — static DAG, every task is schedulable and discoverable
+task "fetch" {
+  objective = "Fetch data"
+}
+
+task "process" {
+  objective  = "Process it"
+  depends_on = [tasks.fetch]
+}
+
+task "publish" {
+  objective  = "Publish result"
+  depends_on = [tasks.process]
+}
+```
+
+Rule of thumb: if every branch would always run, it belongs in `depends_on`. `send_to` and `router` are for runtime-shaped graphs — fan-out that's conceptually "trigger these in parallel," or fan-in where *which* predecessor fires is decided at runtime.
+
 ## Conditional Routing (`router`)
 
 A `router` block presents route options to the commander after the task finishes. The commander evaluates the conditions and picks one — or none.
@@ -56,20 +115,34 @@ Route targets can themselves have routers. This creates natural decision chains:
 task "classify" {
   objective = "Classify the request type"
   router {
-    route { target = tasks.handle_billing; condition = "Billing related" }
+    route {
+      target    = tasks.handle_billing
+      condition = "Billing related"
+    }
   }
 }
 
 task "handle_billing" {
   objective = "Determine the billing action"
   router {
-    route { target = tasks.process_refund;   condition = "Customer wants a refund" }
-    route { target = tasks.correct_invoice;  condition = "Invoice needs correction" }
+    route {
+      target    = tasks.process_refund
+      condition = "Customer wants a refund"
+    }
+    route {
+      target    = tasks.correct_invoice
+      condition = "Invoice needs correction"
+    }
   }
 }
 
-task "process_refund"   { objective = "Process the refund" }
-task "correct_invoice"  { objective = "Fix the invoice" }
+task "process_refund" {
+  objective = "Process the refund"
+}
+
+task "correct_invoice" {
+  objective = "Fix the invoice"
+}
 ```
 
 ## Unconditional Routing (`send_to`)
@@ -86,7 +159,54 @@ task "process_a" { objective = "Process path A" }
 task "process_b" { objective = "Process path B" }
 ```
 
-This is useful for fan-out patterns where every branch should always run.
+Use `send_to` when:
+
+1. **Fan-out** — one task triggers multiple parallel branches that each do distinct work. (If they do the same work across items, use an [iterator](/missions/iteration) instead.)
+2. **Conditional fan-in onto a shared handler** — a router (or chain of routers) has several branches that all need to end at the same downstream task. Only one branch actually runs, so the shared task can't use `depends_on` (it would hang waiting on the branches that were never activated). Instead each branch `send_to`s the shared task; whichever branch runs activates it.
+
+```hcl
+# A router picks one of three handlers; every handler ends with the same notify step.
+task "classify" {
+  objective = "Classify the incoming ticket"
+  router {
+    route {
+      target    = tasks.handle_billing
+      condition = "Billing issue"
+    }
+    route {
+      target    = tasks.handle_bug
+      condition = "Technical bug"
+    }
+    route {
+      target    = tasks.handle_general
+      condition = "General inquiry"
+    }
+  }
+}
+
+task "handle_billing" {
+  objective = "Resolve billing issue"
+  send_to   = [tasks.notify]
+}
+
+task "handle_bug" {
+  objective = "File a bug report"
+  send_to   = [tasks.notify]
+}
+
+task "handle_general" {
+  objective = "Answer the inquiry"
+  send_to   = [tasks.notify]
+}
+
+task "notify" {
+  objective = "Notify the customer that the ticket was handled"
+}
+```
+
+`notify` can't be `depends_on = [handle_billing, handle_bug, handle_general]` — that would wait for all three, but the router only activates one. `send_to` from each branch is the right shape: whichever handler fires pushes into `notify`.
+
+**Don't** use `send_to` as a substitute for `depends_on` in a linear pipeline where every step always runs — that makes the graph dynamic for no reason and prevents downstream tasks from waiting on those steps. See [Choosing Between...](#choosing-between-depends_on-router-and-send_to).
 
 ## Cross-Mission Routing
 

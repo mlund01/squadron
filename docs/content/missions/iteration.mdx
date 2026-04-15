@@ -65,8 +65,13 @@ task "process_items" {
   }
 
   output {
-    field "total" { type = "number"; required = true }
-    field "flagged" { type = "boolean" }
+    field "total" {
+      type     = "number"
+      required = true
+    }
+    field "flagged" {
+      type = "boolean"
+    }
   }
 }
 ```
@@ -146,8 +151,13 @@ mission "midwest_weather" {
   dataset "city_list" {
     description = "Midwest cities to check"
     schema {
-      field "name"  { type = "string"; required = true }
-      field "state" { type = "string" }
+      field "name" {
+        type     = "string"
+        required = true
+      }
+      field "state" {
+        type = "string"
+      }
     }
   }
 
@@ -257,8 +267,14 @@ task "create_backstories" {
   }
 
   output {
-    field "origin" { type = "string"; required = true }
-    field "secret_talent" { type = "string"; required = true }
+    field "origin" {
+      type     = "string"
+      required = true
+    }
+    field "secret_talent" {
+      type     = "string"
+      required = true
+    }
   }
 }
 

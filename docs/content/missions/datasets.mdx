@@ -14,8 +14,13 @@ mission "process_cities" {
     description = "Cities to process"
 
     schema {
-      field "name"  { type = "string"; required = true }
-      field "state" { type = "string" }
+      field "name" {
+        type     = "string"
+        required = true
+      }
+      field "state" {
+        type = "string"
+      }
     }
   }
 
@@ -187,7 +192,10 @@ When a schema is defined, all items are validated:
 ```hcl
 dataset "users" {
   schema {
-    field "email" { type = "string"; required = true }
+    field "email" {
+      type     = "string"
+      required = true
+    }
   }
 }
 ```

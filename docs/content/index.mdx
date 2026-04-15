@@ -22,13 +22,24 @@ mission "research" {
     agents     = [agents.analyst]
 
     router {
-      route { target = tasks.deep_dive; condition = "Findings warrant deeper investigation" }
-      route { target = tasks.summarize; condition = "Findings are routine" }
+      route {
+        target    = tasks.deep_dive
+        condition = "Findings warrant deeper investigation"
+      }
+      route {
+        target    = tasks.summarize
+        condition = "Findings are routine"
+      }
     }
   }
 
-  task "deep_dive" { objective = "Investigate the most promising lead in detail" }
-  task "summarize" { objective = "Write a one-page summary" }
+  task "deep_dive" {
+    objective = "Investigate the most promising lead in detail"
+  }
+
+  task "summarize" {
+    objective = "Write a one-page summary"
+  }
 }
 ```
 

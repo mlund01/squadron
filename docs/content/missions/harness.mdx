@@ -104,9 +104,18 @@ Routing is enforced by the harness, not a prompt convention:
 ```hcl
 task "classify" {
   router {
-    route { target = tasks.refund;   condition = "Customer wants a refund" }
-    route { target = tasks.escalate; condition = "Complaint is severe" }
-    route { target = tasks.close;    condition = "Issue is resolved" }
+    route {
+      target    = tasks.refund
+      condition = "Customer wants a refund"
+    }
+    route {
+      target    = tasks.escalate
+      condition = "Complaint is severe"
+    }
+    route {
+      target    = tasks.close
+      condition = "Issue is resolved"
+    }
   }
 }
 ```

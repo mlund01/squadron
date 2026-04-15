@@ -22,7 +22,7 @@ export default async function RootLayout({ children }) {
         }}
         backgroundColor={{
           dark: '#0a1f0a',
-          light: '#f0fdf4',
+          light: '#ffffff',
         }}
         faviconGlyph="▶"
       />
@@ -34,15 +34,14 @@ export default async function RootLayout({ children }) {
           footer={
             <Footer>
               <span style={{ fontFamily: "'JetBrains Mono', monospace", color: 'var(--defcon5-fg-dim)' }}>
-                [MIT] {new Date().getFullYear()} SQUADRON // DEFCON 5
+                [MIT] {new Date().getFullYear()} SQUADRON
               </span>
             </Footer>
           }
           nextThemes={{
-            defaultTheme: 'dark',
-            forcedTheme: 'dark',
+            defaultTheme: 'system',
           }}
-          themeSwitch={{ dark: 'DEFCON 5', light: 'DEFCON 5', system: 'DEFCON 5' }}
+          themeSwitch={{ dark: 'DEFCON 5', light: 'DEFCON 1', system: 'SYSTEM' }}
         >
           {children}
         </Layout>

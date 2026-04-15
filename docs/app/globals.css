@@ -10,8 +10,23 @@ body {
   font-family: 'JetBrains Mono', 'Courier New', ui-monospace, monospace;
 }
 
-/* ─── DEFCON 5 palette ─── */
+/* ─── DEFCON 1 palette (light — white bg, green ink) ─── */
 :root {
+  --defcon5-bg: #ffffff;
+  --defcon5-bg-elevated: #ffffff;
+  --defcon5-bg-inset: #f6fbf7;
+  --defcon5-fg: #166534;
+  --defcon5-fg-bright: #14532d;
+  --defcon5-fg-dim: #6b7c70;
+  --defcon5-border: #d1e7d6;
+  --defcon5-border-strong: #86efac;
+  --defcon5-accent: #15803d;
+  --defcon5-amber: #b45309;
+  --defcon5-red: #b91c1c;
+}
+
+/* ─── DEFCON 5 palette (dark — green-on-black CRT) ─── */
+.dark {
   --defcon5-bg: #0a1f0a;
   --defcon5-bg-elevated: #0d2a0d;
   --defcon5-bg-inset: #081808;
@@ -25,20 +40,8 @@ body {
   --defcon5-red: #f87171;
 }
 
-.dark {
-  --defcon5-bg: #0a1f0a;
-  --defcon5-bg-elevated: #0d2a0d;
-  --defcon5-bg-inset: #081808;
-  --defcon5-fg: #4ade80;
-  --defcon5-fg-bright: #86efac;
-  --defcon5-fg-dim: #6b8f71;
-  --defcon5-border: #1a4a1a;
-  --defcon5-border-strong: #2a6a2a;
-}
-
-/* ─── Global body tint (dark theme) ─── */
-.dark body,
-.dark {
+/* ─── Global body tint ─── */
+body {
   color: var(--defcon5-fg);
 }
 
@@ -49,108 +52,113 @@ html.dark {
 /* ─── Navbar ─── */
 .nextra-navbar {
   border-bottom: 1px solid var(--defcon5-border) !important;
-  background: rgba(10, 31, 10, 0.85) !important;
   backdrop-filter: blur(8px);
 }
 
+.nextra-navbar,
+.nextra-navbar-blur {
+  background: rgba(255, 255, 255, 0.85) !important;
+}
+
+.dark .nextra-navbar,
 .dark .nextra-navbar-blur {
   background: rgba(10, 31, 10, 0.85) !important;
 }
 
 /* ─── Sidebar ─── */
-.dark .nextra-sidebar {
+.nextra-sidebar {
   background: var(--defcon5-bg) !important;
 }
 
-.dark aside.nextra-sidebar-container {
+aside.nextra-sidebar-container {
   border-right: 1px solid var(--defcon5-border);
 }
 
-.dark .nextra-sidebar a,
-.dark .nextra-sidebar button {
+.nextra-sidebar a,
+.nextra-sidebar button {
   color: var(--defcon5-fg-dim);
 }
 
-.dark .nextra-sidebar a:hover,
-.dark .nextra-sidebar button:hover {
+.nextra-sidebar a:hover,
+.nextra-sidebar button:hover {
   color: var(--defcon5-fg-bright);
   background: rgba(74, 222, 128, 0.08) !important;
 }
 
 /* Active sidebar link */
-.dark .nextra-sidebar a[aria-current="page"],
-.dark .nextra-sidebar li.active > a,
-.dark .nextra-sidebar a[data-active="true"] {
+.nextra-sidebar a[aria-current="page"],
+.nextra-sidebar li.active > a,
+.nextra-sidebar a[data-active="true"] {
   background: rgba(74, 222, 128, 0.12) !important;
   color: var(--defcon5-fg-bright) !important;
   border-left: 2px solid var(--defcon5-fg);
 }
 
 /* ─── Table of contents ─── */
-.dark .nextra-toc a {
+.nextra-toc a {
   color: var(--defcon5-fg-dim);
 }
 
-.dark .nextra-toc a:hover {
+.nextra-toc a:hover {
   color: var(--defcon5-fg-bright);
 }
 
-.dark .nextra-toc a[data-active="true"] {
+.nextra-toc a[data-active="true"] {
   color: var(--defcon5-fg) !important;
 }
 
 /* ─── Breadcrumb ─── */
-.dark .nextra-breadcrumb {
+.nextra-breadcrumb {
   color: var(--defcon5-fg-dim);
 }
 
 /* ─── Prose content ─── */
-.dark .x\:prose,
-.dark .nextra-content {
+.x\:prose,
+.nextra-content {
   color: var(--defcon5-fg);
 }
 
 /* Headings — brighter green, add a terminal prompt on h1 */
-.dark h1,
-.dark h2,
-.dark h3,
-.dark h4,
-.dark h5,
-.dark h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
   color: var(--defcon5-fg-bright) !important;
   font-family: 'JetBrains Mono', 'Courier New', monospace;
   letter-spacing: -0.01em;
 }
 
-.dark article h1:first-child::before {
+article h1:first-child::before {
   content: '$ ';
   color: var(--defcon5-fg-dim);
   font-weight: 400;
 }
 
 /* Links */
-.dark a {
+a {
   color: var(--defcon5-accent);
   text-decoration: underline;
   text-decoration-color: rgba(163, 230, 53, 0.4);
   text-underline-offset: 2px;
 }
 
-.dark a:hover {
+a:hover {
   color: var(--defcon5-fg-bright);
   text-decoration-color: var(--defcon5-fg-bright);
 }
 
 /* Don't underline structural links */
-.dark .nextra-sidebar a,
-.dark .nextra-toc a,
-.dark .nextra-navbar a,
-.dark .nextra-breadcrumb a {
+.nextra-sidebar a,
+.nextra-toc a,
+.nextra-navbar a,
+.nextra-breadcrumb a {
   text-decoration: none;
 }
 
 /* ─── Inline code ─── */
-.dark code:not(pre code) {
+code:not(pre code) {
   background: rgba(74, 222, 128, 0.1) !important;
   color: var(--defcon5-fg-bright) !important;
   border: 1px solid var(--defcon5-border);
@@ -161,17 +169,17 @@ html.dark {
 }
 
 /* ─── Code blocks ─── */
-.dark pre,
-.dark .nextra-code > pre,
-.dark figure[data-rehype-pretty-code-figure] pre {
+pre,
+.nextra-code > pre,
+figure[data-rehype-pretty-code-figure] pre {
   background: var(--defcon5-bg-inset) !important;
   border: 1px solid var(--defcon5-border) !important;
   border-radius: 6px;
   box-shadow: inset 0 0 0 1px rgba(74, 222, 128, 0.05);
 }
 
-.dark pre code,
-.dark figure[data-rehype-pretty-code-figure] code {
+pre code,
+figure[data-rehype-pretty-code-figure] code {
   color: var(--defcon5-fg) !important;
   font-family: 'JetBrains Mono', 'Courier New', monospace !important;
 }
@@ -214,95 +222,95 @@ html.dark {
 .dark .shiki [style*="color:#EEFFFF"] { color: var(--defcon5-fg) !important; } /* default text */
 
 /* Code-block header (filename bar, copy button) */
-.dark figure[data-rehype-pretty-code-figure] figcaption {
+figure[data-rehype-pretty-code-figure] figcaption {
   background: var(--defcon5-bg-elevated) !important;
   color: var(--defcon5-fg-dim) !important;
   border-bottom: 1px solid var(--defcon5-border);
   font-family: 'JetBrains Mono', 'Courier New', monospace;
 }
 
-.dark [data-rehype-pretty-code-title] {
+[data-rehype-pretty-code-title] {
   background: var(--defcon5-bg-elevated) !important;
   color: var(--defcon5-fg-bright) !important;
   border-bottom: 1px solid var(--defcon5-border) !important;
 }
 
 /* Line numbers / highlighted lines */
-.dark [data-highlighted-line] {
+[data-highlighted-line] {
   background: rgba(74, 222, 128, 0.08) !important;
   border-left: 2px solid var(--defcon5-fg);
 }
 
-.dark [data-highlighted-chars] {
+[data-highlighted-chars] {
   background: rgba(163, 230, 53, 0.15) !important;
   border-radius: 2px;
 }
 
 /* ─── Tables ─── */
-.dark table {
+table {
   border-color: var(--defcon5-border) !important;
 }
 
-.dark table th {
+table th {
   background: var(--defcon5-bg-elevated) !important;
   color: var(--defcon5-fg-bright) !important;
   border-color: var(--defcon5-border) !important;
 }
 
-.dark table td {
+table td {
   border-color: var(--defcon5-border) !important;
 }
 
-.dark table tr:nth-child(even) {
+table tr:nth-child(even) {
   background: rgba(74, 222, 128, 0.03) !important;
 }
 
 /* ─── Blockquotes / callouts ─── */
-.dark blockquote {
+blockquote {
   border-left: 3px solid var(--defcon5-fg) !important;
   background: rgba(74, 222, 128, 0.04);
   color: var(--defcon5-fg-bright) !important;
   padding-left: 1em;
 }
 
-.dark .nextra-callout {
+.nextra-callout {
   border-color: var(--defcon5-border-strong) !important;
   background: rgba(74, 222, 128, 0.06) !important;
   color: var(--defcon5-fg) !important;
 }
 
-.dark .nextra-callout[data-type="info"] {
+.nextra-callout[data-type="info"] {
   border-color: var(--defcon5-fg) !important;
 }
 
-.dark .nextra-callout[data-type="warning"] {
+.nextra-callout[data-type="warning"] {
   border-color: var(--defcon5-amber) !important;
   background: rgba(250, 204, 21, 0.06) !important;
 }
 
-.dark .nextra-callout[data-type="error"] {
+.nextra-callout[data-type="error"] {
   border-color: var(--defcon5-red) !important;
   background: rgba(248, 113, 113, 0.06) !important;
 }
 
 /* ─── Horizontal rules ─── */
-.dark hr {
+hr {
   border-color: var(--defcon5-border) !important;
 }
 
 /* ─── Search ─── */
-.dark .nextra-search input {
+.nextra-search input {
   background: var(--defcon5-bg-inset) !important;
   border-color: var(--defcon5-border) !important;
   color: var(--defcon5-fg) !important;
   font-family: 'JetBrains Mono', 'Courier New', monospace;
 }
 
-.dark .nextra-search input:focus {
+.nextra-search input:focus {
   border-color: var(--defcon5-fg) !important;
 }
 
-.dark .nextra-search input::placeholder {
+.nextra-search input::placeholder {
   color: var(--defcon5-fg-dim);
 }
 

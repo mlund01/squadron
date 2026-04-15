@@ -145,7 +145,7 @@ func Fork(configPath string, extraFlags []string) (int, error) {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Dir = resolveConfigDir(absConfig)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	detach(cmd)
 
 	if err := cmd.Start(); err != nil {
 		logFile.Close()

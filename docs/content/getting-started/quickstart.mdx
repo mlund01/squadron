@@ -12,45 +12,48 @@ Get from zero to a running agent in under a minute.
 mkdir my-squadron && cd my-squadron
 ```
 
-## 2. Run the Wizard
-
-```bash
-squadron quickstart
-```
-
-The wizard walks you through:
-
-- Picking a provider (Anthropic, OpenAI, or Gemini)
-- Entering your API key (stored in an encrypted vault)
-- Generating a starter mission that fetches the Hacker News front page, researches the top 3 stories in parallel, and produces an executive summary
-
-This creates `squadron.hcl` and a `.squadron/` directory with the encrypted vault.
-
-## 3. Run the Starter Mission
-
-```bash
-squadron mission hn_research
-```
-
-You'll see the mission execute live in your terminal — fetching the page, processing each story in parallel, then summarizing.
-
-## 4. Or Launch the Command Center
+## 2. Launch Squadron
 
 ```bash
 squadron engage --cc
 ```
 
-Launches a web UI in your browser where you can run missions, edit variables, watch live execution, and browse run history. Squadron runs in the background and starts automatically on boot.
+On a fresh directory, `engage` runs an interactive wizard that:
 
-Stop it with:
+- Asks which LLM provider you want (Anthropic, OpenAI, or Gemini)
+- Prompts for your API key and stores it in an encrypted vault
+- Optionally generates a starter mission (`hn_research`) that fetches the Hacker News front page, researches the top 3 stories in parallel, and produces an executive summary
+
+When the wizard finishes, Squadron runs in the background and opens the command center UI in your browser at `http://localhost:8080`. Squadron also installs a system service (launchd on macOS, systemd on Linux) so it starts automatically on boot.
+
+## 3. Try It Out
+
+From the command center UI you can:
+
+- Run missions with input forms and watch execution live
+- Edit HCL config files in the browser (with validation)
+- Manage variables
+- Browse mission run history with task-level detail
+
+Or run missions from the terminal:
+
+```bash
+squadron mission hn_research
+```
+
+## 4. Stopping
+
+Run from the same directory you engaged from:
 
 ```bash
 squadron disengage
 ```
 
+This stops the daemon and removes the system service so it no longer starts on boot.
+
 ## What's Next
 
-- [engage](/cli/engage) — How the daemon works
+- [engage](/cli/engage) — How the daemon works, all flags, remote command center setup
 - [Agents](/config/agents) — Configure agent behavior
 - [Tools](/config/tools) — Add custom tools
 - [Missions](/missions/overview) — Build multi-step pipelines

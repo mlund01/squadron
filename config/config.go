@@ -803,7 +803,7 @@ func loadFromFiles(files []string) (*Config, error) {
 	// Build vars context
 	varsCtx, resolvedVars := buildVarsContext(allVars)
 
-	// Parse storage block (required)
+	// Parse storage block (optional — defaults to sqlite if omitted)
 	var storageConfig StorageConfig
 	hasStorage := false
 	for _, pb := range allParsedBlocks {
@@ -816,7 +816,11 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 	}
 	if !hasStorage {
-		return nil, fmt.Errorf("a storage block is required in the configuration, e.g.:\n\n  storage {\n    backend = \"sqlite\"\n  }\n")
+		configDir := "."
+		if len(files) > 0 {
+			configDir = filepath.Dir(files[0])
+		}
+		storageConfig = *DefaultStorageConfig(configDir)
 	}
 	storageConfig.Defaults()
 

@@ -61,6 +61,14 @@ model "test" {
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
 		})
+
+		It("defaults to sqlite storage when no storage block is defined", func() {
+			_, f := writeFixture("config.hcl", `variable "x" { default = "val" }`)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Storage).NotTo(BeNil())
+			Expect(cfg.Storage.Backend).To(Equal("sqlite"))
+		})
 	})
 
 	Describe("LoadDir", func() {

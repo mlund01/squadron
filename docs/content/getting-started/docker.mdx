@@ -19,7 +19,7 @@ Both images support `linux/amd64` and `linux/arm64`.
 docker run --rm ghcr.io/mlund01/squadron version
 ```
 
-## Running with Config
+## Mounts
 
 Squadron in Docker uses a single mount point:
 
@@ -27,38 +27,41 @@ Squadron in Docker uses a single mount point:
 |-------|---------|
 | `/config` | Your HCL configuration files and `.squadron/` state directory |
 
-All runtime state (vault, plugins, database) lives in `/config/.squadron/`, right alongside your HCL config files. This means you only need one mount.
+All runtime state (vault, plugins, database) lives in `/config/.squadron/`, right alongside your HCL config files. The container's working directory is `/config`, so the `-c` flag is not needed.
 
-The container's working directory is `/config`, so the `-c` flag is not needed.
-
-Use `--init` to automatically initialize the encrypted vault on first run:
-
-### Launch with local command center
+## Run with the Command Center UI
 
 ```bash
-docker run \
-  -v /path/to/your/config:/config \
+docker run -it \
+  -v ./my-project:/config \
   -p 8080:8080 \
-  ghcr.io/mlund01/squadron serve --init -w --cc-port 8080 --no-browser
+  ghcr.io/mlund01/squadron engage --cc
 ```
 
-Then open `http://localhost:8080` in your browser.
+- `-it` is optional — with it, the quickstart wizard runs on an empty project. Without it, Squadron auto-initializes and you set everything up from the UI.
+- `-p 8080:8080` publishes the command center to the host. Open `http://localhost:8080`.
 
-### Connect to a remote commander
+The official image sets `SQUADRON_CONTAINER=1`, which makes Squadron run in the foreground and skip browser auto-open. You never need to pass `--foreground` here.
 
-If your HCL config has a `commander` block, no port mapping is needed — Squadron connects outbound:
+If some variables are missing, Squadron still starts — the UI lets you set them after the container is up.
+
+## Connect to a Remote Command Center
+
+If your HCL config declares a `command_center` block, Squadron connects outbound — no `--cc` and no port mapping needed:
 
 ```bash
 docker run \
-  -v /path/to/your/config:/config \
-  ghcr.io/mlund01/squadron serve --init
+  -v ./my-project:/config \
+  ghcr.io/mlund01/squadron engage
 ```
 
-### Run a mission directly
+Passing `--cc` alongside a `command_center` block is an error.
+
+## Run a Single Mission
 
 ```bash
 docker run \
-  -v /path/to/your/config:/config \
+  -v ./my-project:/config \
   ghcr.io/mlund01/squadron mission --init my_mission
 ```
 
@@ -69,8 +72,8 @@ services:
   squadron:
     image: ghcr.io/mlund01/squadron:latest
     volumes:
-      - ./my-config:/config
-    command: ["serve", "--init", "-w", "--cc-port", "8080", "--no-browser"]
+      - ./my-project:/config
+    command: ["engage", "--cc"]
     ports:
       - "8080:8080"
 ```
@@ -81,23 +84,29 @@ docker compose up
 
 ## Setting Variables
 
-Variables are stored in an encrypted vault at `/config/.squadron/vars.vault`. Set them by exec-ing into a running container:
+Variables are stored in an encrypted vault at `/config/.squadron/vars.vault`. There are two ways to set them:
+
+**Via the command center UI** (easiest): Open the UI at `http://localhost:8080`, navigate to Variables, and add them there.
+
+**Via `vars set` in a running container**:
 
 ```bash
 docker exec <container> squadron vars set anthropic_api_key sk-ant-...
 ```
 
-## Securing Secrets
+## Securing the Vault Passphrase
 
-By default, `--init` uses a hardcoded fallback passphrase. This encrypts your secrets at rest but the key is publicly known (Squadron is open source). For full security, mount a passphrase file as a Docker secret:
+By default, when Squadron auto-initializes the vault, it writes the passphrase to `/config/.squadron/vault.key` with `0600` permissions. This works fine when the volume is local and trusted.
+
+For stronger production setups, mount a passphrase file as a Docker secret:
 
 ```yaml
 services:
   squadron:
     image: ghcr.io/mlund01/squadron:latest
     volumes:
-      - ./my-config:/config
-    command: ["serve", "--init", "-w", "--cc-port", "8080", "--no-browser"]
+      - ./my-project:/config
+    command: ["engage", "--cc"]
     secrets:
       - vault_passphrase
     ports:
@@ -108,7 +117,7 @@ secrets:
     file: ./vault_passphrase.txt
 ```
 
-Squadron automatically checks `/run/secrets/vault_passphrase`. If the file exists, it uses that passphrase instead of the fallback. Docker mounts secrets as tmpfs (RAM-backed), so the passphrase never touches the container's disk.
+Squadron checks `/run/secrets/vault_passphrase` automatically. If the file exists, it uses that passphrase instead of the on-disk key. Docker mounts secrets as tmpfs, so the passphrase never touches the container's disk.
 
 ## Pinning a Version
 

@@ -4,62 +4,57 @@ title: Quick Start
 
 # Quick Start
 
-Create your first agent in 5 minutes.
+Get from zero to a running agent in under a minute.
 
-## 1. Create Config Directory
-
-```bash
-mkdir my-agents && cd my-agents
-```
-
-## 2. Define Variables
-
-`variables.hcl`:
-
-```hcl
-variable "anthropic_api_key" {
-  secret = true
-}
-```
-
-## 3. Define a Model
-
-`models.hcl`:
-
-```hcl
-model "anthropic" {
-  provider = "anthropic"
-  api_key  = vars.anthropic_api_key
-}
-```
-
-## 4. Define an Agent
-
-`agents.hcl`:
-
-```hcl
-agent "assistant" {
-  model       = models.anthropic.claude_sonnet_4
-  personality = "Helpful and concise"
-  role        = "General purpose assistant"
-  tools       = [builtins.http.get]
-}
-```
-
-## 5. Validate
+## 1. Create a Project Directory
 
 ```bash
-squadron verify .
+mkdir my-squadron && cd my-squadron
 ```
 
-## 6. Chat
+## 2. Launch Squadron
 
 ```bash
-squadron chat -c . assistant
+squadron engage --cc
 ```
 
-## Next Steps
+On a fresh directory, `engage` runs an interactive wizard that:
 
-- [Agents](/config/agents) - Configure agent behavior
-- [Tools](/config/tools) - Add custom tools
-- [Missions](/missions/overview) - Build multi-step pipelines
+- Asks which LLM provider you want (Anthropic, OpenAI, or Gemini)
+- Prompts for your API key and stores it in an encrypted vault
+- Optionally generates a starter mission (`hn_research`) that fetches the Hacker News front page, researches the top 3 stories in parallel, and produces an executive summary
+
+When the wizard finishes, Squadron runs in the background and opens the command center UI in your browser at `http://localhost:8080`. Squadron also installs a system service (launchd on macOS, systemd on Linux) so it starts automatically on boot.
+
+## 3. Try It Out
+
+From the command center UI you can:
+
+- Run missions with input forms and watch execution live
+- Edit HCL config files in the browser (with validation)
+- Manage variables
+- Browse mission run history with task-level detail
+
+Or run missions from the terminal:
+
+```bash
+squadron mission hn_research
+```
+
+## 4. Stopping
+
+Run from the same directory you engaged from:
+
+```bash
+squadron disengage
+```
+
+This stops the daemon and removes the system service so it no longer starts on boot.
+
+## What's Next
+
+- [engage](/cli/engage) — How the daemon works, all flags, remote command center setup
+- [Agents](/config/agents) — Configure agent behavior
+- [Tools](/config/tools) — Add custom tools
+- [Missions](/missions/overview) — Build multi-step pipelines
+- [Docker](/getting-started/docker) — Run Squadron in containers

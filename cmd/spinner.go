@@ -22,10 +22,10 @@ const spinnerFrames = `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`
 func startSpinner(initial string) *spinner {
 	sp := &spinner{done: make(chan struct{}), exited: make(chan struct{})}
 	sp.message.Store(&initial)
-	sp.tty = term.IsTerminal(int(os.Stderr.Fd()))
+	sp.tty = term.IsTerminal(int(os.Stdout.Fd()))
 
 	if !sp.tty {
-		fmt.Fprintln(os.Stderr, initial+"...")
+		fmt.Println(initial + "...")
 		close(sp.exited)
 		return sp
 	}
@@ -47,7 +47,7 @@ func (s *spinner) Stop() {
 	}
 	close(s.done)
 	<-s.exited // wait for goroutine to finish writing
-	fmt.Fprint(os.Stderr, "\r\033[K")
+	fmt.Print("\r\033[K")
 }
 
 func (s *spinner) run() {
@@ -66,7 +66,7 @@ func (s *spinner) run() {
 			if p := s.message.Load(); p != nil {
 				msg = *p
 			}
-			fmt.Fprintf(os.Stderr, "\r\033[K%s %s", string(frames[i]), msg)
+			fmt.Printf("\r\033[K%s %s", string(frames[i]), msg)
 			i = (i + 1) % len(frames)
 		}
 	}

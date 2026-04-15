@@ -4,7 +4,7 @@ AI agent workflows as configuration, not code.
 
 Squadron is a framework for defining and running multi-agent missions in HCL. You declare agents, tools, and task graphs in config files — Squadron handles orchestration, state management, branching, and recovery.
 
-**[Documentation](https://mlund01.github.io/squadron/)**
+**[Documentation](https://docs.squadron.sh)**
 
 ## Install
 
@@ -12,7 +12,7 @@ Squadron is a framework for defining and running multi-agent missions in HCL. Yo
 curl -fsSL https://raw.githubusercontent.com/mlund01/squadron/main/install.sh | bash
 ```
 
-Or download from [GitHub Releases](https://github.com/mlund01/squadron/releases). See the [installation docs](https://mlund01.github.io/squadron/getting-started/installation) for more options.
+Or download from [GitHub Releases](https://github.com/mlund01/squadron/releases). See the [installation docs](https://docs.squadron.sh/getting-started/installation) for more options.
 
 ## Quick Start
 
@@ -74,7 +74,7 @@ docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
   ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
 ```
 
-Alpine (default) and Debian images are published to `ghcr.io/mlund01/squadron` on every release. See the [Docker docs](https://mlund01.github.io/squadron/getting-started/docker) for details.
+Alpine (default) and Debian images are published to `ghcr.io/mlund01/squadron` on every release. See the [Docker docs](https://docs.squadron.sh/getting-started/docker) for details.
 
 ## Key Features
 

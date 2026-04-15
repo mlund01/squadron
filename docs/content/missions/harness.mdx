@@ -1,0 +1,169 @@
+---
+title: The Harness
+---
+
+# The Harness
+
+Squadron runs missions through a deterministic runtime — the **harness** — that coordinates many small LLM calls instead of turning one LLM loose in a long loop. This page explains what the harness does, and why missions are built around a two-tier commander/agent split.
+
+## Two tiers: commanders and agents
+
+Every task gets its own **commander**. When work needs a tool, the commander sends it to an **agent** via `call_agent`. The roles are distinct:
+
+| | Commander | Agent |
+|---|---|---|
+| Job | Orchestrate the task | Do whatever work the commander sends |
+| Tools | Internal only (`call_agent`, `query_task_output`, `task_complete`, ...) | Plugin / MCP / built-in tools |
+| Context | Subtask plan, agent answers, structured outputs | Its own tool calls and results |
+| Typical model | Fast, cheap (planning) | Stronger or domain-specific (execution) |
+
+The commander plans subtasks up front, but subtasks are not 1:1 with agent calls. A subtask might take several back-and-forth `call_agent` invocations (the commander reads an answer, decides more work is needed, and sends the agent another task). A trivial subtask — summarizing dependency outputs, making a routing decision, writing a final answer — might take zero agent calls, because the commander can reason about it directly without plugin tools.
+
+An agent invocation is scoped to the specific task the commander gave it. It reasons, calls tools, and iterates until it has an answer, then returns that answer and exits. The commander decides what to do next.
+
+```hcl
+agent "browser" {
+  model = models.anthropic.claude_sonnet_4
+  role  = "Browser automation specialist"
+  tools = [plugins.playwright.all]
+}
+
+mission "scrape" {
+  commander { model = models.anthropic.claude_haiku_4_5 }
+  agents    = [agents.browser]
+
+  task "extract" {
+    objective = "Log into ${inputs.url} and extract the user's order history"
+  }
+}
+```
+
+The commander here is a Haiku. It never touches Playwright. It sends work to the browser agent via `call_agent` — possibly once, possibly several times — reading each answer and deciding whether more is needed before the task is done. The Playwright tool calls and their raw results stay inside the agent.
+
+## Why commanders don't have plugin tools
+
+Commanders can only call internal orchestration tools. That restriction is load-bearing:
+
+- **Orchestration context stays clean.** The commander's context holds the subtask plan, agent answers, structured outputs, and the routing decision. Raw tool results (HTML, JSON blobs, stack traces) never touch it — they stay inside the agent that made the call.
+- **Roles can use different models.** Orchestration benefits from a fast planner; execution often wants a stronger model for a specific domain. Mixing models per role is only possible because the roles are separate LLMs.
+- **Summaries stay signal-heavy.** When a task ends, the commander writes a `summary` that propagates to downstream tasks. Keeping tool noise in agents means summaries are about conclusions, not transcripts.
+
+Rule of thumb: commanders talk to agents, agents talk to tools.
+
+## What the harness runs
+
+Between "LLM decides" and "something happens," the harness handles the mechanics that would otherwise be imperative code or fragile prompt instructions.
+
+### Dependency graph
+
+Tasks declare `depends_on` in HCL. Before the mission starts, the harness topologically sorts the graph, rejects cycles, and excludes dynamic targets (tasks reachable only via `router` or `send_to`). Tasks run in parallel the moment their dependencies complete. See [Tasks](/missions/tasks) and [Routing](/missions/routing).
+
+### Static context passing
+
+When a commander calls `task_complete`, its `summary` is persisted and handed to every downstream task's commander as static context — no LLM queries, no transcript replay. Commanders can still use `ask_commander` for deeper follow-up, but good summaries make that unnecessary most of the time.
+
+### Structured knowledge store
+
+Tasks can declare output schemas:
+
+```hcl
+task "analyze" {
+  objective = "Find all active users in the last 30 days"
+  output {
+    field "users" {
+      type     = "list"
+      required = true
+    }
+    field "total_count" {
+      type = "integer"
+    }
+  }
+}
+```
+
+The commander submits data matching the schema via `submit_output`. Downstream commanders pull it back with `query_task_output` — filters, aggregations, sorting, pagination — without the raw records ever entering an LLM context.
+
+### Large-result interception
+
+When a tool returns a payload above the configured threshold (~16,000 tokens by default), the harness stores the full data outside context and returns a sample plus a handle. The LLM uses `result_items`, `result_chunk`, or `result_get` to fetch exactly what it needs. An agent can process a 2MB page without blowing the window.
+
+### Persistence and resume
+
+Every LLM message, tool call, route decision, and structured output is written to the data store as the mission runs.
+
+```bash
+squadron mission my_mission -c ./config --resume <mission-id>
+```
+
+Completed tasks are skipped. Interrupted LLM streams continue from the cut-off point. Agents with in-flight tool calls get their conversation healed with a placeholder observation so the loop resumes cleanly.
+
+### Routing as a runtime construct
+
+Routing is enforced by the harness, not a prompt convention:
+
+```hcl
+task "classify" {
+  router {
+    route { target = tasks.refund;   condition = "Customer wants a refund" }
+    route { target = tasks.escalate; condition = "Complaint is severe" }
+    route { target = tasks.close;    condition = "Issue is resolved" }
+  }
+}
+```
+
+Route options are injected into the commander's system prompt. `task_complete` requires a `route` value, the harness validates it against declared targets, and activates the branch. `send_to` does the same unconditionally for fan-out. See [Routing](/missions/routing).
+
+### Parallel iteration
+
+Iterated tasks run in parallel or sequentially with bounded concurrency:
+
+```hcl
+task "enrich" {
+  iterator {
+    dataset           = datasets.customers
+    parallel          = true
+    concurrency_limit = 10
+    smoketest         = true
+  }
+  objective = "Enrich customer ${item.id} with CRM data"
+}
+```
+
+Sequential iterations pass `<LEARNINGS>` blocks forward so the agent compounds knowledge across the run. See [Iteration](/missions/iteration).
+
+## How it fits together
+
+```
+┌─────────────────────────────────────────────┐
+│                 the harness                 │
+│                                             │
+│  ┌────────────┐                             │
+│  │ commander  │   subtask plan              │
+│  │   (LLM)    │ ──────────────────┐         │
+│  └────────────┘                   │         │
+│        ▲                          ▼         │
+│        │                   ┌────────────┐   │
+│        │   answer          │   agent    │   │
+│        └────────────────── │   (LLM)    │   │
+│                            └─────┬──────┘   │
+│                                  │          │
+│                                  ▼          │
+│                            ┌────────────┐   │
+│                            │   tools    │   │
+│                            └────────────┘   │
+│                                             │
+│  persistence · routing · knowledge store    │
+│  result interception · dependency DAG       │
+└─────────────────────────────────────────────┘
+```
+
+LLMs make the judgment calls: plan subtasks, pick an agent, choose a route, write a summary. The harness handles the rest — who runs when, what context they see, where results go, what happens on failure, how the next task starts.
+
+## See also
+
+- [Missions Overview](/missions/overview) — the mission block, inputs, execution basics
+- [Tasks](/missions/tasks) — task fields, dependencies, structured outputs
+- [Routing](/missions/routing) — `router` and `send_to` in depth
+- [Iteration](/missions/iteration) — parallel and sequential dataset iteration
+- [Internal Tools](/missions/internal-tools) — every tool the harness gives commanders and agents
+- [Agents](/config/agents) — defining agents, assigning tools, choosing models

@@ -12,6 +12,10 @@ Start Squadron as a long-running background service. By default, Squadron runs h
 squadron engage [flags]
 ```
 
+Run `engage` from the root of your Squadron project directory. State (vault, PID file, logs, store) lives in `<project>/.squadron/`, so the directory you're in determines which project the daemon belongs to.
+
+> **Important:** `squadron disengage` must be run from the **same directory** you engaged from — it finds the running daemon via `<project>/.squadron/engage.pid`. If you're somewhere else, either `cd` back or pass `-c /path/to/project`.
+
 ## Flags
 
 | Flag | Description |

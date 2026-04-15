@@ -12,6 +12,8 @@ Stop a running Squadron daemon and remove its system service.
 squadron disengage [flags]
 ```
 
+> **Must be run from the same directory you engaged from.** `disengage` finds the running daemon by reading `<project>/.squadron/engage.pid` — so if you're in a different directory, either `cd` back or pass `-c /path/to/project`.
+
 ## Flags
 
 | Flag | Description |

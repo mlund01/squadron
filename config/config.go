@@ -15,6 +15,7 @@ import (
 	schemafunc "squadron/config/functions"
 	vaultpkg "squadron/config/vault"
 	squadronmcp "squadron/mcp"
+	"squadron/mcp/oauth"
 	"squadron/plugin"
 
 	"github.com/zclconf/go-cty/cty/function"
@@ -1021,6 +1022,17 @@ func loadFromFiles(files []string) (*Config, error) {
 				return nil, err
 			}
 			allMCPServers = append(allMCPServers, *srv)
+
+			// Persist config-level OAuth client credentials to the vault so
+			// the login flow and transport pick them up automatically.
+			if srv.ClientID != "" {
+				if err := oauth.SaveClientCredentials(srv.Name, oauth.ClientCredentials{
+					ClientID:     srv.ClientID,
+					ClientSecret: srv.ClientSecret,
+				}); err != nil {
+					return nil, fmt.Errorf("mcp '%s': saving client credentials: %w", srv.Name, err)
+				}
+			}
 
 			client, err := squadronmcp.Load(srv.Name, squadronmcp.Spec{
 				Command: srv.Command,
@@ -2681,6 +2693,8 @@ func parseMCPServerBlock(block *hcl.Block, ctx *hcl.EvalContext) (*MCPServer, er
 			{Name: "args"},
 			{Name: "env"},
 			{Name: "headers"},
+			{Name: "client_id"},
+			{Name: "client_secret"},
 		},
 	})
 	if diags.HasErrors() {
@@ -2776,6 +2790,12 @@ func parseMCPServerBlock(block *hcl.Block, ctx *hcl.EvalContext) (*MCPServer, er
 		return nil, err
 	}
 	if srv.Headers, err = getStringMap("headers"); err != nil {
+		return nil, err
+	}
+	if srv.ClientID, err = getString("client_id"); err != nil {
+		return nil, err
+	}
+	if srv.ClientSecret, err = getString("client_secret"); err != nil {
 		return nil, err
 	}
 

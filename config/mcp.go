@@ -49,6 +49,10 @@ type MCPServer struct {
 	Version string
 	Entry   string // github source only
 
+	// OAuth fields (HTTP-only, for servers that don't support DCR).
+	ClientID     string
+	ClientSecret string
+
 	// Common fields.
 	Args []string
 	Env  map[string]string
@@ -112,6 +116,14 @@ func (m *MCPServer) Validate() error {
 		if len(m.Headers) > 0 {
 			return fmt.Errorf("mcp '%s': headers is only valid on http (url) servers", m.Name)
 		}
+		if m.ClientID != "" {
+			return fmt.Errorf("mcp '%s': client_id is only valid on http (url) servers", m.Name)
+		}
+	}
+
+	// client_secret without client_id is meaningless.
+	if m.ClientSecret != "" && m.ClientID == "" {
+		return fmt.Errorf("mcp '%s': client_secret requires client_id", m.Name)
 	}
 
 	// Version rules.

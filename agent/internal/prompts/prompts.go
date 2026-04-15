@@ -57,13 +57,10 @@ func formatSkillsSection(skills []SkillInfo) string {
 
 	var sb strings.Builder
 	sb.WriteString("## Available Skills\n\n")
-	sb.WriteString("You can load specialized skills on-demand using the `load_skill` tool. ")
-	sb.WriteString("Each skill provides additional tools and detailed instructions for specific tasks.\n\n")
-	sb.WriteString("**Load a skill when its description matches what you need to do:**\n\n")
+	sb.WriteString("Use `load_skill` to activate a skill when its description matches your needs:\n\n")
 	for _, s := range skills {
 		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", s.Name, s.Description))
 	}
-	sb.WriteString("\nUse `load_skill` with the skill name to activate it. Once loaded, follow the skill's instructions and use its newly available tools.\n")
 	return sb.String()
 }
 
@@ -75,8 +72,7 @@ func formatSecretsSection(secrets []SecretInfo) string {
 
 	var sb strings.Builder
 	sb.WriteString("## Available Secrets\n\n")
-	sb.WriteString("Use `${secrets.<name>}` in tool input JSON. The actual values will be injected at runtime.\n\n")
-	sb.WriteString("**Available:**\n")
+	sb.WriteString("Use `${secrets.<name>}` in tool input JSON. Values are injected at runtime. Never output actual secret values.\n\n")
 	for _, s := range secrets {
 		if s.Description != "" {
 			sb.WriteString(fmt.Sprintf("- `${secrets.%s}` - %s\n", s.Name, s.Description))
@@ -84,7 +80,6 @@ func formatSecretsSection(secrets []SecretInfo) string {
 			sb.WriteString(fmt.Sprintf("- `${secrets.%s}`\n", s.Name))
 		}
 	}
-	sb.WriteString("\n**Important:** Never output actual secret values. Always use the placeholder syntax.\n")
 	return sb.String()
 }
 
@@ -92,11 +87,10 @@ func formatSecretsSection(secrets []SecretInfo) string {
 func getModeInstructions(mode config.AgentMode) string {
 	switch mode {
 	case config.ModeMission:
-		return `**MISSION MODE:** You are running as part of an automated mission. You have been given a task to complete.
-- You MUST use REASONING before every action or answer
-- Continue cycling through REASONING and ACTION until the task is fully complete
-- Only provide an ANSWER when the task is done
-- Be thorough and autonomous - do not ask clarifying questions, make reasonable assumptions`
+		return `**MISSION MODE:** You are running as part of an automated mission.
+- Use REASONING when the situation is complex or ambiguous. Skip it for straightforward actions.
+- Continue working until the task is fully complete. Only provide an ANSWER when done.
+- Be autonomous — make reasonable assumptions.`
 
 	case config.ModeChat:
 		fallthrough
@@ -113,72 +107,18 @@ func getResponsePatterns(mode config.AgentMode) string {
 	var sb strings.Builder
 
 	if mode == config.ModeMission {
-		sb.WriteString(`### Pattern 1: Reasoning + Tool Call (continue working)
-Put your reasoning in REASONING tags, then call the appropriate tool via function calling.
-
-` + "```" + `
-<REASONING>
-Analyze the current state and what needs to be done next...
-</REASONING>
-[then call the tool via function calling]
-` + "```" + `
-
-### Pattern 2: Reasoning + Answer (task complete)
-Use this ONLY when the task is fully complete.
-
-` + "```" + `
-<REASONING>
-The task is complete because...
-</REASONING>
-<ANSWER>
-Summary of what was accomplished and the final result.
-</ANSWER>
-` + "```" + `
-
-### Pattern 3: Ask Commander for Clarification
-When you need more information from the commander, use the ` + "`ask_commander`" + ` tool.
-**Only ask when truly necessary. Make reasonable assumptions when possible, but ask if critical details are missing.**
-
-### Pattern 4: Multi-step Reasoning
-For complex analysis, you may use multiple REASONING blocks before making a tool call.
+		sb.WriteString(`**Working:** Optionally use REASONING tags for complex decisions, then call a tool via function calling.
+**Done:** Use ANSWER tags with your final result.
+**Need info:** Use ` + "`ask_commander`" + ` — only when critical details are missing.
 
 ## Commander Responses
 
-When you ask the commander a question via ask_commander, you may receive one of two responses:
-
-### ` + "`<COMMANDER_RESPONSE>`" + ` - Answer to Your Question
-
-The commander is providing the information you requested. Continue your task from where you left off using this new information.
-
-### ` + "`<NEW_TASK>`" + ` - New Assignment
-
-The commander has decided to give you a different task instead. **Ignore any in-flight work** and start fresh on this new task. Treat it as a completely new assignment.`)
+- ` + "`<COMMANDER_RESPONSE>`" + `: Answer to your question. Continue your task using this information.
+- ` + "`<NEW_TASK>`" + `: New assignment. **Drop in-flight work** and start fresh on this task.`)
 	} else {
-		// Chat mode
-		sb.WriteString(`### Pattern 1: Direct Answer
-Use this when you can answer without tools:
-
-` + "```" + `
-<ANSWER>
-Your response to the user
-</ANSWER>
-` + "```" + `
-
-### Pattern 2: Reasoning + Answer
-Use this for complex questions that benefit from showing your thought process:
-
-` + "```" + `
-<REASONING>
-Your reasoning about the situation
-</REASONING>
-<ANSWER>
-Your response to the user
-</ANSWER>
-` + "```" + `
-
-### Pattern 3: Tool Call
-When you need to use a tool, put reasoning in REASONING tags then call the tool via function calling.
-**Any explanation MUST be inside REASONING tags — never output raw text before a tool call.**`)
+		sb.WriteString(`**Direct answer:** Wrap response in ANSWER tags.
+**Complex question:** Use REASONING tags, then ANSWER tags.
+**Tool needed:** Use REASONING tags, then call the tool. Never output raw text before a tool call.`)
 	}
 
 	return sb.String()
@@ -189,8 +129,8 @@ func getRules(mode config.AgentMode) string {
 	var rules []string
 
 	if mode == config.ModeMission {
-		rules = append(rules, "**Always reason first.** Every response MUST start with a REASONING block.")
-		rules = append(rules, "**Complete the task.** Keep working (REASONING → tool call) until the task is done.")
+		rules = append(rules, "**Reason when it helps.** Use REASONING for complex decisions, ambiguous situations, or multi-step planning. Skip it for straightforward tool calls.")
+		rules = append(rules, "**Complete the task.** Keep working until the task is done.")
 		rules = append(rules, "**ANSWER means done.** Only use ANSWER when the entire task is complete.")
 		rules = append(rules, "**Be autonomous.** Don't ask questions - make reasonable assumptions and proceed.")
 	} else {
@@ -254,58 +194,30 @@ func GetCommanderPrompt(agents []AgentInfo, iterOpts IterationOptions) string {
 	return prompt
 }
 
-
 // getParallelIterationContent returns content about reusing questions from other iterations
 func getParallelIterationContent() string {
-	return `## Reusing Questions from Other Iterations
+	return `## Parallel Iteration: Shared Questions
 
-When running as part of an iterated task, other iterations may have already asked questions to dependency commanders. You can reuse their answers to avoid redundant queries.
-
-### Listing Asked Questions
-
-Use ` + "`list_commander_questions`" + ` to see what questions have been asked. It returns a numbered list of questions (without answers).
-
-### Getting Cached Answers
-
-Use ` + "`get_commander_answer`" + ` with the question index to get the cached answer. If the answer is still being fetched by another iteration, this will wait until it's ready.
-
-**Tip:** Check ` + "`list_commander_questions`" + ` first before using ` + "`ask_commander`" + `. If another iteration already asked a similar question, use ` + "`get_commander_answer`" + ` instead to avoid duplicate work.
+Other iterations may have already asked questions to dependency commanders. Before using ` + "`ask_commander`" + `, check ` + "`list_commander_questions`" + ` for existing questions and use ` + "`get_commander_answer`" + ` to retrieve cached answers instead of asking again.
 
 `
 }
 
 // getSequentialIterationContent returns content about learnings for sequential iterations
 func getSequentialIterationContent() string {
-	return `## Learnings for Next Iteration
+	return `## Sequential Iteration: Learnings
 
-When commanding a sequential iteration, you may receive learnings from the previous iteration. These contain insights, failure solutions, and recommendations that can help you succeed.
-
-**Applying Learnings:**
-- Review any "Learnings from Previous Iteration" in your context
-- Apply insights to avoid repeating mistakes
-- Leverage successful strategies mentioned
-
-**Capturing Learnings:**
-When completing your task, include a ` + "`<LEARNINGS>`" + ` block after your ANSWER to help the next iteration:
+Review any "Learnings from Previous Iteration" in your context and apply them. When completing your task, include a ` + "`<LEARNINGS>`" + ` block to help the next iteration:
 
 ` + "```" + `
-<ANSWER>
-[Your answer here]
-</ANSWER>
 <LEARNINGS>
 {
-  "key_insights": ["Useful observations for similar problems"],
+  "key_insights": ["Useful observations"],
   "failures": [{"problem": "What went wrong", "solution": "How it was fixed"}],
   "recommendations": "Advice for the next iteration"
 }
 </LEARNINGS>
 ` + "```" + `
-
-Include learnings when you or your agents:
-- Discovered unexpected behavior or edge cases
-- Encountered and solved problems
-- Identified optimizations or better approaches
-- Have context that would otherwise be lost between iterations
 
 `
 }
@@ -317,24 +229,12 @@ func formatAgents(agents []AgentInfo) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("### call_agent\n\n")
-	sb.WriteString("Call an agent to perform a task or respond to an agent's question.\n\n")
-	sb.WriteString("**Input Schema:**\n```json\n")
-	sb.WriteString("{\n")
-	sb.WriteString("  \"name\": \"string (required) - The name of the agent to call\",\n")
-	sb.WriteString("  \"task\": \"string - A new task for the agent. Always treated as a fresh assignment.\",\n")
-	sb.WriteString("  \"response\": \"string - Response to an agent's ASK_COMMANDER question. Agent continues from where it left off.\"\n")
-	sb.WriteString("}\n```\n\n")
-	sb.WriteString("Provide exactly one of `task` or `response`, not both.\n\n")
-	sb.WriteString("**Available agents:**\n\n")
-
 	for _, agent := range agents {
 		sb.WriteString(fmt.Sprintf("- **%s**: %s\n", agent.Name, agent.Description))
 	}
 
 	return sb.String()
 }
-
 
 // FormatFolderContext builds a system prompt section describing available folders.
 func FormatFolderContext(store aitools.FolderStore) string {

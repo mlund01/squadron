@@ -116,10 +116,14 @@ chat runs to fail with a pointer to this command.`,
 			return fmt.Errorf("mcp %q: %w", name, probeErr)
 		}
 
-		// If the user provided a client_id (for servers that don't support DCR),
-		// save it before running the flow so the orchestrator picks it up.
+		// Save client credentials to the vault so the orchestrator picks
+		// them up. CLI flags take precedence over HCL config values.
 		clientID, _ := cmd.Flags().GetString("client-id")
 		clientSecret, _ := cmd.Flags().GetString("client-secret")
+		if clientID == "" && spec.ClientID != "" {
+			clientID = spec.ClientID
+			clientSecret = spec.ClientSecret
+		}
 		if clientID != "" {
 			if err := oauth.SaveClientCredentials(name, oauth.ClientCredentials{
 				ClientID:     clientID,

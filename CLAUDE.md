@@ -121,6 +121,13 @@ mcp "remote_api" {
   }
 }
 
+# HTTP transport with OAuth client credentials (for servers that don't support DCR)
+mcp "slack" {
+  url           = "https://tools.slack.dev/agent-tools-mcp/sse"
+  client_id     = vars.slack_client_id
+  client_secret = vars.slack_client_secret
+}
+
 # mcp_host.hcl — OPPOSITE direction: Squadron hosts its own MCP server
 mcp_host {
   enabled = true

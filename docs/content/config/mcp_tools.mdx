@@ -159,12 +159,26 @@ mcp "linear": authorization required
     squadron mcp login linear
 ```
 
+### Pre-registered client credentials
+
+Some OAuth servers don't support Dynamic Client Registration (DCR). For these, provide your own `client_id` (and optionally `client_secret`) directly in the HCL block:
+
+```hcl
+mcp "slack" {
+  url           = "https://tools.slack.dev/agent-tools-mcp/sse"
+  client_id     = vars.slack_client_id
+  client_secret = vars.slack_client_secret
+}
+```
+
+These credentials are saved to the encrypted vault at config load time and used automatically by `squadron mcp login`. CLI flags (`--client-id`, `--client-secret`) override the HCL values if both are provided.
+
 ### `squadron mcp login <name>`
 
 Runs the full OAuth 2.1 flow:
 
 1. Discovers the authorization server from the MCP URL's `.well-known` metadata
-2. Registers Squadron as a client via [Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) (if no cached credentials exist)
+2. Registers Squadron as a client via [Dynamic Client Registration](https://datatracker.ietf.org/doc/html/rfc7591) (if no cached credentials or `client_id` in config)
 3. Opens your browser to the authorization page
 4. Waits for the redirect on a local loopback server
 5. Exchanges the authorization code (with PKCE) for an access token

@@ -893,29 +893,7 @@ func (c *Client) handleValidateConfig(env *protocol.Envelope) (*protocol.Envelop
 		configDir = filepath.Dir(c.configPath)
 	}
 
-	// Copy existing .hcl files to temp dir (recursively)
-	filepath.WalkDir(configDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() && d.Name() != "." && strings.HasPrefix(d.Name(), ".") {
-			return filepath.SkipDir
-		}
-		if !d.IsDir() && strings.HasSuffix(d.Name(), ".hcl") {
-			rel, err := filepath.Rel(configDir, path)
-			if err != nil {
-				return nil
-			}
-			content, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			destPath := filepath.Join(tmpDir, rel)
-			os.MkdirAll(filepath.Dir(destPath), 0755)
-			os.WriteFile(destPath, content, 0644)
-		}
-		return nil
-	})
+	copyConfigTree(configDir, tmpDir)
 
 	// Overlay modified files from the payload
 	for name, content := range payload.Files {
@@ -941,6 +919,40 @@ func (c *Client) handleValidateConfig(env *protocol.Envelope) (*protocol.Envelop
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeValidateConfigResult, &protocol.ValidateConfigResultPayload{
 		Valid: true,
+	})
+}
+
+// copyConfigTree copies .hcl, .md, and .txt files from src into dst, preserving
+// relative paths. .md and .txt are included because load() can reference them
+// from HCL. Dot-directories are skipped. Errors on individual files are ignored
+// so a single unreadable file doesn't abort validation.
+func copyConfigTree(src, dst string) {
+	filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && d.Name() != "." && strings.HasPrefix(d.Name(), ".") {
+			return filepath.SkipDir
+		}
+		if d.IsDir() {
+			return nil
+		}
+		name := d.Name()
+		if !strings.HasSuffix(name, ".hcl") && !strings.HasSuffix(name, ".md") && !strings.HasSuffix(name, ".txt") {
+			return nil
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+		destPath := filepath.Join(dst, rel)
+		os.MkdirAll(filepath.Dir(destPath), 0755)
+		os.WriteFile(destPath, content, 0644)
+		return nil
 	})
 }
 

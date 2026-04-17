@@ -109,6 +109,16 @@ var DefaultPricing = map[string]*ModelPricing{
 
 	// === Google Gemini (verified April 2026) ===
 	// Cache read pricing from Google's pricing page; cache write = input price
+	// Gemini 3.x uses tiered pricing (≤200k / >200k); we use the ≤200k tier.
+	"gemini-3.1-pro-preview": {
+		Input: 2.00, Output: 12.00, CacheRead: 0.20, CacheWrite: 2.00,
+	},
+	"gemini-3.1-flash-lite-preview": {
+		Input: 0.25, Output: 1.50, CacheRead: 0.025, CacheWrite: 0.25,
+	},
+	"gemini-3-flash-preview": {
+		Input: 0.50, Output: 3.00, CacheRead: 0.05, CacheWrite: 0.50,
+	},
 	"gemini-2.5-pro": {
 		Input: 1.25, Output: 10.00, CacheRead: 0.125, CacheWrite: 1.25,
 	},
@@ -120,6 +130,9 @@ var DefaultPricing = map[string]*ModelPricing{
 	},
 	"gemini-2.0-flash": {
 		Input: 0.10, Output: 0.40, CacheRead: 0.025, CacheWrite: 0.10,
+	},
+	"gemini-2.0-flash-lite": {
+		Input: 0.075, Output: 0.30, CacheRead: 0.01875, CacheWrite: 0.075,
 	},
 	"gemini-2.0-flash-exp": {
 		Input: 0.10, Output: 0.40, CacheRead: 0.025, CacheWrite: 0.10,

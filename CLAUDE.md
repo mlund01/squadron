@@ -238,6 +238,42 @@ mission "ingest" {
 
 The command center registers the route `POST /webhooks/<instance_name>/<webhook_path>` and dispatches to squadron via WebSocket when hit. One `trigger` block per mission max.
 
+#### Budgets
+
+Missions and tasks can declare spending limits via a `budget` block. Both
+fields are optional but at least one must be set. Whichever limit is reached
+first fails the current task and crashes the whole mission — in-flight
+commanders and agents unwind via the mission's shared cancellable context.
+
+```hcl
+mission "expensive_research" {
+  budget {
+    tokens  = 5000000   # cumulative across every task
+    dollars = 25.00
+  }
+
+  task "crawl" {
+    budget { tokens = 500000 }   # per-task cap, across all iterations
+    objective = "Crawl the target domain"
+  }
+}
+```
+
+- **Scope.** Task budgets sum tokens/cost across the task's commander and every
+  agent it spawns, including all iterations of an iterated task (iteration
+  suffixes are stripped so `crawl[0]`, `crawl[1]`, ... share the same counter).
+  Mission budgets sum across every task in the mission.
+- **Both types matter.** Models without configured pricing (Ollama/local) always
+  contribute $0, so a dollar-only budget cannot constrain them — pair it with a
+  token budget. Conversely, a dollar budget lets you cap spend without having to
+  think about per-model token rates.
+- **First breach wins.** The tracker latches on first breach, cancels the
+  mission context, and returns a `*mission.BudgetBreach` as the mission error.
+  In-flight tasks return `ctx.Canceled`, but the runner substitutes the breach
+  so the mission status is `failed`, not `stopped`.
+- **Zero overhead when unused.** If neither the mission nor any task declares a
+  budget, no tracker is created.
+
 #### Concurrency (`max_parallel`)
 
 `max_parallel` (default 3) limits concurrent instances of a mission across all sources — schedules, webhooks, and manual runs. When at capacity, new runs are skipped and a `schedule_skip` event is emitted.

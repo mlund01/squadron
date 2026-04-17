@@ -31,6 +31,15 @@ type SecretInfo struct {
 	Description string
 }
 
+// BudgetChecker is implemented by anything that tracks cumulative token/dollar
+// usage against a configured budget. Commanders and agents call CheckBudget
+// before each LLM turn and RecordUsage after each turn; a non-nil error from
+// either method causes the owning task to fail immediately.
+type BudgetChecker interface {
+	CheckBudget() error
+	RecordUsage(tokens int, cost float64) error
+}
+
 // CommanderOptions holds configuration for creating a commander
 type CommanderOptions struct {
 	// Config is the loaded configuration
@@ -80,6 +89,10 @@ type CommanderOptions struct {
 	ToolResponseMaxSize int
 	// PricingOverrides maps API model names to custom pricing (optional, from config)
 	PricingOverrides map[string]*llm.ModelPricing
+	// Budget is an optional per-task budget checker. When set, the commander checks it
+	// before each LLM call and records usage after each turn. Returning an error from
+	// either call fails the task immediately.
+	Budget BudgetChecker
 	// MissionLocalAgents are agents scoped to this mission (checked before global agents)
 	MissionLocalAgents []config.Agent
 	// Provider is an optional pre-created LLM provider. When set, commander creation
@@ -319,6 +332,7 @@ type Commander struct {
 	compaction         *CompactionConfig      // Compaction settings (nil if disabled)
 	pruneOn            int                    // Trigger pruning at this many turns (0 = disabled)
 	pruneTo            int                    // Prune down to this many turns
+	budget             BudgetChecker          // Optional token/dollar budget enforcer
 }
 
 // NewCommander creates a new commander for a mission task
@@ -434,6 +448,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		pruneOn:          opts.PruneOn,
 		pruneTo:          opts.PruneTo,
 		pricingOverrides: opts.PricingOverrides,
+		budget:           opts.Budget,
 	}
 
 	// Add result tools to commander's tool map
@@ -692,6 +707,7 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		DebugLogger:      s.debugLogger,
 		PricingOverrides: s.pricingOverrides,
 		Provider:         s.provider,
+		Budget:           s.budget,
 	})
 }
 
@@ -1220,6 +1236,14 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		default:
 		}
 
+		// Pre-call budget check — fails fast before issuing a new LLM request
+		// if this task or the mission has already exhausted its token/dollar budget.
+		if s.budget != nil {
+			if err := s.budget.CheckBudget(); err != nil {
+				return err
+			}
+		}
+
 		// Create reasoning parser for this turn
 		parser := newCommanderReasoningParser(streamer)
 
@@ -1306,6 +1330,17 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 				turnData.CacheWriteCost = cost.CacheWriteCost
 			}
 			streamer.SessionTurn(turnData)
+
+			// Charge this turn against the task/mission budget. A breach returned here
+			// fails the current task and (via the tracker's cancel hook) stops the mission.
+			if s.budget != nil {
+				turnTokens := resp.Usage.InputTokens + resp.Usage.OutputTokens +
+					resp.Usage.CacheReadTokens + resp.Usage.CacheWriteTokens
+				if err := s.budget.RecordUsage(turnTokens, turnData.Cost); err != nil {
+					parser.Finish()
+					return err
+				}
+			}
 		}
 
 		parser.Finish()

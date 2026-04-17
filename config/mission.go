@@ -322,6 +322,7 @@ type Mission struct {
 	Schedules   []Schedule        `json:"schedules,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"`
 	MaxParallel int               `json:"maxParallel,omitempty"` // default 3
+	Budget      *Budget           `json:"budget,omitempty"`
 }
 
 // GetLocalAgent returns a mission-scoped agent by name, or nil if not found.
@@ -345,6 +346,7 @@ type Task struct {
 	Output        *OutputSchema  `json:"output,omitempty"`
 	Router        *TaskRouter    `json:"router,omitempty"`
 	SendTo        []string       `json:"sendTo,omitempty"`
+	Budget        *Budget        `json:"budget,omitempty"`
 }
 
 // TaskRouter defines conditional routing after task completion
@@ -551,6 +553,11 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 	// Validate max_parallel
 	if w.MaxParallel < 0 {
 		return fmt.Errorf("max_parallel must be >= 1")
+	}
+
+	// Validate budget
+	if err := w.Budget.Validate(); err != nil {
+		return err
 	}
 
 	return nil
@@ -860,6 +867,11 @@ func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, d
 			}
 			seen[target] = true
 		}
+	}
+
+	// Validate budget if present
+	if err := t.Budget.Validate(); err != nil {
+		return err
 	}
 
 	// Validate router if present

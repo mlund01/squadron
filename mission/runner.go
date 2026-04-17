@@ -83,6 +83,10 @@ type Runner struct {
 	// Drain signal — closed when mission should gracefully stop
 	drainCh   chan struct{}
 	drainOnce sync.Once
+
+	// Budget tracker — nil when neither the mission nor any task declares a budget.
+	// First breach cancels the mission-scoped context and fails the mission.
+	budgetTracker *BudgetTracker
 }
 
 // routerActivation represents a task activated by a router
@@ -215,6 +219,9 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 	for _, opt := range opts {
 		opt(r)
 	}
+
+	// Build budget tracker (nil if no budgets declared — zero overhead in that case)
+	r.budgetTracker = NewBudgetTracker(mission)
 
 	// Build pricing overrides from model config
 	configOverrides := config.BuildPricingOverrides(cfg.Models)
@@ -365,6 +372,14 @@ func (r *Runner) NextMissionInputs() map[string]string {
 // Run executes the mission.
 // The caller is responsible for closing r.stores after Run returns and all events are flushed.
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
+
+	// Derive a mission-scoped context so the budget tracker can cancel every in-flight
+	// commander and agent the moment a task or mission budget is breached.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if r.budgetTracker != nil {
+		r.budgetTracker.SetCancel(cancel)
+	}
 
 	var missionID string
 	stateStore := newTaskStateStore(r.stores.Missions)
@@ -567,6 +582,15 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		return stateMgr.AllCompleted() && !stateMgr.AnyInFlight() && len(r.routerPending) == 0
 	}
 
+	// budgetFail returns a *BudgetBreach when the tracker latched into breach, or nil.
+	// Used at every cancellation/error site so a breach always wins over ctx.Canceled.
+	budgetFail := func() error {
+		if b := r.budgetTracker.Breach(); b != nil {
+			return b
+		}
+		return nil
+	}
+
 	// Process tasks, launching parallel tasks when their dependencies are met
 	for !isLoopDone() {
 		// Check for drain signal — wait for in-flight tasks then stop gracefully
@@ -580,6 +604,11 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		case <-ctx.Done():
 			stateMgr.StopAll()
 			wg.Wait()
+			if err := budgetFail(); err != nil {
+				r.stores.Missions.UpdateMissionStatus(missionID, "failed")
+				stateMgr.missionState = MissionFailed
+				return err
+			}
 			r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
 			stateMgr.missionState = MissionStopped
 			return ctx.Err()
@@ -626,6 +655,9 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 			select {
 			case err := <-errChan:
 				if err != nil {
+					if budgetErr := budgetFail(); budgetErr != nil {
+						err = budgetErr
+					}
 					r.stores.Missions.UpdateMissionStatus(missionID, "failed")
 					return err
 				}
@@ -638,6 +670,11 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 			case <-ctx.Done():
 				stateMgr.StopAll()
 				wg.Wait()
+				if err := budgetFail(); err != nil {
+					r.stores.Missions.UpdateMissionStatus(missionID, "failed")
+					stateMgr.missionState = MissionFailed
+					return err
+				}
 				r.stores.Missions.UpdateMissionStatus(missionID, "stopped")
 				stateMgr.missionState = MissionStopped
 				return ctx.Err()
@@ -793,6 +830,9 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	close(errChan)
 	for err := range errChan {
 		if err != nil {
+			if budgetErr := budgetFail(); budgetErr != nil {
+				err = budgetErr
+			}
 			_ = stateMgr.TransitionMission(MissionFailed)
 			return err
 		}
@@ -912,6 +952,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			PricingOverrides:    r.pricingOverrides,
 			MissionLocalAgents:  r.mission.LocalAgents,
 			Provider:            r.testProvider(),
+			Budget:              r.budgetTracker.For(taskName),
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -1184,6 +1225,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		PricingOverrides:    r.pricingOverrides,
 		MissionLocalAgents:  r.mission.LocalAgents,
 		Provider:            r.testProvider(),
+		Budget:              r.budgetTracker.For(task.Name),
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -1956,6 +1998,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		PricingOverrides:    r.pricingOverrides,
 		MissionLocalAgents:  r.mission.LocalAgents,
 		Provider:            r.testProvider(),
+		Budget:              r.budgetTracker.For(task.Name),
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -2405,6 +2448,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		PricingOverrides:    r.pricingOverrides,
 		MissionLocalAgents:  r.mission.LocalAgents,
 		Provider:            r.testProvider(),
+		Budget:              r.budgetTracker.For(task.Name),
 	})
 	if err != nil {
 		return append(iterations, IterationResult{
@@ -2631,8 +2675,10 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		PruneOn:                r.commanderPruneOn(),
 		PruneTo:                r.commanderPruneTo(),
 		ToolResponseMaxSize:    r.mission.Commander.GetToolResponseMaxBytes(),
+		PricingOverrides:       r.pricingOverrides,
 		MissionLocalAgents:     r.mission.LocalAgents,
 		Provider:               r.testProvider(),
+		Budget:                 r.budgetTracker.For(task.Name),
 	})
 	if err != nil {
 		streamer.IterationFailed(task.Name, index, err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"regexp"
 	"time"
 
@@ -83,6 +84,7 @@ type orchestrator struct {
 	sessionID        string
 	taskID           string
 	pricingOverrides map[string]*llm.ModelPricing
+	maxTokensRetries int // Count of consecutive max_tokens truncation retries
 }
 
 // newOrchestrator creates a new chat orchestrator
@@ -269,6 +271,47 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		if answer := parser.GetAnswer(); answer != "" {
 			finalAnswer = answer
 		}
+
+		// Handle max_tokens truncation before processing tool uses. Any partial
+		// tool_use can't be trusted (JSON input may be cut off), so we emit
+		// error tool_results to keep the session protocol-valid and ask the
+		// LLM to be more concise. Allow up to 3 corrective attempts.
+		for resp != nil && resp.FinishReason == "max_tokens" {
+			o.maxTokensRetries++
+			if len(toolUses) > 0 {
+				var errResults []llm.ToolResultBlock
+				for _, tc := range toolUses {
+					errResults = append(errResults, llm.ToolResultBlock{
+						ToolUseID: tc.ID,
+						Content:   "Error: tool call was truncated because the response hit the max output token limit; not executed.",
+						IsError:   true,
+					})
+				}
+				o.session.AddToolResults(errResults)
+				toolUses = nil
+			}
+			if o.maxTokensRetries > 3 {
+				return ChatResult{}, fmt.Errorf("agent response hit max output tokens after 3 correction attempts")
+			}
+			log.Printf("[Agent] Response hit max_tokens (attempt %d/3), sending correction...", o.maxTokensRetries)
+			correction := "Your previous response hit the maximum output token limit and was truncated. Be more concise: shorten your reasoning, split the work into smaller tool calls, or finish with <ANSWER>...</ANSWER> if you have enough context."
+			resp, err = o.session.SendStream(ctx, correction, onChunk)
+			if err != nil {
+				o.streamer.Error(err)
+				return ChatResult{}, err
+			}
+			if resp != nil {
+				for _, block := range resp.ContentBlocks {
+					if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+						toolUses = append(toolUses, *block.ToolUse)
+					}
+				}
+				if answer := parser.GetAnswer(); answer != "" {
+					finalAnswer = answer
+				}
+			}
+		}
+		o.maxTokensRetries = 0
 
 		// If no tool calls, we're done with this turn
 		if len(toolUses) == 0 {

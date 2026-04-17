@@ -433,11 +433,11 @@ func (a *Agent) GetTools() map[string]aitools.Tool {
 func createProvider(ctx context.Context, modelConfig *config.Model) (llm.Provider, bool, error) {
 	switch modelConfig.Provider {
 	case config.ProviderOpenAI:
-		return llm.NewOpenAIProvider(modelConfig.APIKey), false, nil
+		return llm.NewOpenAIProvider(modelConfig.APIKey, modelConfig.BaseURL), false, nil
 	case config.ProviderAnthropic:
-		return llm.NewAnthropicProvider(modelConfig.APIKey), false, nil
+		return llm.NewAnthropicProvider(modelConfig.APIKey, modelConfig.BaseURL), false, nil
 	case config.ProviderGemini:
-		provider, err := llm.NewGeminiProvider(ctx, modelConfig.APIKey)
+		provider, err := llm.NewGeminiProvider(ctx, modelConfig.APIKey, modelConfig.BaseURL)
 		if err != nil {
 			return nil, false, err
 		}

@@ -24,7 +24,6 @@ export default async function RootLayout({ children }) {
           dark: '#0a1f0a',
           light: '#ffffff',
         }}
-        faviconGlyph="▶"
       />
       <body>
         <Layout

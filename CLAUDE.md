@@ -777,6 +777,83 @@ When `--resume <missionID>` is used:
 | `DatasetStore` | `store/store.go` | Dataset item persistence |
 | `SQLiteStore` | `store/sqlite.go` | SQLite implementation of all stores |
 
+### Schema Migrations
+
+All schema changes flow through the versioned runner in `store/migrations.go`.
+The runner tracks applied versions in a `schema_migrations` table and applies
+each pending migration in its own transaction together with the bookkeeping
+insert — a partial failure leaves the DB untouched. It runs automatically
+during `NewSQLiteBundle` / `NewPostgresBundle`.
+
+#### File layout
+
+Migration SQL lives under `store/migrations/` as paired, dialect-specific
+files embedded via `//go:embed`:
+
+```
+store/
+  migrations.go                      # runner + loader
+  migrations_checksums_test.go       # tamper guardrail
+  migrations/
+    0001_baseline.sqlite.sql
+    0001_baseline.postgres.sql
+    0002_<name>.sqlite.sql
+    0002_<name>.postgres.sql
+    ...
+```
+
+Filenames MUST match `NNNN_<name>.<sqlite|postgres>.sql`. At startup,
+`LoadMigrations()` pairs each version's sqlite and postgres files, enforces
+that both exist and share the same name, and errors if versions skip.
+
+#### Adding a migration — the ONLY sanctioned way to change a schema
+
+1. Create two new files under `store/migrations/`:
+   - `NNNN_<name>.sqlite.sql`
+   - `NNNN_<name>.postgres.sql`
+
+   where `NNNN` is the previous version + 1, zero-padded to 4 digits, and
+   `<name>` is `lowercase_snake_case` (matches `[a-z0-9_]+`).
+2. Write dialect-specific DDL in each file. Dialects diverge on type names
+   (`REAL` vs `DOUBLE PRECISION`), auto-increment (`AUTOINCREMENT` vs
+   `SERIAL`), and a few `ALTER TABLE` semantics — write each side
+   explicitly. If a change is meaningful for only one dialect, the other
+   file can be empty but must still exist.
+3. Prefer `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` so the migration is
+   safe to re-run if something wedges mid-apply.
+4. Do NOT wrap the SQL in `BEGIN`/`COMMIT` — the runner handles that.
+5. Register both files' sha256 checksums in `migrationChecksums` in
+   [store/migrations_checksums_test.go](store/migrations_checksums_test.go):
+
+   ```
+   shasum -a 256 store/migrations/NNNN_<name>.sqlite.sql
+   shasum -a 256 store/migrations/NNNN_<name>.postgres.sql
+   ```
+
+6. Update the stores (`sqlite.go`, `postgres.go`, `cost_store*.go`, etc.) in
+   the same PR so code and schema advance together.
+
+#### Append-only invariants (enforced by tests)
+
+- **NEVER edit a shipped migration file.** The checksum test compares every
+  file on disk against its recorded sha256 — any byte-level change breaks
+  the build with a message pointing to the offender. If a migration is
+  wrong, write a NEW one that fixes it forward.
+- **NEVER delete a shipped migration file.** `migrationChecksums` entries
+  without a matching file on disk also fail the test. Historical migrations
+  must stay in the tree because users in the field have the old version
+  recorded and the runner still needs to reason about it.
+- **NEVER add a migration file without registering it.** Files under
+  `store/migrations/` without a `migrationChecksums` entry also fail the
+  test — every migration must be locked down.
+- **NEVER add bare `db.Exec("ALTER TABLE ...")`** calls outside the
+  migration list. All schema mutations go through a numbered migration.
+
+Baseline (migration 1) captures the schema that existed when the versioned
+system was introduced. It uses `IF NOT EXISTS` everywhere so existing
+deployments upgrade cleanly: their tables are preserved, baseline is
+recorded as applied, and subsequent migrations run on top.
+
 
 ---
 

@@ -66,9 +66,10 @@ func runUpgrade(cmd *cobra.Command, args []string) error {
 			return err
 		}
 
-		// 4. Download archive to temp file
+		// 4. Download archive and verify its SHA-256 against the release's
+		// checksums.txt before we ever execute it.
 		fmt.Println("Downloading...")
-		archivePath, err := downloadToTemp(downloadURL)
+		archivePath, err := downloadAndVerify(release, downloadURL)
 		if err != nil {
 			return fmt.Errorf("download failed: %w", err)
 		}
@@ -144,7 +145,7 @@ func upgradeCC() error {
 		return err
 	}
 
-	archivePath, err := downloadToTemp(downloadURL)
+	archivePath, err := downloadAndVerify(release, downloadURL)
 	if err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}

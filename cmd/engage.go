@@ -722,7 +722,7 @@ func ensureCommandCenter() (string, error) {
 		return "", err
 	}
 
-	archivePath, err := downloadToTemp(downloadURL)
+	archivePath, err := downloadAndVerify(release, downloadURL)
 	if err != nil {
 		return "", fmt.Errorf("download failed: %w", err)
 	}

@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"squadron/internal/release"
 )
 
 // githubRelease is the subset of GitHub API release response we need.
@@ -83,6 +85,43 @@ func findAssetURL(release githubRelease, projectName string) (string, error) {
 	}
 	return "", fmt.Errorf("no release asset found for %s/%s (looking for %s)\nAvailable: %s",
 		runtime.GOOS, runtime.GOARCH, assetName, strings.Join(available, ", "))
+}
+
+// findChecksumsURL returns the download URL of the release's checksums.txt
+// asset. GoReleaser publishes this file alongside platform archives and it
+// is the integrity anchor for the upgrade flow.
+func findChecksumsURL(release githubRelease) (string, error) {
+	for _, a := range release.Assets {
+		if a.Name == "checksums.txt" {
+			return a.BrowserDownloadURL, nil
+		}
+	}
+	return "", fmt.Errorf("release %s has no checksums.txt asset", release.TagName)
+}
+
+// downloadAndVerify downloads the archive at downloadURL to a temp file,
+// verifies its SHA-256 against checksums.txt in the same release, and
+// returns the temp path. On verification failure the temp file is removed
+// and an error returned — callers must never touch an unverified archive.
+func downloadAndVerify(rel githubRelease, downloadURL string) (string, error) {
+	checksumsURL, err := findChecksumsURL(rel)
+	if err != nil {
+		return "", err
+	}
+	archiveName := filepath.Base(downloadURL)
+	expected, err := release.FetchChecksum(checksumsURL, archiveName)
+	if err != nil {
+		return "", fmt.Errorf("fetch checksum: %w", err)
+	}
+	archivePath, err := downloadToTemp(downloadURL)
+	if err != nil {
+		return "", err
+	}
+	if err := release.VerifyChecksum(archivePath, expected); err != nil {
+		os.Remove(archivePath)
+		return "", err
+	}
+	return archivePath, nil
 }
 
 func downloadToTemp(url string) (string, error) {

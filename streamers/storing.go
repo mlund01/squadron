@@ -342,6 +342,16 @@ func (h *StoringMissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	h.inner.SessionTurn(data)
 }
 
+func (h *StoringMissionHandler) MissionIssue(data MissionIssueData) {
+	var taskName *string
+	if data.TaskName != "" {
+		tn := data.TaskName
+		taskName = &tn
+	}
+	h.storeEvent(EventMissionIssue, taskName, nil, extractIterationIndex(data.TaskName), data)
+	h.inner.MissionIssue(data)
+}
+
 func (h *StoringMissionHandler) AgentStarted(taskName string, agentName string, instruction string) {
 	sessionKey := taskName + ":" + agentName
 	h.storeEvent(protocol.EventAgentStarted, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.AgentStartedData{

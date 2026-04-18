@@ -96,6 +96,34 @@ func TestBudgetTracker_SetCancelFires(t *testing.T) {
 	}
 }
 
+func TestBudgetTracker_OnBreachFiresOnce(t *testing.T) {
+	m := &config.Mission{
+		Budget: &config.Budget{Tokens: intp(10)},
+		Tasks:  []config.Task{{Name: "a"}},
+	}
+	bt := NewBudgetTracker(m)
+
+	var calls int
+	var captured *BudgetBreach
+	bt.SetOnBreach(func(b *BudgetBreach) {
+		calls++
+		captured = b
+	})
+
+	if err := bt.Record("a", 20, 0); err == nil {
+		t.Fatal("expected breach")
+	}
+	// Subsequent Record/Check calls must not re-fire the callback — breach is latched.
+	_ = bt.Record("a", 5, 0)
+	_ = bt.Check("a")
+	if calls != 1 {
+		t.Fatalf("expected OnBreach to fire exactly once, got %d", calls)
+	}
+	if captured == nil || captured.Scope != "mission" || captured.Kind != "tokens" {
+		t.Fatalf("unexpected captured breach: %+v", captured)
+	}
+}
+
 func TestBudgetTracker_NoLimitMeansNoBreach(t *testing.T) {
 	// Dollar-only budget + model with no pricing (cost always 0) must not breach
 	// purely from token usage — that's the whole reason both limits exist.

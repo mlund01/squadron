@@ -379,6 +379,23 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	defer cancel()
 	if r.budgetTracker != nil {
 		r.budgetTracker.SetCancel(cancel)
+		r.budgetTracker.SetOnBreach(func(b *BudgetBreach) {
+			// Advisory, not authoritative — the returned *BudgetBreach error is what
+			// actually fails the mission. This event just lets the command center
+			// render "why" at the moment usage crossed the limit.
+			streamer.MissionIssue(streamers.MissionIssueData{
+				Severity: streamers.IssueFatal,
+				Category: streamers.IssueCategoryBudgetExceeded,
+				Message:  b.Error(),
+				TaskName: b.TaskName,
+				Details: map[string]any{
+					"scope": b.Scope,
+					"kind":  b.Kind,
+					"used":  b.Used,
+					"limit": b.Limit,
+				},
+			})
+		})
 	}
 
 	var missionID string

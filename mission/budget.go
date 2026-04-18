@@ -44,8 +44,9 @@ type BudgetTracker struct {
 	taskTokens    map[string]int64
 	taskCost      map[string]float64
 
-	breach *BudgetBreach
-	cancel context.CancelFunc
+	breach   *BudgetBreach
+	cancel   context.CancelFunc
+	onBreach func(*BudgetBreach)
 }
 
 // NewBudgetTracker builds a tracker from a mission's declared budgets.
@@ -80,6 +81,19 @@ func (bt *BudgetTracker) SetCancel(cancel context.CancelFunc) {
 	}
 	bt.mu.Lock()
 	bt.cancel = cancel
+	bt.mu.Unlock()
+}
+
+// SetOnBreach registers a callback invoked exactly once, when the first breach
+// latches. Used by the runner to emit a mission_issue event at breach time so
+// the observability signal lines up with the moment usage crosses the limit
+// (rather than later, when the error bubbles up to the runner).
+func (bt *BudgetTracker) SetOnBreach(fn func(*BudgetBreach)) {
+	if bt == nil {
+		return
+	}
+	bt.mu.Lock()
+	bt.onBreach = fn
 	bt.mu.Unlock()
 }
 
@@ -164,6 +178,9 @@ func (bt *BudgetTracker) Record(taskName string, tokens int, cost float64) error
 
 func (bt *BudgetTracker) setBreachLocked(b *BudgetBreach) {
 	bt.breach = b
+	if bt.onBreach != nil {
+		bt.onBreach(b)
+	}
 	if bt.cancel != nil {
 		// Cancel outside mu? No — the cancel func is safe to call under lock; it
 		// just closes a channel on the derived context. Doing it here guarantees

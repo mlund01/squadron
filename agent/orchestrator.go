@@ -327,6 +327,12 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			// Emit event with pre-injection params
 			o.streamer.CallingTool(tc.ID, tc.Name, actionInput)
 
+			// TODO(mission-issue): the error branches below feed the error back to
+			// the LLM as a tool_result and let the agent decide what to do. That's
+			// invisible to the command center. Emit a warning-severity mission_issue
+			// (category=tool_error) here — non-fatal, no retry signal — so operators
+			// can see tool-call churn without tailing debug logs.
+
 			// Inject protected values before execution
 			injectedInput, secretErr := o.secretInjector.Inject(actionInput)
 			if secretErr != nil {

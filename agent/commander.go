@@ -1236,8 +1236,6 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		default:
 		}
 
-		// Pre-call budget check — fails fast before issuing a new LLM request
-		// if this task or the mission has already exhausted its token/dollar budget.
 		if s.budget != nil {
 			if err := s.budget.CheckBudget(); err != nil {
 				return err
@@ -1331,12 +1329,8 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			}
 			streamer.SessionTurn(turnData)
 
-			// Charge this turn against the task/mission budget. A breach returned here
-			// fails the current task and (via the tracker's cancel hook) stops the mission.
 			if s.budget != nil {
-				turnTokens := resp.Usage.InputTokens + resp.Usage.OutputTokens +
-					resp.Usage.CacheReadTokens + resp.Usage.CacheWriteTokens
-				if err := s.budget.RecordUsage(turnTokens, turnData.Cost); err != nil {
+				if err := s.budget.RecordUsage(resp.Usage.Total(), turnData.Cost); err != nil {
 					parser.Finish()
 					return err
 				}

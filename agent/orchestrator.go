@@ -112,8 +112,6 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 	firstTurn := true
 
 	for {
-		// Pre-call budget check — refuse to start a new LLM turn once the mission or
-		// this task has exhausted its token/dollar budget.
 		if o.budget != nil {
 			if err := o.budget.CheckBudget(); err != nil {
 				o.streamer.Error(err)
@@ -219,17 +217,13 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			}
 		}
 
-		// Charge the turn against the shared budget. First breach aborts the task and
-		// (via the tracker's cancel hook) brings down the whole mission.
 		if o.budget != nil && resp != nil {
-			turnTokens := resp.Usage.InputTokens + resp.Usage.OutputTokens +
-				resp.Usage.CacheReadTokens + resp.Usage.CacheWriteTokens
 			var turnCost float64
 			if pricing := llm.GetPricing(o.modelName, o.pricingOverrides); pricing != nil {
 				c := llm.ComputeTurnCost(pricing, resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheReadTokens, resp.Usage.CacheWriteTokens)
 				turnCost = c.TotalCost
 			}
-			if err := o.budget.RecordUsage(turnTokens, turnCost); err != nil {
+			if err := o.budget.RecordUsage(resp.Usage.Total(), turnCost); err != nil {
 				parser.Finish()
 				o.streamer.Error(err)
 				return ChatResult{}, err

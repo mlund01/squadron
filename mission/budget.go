@@ -9,23 +9,39 @@ import (
 	"squadron/config"
 )
 
+// BudgetScope identifies whether a breach is against a task's or the mission's budget.
+type BudgetScope string
+
+const (
+	BudgetScopeMission BudgetScope = "mission"
+	BudgetScopeTask    BudgetScope = "task"
+)
+
+// BudgetKind identifies which budget dimension was exceeded.
+type BudgetKind string
+
+const (
+	BudgetKindTokens  BudgetKind = "tokens"
+	BudgetKindDollars BudgetKind = "dollars"
+)
+
 // BudgetBreach describes which budget limit was exceeded.
 type BudgetBreach struct {
-	Scope    string  // "mission" or "task"
-	TaskName string  // populated when Scope == "task"
-	Kind     string  // "tokens" or "dollars"
+	Scope    BudgetScope
+	TaskName string // populated when Scope == BudgetScopeTask
+	Kind     BudgetKind
 	Limit    float64 // configured limit
 	Used     float64 // cumulative usage at the moment of breach
 }
 
 func (b *BudgetBreach) Error() string {
-	if b.Scope == "mission" {
-		if b.Kind == "tokens" {
+	if b.Scope == BudgetScopeMission {
+		if b.Kind == BudgetKindTokens {
 			return fmt.Sprintf("mission budget exceeded: %.0f tokens used, limit %.0f", b.Used, b.Limit)
 		}
 		return fmt.Sprintf("mission budget exceeded: $%.4f used, limit $%.4f", b.Used, b.Limit)
 	}
-	if b.Kind == "tokens" {
+	if b.Kind == BudgetKindTokens {
 		return fmt.Sprintf("task '%s' budget exceeded: %.0f tokens used, limit %.0f", b.TaskName, b.Used, b.Limit)
 	}
 	return fmt.Sprintf("task '%s' budget exceeded: $%.4f used, limit $%.4f", b.TaskName, b.Used, b.Limit)
@@ -128,9 +144,10 @@ func (bt *BudgetTracker) Record(taskName string, tokens int, cost float64) error
 		return nil
 	}
 	bt.mu.Lock()
-	defer bt.mu.Unlock()
 	if bt.breach != nil {
-		return bt.breach
+		b := bt.breach
+		bt.mu.Unlock()
+		return b
 	}
 
 	base := baseTaskName(taskName)
@@ -139,55 +156,56 @@ func (bt *BudgetTracker) Record(taskName string, tokens int, cost float64) error
 	bt.taskTokens[base] += int64(tokens)
 	bt.taskCost[base] += cost
 
-	// Task limits
+	breach := bt.detectBreachLocked(base)
+	if breach == nil {
+		bt.mu.Unlock()
+		return nil
+	}
+	bt.breach = breach
+	cb, cancel := bt.onBreach, bt.cancel
+	bt.mu.Unlock()
+
+	// Side effects fire outside bt.mu so user callbacks that acquire other locks
+	// (e.g. a streamer mutex via MissionIssue) can't invert the lock order.
+	if cb != nil {
+		cb(breach)
+	}
+	if cancel != nil {
+		cancel()
+	}
+	return breach
+}
+
+func (bt *BudgetTracker) detectBreachLocked(base string) *BudgetBreach {
 	if tb, ok := bt.taskBudgets[base]; ok {
 		if tb.Tokens != nil && bt.taskTokens[base] >= *tb.Tokens {
-			bt.setBreachLocked(&BudgetBreach{
-				Scope: "task", TaskName: base, Kind: "tokens",
+			return &BudgetBreach{
+				Scope: BudgetScopeTask, TaskName: base, Kind: BudgetKindTokens,
 				Limit: float64(*tb.Tokens), Used: float64(bt.taskTokens[base]),
-			})
-			return bt.breach
+			}
 		}
 		if tb.Dollars != nil && bt.taskCost[base] >= *tb.Dollars {
-			bt.setBreachLocked(&BudgetBreach{
-				Scope: "task", TaskName: base, Kind: "dollars",
+			return &BudgetBreach{
+				Scope: BudgetScopeTask, TaskName: base, Kind: BudgetKindDollars,
 				Limit: *tb.Dollars, Used: bt.taskCost[base],
-			})
-			return bt.breach
+			}
 		}
 	}
-	// Mission limits
 	if mb := bt.missionBudget; mb != nil {
 		if mb.Tokens != nil && bt.missionTokens >= *mb.Tokens {
-			bt.setBreachLocked(&BudgetBreach{
-				Scope: "mission", Kind: "tokens",
+			return &BudgetBreach{
+				Scope: BudgetScopeMission, Kind: BudgetKindTokens,
 				Limit: float64(*mb.Tokens), Used: float64(bt.missionTokens),
-			})
-			return bt.breach
+			}
 		}
 		if mb.Dollars != nil && bt.missionCost >= *mb.Dollars {
-			bt.setBreachLocked(&BudgetBreach{
-				Scope: "mission", Kind: "dollars",
+			return &BudgetBreach{
+				Scope: BudgetScopeMission, Kind: BudgetKindDollars,
 				Limit: *mb.Dollars, Used: bt.missionCost,
-			})
-			return bt.breach
+			}
 		}
 	}
 	return nil
-}
-
-func (bt *BudgetTracker) setBreachLocked(b *BudgetBreach) {
-	bt.breach = b
-	if bt.onBreach != nil {
-		bt.onBreach(b)
-	}
-	if bt.cancel != nil {
-		// Cancel outside mu? No — the cancel func is safe to call under lock; it
-		// just closes a channel on the derived context. Doing it here guarantees
-		// any concurrent Check/Record observing the breach is ordered after the
-		// cancel signal becomes visible to other goroutines.
-		bt.cancel()
-	}
 }
 
 // Breach returns the latched breach, or nil if no budget has been exceeded.

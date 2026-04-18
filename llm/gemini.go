@@ -16,8 +16,12 @@ type GeminiProvider struct {
 	client *genai.Client
 }
 
-func NewGeminiProvider(ctx context.Context, apiKey string) (*GeminiProvider, error) {
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+func NewGeminiProvider(ctx context.Context, apiKey, baseURL string) (*GeminiProvider, error) {
+	opts := []option.ClientOption{option.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		opts = append(opts, option.WithEndpoint(baseURL))
+	}
+	client, err := genai.NewClient(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}

@@ -30,8 +30,12 @@ type OpenAIProvider struct {
 	client *openai.Client
 }
 
-func NewOpenAIProvider(apiKey string) *OpenAIProvider {
-	client := openai.NewClient(option.WithAPIKey(apiKey))
+func NewOpenAIProvider(apiKey, baseURL string) *OpenAIProvider {
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+	client := openai.NewClient(opts...)
 	return &OpenAIProvider{client: &client}
 }
 

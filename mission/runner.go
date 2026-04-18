@@ -729,7 +729,14 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 				}
 
 				if err != nil {
-					if ctx.Err() != nil {
+					// A budget breach cancels the mission context — tasks that observe
+					// ctx.Err() as a result should still be marked failed (not stopped)
+					// so the task row in the UI matches the mission's terminal "failed"
+					// status. Budget is the only path that cancels the context for a
+					// non-stop reason today; if more "fail-fast" sources appear they
+					// should follow the same pattern.
+					budgetBreach := r.budgetTracker.Breach() != nil
+					if ctx.Err() != nil && !budgetBreach {
 						// Mission was stopped — mark task as stopped
 						stateMgr.ForceState(task.Name, TaskStopped)
 						if tid := stateMgr.GetTaskID(task.Name); tid != "" {
@@ -738,6 +745,13 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 						errChan <- ctx.Err()
 					} else {
 						stateMgr.ForceState(task.Name, TaskFailed)
+						if tid := stateMgr.GetTaskID(task.Name); tid != "" {
+							errMsg := err.Error()
+							if budgetBreach {
+								errMsg = r.budgetTracker.Breach().Error()
+							}
+							r.stores.Missions.UpdateTaskStatus(tid, "failed", nil, &errMsg)
+						}
 						errChan <- fmt.Errorf("task '%s' failed: %w", task.Name, err)
 					}
 					return

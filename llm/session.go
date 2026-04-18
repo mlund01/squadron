@@ -286,10 +286,16 @@ func (s *Session) Clone() *Session {
 				if part.ToolUse != nil {
 					inputCopy := make(json.RawMessage, len(part.ToolUse.Input))
 					copy(inputCopy, part.ToolUse.Input)
+					var sigCopy []byte
+					if len(part.ToolUse.ThoughtSignature) > 0 {
+						sigCopy = make([]byte, len(part.ToolUse.ThoughtSignature))
+						copy(sigCopy, part.ToolUse.ThoughtSignature)
+					}
 					messagesCopy[i].Parts[j].ToolUse = &ToolUseBlock{
-						ID:    part.ToolUse.ID,
-						Name:  part.ToolUse.Name,
-						Input: inputCopy,
+						ID:               part.ToolUse.ID,
+						Name:             part.ToolUse.Name,
+						Input:            inputCopy,
+						ThoughtSignature: sigCopy,
 					}
 				}
 				if part.ToolResult != nil {

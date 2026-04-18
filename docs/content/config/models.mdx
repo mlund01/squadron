@@ -27,6 +27,18 @@ model "gemini" {
 
 All supported models for each provider are available automatically — no need to list them.
 
+### Custom Endpoints
+
+Every provider accepts an optional `base_url` to redirect API calls to a compatible proxy or gateway (LiteLLM, OpenRouter, a corporate gateway, etc.). Leave it unset to use each SDK's default endpoint.
+
+```hcl
+model "anthropic" {
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
+  base_url = "https://litellm.internal.example.com"
+}
+```
+
 ## Local Models (Ollama)
 
 The `ollama` provider connects to any OpenAI-compatible local inference server. Use `aliases` to define which models are available and map HCL-safe keys to the actual model names.
@@ -70,7 +82,7 @@ The `base_url` should point to the OpenAI-compatible API endpoint. Common values
 |-----------|------|----------|-------------|
 | `provider` | string | yes | Provider name: `anthropic`, `openai`, `gemini`, or `ollama` |
 | `api_key` | string | cloud providers | API key (required for `anthropic`, `openai`, `gemini`) |
-| `base_url` | string | `ollama` only | URL for the OpenAI-compatible API endpoint |
+| `base_url` | string | no | Override the provider's API endpoint (required for `ollama`; optional for cloud providers to route through a compatible proxy) |
 | `aliases` | map | `ollama` only | Map of HCL key → API model name |
 | `prompt_caching` | bool | no | Enable prompt caching (default: `true`) |
 

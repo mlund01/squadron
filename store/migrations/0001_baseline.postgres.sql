@@ -72,9 +72,11 @@ CREATE TABLE IF NOT EXISTS tool_results (
     id TEXT PRIMARY KEY,
     task_id TEXT NOT NULL REFERENCES mission_tasks(id),
     session_id TEXT NOT NULL REFERENCES sessions(id),
+    tool_call_id TEXT NOT NULL DEFAULT '',
     tool_name TEXT NOT NULL,
     input_params TEXT,
     raw_data TEXT,
+    status TEXT DEFAULT 'started',
     started_at TEXT,
     finished_at TEXT
 );

@@ -36,7 +36,7 @@ import (
 //	shasum -a 256 store/migrations/<file>
 var migrationChecksums = map[string]string{
 	"0001_baseline.sqlite.sql":   "ea7a46271d90d7e19daff1b608d67137a091811dba1382f9f4267828c1d9ffa6",
-	"0001_baseline.postgres.sql": "17efb527ecddbd8bcb7333d5b7608039ffe798900f6abe4f8a9b00fecde4c8a3",
+	"0001_baseline.postgres.sql": "ada6e4e89800425c2512877f20b090f22eacb8e9fa3aea3d8ebb94e953448c8f",
 }
 
 var _ = Describe("Migration checksums", func() {

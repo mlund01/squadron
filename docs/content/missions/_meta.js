@@ -6,5 +6,6 @@ export default {
   datasets: 'Datasets',
   iteration: 'Iteration',
   'internal-tools': 'Internal Tools',
+  budgets: 'Budgets',
   schedules: 'Schedules & Triggers',
 }

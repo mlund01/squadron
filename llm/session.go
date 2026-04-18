@@ -79,6 +79,11 @@ func (s *Session) chatStreamWithRetry(ctx context.Context, req *ChatRequest) (<-
 		backoff := retryBackoffs[attempt] * time.Second
 		log.Printf("[LLM] Retryable error (attempt %d/%d: %v), retrying in %s...", attempt+1, len(retryBackoffs), err, backoff)
 
+		// TODO(mission-issue): emit a warning-severity mission_issue with
+		// category=provider_error, retrying=true, details={attempt, backoff}.
+		// Session currently has no handle on the mission streamer; add an
+		// optional callback to Session so the runner/commander can wire it.
+
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

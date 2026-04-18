@@ -248,6 +248,14 @@ func (s *mockMissionStreamer) CommanderToolComplete(taskName, toolCallId, toolNa
 func (s *mockMissionStreamer) Compaction(taskName, entity string, inputTokens, tokenLimit, messagesCompacted, turnRetention int) {
 }
 func (s *mockMissionStreamer) SessionTurn(data protocol.SessionTurnData) {}
+func (s *mockMissionStreamer) MissionIssue(data streamers.MissionIssueData) {
+	s.record("mission_issue", map[string]string{
+		"severity": string(data.Severity),
+		"category": data.Category,
+		"task":     data.TaskName,
+		"message":  data.Message,
+	})
+}
 func (s *mockMissionStreamer) AgentStarted(taskName, agentName, instruction string) {
 	s.record("agent_started", map[string]string{"task": taskName, "agent": agentName})
 }

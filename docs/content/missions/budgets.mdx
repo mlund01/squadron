@@ -1,0 +1,107 @@
+---
+title: Budgets
+---
+
+# Budgets
+
+Missions and tasks can declare spending limits in a `budget` block. When a limit is reached, the current task fails and the whole mission fails — in-flight commanders and agents unwind immediately.
+
+Both a **token** cap and a **dollar** cap are supported. Either one alone is valid; the first limit reached wins.
+
+```hcl
+mission "expensive_research" {
+  budget {
+    tokens  = 5000000   # cumulative across every task
+    dollars = 25.00
+  }
+
+  task "crawl" {
+    budget { tokens = 500000 }   # per-task cap
+    objective = "Crawl the target domain"
+  }
+}
+```
+
+## Why both tokens and dollars?
+
+Models without declared pricing — local models served via Ollama, self-hosted endpoints, anything Squadron doesn't have rates for — always report `$0` cost. That means a **dollar-only** budget cannot constrain them, no matter how many tokens they consume. If you run mixed fleets, always include a token cap as a safety net.
+
+Conversely, a **dollar-only** budget is useful when you want one number that naturally scales across model choices: switching from a cheap model to an expensive one just means fewer tokens fit under the same cap.
+
+## Scope
+
+### Mission budget
+
+Sums tokens and cost across every task in the mission — commanders, agents they spawn, every iteration of every iterated task. The first limit reached fails the mission.
+
+### Task budget
+
+Sums across that task's commander and every agent it spawns. **Iteration suffixes are stripped** — `crawl[0]`, `crawl[1]`, `crawl[2]` all contribute to the same `crawl` counter. That means a task-level budget caps the whole iterated task, not each iteration.
+
+### Validation
+
+At least one of `tokens` or `dollars` must be set. Empty `budget { }` blocks are rejected at config load.
+
+## What happens when a budget trips
+
+1. The breach latches — subsequent usage checks return the same breach without double-counting.
+2. The mission-scoped context is canceled, so in-flight LLM calls and tool calls return promptly.
+3. A `mission_issue` event is emitted with `severity=fatal`, `category=budget_exceeded`, and structured details (`scope`, `kind`, `used`, `limit`).
+4. The task transitions to `failed` (not `stopped`) with the breach message as its error.
+5. The mission transitions to `failed`.
+
+Issues are purely advisory — authoritative failure still comes from the returned error — so the event and the mission status can never disagree.
+
+## Examples
+
+### Cap the whole mission in dollars, no per-task limits
+
+```hcl
+mission "sweep" {
+  budget {
+    dollars = 2.00
+  }
+  # ... tasks ...
+}
+```
+
+### Cap an expensive iteration but let the rest run free
+
+```hcl
+mission "research" {
+  task "crawl_pages" {
+    iterator {
+      dataset  = datasets.urls
+      parallel = true
+    }
+    budget {
+      tokens = 1000000   # the parallel fan-out is the risky part
+    }
+    objective = "Fetch and summarize ${item.url}"
+  }
+
+  task "summarize" {
+    depends_on = [tasks.crawl_pages]
+    objective  = "Produce an executive summary"
+  }
+}
+```
+
+### Belt-and-suspenders: cap dollars overall, tokens per expensive task
+
+```hcl
+mission "thorough" {
+  budget {
+    dollars = 10.00   # hard spend ceiling regardless of model
+  }
+
+  task "deep_analysis" {
+    budget { tokens = 2000000 }
+    objective = "Analyze the full corpus"
+  }
+}
+```
+
+## Zero overhead when unused
+
+If neither the mission nor any task declares a budget, no tracker is created and no per-turn accounting happens.

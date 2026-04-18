@@ -83,6 +83,7 @@ type orchestrator struct {
 	sessionID        string
 	taskID           string
 	pricingOverrides map[string]*llm.ModelPricing
+	budget           BudgetChecker
 }
 
 // newOrchestrator creates a new chat orchestrator
@@ -111,6 +112,13 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 	firstTurn := true
 
 	for {
+		if o.budget != nil {
+			if err := o.budget.CheckBudget(); err != nil {
+				o.streamer.Error(err)
+				return ChatResult{}, err
+			}
+		}
+
 		// Create parser for streaming text content (REASONING/ANSWER tags)
 		parser := NewMessageParser(o.streamer)
 
@@ -209,6 +217,19 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			}
 		}
 
+		if o.budget != nil && resp != nil {
+			var turnCost float64
+			if pricing := llm.GetPricing(o.modelName, o.pricingOverrides); pricing != nil {
+				c := llm.ComputeTurnCost(pricing, resp.Usage.InputTokens, resp.Usage.OutputTokens, resp.Usage.CacheReadTokens, resp.Usage.CacheWriteTokens)
+				turnCost = c.TotalCost
+			}
+			if err := o.budget.RecordUsage(resp.Usage.Total(), turnCost); err != nil {
+				parser.Finish()
+				o.streamer.Error(err)
+				return ChatResult{}, err
+			}
+		}
+
 		if o.eventLogger != nil {
 			eventData := map[string]any{
 				"duration_ms": time.Since(llmStart).Milliseconds(),
@@ -299,6 +320,12 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 			// Emit event with pre-injection params
 			o.streamer.CallingTool(tc.ID, tc.Name, actionInput)
+
+			// TODO(mission-issue): the error branches below feed the error back to
+			// the LLM as a tool_result and let the agent decide what to do. That's
+			// invisible to the command center. Emit a warning-severity mission_issue
+			// (category=tool_error) here — non-fatal, no retry signal — so operators
+			// can see tool-call churn without tailing debug logs.
 
 			// Inject protected values before execution
 			injectedInput, secretErr := o.secretInjector.Inject(actionInput)

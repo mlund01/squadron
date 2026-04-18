@@ -91,6 +91,11 @@ type MissionHandler interface {
 
 	// Routing events
 	RouteChosen(routerTask string, targetTask string, condition string, isMission bool)
+
+	// Advisory issues — warnings for retryable problems (provider outage, etc.)
+	// and fatal issues that accompany (but do not themselves cause) mission
+	// termination. See streamers.MissionIssueData for the contract.
+	MissionIssue(data MissionIssueData)
 }
 
 // IDRegistrar is an optional interface that MissionHandler implementations can

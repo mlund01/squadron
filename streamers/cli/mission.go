@@ -111,6 +111,31 @@ func (s *MissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	// No-op for CLI — telemetry is primarily for the web UI
 }
 
+func (s *MissionHandler) MissionIssue(data streamers.MissionIssueData) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	color := ColorYellow
+	label := "WARN"
+	switch data.Severity {
+	case streamers.IssueError:
+		color = ColorRed
+		label = "ERROR"
+	case streamers.IssueFatal:
+		color = ColorRed
+		label = "FATAL"
+	}
+	scope := ""
+	if data.TaskName != "" {
+		scope = fmt.Sprintf(" [%s]", data.TaskName)
+	}
+	retrying := ""
+	if data.Retrying {
+		retrying = " (retrying)"
+	}
+	fmt.Printf("%s%s%s %s%s: %s%s%s\n",
+		ColorBold, color, label, data.Category, scope, data.Message, retrying, ColorReset)
+}
+
 func (s *MissionHandler) RouteChosen(routerTask string, targetTask string, condition string, isMission bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

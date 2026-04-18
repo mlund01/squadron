@@ -1717,6 +1717,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Type: "folder"},
 			{Type: "schedule"},
 			{Type: "trigger"},
+			{Type: "budget"},
 		},
 	})
 	if diags.HasErrors() {
@@ -1914,6 +1915,22 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		trigger = &t
 	}
 
+	// Parse budget block (optional, singleton)
+	var missionBudget *Budget
+	for _, budgetBlock := range missionContent.Blocks {
+		if budgetBlock.Type != "budget" {
+			continue
+		}
+		if missionBudget != nil {
+			return nil, fmt.Errorf("mission '%s': only one budget block allowed", missionName)
+		}
+		b, err := parseBudgetBlock(budgetBlock, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("mission '%s' budget: %w", missionName, err)
+		}
+		missionBudget = b
+	}
+
 	// Parse max_parallel attribute (optional, default 3)
 	maxParallel := 3
 	if attr, ok := missionContent.Attributes["max_parallel"]; ok {
@@ -1937,6 +1954,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Schedules:   schedules,
 		Trigger:     trigger,
 		MaxParallel: maxParallel,
+		Budget:      missionBudget,
 	}
 
 	// Parse inputs — accept either shorthand attribute or verbose labeled block form.
@@ -2378,6 +2396,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			{Type: "iterator"},
 			{Type: "output"}, // verbose: output { field "name" { ... } }
 			{Type: "router"},
+			{Type: "budget"},
 		},
 	})
 	if diags.HasErrors() {
@@ -2487,6 +2506,22 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		}
 	}
 
+	// Parse budget block if present
+	var taskBudget *Budget
+	for _, budgetBlock := range taskContent.Blocks {
+		if budgetBlock.Type != "budget" {
+			continue
+		}
+		if taskBudget != nil {
+			return nil, fmt.Errorf("task '%s': only one budget block allowed", taskName)
+		}
+		b, err := parseBudgetBlock(budgetBlock, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("task '%s' budget: %w", taskName, err)
+		}
+		taskBudget = b
+	}
+
 	// Validate: sequential iterator tasks must not reference `item` in their objective.
 	// The commander receives item data via the dataset_next tool, not through the objective.
 	if iterator != nil && !iterator.Parallel {
@@ -2507,7 +2542,48 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		Iterator:      iterator,
 		Output:        output,
 		Router:        router,
+		Budget:        taskBudget,
 	}, nil
+}
+
+// parseBudgetBlock parses a `budget { tokens = N, dollars = M }` block.
+// Both attributes are optional but at least one must be set (enforced by Validate).
+func parseBudgetBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Budget, error) {
+	content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "tokens"},
+			{Name: "dollars"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	b := &Budget{}
+	if attr, ok := content.Attributes["tokens"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("tokens: %w", diags)
+		}
+		bf := val.AsBigFloat()
+		if !bf.IsInt() {
+			return nil, fmt.Errorf("tokens must be an integer")
+		}
+		n, _ := bf.Int64()
+		b.Tokens = &n
+	}
+	if attr, ok := content.Attributes["dollars"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("dollars: %w", diags)
+		}
+		f, _ := val.AsBigFloat().Float64()
+		b.Dollars = &f
+	}
+	if err := b.Validate(); err != nil {
+		return nil, err
+	}
+	return b, nil
 }
 
 // outputFieldBlock is used for parsing output field blocks

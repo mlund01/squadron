@@ -168,6 +168,12 @@ type Usage struct {
 	CacheReadTokens  int // Tokens read from cache (Anthropic: cache_read_input_tokens, OpenAI: cached_tokens)
 }
 
+// Total is the sum of all token categories — used by budget accounting where
+// every category counts against the same cap.
+func (u Usage) Total() int {
+	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
+}
+
 type Provider interface {
 	Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error)
 	ChatStream(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error)

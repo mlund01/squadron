@@ -28,7 +28,6 @@ func NewGeminiProvider(ctx context.Context, apiKey, baseURL string) (*GeminiProv
 	return &GeminiProvider{client: client}, nil
 }
 
-// Close is a no-op for the new genai SDK (no persistent client state to release).
 func (p *GeminiProvider) Close() error { return nil }
 
 func (p *GeminiProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
@@ -84,46 +83,22 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 					continue
 				}
 				for _, part := range cand.Content.Parts {
-					if part == nil {
+					block, ok := partToBlock(part)
+					if !ok {
 						continue
 					}
-					// Skip thought parts — we don't surface model reasoning.
-					// Their signatures travel with the function call parts that follow.
-					if part.Thought {
-						continue
-					}
-					if part.FunctionCall != nil {
-						callID := part.FunctionCall.ID
-						if callID == "" {
-							callID = uuid.New().String()
-						}
-						inputBytes, _ := json.Marshal(part.FunctionCall.Args)
-
+					switch block.Type {
+					case ContentTypeToolUse:
 						chunks <- StreamChunk{
-							ToolCallStart: &ToolCallStartChunk{ID: callID, Name: part.FunctionCall.Name},
+							ToolCallStart: &ToolCallStartChunk{ID: block.ToolUse.ID, Name: block.ToolUse.Name},
 						}
-						chunks <- StreamChunk{ToolCallDelta: string(inputBytes)}
-
-						allBlocks = append(allBlocks, ContentBlock{
-							Type: ContentTypeToolUse,
-							ToolUse: &ToolUseBlock{
-								ID:               callID,
-								Name:             part.FunctionCall.Name,
-								Input:            inputBytes,
-								ThoughtSignature: part.ThoughtSignature,
-							},
-						})
-
-						chunks <- StreamChunk{ToolCallDone: &callID}
-						continue
-					}
-					if part.Text != "" {
-						chunks <- StreamChunk{Content: part.Text}
-						if n := len(allBlocks); n > 0 && allBlocks[n-1].Type == ContentTypeText {
-							allBlocks[n-1].Text += part.Text
-						} else {
-							allBlocks = append(allBlocks, ContentBlock{Type: ContentTypeText, Text: part.Text})
-						}
+						chunks <- StreamChunk{ToolCallDelta: string(block.ToolUse.Input)}
+						allBlocks = append(allBlocks, block)
+						id := block.ToolUse.ID
+						chunks <- StreamChunk{ToolCallDone: &id}
+					case ContentTypeText:
+						chunks <- StreamChunk{Content: block.Text}
+						allBlocks = appendTextBlock(allBlocks, block.Text)
 					}
 				}
 			}
@@ -201,9 +176,9 @@ func (p *GeminiProvider) buildContents(messages []Message) ([]*genai.Content, *g
 			continue
 		}
 
-		role := "user"
+		role := genai.RoleUser
 		if m.Role == RoleAssistant {
-			role = "model"
+			role = genai.RoleModel
 		}
 
 		parts := messageToParts(m, toolNames)
@@ -284,37 +259,60 @@ func (p *GeminiProvider) extractResponse(resp *genai.GenerateContentResponse) (s
 			continue
 		}
 		for _, part := range cand.Content.Parts {
-			if part == nil || part.Thought {
+			block, ok := partToBlock(part)
+			if !ok {
 				continue
 			}
-			if part.FunctionCall != nil {
-				callID := part.FunctionCall.ID
-				if callID == "" {
-					callID = uuid.New().String()
-				}
-				inputBytes, _ := json.Marshal(part.FunctionCall.Args)
-				blocks = append(blocks, ContentBlock{
-					Type: ContentTypeToolUse,
-					ToolUse: &ToolUseBlock{
-						ID:               callID,
-						Name:             part.FunctionCall.Name,
-						Input:            inputBytes,
-						ThoughtSignature: part.ThoughtSignature,
-					},
-				})
+			if block.Type == ContentTypeText {
+				content += block.Text
+				blocks = appendTextBlock(blocks, block.Text)
 				continue
 			}
-			if part.Text != "" {
-				content += part.Text
-				if n := len(blocks); n > 0 && blocks[n-1].Type == ContentTypeText {
-					blocks[n-1].Text += part.Text
-				} else {
-					blocks = append(blocks, ContentBlock{Type: ContentTypeText, Text: part.Text})
-				}
-			}
+			blocks = append(blocks, block)
 		}
 	}
 	return content, blocks
+}
+
+// partToBlock extracts a single response Part into a provider-agnostic
+// ContentBlock. Returns ok=false for parts that carry no surface content —
+// nil parts, empty text, and "thought" parts (the model's hidden reasoning;
+// thought_signatures travel with the function-call parts that follow).
+func partToBlock(part *genai.Part) (ContentBlock, bool) {
+	if part == nil || part.Thought {
+		return ContentBlock{}, false
+	}
+	if part.FunctionCall != nil {
+		callID := part.FunctionCall.ID
+		if callID == "" {
+			callID = uuid.New().String()
+		}
+		inputBytes, _ := json.Marshal(part.FunctionCall.Args)
+		return ContentBlock{
+			Type: ContentTypeToolUse,
+			ToolUse: &ToolUseBlock{
+				ID:               callID,
+				Name:             part.FunctionCall.Name,
+				Input:            inputBytes,
+				ThoughtSignature: part.ThoughtSignature,
+			},
+		}, true
+	}
+	if part.Text != "" {
+		return ContentBlock{Type: ContentTypeText, Text: part.Text}, true
+	}
+	return ContentBlock{}, false
+}
+
+// appendTextBlock coalesces consecutive text into the trailing text block so
+// a stream of small text parts doesn't produce a long run of one-character
+// ContentBlocks.
+func appendTextBlock(blocks []ContentBlock, text string) []ContentBlock {
+	if n := len(blocks); n > 0 && blocks[n-1].Type == ContentTypeText {
+		blocks[n-1].Text += text
+		return blocks
+	}
+	return append(blocks, ContentBlock{Type: ContentTypeText, Text: text})
 }
 
 func convertGeminiTools(tools []ToolDefinition) []*genai.Tool {
@@ -467,8 +465,8 @@ func jsonSchemaToGeminiSchema(schema map[string]any) *genai.Schema {
 
 // applyJSONSchemaType handles the `type` keyword, which JSON Schema allows to
 // be either a single string or an array. Gemini's Type is a single value;
-// ["X", "null"] collapses to X + nullable, and broader unions fall through to
-// anyOf (populated elsewhere).
+// ["X", "null"] collapses to X + nullable, and broader unions expand into
+// AnyOf branches (one per non-null type).
 func applyJSONSchemaType(s *genai.Schema, t any) {
 	switch tv := t.(type) {
 	case string:

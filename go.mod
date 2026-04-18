@@ -2,6 +2,10 @@ module squadron
 
 go 1.25.4
 
+// TEMP: local replace for unpublished squadron-wire OAuth proxy messages.
+// Revert + publish a new squadron-wire tag before merging.
+replace github.com/mlund01/squadron-wire => ../squadron-wire
+
 require (
 	github.com/99designs/keyring v1.2.2
 	github.com/anthropics/anthropic-sdk-go v1.19.0
@@ -23,6 +27,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.16.3
 	golang.org/x/crypto v0.48.0
+	golang.org/x/term v0.40.0
 	google.golang.org/api v0.259.0
 	modernc.org/sqlite v1.47.0
 )
@@ -106,7 +111,6 @@ require (
 	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
-	golang.org/x/term v0.40.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/time v0.14.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect

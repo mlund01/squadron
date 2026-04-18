@@ -310,6 +310,10 @@ func runEngage(cmd *cobra.Command, args []string) {
 	}
 	client := wsbridge.NewClient(cfg, cfgErr == nil, cfgErrMsg, engageConfigPath, stores, Version)
 
+	// Enable commander-initiated MCP OAuth logins. Safe even when no command
+	// center is configured — the hook only fires on incoming WS requests.
+	installOAuthProxyHook()
+
 	sched := scheduler.New(client.RunScheduledMission)
 	client.SetConcurrencyTracker(sched)
 	if cfgErr == nil {
@@ -341,11 +345,12 @@ func runEngage(cmd *cobra.Command, args []string) {
 			fmt.Printf("Squadron ready — http://localhost:%d\n", ccPort)
 		}
 	} else if cfg.CommandCenter != nil {
-		if err := connectWithRetry(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {
+		wsURL := cfg.CommandCenter.WebSocketURL()
+		if err := connectWithRetry(client, wsURL, cfg.CommandCenter.AutoReconnect); err != nil {
 			log.Printf("Connection failed: %v (will retry when config changes)", err)
 		} else {
 			fmt.Printf("Squadron ready — connected to %s (instance: %s)\n",
-				cfg.CommandCenter.URL, cfg.CommandCenter.InstanceName)
+				wsURL, cfg.CommandCenter.InstanceName)
 		}
 	}
 
@@ -369,7 +374,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 				cfg := client.GetConfig()
 				if cfg != nil && cfg.CommandCenter != nil && cfg.CommandCenter.AutoReconnect {
 					log.Println("Attempting to reconnect...")
-					if err := connectWithRetry(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {
+					if err := connectWithRetry(client, cfg.CommandCenter.WebSocketURL(), cfg.CommandCenter.AutoReconnect); err != nil {
 						log.Printf("Reconnect failed: %v", err)
 						// Don't exit — wait for config changes
 						go watchForConfigChanges(client, engageConfigPath)

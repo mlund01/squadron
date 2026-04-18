@@ -59,14 +59,14 @@ func TestConfigHasCommandCenter(t *testing.T) {
 	}{
 		{
 			name:    "declared",
-			content: `command_center {` + "\n  url = \"ws://example.com/ws\"\n}\n",
+			content: `command_center {` + "\n  host = \"https://example.com\"\n}\n",
 			want:    true,
 		},
 		{
 			name: "indented declared",
 			content: `
   command_center {
-    url = "ws://example.com/ws"
+    host = "https://example.com"
   }
 `,
 			want: true,
@@ -74,7 +74,7 @@ func TestConfigHasCommandCenter(t *testing.T) {
 		{
 			name: "hash commented out",
 			content: `# command_center {
-#   url = "ws://example.com/ws"
+#   host = "https://example.com"
 # }
 variable "x" { secret = true }
 `,
@@ -83,7 +83,7 @@ variable "x" { secret = true }
 		{
 			name: "slash commented out",
 			content: `// command_center {
-//   url = "ws://example.com/ws"
+//   host = "https://example.com"
 // }
 `,
 			want: false,

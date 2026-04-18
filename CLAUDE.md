@@ -15,10 +15,11 @@ go build -o squadron ./cmd/cli              # Build the CLI
 ./squadron vars set <name> <value>         # Set a variable
 ./squadron vars get <name>                 # Get a variable
 ./squadron vars list                       # List all variables
-./squadron serve -c <path>                 # Connect to command center (requires command_center block)
-./squadron serve -c <path> -w              # Launch local command center + connect
-./squadron serve -c <path> -w --cc-port 9090  # Custom command center port
-./squadron serve -c <path> -w --no-browser # Launch without opening browser
+./squadron engage -c <path>                # Connect to command center (requires command_center block); daemonizes by default
+./squadron engage -c <path> --cc           # Launch local command center UI + connect
+./squadron engage -c <path> --cc --cc-port 9090  # Custom command center port
+./squadron engage -c <path> --foreground   # Run in terminal instead of daemonizing (useful for dev / scripts)
+./squadron disengage                       # Stop the running daemon and remove the system service
 ./squadron mcp status                      # Show OAuth status for configured MCP servers
 ./squadron mcp login <name>                # Authorize an MCP server via OAuth
 ./squadron mcp logout <name>               # Forget stored OAuth token for an MCP server
@@ -182,7 +183,7 @@ mission "example" {
 
 ### Schedules, Triggers, and Concurrency
 
-Missions can run automatically via schedules (cron-based timers) or triggers (webhooks). Both are defined inside the `mission` block and are active only in serve mode.
+Missions can run automatically via schedules (cron-based timers) or triggers (webhooks). Both are defined inside the `mission` block and are active only in engage mode.
 
 #### Schedule Block
 
@@ -244,7 +245,7 @@ The command center registers the route `POST /webhooks/<instance_name>/<webhook_
 
 #### Architecture
 
-The scheduler lives in `scheduler/` but its lifecycle (creation, config updates, shutdown) is managed by `cmd/serve.go`, not wsbridge. The wsbridge client receives a `ConcurrencyTracker` interface for enforcing `max_parallel` on all mission starts. The cron library used is `robfig/cron/v3`.
+The scheduler lives in `scheduler/` but its lifecycle (creation, config updates, shutdown) is managed by `cmd/engage.go`, not wsbridge. The wsbridge client receives a `ConcurrencyTracker` interface for enforcing `max_parallel` on all mission starts. The cron library used is `robfig/cron/v3`.
 
 ### Mission-Scoped Agents
 
@@ -568,8 +569,9 @@ If the server returns 401 on load, Squadron surfaces an `AuthRequiredError` with
 The `mcp/oauth/` package houses:
 - `VaultTokenStore` — implements `transport.TokenStore` against the vault
 - `RunLoginFlow` — the orchestrator (discovery, DCR, PKCE, browser, exchange)
-- `LoopbackCallbackSource` — serves `/callback` on `127.0.0.1:0` for CLI mode
-- `CallbackSource` interface — Phase 2 adds a wsbridge-backed source for command-center mode
+- `CallbackSource` interface — pluggable callback delivery
+- `LoopbackCallbackSource` — serves `/callback` on `127.0.0.1:0` for standalone CLI mode
+- `WsbridgeCallbackSource` — routes the callback through command center so squadrons behind NAT or remote hosts can still do OAuth, and HTTPS-only IdPs have a stable callback URL. Used automatically inside `squadron engage` when a `command_center` block is configured. The redirect URI is fixed at `<command_center.host>/oauth/callback`; routing uses the OAuth `state` value.
 
 SSE vs streamable HTTP is auto-detected from the URL path suffix (`/sse`). The OAuth transport is only engaged when a token is already stored — anonymous servers fall through to the plain client.
 
@@ -784,7 +786,7 @@ When `--resume <missionID>` is used:
 
 Variables are encrypted at rest in `.squadron/vars.vault` using AES-256-GCM with an Argon2id-derived key. The encryption passphrase is stored in the OS keychain (macOS Keychain, Linux Secret Service/KeyCtl, Windows WinCred).
 
-Run `squadron init` before using vars commands. Commands `serve`, `chat`, and `mission` require init (or pass `--init` to auto-initialize).
+Run `squadron init` before using vars commands. Commands `engage`, `chat`, and `mission` require init (or pass `--init` to auto-initialize).
 
 Passphrase resolution order: in-process cache → `--passphrase-file` flag → `/run/secrets/vault_passphrase` (Docker) → OS keyring → hardcoded fallback (with warning).
 

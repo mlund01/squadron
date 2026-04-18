@@ -76,6 +76,12 @@ func (mc *mockCommander) wsURL() string {
 	return "ws" + strings.TrimPrefix(mc.srv.URL, "http") + "/ws"
 }
 
+// hostURL returns the base URL the CommandCenterConfig.Host expects —
+// squadron derives the ws scheme and /ws suffix internally.
+func (mc *mockCommander) hostURL() string {
+	return mc.srv.URL
+}
+
 func (mc *mockCommander) waitForConnection() {
 	for i := 0; i < 50; i++ {
 		if mc.conn != nil {
@@ -111,10 +117,10 @@ func (mc *mockCommander) sendEnvelope(env *protocol.Envelope) {
 	}
 }
 
-func testConfig(wsURL string) *config.Config {
+func testConfig(host string) *config.Config {
 	return &config.Config{
 		CommandCenter: &config.CommandCenterConfig{
-			URL:                wsURL,
+			Host:               host,
 			InstanceName:       "test-instance",
 			ReconnectInterval:  1,
 		},
@@ -135,7 +141,7 @@ func testConfig(wsURL string) *config.Config {
 
 func TestClientConnectAndRegister(t *testing.T) {
 	mc := newMockCommander(t)
-	cfg := testConfig(mc.wsURL())
+	cfg := testConfig(mc.hostURL())
 	stores := newTestBundle(t)
 
 
@@ -197,7 +203,7 @@ func TestClientConnectAndRegister(t *testing.T) {
 
 func TestClientHandlesGetConfig(t *testing.T) {
 	mc := newMockCommander(t)
-	cfg := testConfig(mc.wsURL())
+	cfg := testConfig(mc.hostURL())
 	stores := newTestBundle(t)
 
 
@@ -250,7 +256,7 @@ func TestClientHandlesGetConfig(t *testing.T) {
 
 func TestClientHandlesHeartbeat(t *testing.T) {
 	mc := newMockCommander(t)
-	cfg := testConfig(mc.wsURL())
+	cfg := testConfig(mc.hostURL())
 	stores := newTestBundle(t)
 
 
@@ -283,7 +289,7 @@ func TestClientHandlesHeartbeat(t *testing.T) {
 
 func TestClientHandlesGetMissions(t *testing.T) {
 	mc := newMockCommander(t)
-	cfg := testConfig(mc.wsURL())
+	cfg := testConfig(mc.hostURL())
 	stores := newTestBundle(t)
 
 

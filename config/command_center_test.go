@@ -13,7 +13,7 @@ var _ = Describe("Command Center Config", func() {
 		It("parses a command_center block with all fields", func() {
 			hcl := `
 command_center {
-  url                = "ws://localhost:8080/ws"
+  host               = "https://commander.example.com"
   instance_name      = "production-scraper"
   auto_reconnect     = true
   reconnect_interval = 10
@@ -27,7 +27,7 @@ storage {
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.CommandCenter).NotTo(BeNil())
-			Expect(cfg.CommandCenter.URL).To(Equal("ws://localhost:8080/ws"))
+			Expect(cfg.CommandCenter.Host).To(Equal("https://commander.example.com"))
 			Expect(cfg.CommandCenter.InstanceName).To(Equal("production-scraper"))
 			Expect(cfg.CommandCenter.AutoReconnect).To(BeTrue())
 			Expect(cfg.CommandCenter.ReconnectInterval).To(Equal(10))
@@ -36,7 +36,7 @@ storage {
 		It("applies defaults for optional fields", func() {
 			hcl := `
 command_center {
-  url           = "ws://localhost:8080/ws"
+  host          = "http://localhost:8080"
   instance_name = "my-instance"
 }
 
@@ -62,12 +62,12 @@ storage {
 
 		It("supports variable interpolation in command_center fields", func() {
 			hcl := `
-variable "cc_url" {
-  default = "ws://staging:9090/ws"
+variable "cc_host" {
+  default = "https://staging.example.com"
 }
 
 command_center {
-  url           = vars.cc_url
+  host          = vars.cc_host
   instance_name = "staging-worker"
 }
 
@@ -79,12 +79,12 @@ storage {
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.CommandCenter).NotTo(BeNil())
-			Expect(cfg.CommandCenter.URL).To(Equal("ws://staging:9090/ws"))
+			Expect(cfg.CommandCenter.Host).To(Equal("https://staging.example.com"))
 		})
 	})
 
 	Describe("Validation", func() {
-		It("fails when url is missing", func() {
+		It("fails when host is missing", func() {
 			hcl := `
 command_center {
   instance_name = "test"
@@ -100,13 +100,13 @@ storage {
 
 			err = cfg.Validate()
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("url is required"))
+			Expect(err.Error()).To(ContainSubstring("host is required"))
 		})
 
 		It("fails when instance_name is missing", func() {
 			hcl := `
 command_center {
-  url = "ws://localhost:8080/ws"
+  host = "https://localhost:8080"
 }
 
 storage {
@@ -122,10 +122,51 @@ storage {
 			Expect(err.Error()).To(ContainSubstring("instance_name is required"))
 		})
 
-		It("passes validation with all required fields", func() {
+		It("rejects the legacy url field with a migration hint", func() {
 			hcl := `
 command_center {
   url           = "ws://localhost:8080/ws"
+  instance_name = "test"
+}
+
+storage {
+  backend = "sqlite"
+}
+`
+			_, f := writeFixture("legacy-command-center.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = cfg.Validate()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("deprecated"))
+			Expect(err.Error()).To(ContainSubstring("host"))
+		})
+
+		It("rejects a host without an http(s) scheme", func() {
+			hcl := `
+command_center {
+  host          = "ws://localhost:8080"
+  instance_name = "test"
+}
+
+storage {
+  backend = "sqlite"
+}
+`
+			_, f := writeFixture("bad-scheme.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+
+			err = cfg.Validate()
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("http or https"))
+		})
+
+		It("passes validation with all required fields", func() {
+			hcl := `
+command_center {
+  host          = "https://localhost:8080"
   instance_name = "valid-instance"
 }
 
@@ -149,6 +190,32 @@ storage {
 
 			err = cfg.Validate()
 			Expect(err).NotTo(HaveOccurred())
+		})
+	})
+
+	Describe("Derived URLs", func() {
+		It("builds the WebSocket URL from an https host", func() {
+			cc := &config.CommandCenterConfig{Host: "https://foo.com"}
+			Expect(cc.WebSocketURL()).To(Equal("wss://foo.com/ws"))
+			Expect(cc.OAuthRedirectURI()).To(Equal("https://foo.com/oauth/callback"))
+		})
+
+		It("builds the WebSocket URL from an http host", func() {
+			cc := &config.CommandCenterConfig{Host: "http://localhost:8080"}
+			Expect(cc.WebSocketURL()).To(Equal("ws://localhost:8080/ws"))
+			Expect(cc.OAuthRedirectURI()).To(Equal("http://localhost:8080/oauth/callback"))
+		})
+
+		It("preserves a path prefix on the host", func() {
+			cc := &config.CommandCenterConfig{Host: "https://foo.com/commander"}
+			Expect(cc.WebSocketURL()).To(Equal("wss://foo.com/commander/ws"))
+			Expect(cc.OAuthRedirectURI()).To(Equal("https://foo.com/commander/oauth/callback"))
+		})
+
+		It("tolerates a trailing slash on the host", func() {
+			cc := &config.CommandCenterConfig{Host: "https://foo.com/"}
+			Expect(cc.WebSocketURL()).To(Equal("wss://foo.com/ws"))
+			Expect(cc.OAuthRedirectURI()).To(Equal("https://foo.com/oauth/callback"))
 		})
 	})
 })

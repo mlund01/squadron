@@ -65,6 +65,12 @@ type Client struct {
 	// Concurrency tracker for mission max_parallel enforcement
 	concurrency ConcurrencyTracker
 
+	// OAuth callback listeners — keyed by OAuth state. The WsbridgeCallbackSource
+	// registers a channel per in-flight login; commander delivers callback params
+	// over WS and we fan them out to the listener matching the state value.
+	oauthMu        sync.Mutex
+	oauthListeners map[string]chan<- OAuthCallback
+
 	// Lifecycle
 	done chan struct{}
 	ctx  context.Context
@@ -113,6 +119,7 @@ func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath st
 		runningMissions: make(map[string]*runningMission),
 		subscriptions:   NewSubscriptionManager(),
 		concurrency:     noopConcurrency{},
+		oauthListeners:  make(map[string]chan<- OAuthCallback),
 		done:         make(chan struct{}),
 		ctx:        ctx,
 		stop:       stop,
@@ -133,7 +140,7 @@ func (c *Client) Connect() error {
 	if cfg == nil || cfg.CommandCenter == nil {
 		return fmt.Errorf("config not loaded")
 	}
-	return c.connectToURL(cfg.CommandCenter.URL)
+	return c.connectToURL(cfg.CommandCenter.WebSocketURL())
 }
 
 func (c *Client) connectToURL(url string) error {
@@ -439,6 +446,54 @@ func (c *Client) sendEnvelope(env *protocol.Envelope) error {
 // SendEvent sends a one-way event to commander (no response expected).
 func (c *Client) SendEvent(env *protocol.Envelope) error {
 	return c.sendEnvelope(env)
+}
+
+// SendRequest sends a request to commander and waits for the correlated
+// response. Exposed so packages outside wsbridge (e.g. mcp/oauth) can issue
+// their own request/response round-trips.
+func (c *Client) SendRequest(env *protocol.Envelope) (*protocol.Envelope, error) {
+	return c.sendRequest(env)
+}
+
+// OAuthCallback is the decoded callback delivery payload pushed from commander
+// into a registered listener.
+type OAuthCallback struct {
+	Code  string
+	State string
+	Error string
+}
+
+// RegisterOAuthListener attaches a channel that receives the OAuth callback
+// for the given state value. Returns a cancel function to deregister. The
+// buffered channel must have capacity >= 1 so we never block while holding
+// the mutex.
+func (c *Client) RegisterOAuthListener(state string, ch chan<- OAuthCallback) func() {
+	c.oauthMu.Lock()
+	c.oauthListeners[state] = ch
+	c.oauthMu.Unlock()
+	return func() {
+		c.oauthMu.Lock()
+		delete(c.oauthListeners, state)
+		c.oauthMu.Unlock()
+	}
+}
+
+// deliverOAuthCallback forwards a callback delivery to the registered
+// listener for the given state, if any. Returns true if a listener consumed
+// the delivery.
+func (c *Client) deliverOAuthCallback(cb OAuthCallback) bool {
+	c.oauthMu.Lock()
+	ch, ok := c.oauthListeners[cb.State]
+	c.oauthMu.Unlock()
+	if !ok {
+		return false
+	}
+	select {
+	case ch <- cb:
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) sendRequest(env *protocol.Envelope) (*protocol.Envelope, error) {

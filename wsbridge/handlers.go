@@ -52,6 +52,8 @@ func (c *Client) registerHandlers() {
 	c.handlers[protocol.TypeGetCostSummary] = c.handleGetCostSummary
 	c.handlers[protocol.TypeSubscribe] = c.handleSubscribe
 	c.handlers[protocol.TypeUnsubscribe] = c.handleUnsubscribe
+	c.handlers[protocol.TypeOAuthCallbackDelivery] = c.handleOAuthCallbackDelivery
+	c.handlers[protocol.TypeStartMCPLogin] = c.handleStartMCPLogin
 }
 
 func (c *Client) handleReloadConfig(env *protocol.Envelope) (*protocol.Envelope, error) {
@@ -1587,4 +1589,63 @@ func (c *Client) handleUnsubscribe(env *protocol.Envelope) (*protocol.Envelope, 
 	}
 	c.subscriptions.Unsubscribe(payload.Scope, payload.MissionID)
 	return nil, nil
+}
+
+// handleOAuthCallbackDelivery is invoked when commander pushes the IdP's
+// callback (code/state) to us over the bridge. We look up the in-flight
+// login by state and wake up its WsbridgeCallbackSource.
+func (c *Client) handleOAuthCallbackDelivery(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.OAuthCallbackDeliveryPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode oauth_callback_delivery: %w", err)
+	}
+
+	cb := OAuthCallback{
+		Code:  payload.Code,
+		State: payload.State,
+		Error: payload.Error,
+	}
+	accepted := c.deliverOAuthCallback(cb)
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeOAuthCallbackAck, &protocol.OAuthCallbackAckPayload{
+		Accepted: accepted,
+		Reason: func() string {
+			if !accepted {
+				return "no listener registered for this state (flow may have expired)"
+			}
+			return ""
+		}(),
+	})
+}
+
+// StartMCPLoginHook is invoked when commander requests that squadron kick
+// off an OAuth login for a named MCP server. It must run the blocking
+// login flow in the background and return the authorization URL
+// synchronously so commander can forward it to the browser that initiated
+// the login. Package-level variable so cmd/engage can wire it up without
+// creating an import cycle between wsbridge and squadron/mcp/oauth.
+var StartMCPLoginHook func(ctx context.Context, client *Client, mcpName string) (authURL string, err error)
+
+func (c *Client) handleStartMCPLogin(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.StartMCPLoginPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode start_mcp_login: %w", err)
+	}
+	if StartMCPLoginHook == nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeStartMCPLoginAck, &protocol.StartMCPLoginAckPayload{
+			Accepted: false,
+			Reason:   "MCP login not available (squadron not configured for oauth proxy)",
+		})
+	}
+	authURL, err := StartMCPLoginHook(c.ctx, c, payload.McpName)
+	if err != nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeStartMCPLoginAck, &protocol.StartMCPLoginAckPayload{
+			Accepted: false,
+			Reason:   err.Error(),
+		})
+	}
+	return protocol.NewResponse(env.RequestID, protocol.TypeStartMCPLoginAck, &protocol.StartMCPLoginAckPayload{
+		Accepted: true,
+		AuthURL:  authURL,
+	})
 }

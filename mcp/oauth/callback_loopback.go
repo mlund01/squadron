@@ -60,6 +60,10 @@ func (s *LoopbackCallbackSource) Prepare(ctx context.Context) (string, error) {
 	return fmt.Sprintf("http://127.0.0.1:%d/callback", port), nil
 }
 
+// SetState is a no-op for the loopback source — it routes callbacks by port,
+// not by state value.
+func (s *LoopbackCallbackSource) SetState(state string) {}
+
 func (s *LoopbackCallbackSource) Present(ctx context.Context, authURL string) error {
 	// Print first so the user has a fallback if the browser launch fails.
 	fmt.Printf("Opening browser to authorize...\n")

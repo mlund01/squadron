@@ -103,12 +103,32 @@ If your config declares a `command_center` block:
 
 ```hcl
 command_center {
-  url           = "ws://command-center.example.com/ws"
+  host          = "https://command-center.example.com"
   instance_name = "my-instance"
 }
 ```
 
-…Squadron connects outbound to that command center. Do not pass `--cc` — Squadron will refuse to run both at once.
+`host` is just the scheme + domain (plus an optional path prefix if you map command center behind one). Squadron derives:
+
+- the WebSocket URL — `https` becomes `wss`, `http` becomes `ws`, with `/ws` appended
+- the OAuth callback URL — scheme preserved, with `/oauth/callback` appended
+
+…so a single value drives both the control-plane connection and the OAuth proxy redirect URI. Do not pass `--cc` — Squadron will refuse to run both at once.
+
+### OAuth proxy for MCP servers
+
+When squadron is connected to a command center, MCP OAuth logins can be
+routed through command center instead of a local loopback server. This
+lets you authorize MCP servers even when squadron runs on a remote host,
+and gives you a stable HTTPS callback URL for IdPs that require it.
+
+- From the command center UI, open the Tools page and click **Connect** on
+  any MCP server to start the flow. The IdP redirect lands on command
+  center's `/oauth/callback`, which pushes the token back to the owning
+  squadron over the WebSocket.
+- The standalone `squadron mcp login <name>` CLI still works — it uses the
+  local loopback server because the CLI process has no live bridge
+  connection. Useful for local development.
 
 ## Behavior with Invalid Config
 

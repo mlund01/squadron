@@ -26,6 +26,7 @@ type mockCallbackSource struct {
 func (m *mockCallbackSource) Prepare(_ context.Context) (string, error) {
 	return m.redirectURI, m.prepareErr
 }
+func (m *mockCallbackSource) SetState(_ string) {}
 func (m *mockCallbackSource) Present(_ context.Context, authURL string) error {
 	m.presentedURL = authURL
 	return m.presentErr

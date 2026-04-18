@@ -333,43 +333,61 @@ func convertGeminiTools(tools []ToolDefinition) []*genai.Tool {
 	return []*genai.Tool{{FunctionDeclarations: decls}}
 }
 
+// jsonSchemaToGeminiSchema converts a generic JSON Schema map into the
+// genai.Schema structure. Gemini accepts a well-defined subset of OpenAPI
+// schema; unsupported keywords (oneOf, allOf, $ref, additionalProperties,
+// etc.) are dropped silently.
 func jsonSchemaToGeminiSchema(schema map[string]any) *genai.Schema {
 	s := &genai.Schema{}
 
-	if t, ok := schema["type"].(string); ok {
-		switch t {
-		case "object":
-			s.Type = genai.TypeObject
-		case "string":
-			s.Type = genai.TypeString
-		case "number":
-			s.Type = genai.TypeNumber
-		case "integer":
-			s.Type = genai.TypeInteger
-		case "boolean":
-			s.Type = genai.TypeBoolean
-		case "array":
-			s.Type = genai.TypeArray
-		}
+	// type — JSON Schema allows an array of types (e.g. ["string", "null"]).
+	// Gemini has no union type; map ["X", "null"] to X + nullable=true, and
+	// fall back to anyOf for multi-type unions.
+	if t, ok := schema["type"]; ok {
+		applyJSONSchemaType(s, t)
 	}
 
+	if title, ok := schema["title"].(string); ok {
+		s.Title = title
+	}
 	if desc, ok := schema["description"].(string); ok {
 		s.Description = desc
 	}
+	if format, ok := schema["format"].(string); ok {
+		s.Format = format
+	}
+	if pattern, ok := schema["pattern"].(string); ok {
+		s.Pattern = pattern
+	}
+	if def, ok := schema["default"]; ok {
+		s.Default = def
+	}
+	if ex, ok := schema["example"]; ok {
+		s.Example = ex
+	}
+	if n, ok := schema["nullable"].(bool); ok {
+		s.Nullable = &n
+	}
 
 	if props, ok := schema["properties"].(map[string]any); ok {
-		s.Properties = make(map[string]*genai.Schema)
+		s.Properties = make(map[string]*genai.Schema, len(props))
 		for name, prop := range props {
 			if propMap, ok := prop.(map[string]any); ok {
 				s.Properties[name] = jsonSchemaToGeminiSchema(propMap)
 			}
 		}
 	}
-
 	if req, ok := schema["required"].([]any); ok {
 		for _, r := range req {
 			if str, ok := r.(string); ok {
 				s.Required = append(s.Required, str)
+			}
+		}
+	}
+	if order, ok := schema["propertyOrdering"].([]any); ok {
+		for _, p := range order {
+			if str, ok := p.(string); ok {
+				s.PropertyOrdering = append(s.PropertyOrdering, str)
 			}
 		}
 	}
@@ -378,5 +396,158 @@ func jsonSchemaToGeminiSchema(schema map[string]any) *genai.Schema {
 		s.Items = jsonSchemaToGeminiSchema(items)
 	}
 
+	// enum — JSON Schema allows any value type; Gemini expects strings.
+	// Stringify non-string values so int/bool enums survive the round trip.
+	if enum, ok := schema["enum"].([]any); ok {
+		s.Enum = make([]string, 0, len(enum))
+		for _, v := range enum {
+			switch tv := v.(type) {
+			case string:
+				s.Enum = append(s.Enum, tv)
+			case nil:
+				s.Enum = append(s.Enum, "")
+			default:
+				b, err := json.Marshal(tv)
+				if err == nil {
+					s.Enum = append(s.Enum, string(b))
+				}
+			}
+		}
+		// Gemini docs recommend format="enum" when enum is set on non-string types.
+		if s.Format == "" {
+			s.Format = "enum"
+		}
+	}
+
+	if anyOf, ok := schema["anyOf"].([]any); ok {
+		for _, sub := range anyOf {
+			if subMap, ok := sub.(map[string]any); ok {
+				s.AnyOf = append(s.AnyOf, jsonSchemaToGeminiSchema(subMap))
+			}
+		}
+	}
+	// oneOf is treated as anyOf (Gemini has no oneOf equivalent).
+	if oneOf, ok := schema["oneOf"].([]any); ok {
+		for _, sub := range oneOf {
+			if subMap, ok := sub.(map[string]any); ok {
+				s.AnyOf = append(s.AnyOf, jsonSchemaToGeminiSchema(subMap))
+			}
+		}
+	}
+
+	// Numeric bounds.
+	if v, ok := toFloat64(schema["minimum"]); ok {
+		s.Minimum = &v
+	}
+	if v, ok := toFloat64(schema["maximum"]); ok {
+		s.Maximum = &v
+	}
+	// Length/size bounds.
+	if v, ok := toInt64(schema["minLength"]); ok {
+		s.MinLength = &v
+	}
+	if v, ok := toInt64(schema["maxLength"]); ok {
+		s.MaxLength = &v
+	}
+	if v, ok := toInt64(schema["minItems"]); ok {
+		s.MinItems = &v
+	}
+	if v, ok := toInt64(schema["maxItems"]); ok {
+		s.MaxItems = &v
+	}
+	if v, ok := toInt64(schema["minProperties"]); ok {
+		s.MinProperties = &v
+	}
+	if v, ok := toInt64(schema["maxProperties"]); ok {
+		s.MaxProperties = &v
+	}
+
 	return s
+}
+
+// applyJSONSchemaType handles the `type` keyword, which JSON Schema allows to
+// be either a single string or an array. Gemini's Type is a single value;
+// ["X", "null"] collapses to X + nullable, and broader unions fall through to
+// anyOf (populated elsewhere).
+func applyJSONSchemaType(s *genai.Schema, t any) {
+	switch tv := t.(type) {
+	case string:
+		s.Type = jsonTypeToGemini(tv)
+	case []any:
+		var nonNull []string
+		hasNull := false
+		for _, entry := range tv {
+			if str, ok := entry.(string); ok {
+				if str == "null" {
+					hasNull = true
+				} else {
+					nonNull = append(nonNull, str)
+				}
+			}
+		}
+		if hasNull {
+			n := true
+			s.Nullable = &n
+		}
+		if len(nonNull) == 1 {
+			s.Type = jsonTypeToGemini(nonNull[0])
+		} else if len(nonNull) > 1 {
+			// Union type: expand into AnyOf branches, one per type.
+			for _, name := range nonNull {
+				s.AnyOf = append(s.AnyOf, &genai.Schema{Type: jsonTypeToGemini(name)})
+			}
+		}
+	}
+}
+
+func jsonTypeToGemini(t string) genai.Type {
+	switch t {
+	case "object":
+		return genai.TypeObject
+	case "string":
+		return genai.TypeString
+	case "number":
+		return genai.TypeNumber
+	case "integer":
+		return genai.TypeInteger
+	case "boolean":
+		return genai.TypeBoolean
+	case "array":
+		return genai.TypeArray
+	}
+	return ""
+}
+
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case float32:
+		return float64(n), true
+	case int:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	}
+	return 0, false
+}
+
+func toInt64(v any) (int64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int64(n), true
+	case float32:
+		return int64(n), true
+	case int:
+		return int64(n), true
+	case int64:
+		return n, true
+	case json.Number:
+		i, err := n.Int64()
+		return i, err == nil
+	}
+	return 0, false
 }

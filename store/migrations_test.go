@@ -33,7 +33,7 @@ var _ = Describe("Migrations", func() {
 
 	AfterEach(func() { cleanup() })
 
-	It("creates schema_migrations and records baseline on first run", func() {
+	It("creates schema_migrations and records every embedded migration on first run", func() {
 		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
 
 		rows, err := db.Query(`SELECT version, name FROM schema_migrations ORDER BY version`)
@@ -41,25 +41,32 @@ var _ = Describe("Migrations", func() {
 		defer rows.Close()
 
 		var versions []int
-		var names []string
 		for rows.Next() {
 			var v int
 			var n string
 			Expect(rows.Scan(&v, &n)).To(Succeed())
 			versions = append(versions, v)
-			names = append(names, n)
 		}
-		Expect(versions).To(Equal([]int{1}))
-		Expect(names).To(Equal([]string{"baseline"}))
+
+		loaded, err := store.LoadMigrations()
+		Expect(err).NotTo(HaveOccurred())
+		expected := make([]int, 0, len(loaded))
+		for _, m := range loaded {
+			expected = append(expected, m.Version)
+		}
+		Expect(versions).To(Equal(expected))
 	})
 
 	It("is idempotent — running twice does not duplicate rows or fail", func() {
 		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
 		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
 
+		loaded, err := store.LoadMigrations()
+		Expect(err).NotTo(HaveOccurred())
+
 		var count int
 		Expect(db.QueryRow(`SELECT COUNT(*) FROM schema_migrations`).Scan(&count)).To(Succeed())
-		Expect(count).To(Equal(1))
+		Expect(count).To(Equal(len(loaded)))
 	})
 
 	It("creates every table referenced by the stores", func() {

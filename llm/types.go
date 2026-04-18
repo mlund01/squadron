@@ -41,6 +41,11 @@ type ToolUseBlock struct {
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
+	// ThoughtSignature is an opaque signature that Gemini thinking models attach
+	// to function call parts. It must be round-tripped back in history for
+	// subsequent requests; omitting it causes a 400 "missing thought_signature".
+	// Empty for non-Gemini providers.
+	ThoughtSignature []byte `json:"thought_signature,omitempty"`
 }
 
 // ToolResultBlock represents the result of a tool call

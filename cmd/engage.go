@@ -172,7 +172,6 @@ func runEngage(cmd *cobra.Command, args []string) {
 		fmt.Printf("Squadron engaged (PID %d). Starts automatically on boot.\n", pid)
 		fmt.Println("Use 'squadron disengage' to stop.")
 
-		// Open the port the child actually bound — may differ from --cc-port if taken.
 		if launchLocalCC && ready.CCPort > 0 {
 			openBrowser(fmt.Sprintf("http://localhost:%d", ready.CCPort))
 		}
@@ -333,7 +332,9 @@ func runEngage(cmd *cobra.Command, args []string) {
 			log.Printf("Connection failed: %v", err)
 		} else {
 			fmt.Printf("Squadron ready — http://localhost:%d\n", ccPort)
-			if !isContainer() {
+			// Forked children let the parent handle the browser so it opens
+			// after the parent's spinner and ready message, not mid-spin.
+			if !isContainer() && os.Getenv("SQUADRON_FORKED") != "1" {
 				openBrowser(fmt.Sprintf("http://localhost:%d", ccPort))
 			}
 		}

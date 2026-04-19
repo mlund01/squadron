@@ -320,6 +320,7 @@ type Commander struct {
 	taskComplete       *aitools.TaskCompleteTool   // Tool to signal task completion
 	loopExitReason     string                     // Why the commander loop exited (for failure diagnostics)
 	noToolCallRetries  int                        // Count of consecutive no-tool-call retries
+	maxTokensRetries   int                        // Count of consecutive max_tokens truncation retries
 	sessionLogger      SessionLogger               // Session persistence (nil if not tracking)
 	sessionID          string                 // Store session ID (empty if not tracking)
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
@@ -1375,10 +1376,48 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			s.turnLogger.LogTurn(firstToolName, s.session.SnapshotMessages())
 		}
 
-		// If response was truncated, record it as the exit reason
-		if resp != nil && resp.FinishReason == "max_tokens" && len(toolUses) == 0 {
-			s.loopExitReason = "LLM response hit max output tokens — tool call was truncated"
+		// Handle max_tokens truncation before processing tool uses. Any partial
+		// tool_use in the response can't be trusted (JSON input may be cut off),
+		// so we emit error tool_results to keep the session protocol-valid and
+		// ask the LLM to be more concise. Allow up to 3 corrective attempts.
+		maxTokensFailed := false
+		for resp != nil && resp.FinishReason == "max_tokens" {
+			s.maxTokensRetries++
+			if len(toolUses) > 0 {
+				var errResults []llm.ToolResultBlock
+				for _, tc := range toolUses {
+					errResults = append(errResults, llm.ToolResultBlock{
+						ToolUseID: tc.ID,
+						Content:   "Error: tool call was truncated because the response hit the max output token limit; not executed.",
+						IsError:   true,
+					})
+				}
+				s.session.AddToolResults(errResults)
+				toolUses = nil
+			}
+			if s.maxTokensRetries > 3 {
+				s.loopExitReason = "LLM response hit max output tokens after 3 correction attempts"
+				maxTokensFailed = true
+				break
+			}
+			log.Printf("[Commander] Response hit max_tokens for task '%s' (attempt %d/3), sending correction...", s.TaskName, s.maxTokensRetries)
+			correction := "Your previous response hit the maximum output token limit and was truncated. Be more concise: shorten your reasoning, split the work into smaller tool calls, or call task_complete with a summary if you have enough context."
+			resp, err = s.session.SendStream(ctx, correction, onChunk)
+			if err != nil {
+				return err
+			}
+			if resp != nil {
+				for _, block := range resp.ContentBlocks {
+					if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
+						toolUses = append(toolUses, *block.ToolUse)
+					}
+				}
+			}
 		}
+		if maxTokensFailed {
+			break
+		}
+		s.maxTokensRetries = 0
 
 		// If no tool calls, the commander produced text instead of calling a tool.
 		// Send a correction and retry, up to 3 times.

@@ -79,6 +79,11 @@ func (s *Session) chatStreamWithRetry(ctx context.Context, req *ChatRequest) (<-
 		backoff := retryBackoffs[attempt] * time.Second
 		log.Printf("[LLM] Retryable error (attempt %d/%d: %v), retrying in %s...", attempt+1, len(retryBackoffs), err, backoff)
 
+		// TODO(mission-issue): emit a warning-severity mission_issue with
+		// category=provider_error, retrying=true, details={attempt, backoff}.
+		// Session currently has no handle on the mission streamer; add an
+		// optional callback to Session so the runner/commander can wire it.
+
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -286,10 +291,16 @@ func (s *Session) Clone() *Session {
 				if part.ToolUse != nil {
 					inputCopy := make(json.RawMessage, len(part.ToolUse.Input))
 					copy(inputCopy, part.ToolUse.Input)
+					var sigCopy []byte
+					if len(part.ToolUse.ThoughtSignature) > 0 {
+						sigCopy = make([]byte, len(part.ToolUse.ThoughtSignature))
+						copy(sigCopy, part.ToolUse.ThoughtSignature)
+					}
 					messagesCopy[i].Parts[j].ToolUse = &ToolUseBlock{
-						ID:    part.ToolUse.ID,
-						Name:  part.ToolUse.Name,
-						Input: inputCopy,
+						ID:               part.ToolUse.ID,
+						Name:             part.ToolUse.Name,
+						Input:            inputCopy,
+						ThoughtSignature: sigCopy,
 					}
 				}
 				if part.ToolResult != nil {

@@ -45,6 +45,7 @@ type Agent struct {
 	sessionID        string           // Session ID for tool result auditing
 	taskID           string           // Task ID for tool result auditing
 	pricingOverrides map[string]*llm.ModelPricing
+	budget           BudgetChecker
 }
 
 // CompactionConfig holds settings for context compaction
@@ -83,6 +84,9 @@ type Options struct {
 	OnSessionTurn func(data protocol.SessionTurnData)
 	// PricingOverrides maps API model names to custom pricing (optional, from config)
 	PricingOverrides map[string]*llm.ModelPricing
+	// Budget is an optional per-task budget checker shared with the commander so that
+	// agent turns contribute to the same cumulative totals.
+	Budget BudgetChecker
 	// AgentConfig is a pre-resolved agent config (optional, used for mission-scoped agents)
 	AgentConfig *config.Agent
 	// Provider is an optional pre-created LLM provider. When set, agent creation
@@ -304,6 +308,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		secretInfos:      opts.SecretInfos,
 		pricingOverrides: opts.PricingOverrides,
 		secretValues:   opts.SecretValues,
+		budget:           opts.Budget,
 	}, nil
 }
 
@@ -348,7 +353,8 @@ func (a *Agent) Resume(ctx context.Context, streamer streamers.ChatHandler) (Cha
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID
 	orch.pricingOverrides = a.pricingOverrides
-	return orch.processTurn(ctx, "", true)
+	orch.budget = a.budget
+	return orch.processTurn(ctx,"", true)
 }
 
 // EnableDebug sets up debug logging on the agent.
@@ -396,7 +402,8 @@ func (a *Agent) Chat(ctx context.Context, input string, streamer streamers.ChatH
 	orch.sessionID = a.sessionID
 	orch.taskID = a.taskID
 	orch.pricingOverrides = a.pricingOverrides
-	return orch.processTurn(ctx, input, false)
+	orch.budget = a.budget
+	return orch.processTurn(ctx,input, false)
 }
 
 // AnswerFollowUp handles a follow-up question using the agent's existing conversation context.
@@ -433,11 +440,11 @@ func (a *Agent) GetTools() map[string]aitools.Tool {
 func createProvider(ctx context.Context, modelConfig *config.Model) (llm.Provider, bool, error) {
 	switch modelConfig.Provider {
 	case config.ProviderOpenAI:
-		return llm.NewOpenAIProvider(modelConfig.APIKey), false, nil
+		return llm.NewOpenAIProvider(modelConfig.APIKey, modelConfig.BaseURL), false, nil
 	case config.ProviderAnthropic:
-		return llm.NewAnthropicProvider(modelConfig.APIKey), false, nil
+		return llm.NewAnthropicProvider(modelConfig.APIKey, modelConfig.BaseURL), false, nil
 	case config.ProviderGemini:
-		provider, err := llm.NewGeminiProvider(ctx, modelConfig.APIKey)
+		provider, err := llm.NewGeminiProvider(ctx, modelConfig.APIKey, modelConfig.BaseURL)
 		if err != nil {
 			return nil, false, err
 		}

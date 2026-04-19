@@ -2,6 +2,7 @@ package mission
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -627,4 +628,114 @@ var _ = Describe("Runner Integration", func() {
 			Expect(streamer.eventCount("iteration_completed")).To(Equal(2))
 		})
 	})
+
+	// -----------------------------------------------------------------------
+	// Budget enforcement
+	// -----------------------------------------------------------------------
+	Describe("mission and task budgets", func() {
+		// The mock provider reports 100 input + 50 output tokens per turn (see
+		// mockProvider.Chat/ChatStream). A minimal single-task/single-agent run
+		// is three turns: commander call_agent → agent answer → commander
+		// task_complete, for ~450 tokens total. Budgets are chosen relative to
+		// that baseline.
+
+		tokens := func(v int64) *int64 { return &v }
+
+		It("fails the mission when a task token budget is exhausted", func() {
+			task := testTask("work", "Do something")
+			task.Budget = &config.Budget{Tokens: tokens(200)}
+			mission := testMission("test_task_budget", []config.Task{task})
+			cfg := buildTestConfig(mission, testAgent("worker"))
+
+			provider := newMockProvider(
+				cmdCallAgent("worker", "Do the work"),
+				agentAnswer("Work is done."),
+				cmdTaskComplete(),
+			)
+
+			streamer, err := runMission(cfg, "test_task_budget", provider, nil)
+			Expect(err).To(HaveOccurred())
+
+			var breach *BudgetBreach
+			Expect(errors.As(err, &breach)).To(BeTrue(), "error should unwrap to *BudgetBreach")
+			Expect(breach.Scope).To(Equal(BudgetScopeTask))
+			Expect(breach.TaskName).To(Equal("work"))
+			Expect(breach.Kind).To(Equal(BudgetKindTokens))
+			Expect(breach.Used).To(BeNumerically(">=", float64(*task.Budget.Tokens)))
+
+			// Advisory mission_issue event fires exactly once with fatal severity.
+			Expect(streamer.eventCount("mission_issue")).To(Equal(1))
+			issue := firstEvent(streamer, "mission_issue")
+			Expect(issue).NotTo(BeNil())
+			Expect(issue.Data["severity"]).To(Equal("fatal"))
+			Expect(issue.Data["category"]).To(Equal("budget_exceeded"))
+			Expect(issue.Data["task"]).To(Equal("work"))
+
+			// Task must be marked failed, not stopped, when ctx cancellation is driven
+			// by a budget breach. Otherwise the UI shows mission=failed / task=stopped.
+			Expect(streamer.hasEvent("task_completed")).To(BeFalse())
+		})
+
+		It("fails the mission when the cumulative mission token budget is exhausted", func() {
+			// Each task burns ~450 tokens; cap the mission at 600 so the second
+			// task's first LLM call trips the mission-wide budget.
+			firstTask := testTask("a", "First")
+			secondTask := testTask("b", "Second")
+			secondTask.DependsOn = []string{"a"}
+
+			mission := testMission("test_mission_budget", []config.Task{firstTask, secondTask})
+			mission.Budget = &config.Budget{Tokens: tokens(600)}
+			cfg := buildTestConfig(mission, testAgent("worker"))
+
+			provider := newMockProvider(
+				cmdCallAgent("worker", "Do A"),
+				agentAnswer("A done."),
+				cmdTaskComplete(),
+				cmdCallAgent("worker", "Do B"),
+				agentAnswer("B done."),
+				cmdTaskComplete(),
+			)
+
+			streamer, err := runMission(cfg, "test_mission_budget", provider, nil)
+			Expect(err).To(HaveOccurred())
+
+			var breach *BudgetBreach
+			Expect(errors.As(err, &breach)).To(BeTrue())
+			Expect(breach.Scope).To(Equal(BudgetScopeMission))
+			Expect(breach.Kind).To(Equal(BudgetKindTokens))
+
+			Expect(streamer.eventCount("mission_issue")).To(Equal(1))
+			Expect(firstEvent(streamer, "mission_issue").Data["severity"]).To(Equal("fatal"))
+		})
+
+		It("runs to completion when usage stays under budget", func() {
+			// Regression guard: budgets must not fire on the happy path.
+			task := testTask("work", "Do something")
+			task.Budget = &config.Budget{Tokens: tokens(100_000)}
+			mission := testMission("test_budget_ample", []config.Task{task})
+			mission.Budget = &config.Budget{Tokens: tokens(1_000_000)}
+			cfg := buildTestConfig(mission, testAgent("worker"))
+
+			provider := newMockProvider(
+				cmdCallAgent("worker", "Do the work"),
+				agentAnswer("Work is done."),
+				cmdTaskComplete(),
+			)
+
+			streamer, err := runMission(cfg, "test_budget_ample", provider, nil)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(streamer.hasEvent("mission_completed")).To(BeTrue())
+			Expect(streamer.hasEvent("mission_issue")).To(BeFalse())
+		})
+	})
 })
+
+// firstEvent returns the first recorded event of the given type, or nil.
+func firstEvent(s *mockMissionStreamer, eventType string) *streamEvent {
+	for _, e := range s.getEvents() {
+		if e.Type == eventType {
+			return &e
+		}
+	}
+	return nil
+}

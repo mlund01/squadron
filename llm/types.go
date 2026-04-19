@@ -41,6 +41,11 @@ type ToolUseBlock struct {
 	ID    string          `json:"id"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
+	// ThoughtSignature is an opaque signature that Gemini thinking models attach
+	// to function call parts. It must be round-tripped back in history for
+	// subsequent requests; omitting it causes a 400 "missing thought_signature".
+	// Empty for non-Gemini providers.
+	ThoughtSignature []byte `json:"thought_signature,omitempty"`
 }
 
 // ToolResultBlock represents the result of a tool call
@@ -161,6 +166,12 @@ type Usage struct {
 
 	CacheWriteTokens int // Tokens written to cache (Anthropic: cache_creation_input_tokens)
 	CacheReadTokens  int // Tokens read from cache (Anthropic: cache_read_input_tokens, OpenAI: cached_tokens)
+}
+
+// Total is the sum of all token categories — used by budget accounting where
+// every category counts against the same cap.
+func (u Usage) Total() int {
+	return u.InputTokens + u.OutputTokens + u.CacheReadTokens + u.CacheWriteTokens
 }
 
 type Provider interface {

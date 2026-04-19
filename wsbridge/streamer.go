@@ -235,6 +235,10 @@ func (h *WSMissionHandler) SessionTurn(data protocol.SessionTurnData) {
 	h.sendEvent(protocol.EventSessionTurn, data)
 }
 
+func (h *WSMissionHandler) MissionIssue(data streamers.MissionIssueData) {
+	h.sendEvent(streamers.EventMissionIssue, data)
+}
+
 func (h *WSMissionHandler) AgentStarted(taskName string, agentName string, instruction string) {
 	h.sendEvent(protocol.EventAgentStarted, protocol.AgentStartedData{
 		TaskName:    taskName,

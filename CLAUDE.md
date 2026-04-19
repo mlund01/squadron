@@ -238,6 +238,42 @@ mission "ingest" {
 
 The command center registers the route `POST /webhooks/<instance_name>/<webhook_path>` and dispatches to squadron via WebSocket when hit. One `trigger` block per mission max.
 
+#### Budgets
+
+Missions and tasks can declare spending limits via a `budget` block. Both
+fields are optional but at least one must be set. Whichever limit is reached
+first fails the current task and crashes the whole mission — in-flight
+commanders and agents unwind via the mission's shared cancellable context.
+
+```hcl
+mission "expensive_research" {
+  budget {
+    tokens  = 5000000   # cumulative across every task
+    dollars = 25.00
+  }
+
+  task "crawl" {
+    budget { tokens = 500000 }   # per-task cap, across all iterations
+    objective = "Crawl the target domain"
+  }
+}
+```
+
+- **Scope.** Task budgets sum tokens/cost across the task's commander and every
+  agent it spawns, including all iterations of an iterated task (iteration
+  suffixes are stripped so `crawl[0]`, `crawl[1]`, ... share the same counter).
+  Mission budgets sum across every task in the mission.
+- **Both types matter.** Models without configured pricing (Ollama/local) always
+  contribute $0, so a dollar-only budget cannot constrain them — pair it with a
+  token budget. Conversely, a dollar budget lets you cap spend without having to
+  think about per-model token rates.
+- **First breach wins.** The tracker latches on first breach, cancels the
+  mission context, and returns a `*mission.BudgetBreach` as the mission error.
+  In-flight tasks return `ctx.Canceled`, but the runner substitutes the breach
+  so the mission status is `failed`, not `stopped`.
+- **Zero overhead when unused.** If neither the mission nor any task declares a
+  budget, no tracker is created.
+
 #### Concurrency (`max_parallel`)
 
 `max_parallel` (default 3) limits concurrent instances of a mission across all sources — schedules, webhooks, and manual runs. When at capacity, new runs are skipped and a `schedule_skip` event is emitted.
@@ -776,6 +812,83 @@ When `--resume <missionID>` is used:
 | `SessionStore` | `store/store.go` | Session/message persistence |
 | `DatasetStore` | `store/store.go` | Dataset item persistence |
 | `SQLiteStore` | `store/sqlite.go` | SQLite implementation of all stores |
+
+### Schema Migrations
+
+All schema changes flow through the versioned runner in `store/migrations.go`.
+The runner tracks applied versions in a `schema_migrations` table and applies
+each pending migration in its own transaction together with the bookkeeping
+insert — a partial failure leaves the DB untouched. It runs automatically
+during `NewSQLiteBundle` / `NewPostgresBundle`.
+
+#### File layout
+
+Migration SQL lives under `store/migrations/` as paired, dialect-specific
+files embedded via `//go:embed`:
+
+```
+store/
+  migrations.go                      # runner + loader
+  migrations_checksums_test.go       # tamper guardrail
+  migrations/
+    0001_baseline.sqlite.sql
+    0001_baseline.postgres.sql
+    0002_<name>.sqlite.sql
+    0002_<name>.postgres.sql
+    ...
+```
+
+Filenames MUST match `NNNN_<name>.<sqlite|postgres>.sql`. At startup,
+`LoadMigrations()` pairs each version's sqlite and postgres files, enforces
+that both exist and share the same name, and errors if versions skip.
+
+#### Adding a migration — the ONLY sanctioned way to change a schema
+
+1. Create two new files under `store/migrations/`:
+   - `NNNN_<name>.sqlite.sql`
+   - `NNNN_<name>.postgres.sql`
+
+   where `NNNN` is the previous version + 1, zero-padded to 4 digits, and
+   `<name>` is `lowercase_snake_case` (matches `[a-z0-9_]+`).
+2. Write dialect-specific DDL in each file. Dialects diverge on type names
+   (`REAL` vs `DOUBLE PRECISION`), auto-increment (`AUTOINCREMENT` vs
+   `SERIAL`), and a few `ALTER TABLE` semantics — write each side
+   explicitly. If a change is meaningful for only one dialect, the other
+   file can be empty but must still exist.
+3. Prefer `IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS` so the migration is
+   safe to re-run if something wedges mid-apply.
+4. Do NOT wrap the SQL in `BEGIN`/`COMMIT` — the runner handles that.
+5. Register both files' sha256 checksums in `migrationChecksums` in
+   [store/migrations_checksums_test.go](store/migrations_checksums_test.go):
+
+   ```
+   shasum -a 256 store/migrations/NNNN_<name>.sqlite.sql
+   shasum -a 256 store/migrations/NNNN_<name>.postgres.sql
+   ```
+
+6. Update the stores (`sqlite.go`, `postgres.go`, `cost_store*.go`, etc.) in
+   the same PR so code and schema advance together.
+
+#### Append-only invariants (enforced by tests)
+
+- **NEVER edit a shipped migration file.** The checksum test compares every
+  file on disk against its recorded sha256 — any byte-level change breaks
+  the build with a message pointing to the offender. If a migration is
+  wrong, write a NEW one that fixes it forward.
+- **NEVER delete a shipped migration file.** `migrationChecksums` entries
+  without a matching file on disk also fail the test. Historical migrations
+  must stay in the tree because users in the field have the old version
+  recorded and the runner still needs to reason about it.
+- **NEVER add a migration file without registering it.** Files under
+  `store/migrations/` without a `migrationChecksums` entry also fail the
+  test — every migration must be locked down.
+- **NEVER add bare `db.Exec("ALTER TABLE ...")`** calls outside the
+  migration list. All schema mutations go through a numbered migration.
+
+Baseline (migration 1) captures the schema that existed when the versioned
+system was introduced. It uses `IF NOT EXISTS` everywhere so existing
+deployments upgrade cleanly: their tables are preserved, baseline is
+recorded as applied, and subsequent migrations run on top.
 
 
 ---

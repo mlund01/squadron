@@ -13,8 +13,12 @@ type AnthropicProvider struct {
 	client *anthropic.Client
 }
 
-func NewAnthropicProvider(apiKey string) *AnthropicProvider {
-	client := anthropic.NewClient(option.WithAPIKey(apiKey))
+func NewAnthropicProvider(apiKey, baseURL string) *AnthropicProvider {
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if baseURL != "" {
+		opts = append(opts, option.WithBaseURL(baseURL))
+	}
+	client := anthropic.NewClient(opts...)
 	return &AnthropicProvider{client: &client}
 }
 

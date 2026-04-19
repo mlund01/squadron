@@ -103,12 +103,12 @@ If your config declares a `command_center` block:
 
 ```hcl
 command_center {
-  url           = "ws://command-center.example.com/ws"
+  url           = "wss://command-center.example.com/ws"
   instance_name = "my-instance"
 }
 ```
 
-…Squadron connects outbound to that command center and skips the local UI automatically.
+…Squadron connects outbound to that command center and skips the local UI automatically. See [Command Center](/config/command_center) for all fields and production patterns (auto-reconnect, webhooks, variable interpolation).
 
 ## Behavior with Invalid Config
 

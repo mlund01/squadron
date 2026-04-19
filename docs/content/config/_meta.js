@@ -10,4 +10,5 @@ export default {
   plugins: 'Plugins',
   mcp_tools: 'MCP Tools',
   mcp_host: 'MCP Host',
+  command_center: 'Command Center',
 }

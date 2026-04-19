@@ -88,7 +88,7 @@ Run with your config mounted:
 
 ```bash
 docker run -v ./my-project:/config -p 8080:8080 \
-  ghcr.io/mlund01/squadron engage --cc
+  ghcr.io/mlund01/squadron engage
 ```
 
 See the [Docker guide](/getting-started/docker) for full setup details including Docker Compose.
@@ -116,7 +116,7 @@ Create a project directory and launch Squadron:
 
 ```bash
 mkdir my-squadron && cd my-squadron
-squadron engage --cc
+squadron engage
 ```
 
 On a fresh directory with an interactive terminal, `engage` runs the quickstart wizard, sets up your provider and API key, generates a starter mission, and opens the command center UI in your browser. See [engage](/cli/engage) for the full walkthrough, or [Quick Start](/getting-started/quickstart) for a guided overview.

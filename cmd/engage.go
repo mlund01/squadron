@@ -32,7 +32,7 @@ import (
 
 var (
 	engageConfigPath string
-	engageCC         bool
+	engageHeadless   bool
 	engageCCPort     int
 	engageAutoInit   bool
 	engageForeground bool
@@ -57,9 +57,10 @@ var engageCmd = &cobra.Command{
 	Short: "Start Squadron and connect to the command center",
 	Long: `Start Squadron as a background service.
 
-By default, Squadron runs headless. Pass --cc to launch the local command
-center web UI. If your config declares a command_center block, Squadron
-connects outbound to that instead (and --cc becomes an error).
+By default, Squadron launches the local command center web UI. If your
+config declares a command_center block, Squadron connects outbound to
+that instead. Pass --headless to skip the local UI and run without any
+command center at all.
 
 Squadron runs in the background and installs as a system service (launchd
 on macOS, systemd on Linux) so it starts automatically on boot.
@@ -73,7 +74,7 @@ func init() {
 	rootCmd.AddCommand(engageCmd)
 
 	engageCmd.Flags().StringVarP(&engageConfigPath, "config", "c", ".", "Path to config file or directory")
-	engageCmd.Flags().BoolVar(&engageCC, "cc", false, "Launch the local command center UI")
+	engageCmd.Flags().BoolVar(&engageHeadless, "headless", false, "Run without launching the local command center UI")
 	engageCmd.Flags().IntVar(&engageCCPort, "cc-port", 8080, "Port for the command center")
 	engageCmd.Flags().BoolVar(&engageAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
 	engageCmd.Flags().BoolVar(&engageForeground, "foreground", false, "Run in foreground (default: run as background service)")
@@ -121,19 +122,12 @@ func runEngage(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	// --cc and a command_center block are two different sources of truth.
 	hasRemoteCC := configHasCommandCenter(engageConfigPath)
-	if engageCC && hasRemoteCC {
-		fmt.Fprintln(os.Stderr, "Error: --cc is incompatible with a command_center block in the config. Remove one or the other.")
+	if engageHeadless && hasRemoteCC {
+		fmt.Fprintln(os.Stderr, "Error: --headless is incompatible with a command_center block in the config. Remove one or the other.")
 		os.Exit(1)
 	}
-	if !engageCC && !hasRemoteCC {
-		fmt.Fprintln(os.Stderr, "Warning: running in headless mode without a command center.")
-		fmt.Fprintln(os.Stderr, "  Squadron will run schedules and webhooks but has no UI and no remote control.")
-		fmt.Fprintln(os.Stderr, "  Pass --cc to launch the local UI, or add a command_center block to your config.")
-		fmt.Fprintln(os.Stderr)
-	}
-	launchLocalCC := engageCC
+	launchLocalCC := !engageHeadless && !hasRemoteCC
 
 	if !engageForeground && term.IsTerminal(int(os.Stdout.Fd())) {
 		absConfigPath, err := filepath.Abs(engageConfigPath)
@@ -143,8 +137,8 @@ func runEngage(cmd *cobra.Command, args []string) {
 		}
 
 		var extraFlags []string
-		if engageCC {
-			extraFlags = append(extraFlags, "--cc")
+		if engageHeadless {
+			extraFlags = append(extraFlags, "--headless")
 		}
 		if engageCCPort != 8080 {
 			extraFlags = append(extraFlags, "--cc-port", fmt.Sprintf("%d", engageCCPort))
@@ -178,7 +172,6 @@ func runEngage(cmd *cobra.Command, args []string) {
 		fmt.Printf("Squadron engaged (PID %d). Starts automatically on boot.\n", pid)
 		fmt.Println("Use 'squadron disengage' to stop.")
 
-		// Open the port the child actually bound — may differ from --cc-port if taken.
 		if launchLocalCC && ready.CCPort > 0 {
 			openBrowser(fmt.Sprintf("http://localhost:%d", ready.CCPort))
 		}
@@ -339,6 +332,11 @@ func runEngage(cmd *cobra.Command, args []string) {
 			log.Printf("Connection failed: %v", err)
 		} else {
 			fmt.Printf("Squadron ready — http://localhost:%d\n", ccPort)
+			// Forked children let the parent handle the browser so it opens
+			// after the parent's spinner and ready message, not mid-spin.
+			if !isContainer() && os.Getenv("SQUADRON_FORKED") != "1" {
+				openBrowser(fmt.Sprintf("http://localhost:%d", ccPort))
+			}
 		}
 	} else if cfg.CommandCenter != nil {
 		if err := connectWithRetry(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {

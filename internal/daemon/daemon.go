@@ -145,6 +145,10 @@ func Fork(configPath string, extraFlags []string) (int, error) {
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	cmd.Dir = resolveConfigDir(absConfig)
+	// Marker so the child knows the parent will own the "ready, open browser"
+	// handoff — without it the child would race ahead and pop a browser tab
+	// before the parent's spinner has even stopped.
+	cmd.Env = append(os.Environ(), "SQUADRON_FORKED=1")
 	detach(cmd)
 
 	if err := cmd.Start(); err != nil {

@@ -18,7 +18,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart={{.Binary}} engage --foreground -c {{.ConfigPath}} --no-browser
+ExecStart={{.Binary}} engage --foreground -c {{.ConfigPath}} --headless
 WorkingDirectory={{.WorkDir}}
 Restart=always
 RestartSec=5

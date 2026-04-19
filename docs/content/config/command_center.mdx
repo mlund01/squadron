@@ -1,0 +1,105 @@
+---
+title: Command Center
+---
+
+# command_center
+
+Declare a `command_center` block to connect Squadron outbound to a remote command center instance — a central web UI that runs missions, watches live execution, and exposes webhooks across multiple Squadron deployments.
+
+When a `command_center` block is present, `squadron engage` skips the local UI and opens a persistent websocket to the remote command center instead. Without the block, `squadron engage` launches the local UI by default (pass `--headless` to opt out entirely).
+
+## Minimal Example
+
+```hcl
+command_center {
+  url           = "wss://command-center.example.com/ws"
+  instance_name = "production-scraper"
+}
+```
+
+The `instance_name` identifies this deployment in the command center UI — two Squadron processes with the same name will conflict, so pick something unique per host or environment.
+
+## Full Example
+
+```hcl
+command_center {
+  url                = "wss://command-center.example.com/ws"
+  instance_name      = "production-scraper"
+  auto_reconnect     = true
+  reconnect_interval = 10
+}
+```
+
+## Fields
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `url` | string | yes | — | WebSocket URL of the command center (`ws://` or `wss://`). Must end with the `/ws` path the server registers. |
+| `instance_name` | string | yes | — | Unique identifier for this Squadron instance. Shown in the command center UI and used in webhook routes (`/webhooks/<instance_name>/<path>`). |
+| `auto_reconnect` | bool | no | `false` | When `true`, Squadron keeps retrying on connection drops instead of exiting. Recommended for production. |
+| `reconnect_interval` | number | no | `5` | Seconds to wait between reconnection attempts. Only used when `auto_reconnect = true`. |
+
+## Using Variables
+
+Credentials and environment-specific URLs should live in the vault:
+
+```hcl
+variable "cc_url" {
+  secret = true
+}
+
+command_center {
+  url           = vars.cc_url
+  instance_name = "staging-worker"
+}
+```
+
+Set the value with `squadron vars set cc_url wss://...`.
+
+## Interaction with `squadron engage`
+
+| Scenario | Behavior |
+|----------|----------|
+| No `command_center` block, no `--headless` | Launches local command center UI (default) |
+| No `command_center` block, `--headless` | Runs fully headless (schedules and webhooks only) |
+| `command_center` block present | Connects to the remote command center; local UI is skipped |
+| `command_center` block present, `--headless` passed | Error — remove one or the other |
+
+See [engage](/cli/engage) for the full command reference.
+
+## Webhooks Across Instances
+
+Each Squadron instance registered with the command center exposes its mission `trigger` blocks under `/webhooks/<instance_name>/<path>` on the command center's HTTP interface. The `instance_name` is what disambiguates webhooks when multiple Squadron deployments share one command center.
+
+```hcl
+mission "ingest" {
+  trigger {
+    webhook_path = "/ingest"
+    secret       = vars.hook_secret
+  }
+  task "process" { objective = "Process incoming data" }
+}
+```
+
+With `instance_name = "production-scraper"`, this mission is reachable at:
+
+```
+POST https://command-center.example.com/webhooks/production-scraper/ingest
+```
+
+See [Schedules & Triggers](/missions/schedules) for webhook details.
+
+## Graceful Degradation
+
+If the command center is unreachable at startup:
+
+- With `auto_reconnect = true` — Squadron logs the failure, keeps retrying, and runs any local schedules in the meantime.
+- With `auto_reconnect = false` — Squadron logs the failure once and continues without a command center connection. Config changes on disk trigger a reconnect attempt.
+
+Either way, Squadron does not crash on a missing command center. This makes it safe to roll out config changes that depend on an eventually-available command center.
+
+## See Also
+
+- [engage](/cli/engage) — How to start Squadron
+- [Variables](/config/variables) — Storing the command center URL and secrets
+- [Schedules & Triggers](/missions/schedules) — Webhook routing through the command center

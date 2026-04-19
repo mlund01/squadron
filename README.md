@@ -71,7 +71,7 @@ squadron mission data_pipeline -c ./config
 
 ```bash
 docker run -v ./config:/config -v squadron-data:/data/squadron -p 8080:8080 \
-  ghcr.io/mlund01/squadron serve -w --cc-port 8080 --no-browser
+  ghcr.io/mlund01/squadron engage
 ```
 
 Alpine (default) and Debian images are published to `ghcr.io/mlund01/squadron` on every release. See the [Docker docs](https://docs.squadron.sh/getting-started/docker) for details.

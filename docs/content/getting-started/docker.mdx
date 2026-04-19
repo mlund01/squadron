@@ -35,19 +35,19 @@ All runtime state (vault, plugins, database) lives in `/config/.squadron/`, righ
 docker run -it \
   -v ./my-project:/config \
   -p 8080:8080 \
-  ghcr.io/mlund01/squadron engage --cc
+  ghcr.io/mlund01/squadron engage
 ```
 
 - `-it` is optional — with it, the quickstart wizard runs on an empty project. Without it, Squadron auto-initializes and you set everything up from the UI.
 - `-p 8080:8080` publishes the command center to the host. Open `http://localhost:8080`.
 
-The official image sets `SQUADRON_CONTAINER=1`, which makes Squadron run in the foreground and skip browser auto-open. You never need to pass `--foreground` here.
+The official image sets `SQUADRON_CONTAINER=1`, which makes Squadron run in the foreground and skip browser auto-open. You never need to pass `--foreground` here. Pass `--headless` if you want Squadron to run without the UI (for example, when missions run purely via schedules or a remote command center).
 
 If some variables are missing, Squadron still starts — the UI lets you set them after the container is up.
 
 ## Connect to a Remote Command Center
 
-If your HCL config declares a `command_center` block, Squadron connects outbound — no `--cc` and no port mapping needed:
+If your HCL config declares a `command_center` block, Squadron connects outbound — no port mapping needed:
 
 ```bash
 docker run \
@@ -55,7 +55,7 @@ docker run \
   ghcr.io/mlund01/squadron engage
 ```
 
-Passing `--cc` alongside a `command_center` block is an error.
+The local UI is skipped automatically when a `command_center` block is present.
 
 ## Run a Single Mission
 
@@ -73,7 +73,7 @@ services:
     image: ghcr.io/mlund01/squadron:latest
     volumes:
       - ./my-project:/config
-    command: ["engage", "--cc"]
+    command: ["engage"]
     ports:
       - "8080:8080"
 ```
@@ -106,7 +106,7 @@ services:
     image: ghcr.io/mlund01/squadron:latest
     volumes:
       - ./my-project:/config
-    command: ["engage", "--cc"]
+    command: ["engage"]
     secrets:
       - vault_passphrase
     ports:

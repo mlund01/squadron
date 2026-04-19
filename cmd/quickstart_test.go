@@ -9,7 +9,7 @@ import (
 
 func TestBaseHCL_ContainsExpectedBlocks(t *testing.T) {
 	p := providers[0] // anthropic
-	hcl := baseHCL(p)
+	hcl := baseHCL(p, true)
 
 	requiredFragments := []string{
 		`variable "anthropic_api_key"`,
@@ -28,10 +28,20 @@ func TestBaseHCL_ContainsExpectedBlocks(t *testing.T) {
 	}
 }
 
+func TestBaseHCL_OmitsAgentWithoutStarter(t *testing.T) {
+	hcl := baseHCL(providers[0], false)
+	if strings.Contains(hcl, `agent "researcher"`) {
+		t.Error("baseHCL should not include researcher agent when starter mission is not requested")
+	}
+	if strings.Contains(hcl, `builtins.http.get`) {
+		t.Error("baseHCL should not reference starter-only tools when starter mission is not requested")
+	}
+}
+
 func TestBaseHCL_AllProviders(t *testing.T) {
 	for _, p := range providers {
 		t.Run(p.Provider, func(t *testing.T) {
-			hcl := baseHCL(p)
+			hcl := baseHCL(p, true)
 			if !strings.Contains(hcl, `provider = "`+p.Provider+`"`) {
 				t.Errorf("missing provider %q", p.Provider)
 			}
@@ -82,6 +92,9 @@ func TestGenerateStarterConfig_WithoutStarter(t *testing.T) {
 	}
 	if strings.Contains(content, `mission "hn_research"`) {
 		t.Error("should not contain starter mission")
+	}
+	if strings.Contains(content, `agent "researcher"`) {
+		t.Error("should not contain researcher agent without starter mission")
 	}
 }
 

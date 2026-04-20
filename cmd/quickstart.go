@@ -187,7 +187,7 @@ func promptSecret(reader *bufio.Reader, prompt string) (string, error) {
 
 // generateStarterConfig writes the starter HCL config file.
 func generateStarterConfig(dir string, p providerInfo, includeStarter bool) error {
-	hcl := baseHCL(p)
+	hcl := baseHCL(p, includeStarter)
 	if includeStarter {
 		hcl += "\n" + starterMissionHCL(p)
 	}
@@ -205,9 +205,10 @@ func generateStarterConfig(dir string, p providerInfo, includeStarter bool) erro
 	return err
 }
 
-// baseHCL generates the provider, model, and agent config.
-func baseHCL(p providerInfo) string {
-	return fmt.Sprintf(`variable "%s" {
+// baseHCL generates the provider and model config, plus the researcher agent
+// when the starter mission is included.
+func baseHCL(p providerInfo, includeStarter bool) string {
+	base := fmt.Sprintf(`variable "%s" {
   secret = true
 }
 
@@ -215,15 +216,20 @@ model "%s" {
   provider = "%s"
   api_key  = vars.%s
 }
+`, p.VarName, p.Provider, p.Provider, p.VarName)
 
+	if !includeStarter {
+		return base
+	}
+
+	return base + fmt.Sprintf(`
 agent "researcher" {
   model       = models.%s.%s
   personality = "You are a precise web researcher. Always use the HTTP GET tool to fetch web pages rather than relying on your own knowledge. Extract information exactly as requested from the HTML responses."
   role        = "Web researcher that fetches and analyzes web content"
   tools       = [builtins.http.get]
 }
-`, p.VarName, p.Provider, p.Provider, p.VarName,
-		p.Provider, p.ModelKey)
+`, p.Provider, p.ModelKey)
 }
 
 // starterMissionHCL generates the HN research starter mission.

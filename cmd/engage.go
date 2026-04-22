@@ -328,7 +328,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 	// can show vars and config files so the user can fix things from the UI.
 	if localCC {
 		commanderURL := fmt.Sprintf("ws://localhost:%d/ws", ccPort)
-		if err := connectWithRetry(client, commanderURL, true); err != nil {
+		if err := connectWithRetry(client, commanderURL); err != nil {
 			log.Printf("Connection failed: %v", err)
 		} else {
 			fmt.Printf("Squadron ready — http://localhost:%d\n", ccPort)
@@ -339,7 +339,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 			}
 		}
 	} else if cfg.CommandCenter != nil {
-		if err := connectWithRetry(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {
+		if err := connectWithRetry(client, cfg.CommandCenter.URL); err != nil {
 			log.Printf("Connection failed: %v (will retry when config changes)", err)
 		} else {
 			fmt.Printf("Squadron ready — connected to %s (instance: %s)\n",
@@ -367,7 +367,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 				cfg := client.GetConfig()
 				if cfg != nil && cfg.CommandCenter != nil && cfg.CommandCenter.AutoReconnect {
 					log.Println("Attempting to reconnect...")
-					if err := connectWithRetry(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {
+					if err := connectWithRetry(client, cfg.CommandCenter.URL); err != nil {
 						log.Printf("Reconnect failed: %v", err)
 						// Don't exit — wait for config changes
 						go watchForConfigChanges(client, engageConfigPath)
@@ -629,25 +629,21 @@ func varsFileModTime() time.Time {
 	return info.ModTime()
 }
 
-func connectWithRetry(client *wsbridge.Client, url string, autoReconnect bool) error {
-	maxAttempts := 1
-	if autoReconnect {
-		maxAttempts = 10
-	}
+func connectWithRetry(client *wsbridge.Client, url string) error {
 	interval := 3 * time.Second
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		err := client.ConnectTo(url)
 		if err == nil {
 			return nil
 		}
-		if attempt == maxAttempts {
-			return fmt.Errorf("failed to connect after %d attempts: %w", maxAttempts, err)
+		log.Printf("Connection attempt %d failed: %v. Retrying in %v...", attempt, err, interval)
+		select {
+		case <-client.Done():
+			return fmt.Errorf("shutting down: %w", err)
+		case <-time.After(interval):
 		}
-		log.Printf("Connection attempt %d/%d failed: %v. Retrying in %v...", attempt, maxAttempts, err, interval)
-		time.Sleep(interval)
 	}
-	return nil
 }
 
 // launchCommandCenter ensures the command center binary is installed,

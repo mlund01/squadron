@@ -163,6 +163,12 @@ func (c *Client) IsConnected() bool {
 	return c.connected
 }
 
+// Done returns a channel that is closed when the client is shut down via Close().
+// Useful for retry loops that should abort on shutdown.
+func (c *Client) Done() <-chan struct{} {
+	return c.ctx.Done()
+}
+
 // HasConfig returns whether the client has a fully loaded and validated config.
 func (c *Client) HasConfig() bool {
 	c.cfgMu.RLock()

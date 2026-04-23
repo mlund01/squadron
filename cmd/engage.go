@@ -324,11 +324,24 @@ func runEngage(cmd *cobra.Command, args []string) {
 	sharedClient = client
 	sharedStores = stores
 
+	// Install the shutdown handler BEFORE connectWithRetry so that SIGTERM
+	// during a long connection retry (e.g. background mode, command center
+	// unreachable) closes the client cleanly instead of hard-killing the
+	// process and orphaning child processes.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	shutdown := make(chan struct{})
+	go func() {
+		<-sigs
+		close(shutdown)
+		client.Close()
+	}()
+
 	// Even without valid config we still try to connect — the command center
 	// can show vars and config files so the user can fix things from the UI.
 	if localCC {
 		commanderURL := fmt.Sprintf("ws://localhost:%d/ws", ccPort)
-		if err := connectWithRetry(client, commanderURL, true); err != nil {
+		if err := connectWithRetry(client, commanderURL); err != nil {
 			log.Printf("Connection failed: %v", err)
 		} else {
 			fmt.Printf("Squadron ready — http://localhost:%d\n", ccPort)
@@ -339,7 +352,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 			}
 		}
 	} else if cfg.CommandCenter != nil {
-		if err := connectWithRetry(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {
+		if err := connectWithRetry(client, cfg.CommandCenter.URL); err != nil {
 			log.Printf("Connection failed: %v (will retry when config changes)", err)
 		} else {
 			fmt.Printf("Squadron ready — connected to %s (instance: %s)\n",
@@ -347,45 +360,61 @@ func runEngage(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	if cfgErr == nil {
-		client.ResumeOrphanedMissions()
-	} else {
-		// Watch for files to appear/change so we can retry the load.
-		go watchForConfigChanges(client, engageConfigPath)
+	// If SIGTERM fired during the connect retry, skip normal startup and
+	// jump straight to cleanup.
+	select {
+	case <-shutdown:
+		// fall through to shutdown below (the select at <-shutdown returns immediately)
+	default:
+		if cfgErr == nil {
+			client.ResumeOrphanedMissions()
+		} else {
+			// Watch for files to appear/change so we can retry the load.
+			go watchForConfigChanges(client, engageConfigPath)
+		}
 	}
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-
+	// Websocket watchdog: for as long as squadron is running, keep the
+	// connection to the command center alive. Any drop triggers an
+	// indefinite reconnect — we only exit this loop on shutdown.
 	go func() {
 		for {
-			if err := client.Run(); err != nil {
-				if !client.IsConnected() {
-					return // shutting down
-				}
-				log.Printf("Connection lost: %v", err)
-				cfg := client.GetConfig()
-				if cfg != nil && cfg.CommandCenter != nil && cfg.CommandCenter.AutoReconnect {
-					log.Println("Attempting to reconnect...")
-					if err := connectWithRetry(client, cfg.CommandCenter.URL, cfg.CommandCenter.AutoReconnect); err != nil {
-						log.Printf("Reconnect failed: %v", err)
-						// Don't exit — wait for config changes
-						go watchForConfigChanges(client, engageConfigPath)
-						return
-					}
-					continue
-				}
+			err := client.Run()
+			// Distinguish shutdown from a natural disconnect. Run sets
+			// c.connected = false in both cases, so IsConnected() can't
+			// tell them apart — check the shutdown channel instead.
+			select {
+			case <-shutdown:
+				return
+			default:
 			}
-			return
+			if err == nil {
+				// Never connected (no command_center configured yet) —
+				// nothing to reconnect to. Bail out; a config reload can
+				// wire things up later.
+				return
+			}
+			log.Printf("Connection lost: %v", err)
+			cfg := client.GetConfig()
+			if cfg == nil || cfg.CommandCenter == nil {
+				// No URL to reconnect to yet — wait for config changes.
+				go watchForConfigChanges(client, engageConfigPath)
+				return
+			}
+			log.Println("Attempting to reconnect...")
+			if err := connectWithRetry(client, cfg.CommandCenter.URL); err != nil {
+				// connectWithRetry only returns an error on shutdown.
+				return
+			}
 		}
 	}()
 
-	<-stop
+	<-shutdown
 	fmt.Println("Shutting down...")
 	daemon.ClearReady(engageConfigPath)
 
-	// Close the wsbridge client first so the reconnect loop won't chase the
-	// command-center process as it shuts down.
+	// client.Close() was already called by the signal handler; this is a
+	// no-op second call, safe to leave for clarity.
 	client.Close()
 
 	squadronmcp.CloseAll() // close MCP clients before stopping the host
@@ -629,25 +658,21 @@ func varsFileModTime() time.Time {
 	return info.ModTime()
 }
 
-func connectWithRetry(client *wsbridge.Client, url string, autoReconnect bool) error {
-	maxAttempts := 1
-	if autoReconnect {
-		maxAttempts = 10
-	}
+func connectWithRetry(client *wsbridge.Client, url string) error {
 	interval := 3 * time.Second
 
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		err := client.ConnectTo(url)
 		if err == nil {
 			return nil
 		}
-		if attempt == maxAttempts {
-			return fmt.Errorf("failed to connect after %d attempts: %w", maxAttempts, err)
+		log.Printf("Connection attempt %d failed: %v. Retrying in %v...", attempt, err, interval)
+		select {
+		case <-client.Done():
+			return fmt.Errorf("shutting down: %w", err)
+		case <-time.After(interval):
 		}
-		log.Printf("Connection attempt %d/%d failed: %v. Retrying in %v...", attempt, maxAttempts, err, interval)
-		time.Sleep(interval)
 	}
-	return nil
 }
 
 // launchCommandCenter ensures the command center binary is installed,

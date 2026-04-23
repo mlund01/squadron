@@ -148,9 +148,11 @@ func (c *Client) connectToURL(url string) error {
 	go c.readPump()
 	go c.writePump()
 
-	// Register with commander
+	// Register with commander. If registration fails, tear down just the
+	// socket — do NOT call Close(), which would cancel c.ctx and prevent
+	// any future reconnect attempts on this client.
 	if err := c.register(); err != nil {
-		c.Close()
+		c.ws.Close()
 		return fmt.Errorf("register: %w", err)
 	}
 
@@ -161,6 +163,12 @@ func (c *Client) connectToURL(url string) error {
 // IsConnected returns whether the client has an active commander connection.
 func (c *Client) IsConnected() bool {
 	return c.connected
+}
+
+// Done returns a channel that is closed when the client is shut down via Close().
+// Useful for retry loops that should abort on shutdown.
+func (c *Client) Done() <-chan struct{} {
+	return c.ctx.Done()
 }
 
 // HasConfig returns whether the client has a fully loaded and validated config.

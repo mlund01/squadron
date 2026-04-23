@@ -324,6 +324,19 @@ func runEngage(cmd *cobra.Command, args []string) {
 	sharedClient = client
 	sharedStores = stores
 
+	// Install the shutdown handler BEFORE connectWithRetry so that SIGTERM
+	// during a long connection retry (e.g. background mode, command center
+	// unreachable) closes the client cleanly instead of hard-killing the
+	// process and orphaning child processes.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM)
+	shutdown := make(chan struct{})
+	go func() {
+		<-sigs
+		close(shutdown)
+		client.Close()
+	}()
+
 	// Even without valid config we still try to connect — the command center
 	// can show vars and config files so the user can fix things from the UI.
 	if localCC {
@@ -347,15 +360,19 @@ func runEngage(cmd *cobra.Command, args []string) {
 		}
 	}
 
-	if cfgErr == nil {
-		client.ResumeOrphanedMissions()
-	} else {
-		// Watch for files to appear/change so we can retry the load.
-		go watchForConfigChanges(client, engageConfigPath)
+	// If SIGTERM fired during the connect retry, skip normal startup and
+	// jump straight to cleanup.
+	select {
+	case <-shutdown:
+		// fall through to shutdown below (the select at <-shutdown returns immediately)
+	default:
+		if cfgErr == nil {
+			client.ResumeOrphanedMissions()
+		} else {
+			// Watch for files to appear/change so we can retry the load.
+			go watchForConfigChanges(client, engageConfigPath)
+		}
 	}
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	go func() {
 		for {
@@ -380,12 +397,12 @@ func runEngage(cmd *cobra.Command, args []string) {
 		}
 	}()
 
-	<-stop
+	<-shutdown
 	fmt.Println("Shutting down...")
 	daemon.ClearReady(engageConfigPath)
 
-	// Close the wsbridge client first so the reconnect loop won't chase the
-	// command-center process as it shuts down.
+	// client.Close() was already called by the signal handler; this is a
+	// no-op second call, safe to leave for clarity.
 	client.Close()
 
 	squadronmcp.CloseAll() // close MCP clients before stopping the host

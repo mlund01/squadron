@@ -148,9 +148,11 @@ func (c *Client) connectToURL(url string) error {
 	go c.readPump()
 	go c.writePump()
 
-	// Register with commander
+	// Register with commander. If registration fails, tear down just the
+	// socket — do NOT call Close(), which would cancel c.ctx and prevent
+	// any future reconnect attempts on this client.
 	if err := c.register(); err != nil {
-		c.Close()
+		c.ws.Close()
 		return fmt.Errorf("register: %w", err)
 	}
 

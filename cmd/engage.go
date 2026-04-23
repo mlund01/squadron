@@ -374,26 +374,38 @@ func runEngage(cmd *cobra.Command, args []string) {
 		}
 	}
 
+	// Websocket watchdog: for as long as squadron is running, keep the
+	// connection to the command center alive. Any drop triggers an
+	// indefinite reconnect — we only exit this loop on shutdown.
 	go func() {
 		for {
-			if err := client.Run(); err != nil {
-				if !client.IsConnected() {
-					return // shutting down
-				}
-				log.Printf("Connection lost: %v", err)
-				cfg := client.GetConfig()
-				if cfg != nil && cfg.CommandCenter != nil && cfg.CommandCenter.AutoReconnect {
-					log.Println("Attempting to reconnect...")
-					if err := connectWithRetry(client, cfg.CommandCenter.URL); err != nil {
-						log.Printf("Reconnect failed: %v", err)
-						// Don't exit — wait for config changes
-						go watchForConfigChanges(client, engageConfigPath)
-						return
-					}
-					continue
-				}
+			err := client.Run()
+			// Distinguish shutdown from a natural disconnect. Run sets
+			// c.connected = false in both cases, so IsConnected() can't
+			// tell them apart — check the shutdown channel instead.
+			select {
+			case <-shutdown:
+				return
+			default:
 			}
-			return
+			if err == nil {
+				// Never connected (no command_center configured yet) —
+				// nothing to reconnect to. Bail out; a config reload can
+				// wire things up later.
+				return
+			}
+			log.Printf("Connection lost: %v", err)
+			cfg := client.GetConfig()
+			if cfg == nil || cfg.CommandCenter == nil {
+				// No URL to reconnect to yet — wait for config changes.
+				go watchForConfigChanges(client, engageConfigPath)
+				return
+			}
+			log.Println("Attempting to reconnect...")
+			if err := connectWithRetry(client, cfg.CommandCenter.URL); err != nil {
+				// connectWithRetry only returns an error on shutdown.
+				return
+			}
 		}
 	}()
 

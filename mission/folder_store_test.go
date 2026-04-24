@@ -341,3 +341,102 @@ func TestSweepExpiredRunFolders_MissingBaseIsNotAnError(t *testing.T) {
 		t.Fatalf("expected nil removed, got %v", removed)
 	}
 }
+
+// TestSweepThenRebuildRoundTrip mirrors the real flow: an old run folder
+// exists with a sidecar backdated past its cleanup window, the sweep deletes
+// it, then a new buildFolderStore (different missionID) creates a fresh run
+// folder with a current sidecar — and the old one is gone.
+func TestSweepThenRebuildRoundTrip(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "runs")
+
+	// Simulate a run from days ago that's past its cleanup deadline.
+	stale := writeRun(t, base, "old-run", time.Now().Add(-5*24*time.Hour), 2)
+
+	if _, err := SweepExpiredRunFolders(base); err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Fatalf("stale run should have been deleted: %v", err)
+	}
+
+	m := &config.Mission{
+		Name: "folders_demo",
+		RunFolder: &config.MissionRunFolder{
+			Base:    base,
+			Cleanup: 2,
+		},
+	}
+	store, err := buildFolderStore(m, nil, "new-run")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	fresh, _, err := store.ResolvePath(aitools.RunFolderName, ".")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if filepath.Base(fresh) != "new-run" {
+		t.Fatalf("fresh run should be keyed by new missionID, got %s", fresh)
+	}
+
+	metaBytes, err := os.ReadFile(filepath.Join(fresh, runMetadataFile))
+	if err != nil {
+		t.Fatalf("fresh sidecar: %v", err)
+	}
+	var meta runMetadata
+	if err := json.Unmarshal(metaBytes, &meta); err != nil {
+		t.Fatalf("decode sidecar: %v", err)
+	}
+	if time.Since(meta.CreatedAt) > time.Minute {
+		t.Fatalf("fresh sidecar CreatedAt should be ~now, got %v", meta.CreatedAt)
+	}
+}
+
+func TestResolvedRunFolderBase(t *testing.T) {
+	if got := ResolvedRunFolderBase(nil); got != DefaultRunFolderBase {
+		t.Fatalf("nil rf: want %q, got %q", DefaultRunFolderBase, got)
+	}
+	if got := ResolvedRunFolderBase(&config.MissionRunFolder{}); got != DefaultRunFolderBase {
+		t.Fatalf("empty base: want %q, got %q", DefaultRunFolderBase, got)
+	}
+	if got := ResolvedRunFolderBase(&config.MissionRunFolder{Base: "/custom"}); got != "/custom" {
+		t.Fatalf("explicit base: want %q, got %q", "/custom", got)
+	}
+}
+
+func TestBuildFolderStore_CreatesNestedBase(t *testing.T) {
+	// Base directory with nested missing parents — MkdirAll should create them all.
+	base := filepath.Join(t.TempDir(), "a", "b", "c", "runs")
+	m := &config.Mission{
+		Name: "m",
+		RunFolder: &config.MissionRunFolder{
+			Base: base,
+		},
+	}
+	if _, err := buildFolderStore(m, nil, "mid-1"); err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(base, "mid-1")); err != nil || !info.IsDir() {
+		t.Fatalf("nested run folder not created: %v", err)
+	}
+}
+
+func TestWriteRunMetadata_PreservesOnReentry(t *testing.T) {
+	// Direct test of the O_CREATE|O_EXCL sidecar write: calling twice with
+	// different cleanupDays must not overwrite the original.
+	dir := t.TempDir()
+	if err := writeRunMetadata(dir, "m", "id-1", 7); err != nil {
+		t.Fatalf("first write: %v", err)
+	}
+	first, _ := os.ReadFile(filepath.Join(dir, runMetadataFile))
+
+	time.Sleep(10 * time.Millisecond)
+
+	if err := writeRunMetadata(dir, "m", "id-1", 99); err != nil {
+		t.Fatalf("second write: %v", err)
+	}
+	second, _ := os.ReadFile(filepath.Join(dir, runMetadataFile))
+
+	if string(first) != string(second) {
+		t.Fatalf("sidecar must not be rewritten:\nfirst:  %s\nsecond: %s", first, second)
+	}
+}

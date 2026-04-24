@@ -25,6 +25,7 @@ import (
 	"squadron/internal/paths"
 	squadronmcp "squadron/mcp"
 	"squadron/mcphost"
+	"squadron/mission"
 	"squadron/scheduler"
 	"squadron/store"
 	"squadron/wsbridge"
@@ -336,6 +337,10 @@ func runEngage(cmd *cobra.Command, args []string) {
 		close(shutdown)
 		client.Close()
 	}()
+
+	// Periodic sweep of expired per-run mission folders. Runs hourly, reads
+	// the live config so new run_folder bases show up after a reload.
+	go runFolderCleanupLoop(shutdown, client.GetConfig)
 
 	// Even without valid config we still try to connect — the command center
 	// can show vars and config files so the user can fix things from the UI.
@@ -840,4 +845,44 @@ func moveFile(src, dst string) error {
 
 func openBrowser(url string) {
 	browser.Open(url)
+}
+
+// runFolderCleanupLoop periodically sweeps expired per-run mission folders
+// for every mission in the current config that declares a run_folder with
+// cleanup > 0. It runs once immediately, then hourly, and exits when
+// shutdown is closed.
+func runFolderCleanupLoop(shutdown <-chan struct{}, getCfg func() *config.Config) {
+	sweep := func() {
+		cfg := getCfg()
+		if cfg == nil {
+			return
+		}
+		seen := make(map[string]bool)
+		for i := range cfg.Missions {
+			rf := cfg.Missions[i].RunFolder
+			if rf == nil || rf.Cleanup <= 0 {
+				continue
+			}
+			base := mission.ResolvedRunFolderBase(rf)
+			if seen[base] {
+				continue
+			}
+			seen[base] = true
+			if _, err := mission.SweepExpiredRunFolders(base); err != nil {
+				log.Printf("run folder cleanup: sweep %q: %v", base, err)
+			}
+		}
+	}
+
+	sweep()
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-shutdown:
+			return
+		case <-ticker.C:
+			sweep()
+		}
+	}
 }

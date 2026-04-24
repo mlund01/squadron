@@ -1,0 +1,163 @@
+---
+title: Folders
+---
+
+# Folders
+
+Folders are sandboxed filesystem locations that agents can read from and write to via the `file_list`, `file_read`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools. Every tool call specifies the folder by name — there is no implicit default.
+
+Squadron supports three kinds of folders:
+
+| Kind | Declared | Name | Scope | Lifetime |
+|------|----------|------|-------|----------|
+| Shared | top-level `shared_folder "name"` | user-chosen | available to any mission that lists it | persists |
+| Mission | `folder` block inside a mission | always `"mission"` | one per mission | persists |
+| Run | `run_folder` block inside a mission | always `"run"` | one per mission **per run** | ephemeral |
+
+A mission may declare any number of shared folder references, at most one `folder` block, and at most one `run_folder` block. The names `"mission"` and `"run"` are reserved — shared folders cannot use them.
+
+## Shared Folders
+
+Declared at the top level, usable by any mission:
+
+```hcl
+shared_folder "research" {
+  path        = "./data/research"
+  description = "Shared research documents"
+  editable    = true
+}
+
+shared_folder "reference" {
+  path = "./data/reference"
+  # no editable flag → read-only
+}
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `path` | string | Directory path (created if missing) |
+| `description` | string | Human-readable description shown to agents |
+| `label` | string | Optional label (falls back to description) |
+| `editable` | bool | If `true`, agents may write. Default `false` (read-only) |
+
+Missions opt in by listing them:
+
+```hcl
+mission "analyze" {
+  folders = [shared_folders.research, shared_folders.reference]
+  # agents reference them by the shared_folder name, e.g. folder: "research"
+}
+```
+
+## The Mission Folder (persistent)
+
+A dedicated folder tied to the mission. Declared with the `folder` block, always writable, always registered under the name **`"mission"`**. Persists across runs — use it for state, archives, cumulative output.
+
+```hcl
+mission "analyze" {
+  folder {
+    path        = "./analyses"
+    description = "Cumulative analysis output across every run"
+  }
+}
+```
+
+Agent tool call:
+
+```json
+{ "folder": "mission", "path": "2026-04-23/report.md", "content": "..." }
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `path` | string | Directory path (created if missing) |
+| `description` | string | Shown to agents alongside the folder name |
+
+## The Run Folder (per-run ephemeral)
+
+A fresh directory created for each invocation of the mission. Declared with `run_folder`, always writable, always registered under the name **`"run"`**. The materialized path is `<base>/<missionID>/` where `<missionID>` is unique per run.
+
+```hcl
+mission "analyze" {
+  run_folder {
+    base        = "./runs"        # optional, default ".squadron/runs"
+    description = "Scratch space for this run"
+    cleanup     = 7               # optional, auto-delete after N days
+  }
+}
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `base` | string | Parent directory. Defaults to `.squadron/runs` |
+| `description` | string | Shown to agents alongside the folder name |
+| `cleanup` | integer | Days to keep the folder before auto-deletion. `0` (default) = keep forever |
+
+Agent tool call:
+
+```json
+{ "folder": "run", "path": "notes.txt", "content": "..." }
+```
+
+### Persistence and Resume
+
+Run folders persist by default so you can inspect artifacts after the mission ends, and so a resumed mission (`squadron mission --resume <id>`) finds its workspace intact. On resume the existing folder is reused — the run ID determines the path, not the wall clock.
+
+### Cleanup
+
+When `cleanup = N` is set, a sidecar `.squadron-run.json` file is written into the folder on creation recording its timestamp. Expired folders are swept:
+
+- **Opportunistically** at the start of every mission run (sweeps the base directory configured for that mission).
+- **Periodically** (once per hour) while `squadron engage` is running.
+
+Only folders with a valid `.squadron-run.json` and a positive `cleanup_days` are deleted — manually created directories under the same base are left alone.
+
+## Tool Reference
+
+All six folder tools take a required `folder` parameter:
+
+| Tool | Purpose |
+|------|---------|
+| `file_list` | List files and directories, with optional recursion and pagination |
+| `file_read` | Read a file (optionally capped by lines or bytes) |
+| `file_create` | Create, overwrite, or append to a file |
+| `file_delete` | Delete a file (directories are not allowed) |
+| `file_search` | Recursively search for files by filename regex |
+| `file_grep` | Search file contents by regex |
+
+Path parameters are always relative to the folder root. Absolute paths and `..` escapes are rejected.
+
+## Full Example
+
+```hcl
+shared_folder "reference" {
+  path        = "./data/reference"
+  description = "Reference materials shared across missions"
+}
+
+mission "research" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.researcher]
+  folders   = [shared_folders.reference]
+
+  folder {
+    path        = "./research_archive"
+    description = "Finished reports, one per run"
+  }
+
+  run_folder {
+    base        = "./runs"
+    description = "Working files for the in-flight run"
+    cleanup     = 14
+  }
+
+  task "gather" {
+    objective = "Gather sources from the reference folder and save notes to the run folder"
+  }
+
+  task "publish" {
+    depends_on = [tasks.gather]
+    objective  = "Write the final report into the mission folder"
+  }
+}
+```

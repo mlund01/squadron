@@ -74,7 +74,8 @@ type OutputField struct {
 	Properties  []OutputField `json:"properties,omitempty"`
 }
 
-// MissionFolder represents a dedicated folder for a mission
+// MissionFolder represents a dedicated folder for a mission.
+// Registered under the reserved name "mission". Persists across runs.
 type MissionFolder struct {
 	Path        string `hcl:"path"`
 	Description string `hcl:"description,optional"`
@@ -84,6 +85,23 @@ type MissionFolder struct {
 func (mf *MissionFolder) Validate() error {
 	if mf.Path == "" {
 		return fmt.Errorf("path is required")
+	}
+	return nil
+}
+
+// MissionRunFolder represents a per-run ephemeral folder for a mission.
+// Registered under the reserved name "run". A fresh subdirectory is created
+// under Base for each mission run, keyed by mission ID.
+type MissionRunFolder struct {
+	Base        string `hcl:"base,optional"`        // parent directory; defaults to ".squadron/runs"
+	Description string `hcl:"description,optional"`
+	Cleanup     int    `hcl:"cleanup,optional"`     // days after creation before auto-delete; 0 = never
+}
+
+// Validate checks that the run folder configuration is valid.
+func (rf *MissionRunFolder) Validate() error {
+	if rf.Cleanup < 0 {
+		return fmt.Errorf("cleanup must be >= 0 (days)")
 	}
 	return nil
 }
@@ -317,8 +335,9 @@ type Mission struct {
 	Tasks       []Task            `hcl:"task,block"`
 	Inputs      []MissionInput    // Parsed from input blocks
 	Datasets    []Dataset         // Parsed from dataset blocks
-	Folders     []string          // Shared folder names referenced by this mission
-	Folder      *MissionFolder    // Optional dedicated mission folder
+	Folders     []string            // Shared folder names referenced by this mission
+	Folder      *MissionFolder      // Optional dedicated mission folder (reserved name "mission")
+	RunFolder   *MissionRunFolder   // Optional per-run ephemeral folder (reserved name "run")
 	Schedules   []Schedule        `json:"schedules,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"`
 	MaxParallel int               `json:"maxParallel,omitempty"` // default 3
@@ -482,6 +501,13 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 	if w.Folder != nil {
 		if err := w.Folder.Validate(); err != nil {
 			return fmt.Errorf("folder: %w", err)
+		}
+	}
+
+	// Validate run folder if present
+	if w.RunFolder != nil {
+		if err := w.RunFolder.Validate(); err != nil {
+			return fmt.Errorf("run_folder: %w", err)
 		}
 	}
 

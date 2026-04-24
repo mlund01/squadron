@@ -5,6 +5,7 @@ export default {
   routing: 'Routing',
   datasets: 'Datasets',
   iteration: 'Iteration',
+  folders: 'Folders',
   'internal-tools': 'Internal Tools',
   budgets: 'Budgets',
   schedules: 'Schedules & Triggers',

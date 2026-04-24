@@ -81,10 +81,11 @@ A clean workspace for one mission run. Each invocation gets its own subdirectory
 mission "analyze" {
   run_folder {
     description = "Scratch space for this run"
-    cleanup     = 7    # delete the folder 7 days after the run started
   }
 }
 ```
+
+By default, run folders are deleted 7 days after the run started. Set `cleanup` to override the window, or `cleanup = 0` to keep folders forever.
 
 Agents reach it under the name `run`:
 
@@ -96,7 +97,7 @@ Agents reach it under the name `run`:
 |-----------|------|-------------|
 | `base` | string | Where run folders live. Defaults to `.squadron/runs` — change it if you want them somewhere else |
 | `description` | string | Shown to agents alongside the folder name |
-| `cleanup` | integer | Delete the folder this many days after the run started. Omit (or set `0`) to keep forever |
+| `cleanup` | integer | Delete the folder this many days after the run started. Defaults to `7`; set `0` to keep forever |
 
 Run folders stick around after the mission ends — useful for inspecting what an agent produced, and required for `squadron mission --resume <id>` to find its workspace. `cleanup` is just a max age; nothing is deleted while a run is in flight.
 
@@ -135,7 +136,7 @@ mission "research" {
 
   run_folder {
     description = "Working files for the in-flight run"
-    cleanup     = 14
+    cleanup     = 14    # override the 7-day default
   }
 
   task "gather" {

@@ -66,11 +66,12 @@ func TestBuildFolderStore_MissionFolder(t *testing.T) {
 
 func TestBuildFolderStore_RunFolder_CreatesSidecar(t *testing.T) {
 	dir := t.TempDir()
+	cleanup := 7
 	m := &config.Mission{
 		Name: "m",
 		RunFolder: &config.MissionRunFolder{
 			Base:    filepath.Join(dir, "runs"),
-			Cleanup: 7,
+			Cleanup: &cleanup,
 		},
 	}
 
@@ -359,11 +360,12 @@ func TestSweepThenRebuildRoundTrip(t *testing.T) {
 		t.Fatalf("stale run should have been deleted: %v", err)
 	}
 
+	cleanup := 2
 	m := &config.Mission{
 		Name: "folders_demo",
 		RunFolder: &config.MissionRunFolder{
 			Base:    base,
-			Cleanup: 2,
+			Cleanup: &cleanup,
 		},
 	}
 	store, err := buildFolderStore(m, nil, "new-run")

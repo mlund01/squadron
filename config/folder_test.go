@@ -111,7 +111,9 @@ mission "m" {
 			Expect(cfg.Missions[0].RunFolder).NotTo(BeNil())
 			Expect(cfg.Missions[0].RunFolder.Base).To(Equal(""))
 			Expect(cfg.Missions[0].RunFolder.Description).To(Equal("Per-run scratch"))
-			Expect(cfg.Missions[0].RunFolder.Cleanup).To(Equal(0))
+			// Cleanup omitted → Validate() filled in the default
+			Expect(cfg.Missions[0].RunFolder.Cleanup).NotTo(BeNil())
+			Expect(*cfg.Missions[0].RunFolder.Cleanup).To(Equal(config.DefaultRunFolderCleanupDays))
 		})
 
 		It("parses a run_folder with custom base and cleanup", func() {
@@ -130,7 +132,25 @@ mission "m" {
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Missions[0].RunFolder.Base).To(Equal("./custom_runs"))
-			Expect(cfg.Missions[0].RunFolder.Cleanup).To(Equal(14))
+			Expect(*cfg.Missions[0].RunFolder.Cleanup).To(Equal(14))
+		})
+
+		It("preserves an explicit cleanup of zero (never delete)", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  run_folder {
+    cleanup = 0
+  }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].RunFolder.Cleanup).NotTo(BeNil())
+			Expect(*cfg.Missions[0].RunFolder.Cleanup).To(Equal(0))
 		})
 
 		It("rejects multiple run_folder blocks", func() {
@@ -150,14 +170,22 @@ mission "m" {
 		})
 
 		It("rejects a negative cleanup value", func() {
-			rf := config.MissionRunFolder{Cleanup: -1}
+			neg := -1
+			rf := config.MissionRunFolder{Cleanup: &neg}
 			err := rf.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("cleanup"))
 		})
 
 		It("allows cleanup of zero (never)", func() {
-			rf := config.MissionRunFolder{Cleanup: 0}
+			zero := 0
+			rf := config.MissionRunFolder{Cleanup: &zero}
+			Expect(rf.Validate()).To(Succeed())
+			Expect(*rf.Cleanup).To(Equal(0))
+		})
+
+		It("Validate accepts an unset Cleanup (parser fills the default)", func() {
+			rf := config.MissionRunFolder{}
 			Expect(rf.Validate()).To(Succeed())
 		})
 

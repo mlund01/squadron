@@ -860,8 +860,11 @@ func runFolderCleanupLoop(shutdown <-chan struct{}, getCfg func() *config.Config
 		seen := make(map[string]bool)
 		for i := range cfg.Missions {
 			rf := cfg.Missions[i].RunFolder
-			if rf == nil || rf.Cleanup <= 0 {
+			if rf == nil {
 				continue
+			}
+			if rf.Cleanup != nil && *rf.Cleanup == 0 {
+				continue // user explicitly opted out of cleanup
 			}
 			base := mission.ResolvedRunFolderBase(rf)
 			if seen[base] {

@@ -1900,6 +1900,10 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		if diags.HasErrors() {
 			return nil, fmt.Errorf("mission '%s' run_folder: %w", missionName, diags)
 		}
+		if rf.Cleanup == nil {
+			v := DefaultRunFolderCleanupDays
+			rf.Cleanup = &v
+		}
 		missionRunFolder = &rf
 	}
 

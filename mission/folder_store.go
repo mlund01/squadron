@@ -38,6 +38,17 @@ func ResolvedRunFolderBase(rf *config.MissionRunFolder) string {
 	return rf.Base
 }
 
+// resolvedCleanup returns the cleanup window in days for a run_folder.
+// Reads the parsed pointer when set (Validate fills in the default at config
+// load time); falls back to the default for callers that hand-build a struct
+// and skip Validate (notably tests).
+func resolvedCleanup(rf *config.MissionRunFolder) int {
+	if rf == nil || rf.Cleanup == nil {
+		return config.DefaultRunFolderCleanupDays
+	}
+	return *rf.Cleanup
+}
+
 type missionFolderStore struct {
 	folders map[string]*folderEntry
 }
@@ -111,7 +122,7 @@ func buildFolderStore(mission *config.Mission, sharedFolders []config.SharedFold
 		if err := os.MkdirAll(absPath, 0755); err != nil {
 			return nil, fmt.Errorf("run_folder: create directory: %w", err)
 		}
-		if err := writeRunMetadata(absPath, mission.Name, missionID, mission.RunFolder.Cleanup); err != nil {
+		if err := writeRunMetadata(absPath, mission.Name, missionID, resolvedCleanup(mission.RunFolder)); err != nil {
 			return nil, fmt.Errorf("run_folder: write metadata: %w", err)
 		}
 		store.folders[aitools.RunFolderName] = &folderEntry{

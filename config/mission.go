@@ -89,18 +89,27 @@ func (mf *MissionFolder) Validate() error {
 	return nil
 }
 
+// DefaultRunFolderCleanupDays is the auto-delete window applied when a
+// run_folder block does not specify `cleanup`.
+const DefaultRunFolderCleanupDays = 7
+
 // MissionRunFolder represents a per-run ephemeral folder for a mission.
 // Registered under the reserved name "run". A fresh subdirectory is created
 // under Base for each mission run, keyed by mission ID.
+//
+// Cleanup is a pointer so we can distinguish "user didn't set it" (apply
+// default of 7 days) from "user set 0" (keep forever).
 type MissionRunFolder struct {
 	Base        string `hcl:"base,optional"`        // parent directory; defaults to ".squadron/runs"
 	Description string `hcl:"description,optional"`
-	Cleanup     int    `hcl:"cleanup,optional"`     // days after creation before auto-delete; 0 = never
+	Cleanup     *int   `hcl:"cleanup,optional"`     // days after creation before auto-delete; nil = default (7), 0 = never
 }
 
-// Validate checks that the run folder configuration is valid.
+// Validate rejects negative cleanup values. Default-filling happens at parse
+// time (see config.go) so callers reading a parsed Mission see a complete
+// struct without needing to validate first.
 func (rf *MissionRunFolder) Validate() error {
-	if rf.Cleanup < 0 {
+	if rf.Cleanup != nil && *rf.Cleanup < 0 {
 		return fmt.Errorf("cleanup must be >= 0 (days)")
 	}
 	return nil

@@ -317,7 +317,7 @@ mission "analyze" {
   run_folder {
     base        = "./runs"            # optional, default ".squadron/runs"
     description = "Per-run scratch"
-    cleanup     = 7                   # optional, auto-delete after N days (0 = never)
+    cleanup     = 7                   # optional, auto-delete after N days; defaults to 7, set 0 to keep forever
   }
 }
 ```

@@ -149,16 +149,13 @@ func RunInit(passphraseFile, providerName string) error {
 }
 
 // ensureSquadronGitignored adds `.squadron/` to the .gitignore at the current
-// working directory, creating the file if necessary. It is a no-op when the
-// cwd is not inside a git repository (so we don't create stray .gitignore
-// files in unrelated folders).
+// working directory, creating the file if necessary. Runs unconditionally —
+// even if the project isn't a git repo yet, so the entry is in place once
+// it becomes one.
 func ensureSquadronGitignored() error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
-	}
-	if !insideGitRepo(cwd) {
-		return nil
 	}
 
 	gitignorePath := filepath.Join(cwd, ".gitignore")
@@ -189,20 +186,6 @@ func ensureSquadronGitignored() error {
 		fmt.Println("Added .squadron/ to .gitignore.")
 	}
 	return nil
-}
-
-// insideGitRepo reports whether dir or any ancestor contains a .git entry.
-func insideGitRepo(dir string) bool {
-	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
-			return true
-		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
-			return false
-		}
-		dir = parent
-	}
 }
 
 // gitignoreContains checks whether any non-comment line in data matches the

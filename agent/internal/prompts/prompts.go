@@ -249,14 +249,7 @@ func FormatFolderContext(store aitools.FolderStore) string {
 	var sb strings.Builder
 	sb.WriteString("## Available Folders\n\n")
 	sb.WriteString("You have access to file folders via the file_list, file_read, file_create, file_delete, file_search, and file_grep tools.\n")
-	sb.WriteString("Use the `folder` parameter to specify which folder. ")
-
-	defaultFolder := store.DefaultFolder()
-	if defaultFolder != "" {
-		sb.WriteString(fmt.Sprintf("Omit it to use the default folder (%q).\n\n", defaultFolder))
-	} else {
-		sb.WriteString("The `folder` parameter is required since no default folder is configured.\n\n")
-	}
+	sb.WriteString("The `folder` parameter is required on every call — pick one of the names below.\n\n")
 
 	for _, info := range infos {
 		access := "read-only"
@@ -264,8 +257,11 @@ func FormatFolderContext(store aitools.FolderStore) string {
 			access = "read/write"
 		}
 		label := ""
-		if info.IsDedicated {
-			label = " (dedicated mission folder)"
+		switch info.Name {
+		case aitools.MissionFolderName:
+			label = " (persistent mission folder — survives across runs)"
+		case aitools.RunFolderName:
+			label = " (per-run folder — fresh directory for this mission run)"
 		}
 		desc := ""
 		if info.Description != "" {

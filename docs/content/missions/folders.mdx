@@ -1,0 +1,151 @@
+---
+title: Folders
+---
+
+# Folders
+
+Folders are filesystem locations that agents can read from and write to. Squadron gives you three kinds, each suited to a different use case:
+
+| Kind | Use it for | Lifetime |
+|------|------------|----------|
+| **Shared** | Reference data or output that many missions touch | Persists |
+| **Mission** | A mission's own long-lived state — archives, accumulated output | Persists |
+| **Run** | Scratch space for the work happening right now | One per run |
+
+Agents reach folders through the `file_list`, `file_read`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools, naming the folder on each call.
+
+A mission can use any number of shared folders, plus one of each mission-scoped kind. The names `mission` and `run` are reserved.
+
+## Shared Folders
+
+Declared at the top level so multiple missions can share the same data:
+
+```hcl
+shared_folder "research" {
+  path        = "./data/research"
+  description = "Shared research documents"
+  editable    = true
+}
+
+shared_folder "reference" {
+  path = "./data/reference"
+  # no editable flag → read-only
+}
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `path` | string | Directory path (created if missing) |
+| `description` | string | Human-readable description shown to agents |
+| `label` | string | Optional label (falls back to description) |
+| `editable` | bool | If `true`, agents may write. Default `false` (read-only) |
+
+Missions opt in by listing them, then refer to them by name in tool calls:
+
+```hcl
+mission "analyze" {
+  folders = [shared_folders.research, shared_folders.reference]
+  # agents call e.g. file_read with folder = "research"
+}
+```
+
+## The Mission Folder
+
+The mission's own dedicated folder. Use it for things you want to keep around: a running log, an archive of finished reports, accumulated state across runs.
+
+```hcl
+mission "analyze" {
+  folder {
+    path        = "./analyses"
+    description = "Cumulative analysis output across every run"
+  }
+}
+```
+
+Agents reach it under the name `mission`:
+
+```json
+{ "folder": "mission", "path": "2026-04-23/report.md", "content": "..." }
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `path` | string | Directory path (created if missing) |
+| `description` | string | Shown to agents alongside the folder name |
+
+## The Run Folder
+
+A clean workspace for one mission run. Each invocation gets its own subdirectory, isolated from previous and concurrent runs — perfect for intermediate files, working drafts, or anything you don't want bleeding into the next run.
+
+```hcl
+mission "analyze" {
+  run_folder {
+    description = "Scratch space for this run"
+  }
+}
+```
+
+By default, run folders are deleted 7 days after the run started. Set `cleanup` to override the window, or `cleanup = 0` to keep folders forever.
+
+Agents reach it under the name `run`:
+
+```json
+{ "folder": "run", "path": "notes.txt", "content": "..." }
+```
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `base` | string | Where run folders live. Defaults to `.squadron/runs` — change it if you want them somewhere else |
+| `description` | string | Shown to agents alongside the folder name |
+| `cleanup` | integer | Delete the folder this many days after the run started. Defaults to `7`; set `0` to keep forever |
+
+Run folders stick around after the mission ends — useful for inspecting what an agent produced, and required for `squadron mission --resume <id>` to find its workspace. `cleanup` is just a max age; nothing is deleted while a run is in flight.
+
+## Tool Reference
+
+All six folder tools take a required `folder` parameter:
+
+| Tool | Purpose |
+|------|---------|
+| `file_list` | List files and directories, with optional recursion and pagination |
+| `file_read` | Read a file (optionally capped by lines or bytes) |
+| `file_create` | Create, overwrite, or append to a file |
+| `file_delete` | Delete a file (directories are not allowed) |
+| `file_search` | Recursively search for files by filename regex |
+| `file_grep` | Search file contents by regex |
+
+Paths are always relative to the folder root. Absolute paths and `..` escapes are rejected.
+
+## Full Example
+
+```hcl
+shared_folder "reference" {
+  path        = "./data/reference"
+  description = "Reference materials shared across missions"
+}
+
+mission "research" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.researcher]
+  folders   = [shared_folders.reference]
+
+  folder {
+    path        = "./research_archive"
+    description = "Finished reports, one per run"
+  }
+
+  run_folder {
+    description = "Working files for the in-flight run"
+    cleanup     = 14    # override the 7-day default
+  }
+
+  task "gather" {
+    objective = "Gather sources from the reference folder and save notes to the run folder"
+  }
+
+  task "publish" {
+    depends_on = [tasks.gather]
+    objective  = "Write the final report into the mission folder"
+  }
+}
+```

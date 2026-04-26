@@ -42,6 +42,9 @@ mission "data_pipeline" {
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |
 | `dataset` | block | Dataset definitions (optional) |
+| `folders` | list | Shared folder references, e.g. `[shared_folders.data]` (see [Folders](/missions/folders)) |
+| `folder` | block | Persistent mission-scoped folder, registered as `"mission"` |
+| `run_folder` | block | Per-run ephemeral folder, registered as `"run"` |
 | `schedule` | block | Automatic run schedules (optional, repeatable) |
 | `trigger` | block | Webhook trigger (optional) |
 | `max_parallel` | number | Max concurrent instances (default: 3) |

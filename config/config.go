@@ -1715,6 +1715,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Type: "dataset", LabelNames: []string{"name"}},
 			{Type: "secret", LabelNames: []string{"name"}},
 			{Type: "folder"},
+			{Type: "run_folder"},
 			{Type: "schedule"},
 			{Type: "trigger"},
 			{Type: "budget"},
@@ -1868,7 +1869,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		}
 	}
 
-	// Parse optional folder block (dedicated mission folder)
+	// Parse optional folder block (dedicated mission folder, reserved name "mission")
 	var missionFolder *MissionFolder
 	for _, folderBlock := range missionContent.Blocks {
 		if folderBlock.Type != "folder" {
@@ -1883,6 +1884,27 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			return nil, fmt.Errorf("mission '%s' folder: %w", missionName, diags)
 		}
 		missionFolder = &mf
+	}
+
+	// Parse optional run_folder block (per-run ephemeral folder, reserved name "run")
+	var missionRunFolder *MissionRunFolder
+	for _, rfBlock := range missionContent.Blocks {
+		if rfBlock.Type != "run_folder" {
+			continue
+		}
+		if missionRunFolder != nil {
+			return nil, fmt.Errorf("mission '%s': only one run_folder block allowed", missionName)
+		}
+		var rf MissionRunFolder
+		diags := gohcl.DecodeBody(rfBlock.Body, ctx, &rf)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' run_folder: %w", missionName, diags)
+		}
+		if rf.Cleanup == nil {
+			v := DefaultRunFolderCleanupDays
+			rf.Cleanup = &v
+		}
+		missionRunFolder = &rf
 	}
 
 	// Parse schedule blocks (optional, multiple allowed)
@@ -1951,6 +1973,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		LocalAgents: localAgents,
 		Folders:     missionFolders,
 		Folder:      missionFolder,
+		RunFolder:   missionRunFolder,
 		Schedules:   schedules,
 		Trigger:     trigger,
 		MaxParallel: maxParallel,

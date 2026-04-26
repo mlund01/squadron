@@ -12,15 +12,19 @@ import (
 	"strings"
 )
 
+// Reserved folder names for mission-scoped folders. Callers addressing the
+// persistent mission folder and the per-run folder must use these names.
+const (
+	MissionFolderName = "mission"
+	RunFolderName     = "run"
+)
+
 // FolderStore provides folder access for missions.
 // Implementations resolve folder names to paths and enforce security.
 type FolderStore interface {
 	// ResolvePath resolves a folder name + relative path to an absolute path.
-	// Empty folderName = dedicated mission folder.
 	// Returns: absolute path, writable flag, error.
 	ResolvePath(folderName string, relPath string) (string, bool, error)
-	// DefaultFolder returns the name of the dedicated folder ("" if none).
-	DefaultFolder() string
 	// FolderInfos returns info about all available folders.
 	FolderInfos() []FolderInfo
 }
@@ -30,7 +34,6 @@ type FolderInfo struct {
 	Name        string
 	Description string
 	Writable    bool
-	IsDedicated bool // true for mission's own folder
 }
 
 // validateRelPath ensures a path is relative and doesn't escape the folder root.
@@ -74,7 +77,7 @@ func (t *FolderListTool) ToolPayloadSchema() Schema {
 		Properties: PropertyMap{
 			"folder": {
 				Type:        TypeString,
-				Description: "Folder name. Omit to use the default mission folder.",
+				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
 			},
 			"path": {
 				Type:        TypeString,
@@ -93,6 +96,7 @@ func (t *FolderListTool) ToolPayloadSchema() Schema {
 				Description: "Number of entries to skip (for pagination). Default 0.",
 			},
 		},
+		Required: []string{"folder"},
 	}
 }
 
@@ -263,7 +267,7 @@ func (t *FolderReadTool) ToolPayloadSchema() Schema {
 		Properties: PropertyMap{
 			"folder": {
 				Type:        TypeString,
-				Description: "Folder name. Omit to use the default mission folder.",
+				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
 			},
 			"path": {
 				Type:        TypeString,
@@ -278,7 +282,7 @@ func (t *FolderReadTool) ToolPayloadSchema() Schema {
 				Description: "Return only the first N bytes. 0 or omit for no limit.",
 			},
 		},
-		Required: []string{"path"},
+		Required: []string{"folder", "path"},
 	}
 }
 
@@ -371,7 +375,7 @@ func (t *FolderCreateTool) ToolPayloadSchema() Schema {
 		Properties: PropertyMap{
 			"folder": {
 				Type:        TypeString,
-				Description: "Folder name. Omit to use the default mission folder.",
+				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
 			},
 			"path": {
 				Type:        TypeString,
@@ -390,7 +394,7 @@ func (t *FolderCreateTool) ToolPayloadSchema() Schema {
 				Description: "If true, overwrite the file if it already exists. Ignored when 'append' is true.",
 			},
 		},
-		Required: []string{"path", "content"},
+		Required: []string{"folder", "path", "content"},
 	}
 }
 
@@ -474,14 +478,14 @@ func (t *FolderDeleteTool) ToolPayloadSchema() Schema {
 		Properties: PropertyMap{
 			"folder": {
 				Type:        TypeString,
-				Description: "Folder name. Omit to use the default mission folder.",
+				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
 			},
 			"path": {
 				Type:        TypeString,
 				Description: "Relative file path within the folder.",
 			},
 		},
-		Required: []string{"path"},
+		Required: []string{"folder", "path"},
 	}
 }
 
@@ -544,7 +548,7 @@ func (t *FolderSearchTool) ToolPayloadSchema() Schema {
 		Properties: PropertyMap{
 			"folder": {
 				Type:        TypeString,
-				Description: "Folder name. Omit to use the default mission folder.",
+				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
 			},
 			"path": {
 				Type:        TypeString,
@@ -563,7 +567,7 @@ func (t *FolderSearchTool) ToolPayloadSchema() Schema {
 				Description: "Number of results to skip (for pagination). Default 0.",
 			},
 		},
-		Required: []string{"pattern"},
+		Required: []string{"folder", "pattern"},
 	}
 }
 
@@ -693,7 +697,7 @@ func (t *FolderGrepTool) ToolPayloadSchema() Schema {
 		Properties: PropertyMap{
 			"folder": {
 				Type:        TypeString,
-				Description: "Folder name. Omit to use the default mission folder.",
+				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
 			},
 			"path": {
 				Type:        TypeString,
@@ -716,7 +720,7 @@ func (t *FolderGrepTool) ToolPayloadSchema() Schema {
 				Description: "Number of matches to skip (for pagination). Default 0.",
 			},
 		},
-		Required: []string{"pattern"},
+		Required: []string{"folder", "pattern"},
 	}
 }
 

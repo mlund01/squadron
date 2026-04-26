@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"squadron/config"
@@ -139,8 +140,69 @@ func RunInit(passphraseFile, providerName string) error {
 	// Cache for current process
 	vault.CachePassphrase(passphrase)
 
+	if err := ensureSquadronGitignored(); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: could not update .gitignore: %v\n", err)
+	}
+
 	fmt.Printf("Squadron initialized with %q vault provider. Secrets are now encrypted at rest.\n", provider.Name())
 	return nil
+}
+
+// ensureSquadronGitignored adds `.squadron/` to the .gitignore at the current
+// working directory, creating the file if necessary. Runs unconditionally —
+// even if the project isn't a git repo yet, so the entry is in place once
+// it becomes one.
+func ensureSquadronGitignored() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	gitignorePath := filepath.Join(cwd, ".gitignore")
+	existing, err := os.ReadFile(gitignorePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	if gitignoreContains(existing, ".squadron") {
+		return nil
+	}
+
+	var buf strings.Builder
+	if len(existing) > 0 {
+		buf.Write(existing)
+		if existing[len(existing)-1] != '\n' {
+			buf.WriteByte('\n')
+		}
+	}
+	buf.WriteString(".squadron/\n")
+
+	if err := os.WriteFile(gitignorePath, []byte(buf.String()), 0644); err != nil {
+		return err
+	}
+	if len(existing) == 0 {
+		fmt.Println("Created .gitignore with .squadron/ entry.")
+	} else {
+		fmt.Println("Added .squadron/ to .gitignore.")
+	}
+	return nil
+}
+
+// gitignoreContains checks whether any non-comment line in data matches the
+// .squadron entry in any common form (.squadron, .squadron/, /.squadron, etc.).
+func gitignoreContains(data []byte, entry string) bool {
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		line = strings.TrimPrefix(line, "/")
+		line = strings.TrimSuffix(line, "/")
+		if line == entry {
+			return true
+		}
+	}
+	return false
 }
 
 // EnsureInitialized checks that squadron has been initialized.

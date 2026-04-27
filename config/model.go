@@ -15,6 +15,14 @@ const (
 // The keys are the variable names used in HCL references (e.g., models.openai.gpt_4o)
 var SupportedModels = map[Provider]map[string]string{
 	ProviderOpenAI: {
+		"gpt_5_5":          "gpt-5.5",
+		"gpt_5_5_pro":      "gpt-5.5-pro",
+		"gpt_5_4":          "gpt-5.4",
+		"gpt_5_4_mini":     "gpt-5.4-mini",
+		"gpt_5_4_nano":     "gpt-5.4-nano",
+		"gpt_5_4_pro":      "gpt-5.4-pro",
+		"gpt_5_3_codex":    "gpt-5.3-codex",
+		"gpt_5_2":          "gpt-5.2",
 		"gpt_5":            "gpt-5",
 		"gpt_5_mini":       "gpt-5-mini",
 		"gpt_5_nano":       "gpt-5-nano",
@@ -44,8 +52,11 @@ var SupportedModels = map[Provider]map[string]string{
 		"gemini_1_5_flash":              "gemini-1.5-flash",
 	},
 	ProviderAnthropic: {
+		"claude_opus_4_7":   "claude-opus-4-7",
 		"claude_opus_4_6":   "claude-opus-4-6",
+		"claude_opus_4_5":   "claude-opus-4-5-20251101",
 		"claude_sonnet_4_6": "claude-sonnet-4-6",
+		"claude_sonnet_4_5": "claude-sonnet-4-5-20250929",
 		"claude_sonnet_4":   "claude-sonnet-4-20250514",
 		"claude_opus_4":     "claude-opus-4-20250514",
 		"claude_haiku_4_5":  "claude-haiku-4-5-20251001",

@@ -11,12 +11,13 @@ import (
 // (aitools and mission) to avoid import cycles. They continue to be used
 // directly by the runner and can be backed by SQLite separately.
 type Bundle struct {
-	Missions MissionStore
-	Datasets DatasetStore
-	Sessions SessionStore
-	Events   EventStore
-	Costs    CostStore
-	closer   func() error
+	Missions    MissionStore
+	Datasets    DatasetStore
+	Sessions    SessionStore
+	Events      EventStore
+	Costs       CostStore
+	HumanInputs HumanInputStore
+	closer      func() error
 }
 
 // Close cleans up the bundle resources
@@ -297,6 +298,64 @@ type DateFieldCostRow struct {
 	Date      string  `json:"date"`
 	FieldKey  string  `json:"fieldKey"`
 	TotalCost float64 `json:"totalCost"`
+}
+
+// HumanInputStore persists human-input requests and their resolutions so
+// they survive restarts and can be proxied to command center on demand.
+// States are "open" (waiting for a human) and "resolved" (a human has
+// answered). CreateRequest is idempotent on tool_call_id so a squadron
+// re-requesting during recovery doesn't create duplicates.
+type HumanInputStore interface {
+	CreateRequest(req *HumanInputRequestRecord) error
+	GetByToolCallID(toolCallID string) (*HumanInputRequestRecord, error)
+	// ResolveRequest marks the request resolved with the given response.
+	// If the request is already resolved, returns the existing record
+	// (idempotent). Returns a not-found-sentinel error if no matching
+	// row exists.
+	ResolveRequest(toolCallID, response, responderUserID string) (*HumanInputRequestRecord, error)
+	ListRequests(filter HumanInputFilter) ([]HumanInputRequestRecord, int, error)
+}
+
+const (
+	HumanInputStateOpen     = "open"
+	HumanInputStateResolved = "resolved"
+)
+
+// HumanInputRequestRecord is one human-input request row.
+//
+//   - ShortSummary: one-line preview shown in the Inbox row.
+//   - Question: the direct ask, kept concise — shown in full when the
+//     row is expanded.
+//   - AdditionalContext: optional markdown background the agent
+//     provides so the operator understands what they're answering.
+type HumanInputRequestRecord struct {
+	ID                string     `json:"id"`
+	MissionID         string     `json:"missionId,omitempty"`
+	TaskID            string     `json:"taskId,omitempty"`
+	ToolCallID        string     `json:"toolCallId"`
+	Question          string     `json:"question"`
+	ShortSummary      string     `json:"shortSummary,omitempty"`
+	AdditionalContext string     `json:"additionalContext,omitempty"`
+	Choices           []string   `json:"choices,omitempty"`
+	// MultiSelect=true means the human may pick 1+ Choices instead of
+	// exactly one. The resolved Response is then a JSON-encoded
+	// string array (e.g. `["A","C"]`); when false, Response is a bare
+	// string. Free-text questions (no choices) are always single.
+	MultiSelect       bool       `json:"multiSelect,omitempty"`
+	State             string     `json:"state"`
+	RequestedAt       time.Time  `json:"requestedAt"`
+	ResolvedAt        *time.Time `json:"resolvedAt,omitempty"`
+	Response          *string    `json:"response,omitempty"`
+	ResponderUserID   *string    `json:"responderUserId,omitempty"`
+}
+
+// HumanInputFilter narrows ListRequests.
+type HumanInputFilter struct {
+	State       string
+	MissionID   string
+	OldestFirst bool
+	Limit       int
+	Offset      int
 }
 
 // CostTotals holds overall cost aggregates.

@@ -27,6 +27,10 @@ var missionCmd = &cobra.Command{
 	Long:  `Execute a mission by name. The mission will run all tasks respecting their dependencies, executing independent tasks in parallel. Provide inputs with --input key=value flags.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := applyHome(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		if err := EnsureInitialized(missionAutoInit); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

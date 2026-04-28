@@ -10,14 +10,18 @@ import (
 
 // BuildToolsMap creates a map of tool name -> Tool implementation from the agent's tools list
 // Tools can be:
-//   - Builtin tools: builtins.http.get, builtins.http.get
+//   - Builtin tools: builtins.http.get, builtins.human.ask
 //   - Plugin tools: plugins.pinger.echo (external plugins)
 //   - MCP tools: mcp.filesystem.read_file (consumer-side MCP servers)
 //   - Custom tools: tools.weather, tools.shout (defined in HCL)
 //
 // datasetStore is optional and provides access to mission datasets for dataset tools.
 // When datasetStore is provided (mission context), dataset tools are automatically injected.
-func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient, loadedMCPClients map[string]*squadronmcp.Client, datasetStore aitools.DatasetStore) map[string]aitools.Tool {
+//
+// humanBridge is optional and powers the `builtins.human.ask` tool. Pass
+// nil when no commander is attached; the tool is still registered and returns
+// a stable "[no human available]" observation to the agent instead of blocking.
+func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient, loadedMCPClients map[string]*squadronmcp.Client, datasetStore aitools.DatasetStore, humanBridge aitools.HumanInputBridge) map[string]aitools.Tool {
 	tools := make(map[string]aitools.Tool)
 
 	// Build a lookup map for custom tool definitions
@@ -41,7 +45,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 				if builtinToolList, ok := BuiltinTools[namespaceName]; ok {
 					for _, toolName := range builtinToolList {
 						ref := "builtins." + namespaceName + "." + toolName
-						tool := GetBuiltinTool(ref, datasetStore)
+						tool := GetBuiltinTool(ref, datasetStore, humanBridge)
 						if tool != nil {
 							tools[ref] = tool
 						}
@@ -97,7 +101,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 
 		// Check if it's a builtin tool reference (builtins.{namespace}.{tool})
 		if IsBuiltinTool(toolRef) {
-			tool := GetBuiltinTool(toolRef, datasetStore)
+			tool := GetBuiltinTool(toolRef, datasetStore, humanBridge)
 			if tool != nil {
 				tools[toolRef] = tool
 			}
@@ -153,9 +157,11 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 	return tools
 }
 
-// GetBuiltinTool returns the aitools.Tool for a built-in tool reference
+// GetBuiltinTool returns the aitools.Tool for a built-in tool reference.
 // datasetStore is optional and required for dataset tools.
-func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore) aitools.Tool {
+// humanBridge is optional; when nil, the ask tool returns a stable
+// "[no human available]" observation rather than blocking.
+func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore, humanBridge aitools.HumanInputBridge) aitools.Tool {
 	switch ref {
 	case "builtins.http.get":
 		return &aitools.HTTPGetTool{}
@@ -175,6 +181,8 @@ func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore) aitools.Tool 
 		return &aitools.DatasetCountTool{Store: datasetStore}
 	case "builtins.utils.sleep":
 		return &aitools.SleepTool{}
+	case "builtins.human.ask":
+		return &aitools.HumanInputTool{Bridge: humanBridge}
 	default:
 		return nil
 	}

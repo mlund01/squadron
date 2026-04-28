@@ -14,12 +14,17 @@ const (
 
 // GlobalEvents are always sent when there's a global subscriber
 var GlobalEvents = map[string]bool{
-	"mission_started":   true,
-	"mission_completed": true,
-	"mission_failed":    true,
-	"mission_stopped":   true,
-	"mission_resumed":   true,
-	"session_turn":      true, // for cost tracking
+	"mission_started":        true,
+	"mission_completed":      true,
+	"mission_failed":         true,
+	"mission_stopped":        true,
+	"mission_resumed":        true,
+	"session_turn":           true, // for cost tracking
+	// Commander needs these at instance scope (not per-mission) so the
+	// Inbox / alerts surfaces see ask activity across every
+	// running mission without subscribing to each one individually.
+	"human_input_requested": true,
+	"human_input_resolved":  true,
 }
 
 // subscription represents an active event subscription
@@ -121,6 +126,13 @@ func (sm *SubscriptionManager) Stop() {
 }
 
 func (sm *SubscriptionManager) isExpired(sub *subscription) bool {
+	// Global subscriptions live as long as the WebSocket itself — the
+	// WS ping/pong already handles liveness. The TTL only exists to
+	// garbage-collect mission subscriptions whose SSE reader went
+	// away without unsubscribing cleanly.
+	if sub.scope == "global" {
+		return false
+	}
 	return time.Since(sub.lastPulse) > subscriptionTTL
 }
 

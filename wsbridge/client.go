@@ -14,6 +14,7 @@ import (
 
 	"squadron/agent"
 	"squadron/config"
+	"squadron/humaninput"
 	"squadron/store"
 )
 
@@ -65,6 +66,13 @@ type Client struct {
 	// Concurrency tracker for mission max_parallel enforcement
 	concurrency ConcurrencyTracker
 
+	// Per-tool-call listener registry — AskHuman registers a channel
+	// before sending; resolutions route back through it.
+	humanInputs *humanInputListeners
+
+	// In-process notifier for human-input events; nil = no-op.
+	humanInputNotifier *humaninput.Notifier
+
 	// Lifecycle
 	done chan struct{}
 	ctx  context.Context
@@ -94,9 +102,9 @@ func (noopConcurrency) NotifyMissionDone(string)         {}
 // RequestHandler processes an incoming request from commander and returns a response payload.
 type RequestHandler func(env *protocol.Envelope) (*protocol.Envelope, error)
 
-// NewClient creates a new wsbridge client. cfgReady indicates whether the config
-// is fully loaded and validated (false = partial config with just vars/plugins).
-// cfgError is the error message when config failed to load (empty if cfgReady is true).
+// NewClient creates a wsbridge client. cfgReady=false means partial
+// config (vars/plugins only) and cfgError carries the load failure.
+// Wire human-input notifier after construction via SetHumanInputNotifier.
 func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath string, stores *store.Bundle, version string) *Client {
 	ctx, stop := context.WithCancel(context.Background())
 	c := &Client{
@@ -113,12 +121,47 @@ func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath st
 		runningMissions: make(map[string]*runningMission),
 		subscriptions:   NewSubscriptionManager(),
 		concurrency:     noopConcurrency{},
+		humanInputs:     newHumanInputListeners(),
 		done:         make(chan struct{}),
 		ctx:        ctx,
 		stop:       stop,
 	}
 	c.registerHandlers()
 	return c
+}
+
+// SetHumanInputNotifier wires the in-process pub/sub. Calling it also
+// subscribes the client and translates every resolved event into a
+// wire event — so resolutions from gateways (which never touch the
+// wire protocol) still push the commander UI. Pass nil to disable.
+func (c *Client) SetHumanInputNotifier(n *humaninput.Notifier) {
+	c.humanInputNotifier = n
+	if n == nil {
+		return
+	}
+	events, cancel := n.Subscribe()
+	go func() {
+		defer cancel()
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if ev.Kind == humaninput.EventKindResolved {
+					c.emitHumanInputResolved(ev.Record)
+				}
+			}
+		}
+	}()
+}
+
+// HumanInputListener exposes the listener registry as a
+// humaninput.Listener so gateways can wake blocking AskHuman calls.
+func (c *Client) HumanInputListener() humaninput.Listener {
+	return c.humanInputs
 }
 
 // ConnectTo dials a specific command center URL, registers, and starts read/write pumps.
@@ -395,15 +438,19 @@ func (c *Client) dispatch(env *protocol.Envelope) {
 
 	// Handlers that work without a loaded config
 	configFreeHandlers := map[protocol.MessageType]bool{
-		protocol.TypeReloadConfig:    true,
-		protocol.TypeGetConfig:       true,
-		protocol.TypeSetVariable:     true,
-		protocol.TypeDeleteVariable:  true,
-		protocol.TypeGetVariables:    true,
-		protocol.TypeListConfigFiles: true,
-		protocol.TypeGetConfigFile:   true,
-		protocol.TypeWriteConfigFile: true,
-		protocol.TypeValidateConfig:  true,
+		protocol.TypeReloadConfig:       true,
+		protocol.TypeGetConfig:          true,
+		protocol.TypeSetVariable:        true,
+		protocol.TypeDeleteVariable:     true,
+		protocol.TypeGetVariables:       true,
+		protocol.TypeListConfigFiles:    true,
+		protocol.TypeGetConfigFile:      true,
+		protocol.TypeWriteConfigFile:    true,
+		protocol.TypeValidateConfig:     true,
+		// Human-in-the-loop endpoints operate purely against the
+		// store, which exists independently of the HCL config.
+		protocol.TypeGetHumanInputs:     true,
+		protocol.TypeResolveHumanInput:  true,
 	}
 
 	// Handle incoming requests from commander

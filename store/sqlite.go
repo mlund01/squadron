@@ -29,11 +29,12 @@ func NewSQLiteBundle(dbPath string) (*Bundle, error) {
 
 	batchingEvents := NewBatchingEventStore(&SQLiteEventStore{db: db})
 	return &Bundle{
-		Missions: &SQLiteMissionStore{db: db},
-		Datasets: &SQLiteDatasetStore{db: db},
-		Sessions: &SQLiteSessionStore{db: db},
-		Events:   batchingEvents,
-		Costs:    &SQLiteCostStore{db: db},
+		Missions:    &SQLiteMissionStore{db: db},
+		Datasets:    &SQLiteDatasetStore{db: db},
+		Sessions:    &SQLiteSessionStore{db: db},
+		Events:      batchingEvents,
+		Costs:       &SQLiteCostStore{db: db},
+		HumanInputs: &SQLiteHumanInputStore{db: db},
 		closer: func() error {
 			batchingEvents.Close()
 			return db.Close()

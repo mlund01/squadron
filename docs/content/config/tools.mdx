@@ -30,6 +30,35 @@ Utility tools:
 tools = [builtins.utils.sleep]
 ```
 
+### Human Input
+
+Pause an agent mid-task and ask an operator a question:
+
+```hcl
+agent "concierge" {
+  model = models.anthropic.claude_sonnet_4
+  role  = "Plans the trip by asking the user a few targeted questions."
+  tools = [builtins.human.ask]
+}
+```
+
+The agent calls `ask` with the question, optional choices, and optional context. The question appears in the Command Center Inbox and on any connected gateway (e.g. Discord). The tool blocks until a human answers or the optional timeout fires.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `question` | string | yes | The actual ask. One or two sentences. |
+| `short_summary` | string | no | ≤80-char headline shown in the Inbox row. Falls back to a truncated `question`. |
+| `additional_context` | string (markdown) | no | Background the operator needs to answer well — what's been tried, trade-offs, what's at stake. |
+| `choices` | list of strings | no | Suggested answers. UI presents them as quick-replies; an "Other" free-text input is always available. |
+| `multi_select` | bool | no | When `true`, the human picks 1+ of `choices` rather than exactly one. The response arrives as a JSON-encoded array string (e.g. `["A","C"]`) — parse it. Has no effect without `choices`. |
+| `timeout_seconds` | number | no | Max seconds to wait. Omit for indefinite wait. |
+
+The tool returns the human's answer as a plain string for single-select / free-text, or a JSON array string for multi-select. If no Command Center / gateway is attached, the tool returns `[no human available]` immediately so the agent can proceed without blocking.
+
+A failed or stopped mission auto-resolves any still-open `ask` calls with a sentinel response, so the Inbox and connected gateways don't linger on dead questions.
+
+See [Gateways](/config/gateways) for surfacing questions outside the Command Center (Discord, Slack, …).
+
 ## Custom Tools
 
 Custom tools wrap built-in or plugin tools with custom schemas and transformations.

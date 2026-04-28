@@ -33,11 +33,12 @@ func NewPostgresBundle(connStr string) (*Bundle, error) {
 
 	batchingEvents := NewBatchingEventStore(&PgEventStore{db: db})
 	return &Bundle{
-		Missions: &PgMissionStore{db: db},
-		Datasets: &PgDatasetStore{db: db},
-		Sessions: &PgSessionStore{db: db},
-		Events:   batchingEvents,
-		Costs:    &PgCostStore{db: db},
+		Missions:    &PgMissionStore{db: db},
+		Datasets:    &PgDatasetStore{db: db},
+		Sessions:    &PgSessionStore{db: db},
+		Events:      batchingEvents,
+		Costs:       &PgCostStore{db: db},
+		HumanInputs: &PgHumanInputStore{db: db},
 		closer: func() error {
 			batchingEvents.Close()
 			return db.Close()

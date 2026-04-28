@@ -98,8 +98,13 @@ If the command center is unreachable at startup:
 
 Either way, Squadron does not crash on a missing command center. This makes it safe to roll out config changes that depend on an eventually-available command center.
 
+## Human Input Inbox
+
+The command center exposes an **Inbox** surface for any agent call to [`builtins.human.ask`](/config/tools#human-input). New questions appear live; you pick a quick-reply button, toggle multi-select choices, or type a free-text answer. A toast + chime fire on every new question (chime works in backgrounded tabs), and resolutions clear in real time across every connected surface — Inbox, mission detail, gateways. See [Tools → Human Input](/config/tools#human-input) for the agent-side schema and [Gateways](/config/gateways) for surfacing questions outside the command center.
+
 ## See Also
 
 - [engage](/cli/engage) — How to start Squadron
 - [Variables](/config/variables) — Storing the command center URL and secrets
 - [Schedules & Triggers](/missions/schedules) — Webhook routing through the command center
+- [Gateways](/config/gateways) — Bridge `human.ask` to Discord, Slack, etc.

@@ -1,0 +1,156 @@
+package aitools
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// HumanInputBridge delivers the question to a human via an attached
+// commander (transport, correlation, mission events). Pass nil to
+// build a tool that returns a no-commander observation instead of
+// blocking — the tool is always registered.
+type HumanInputBridge interface {
+	AskHuman(ctx context.Context, req HumanInputRequest) (string, error)
+}
+
+// HumanInputRequest is the payload the bridge needs to deliver one
+// ask. ToolCallID is generated here; mission/task ids come from ctx
+// (see WithMissionContext) so callers don't have to thread mission
+// awareness into the tool builder.
+type HumanInputRequest struct {
+	ToolCallID        string
+	MissionID         string
+	TaskID            string
+	Question          string
+	ShortSummary      string
+	AdditionalContext string
+	Choices           []string
+	// MultiSelect=true → response is a JSON-encoded string array
+	// (`["A","C"]`). Forced false when Choices is empty.
+	MultiSelect bool
+}
+
+// HumanInputTool backs builtins.human.ask. Pauses the agent's ReAct
+// loop until a human responds (or the optional timeout fires). The
+// Bridge field is nil when no commander is attached.
+type HumanInputTool struct {
+	Bridge HumanInputBridge
+}
+
+// ToolName is the bare verb. The HCL ref `builtins.human.ask` already
+// supplies the namespace context.
+func (t *HumanInputTool) ToolName() string { return "ask" }
+
+func (t *HumanInputTool) ToolDescription() string {
+	return "Ask a human operator a question and wait for their response. " +
+		"Use this when you need direction, feedback, or approval that only a person can provide. " +
+		"Keep `question` short and direct — it's the actual ask. " +
+		"Use `additional_context` (markdown ok) to give the operator the background they need to answer well: what you've already tried, what the trade-offs are, what's at stake. " +
+		"Always provide a punchy `short_summary` (≤80 chars, no markdown) that the Inbox row preview can show. " +
+		"The `choices` parameter is optional: when given, the human sees those as quick-reply options plus an \"Other\" free-text input; when omitted, the human answers in free-text. " +
+		"Set `multi_select` to true when the human may pick 1+ of the choices (e.g. \"which of these features apply?\"). When multi-select, the response is a JSON-encoded array of strings like `[\"A\",\"C\"]` — parse it accordingly. Default (false) means the human picks exactly one. " +
+		"Returns the human's answer as a plain string (single-select / free-text) or a JSON array string (multi-select). " +
+		"If no commander is attached, returns \"[no human available]\" so you can proceed without blocking."
+}
+
+func (t *HumanInputTool) ToolPayloadSchema() Schema {
+	return Schema{
+		Type: TypeObject,
+		Properties: PropertyMap{
+			"question": {
+				Type:        TypeString,
+				Description: "The actual ask. Keep it short and direct — one or two sentences. Use `additional_context` for background.",
+			},
+			"short_summary": {
+				Type:        TypeString,
+				Description: "Optional one-line summary (≤80 chars, no markdown) shown in the Inbox row preview. Falls back to a truncated form of `question` if omitted.",
+			},
+			"additional_context": {
+				Type:        TypeString,
+				Description: "Optional background the operator needs to answer well: what you've already tried, the relevant data, the trade-offs, what's at stake. Markdown is supported. Shown alongside `question` in the expanded view.",
+			},
+			"choices": {
+				Type:        TypeArray,
+				Description: "Optional list of suggested answers. If provided, the UI presents them as quick-replies; an \"Other\" text input is always available.",
+				Items:       &Property{Type: TypeString},
+			},
+			"multi_select": {
+				Type:        TypeBoolean,
+				Description: "Set to true for 'pick all that apply' / 'select one or more' style questions. The human will then be presented a multi-select picker (dropdown in Discord, checkboxes in the web inbox) instead of single-choice quick-reply buttons, and the response will arrive as a JSON-encoded array of strings (e.g. `[\"A\",\"C\"]`) which you must parse. Default false (single pick). Has no effect without `choices`.",
+			},
+			"timeout_seconds": {
+				Type:        TypeNumber,
+				Description: "Optional maximum seconds to wait for a response. Omit for indefinite wait.",
+			},
+		},
+		Required: []string{"question"},
+	}
+}
+
+type askParams struct {
+	Question          string   `json:"question"`
+	ShortSummary      string   `json:"short_summary,omitempty"`
+	AdditionalContext string   `json:"additional_context,omitempty"`
+	Choices           []string `json:"choices,omitempty"`
+	MultiSelect       bool     `json:"multi_select,omitempty"`
+	TimeoutSeconds    *float64 `json:"timeout_seconds,omitempty"`
+}
+
+// NoCommanderObservation is what Call returns when no bridge is wired.
+const NoCommanderObservation = "[no human available]"
+
+func (t *HumanInputTool) Call(ctx context.Context, params string) string {
+	var p askParams
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return "Error: invalid parameters - " + err.Error()
+	}
+	if p.Question == "" {
+		return "Error: question is required"
+	}
+	if t.Bridge == nil {
+		return NoCommanderObservation
+	}
+
+	missionID, taskID := MissionContextFromContext(ctx)
+	req := HumanInputRequest{
+		ToolCallID:        uuid.NewString(),
+		MissionID:         missionID,
+		TaskID:            taskID,
+		Question:          p.Question,
+		ShortSummary:      p.ShortSummary,
+		AdditionalContext: p.AdditionalContext,
+		Choices:           p.Choices,
+		// Multi-select without choices is meaningless.
+		MultiSelect: p.MultiSelect && len(p.Choices) > 0,
+	}
+
+	callCtx := ctx
+	if p.TimeoutSeconds != nil && *p.TimeoutSeconds > 0 {
+		var cancel context.CancelFunc
+		callCtx, cancel = context.WithTimeout(ctx, time.Duration(*p.TimeoutSeconds*float64(time.Second)))
+		defer cancel()
+	}
+
+	resp, err := t.Bridge.AskHuman(callCtx, req)
+	if err != nil {
+		if errIsTimeout(err, callCtx) {
+			if p.TimeoutSeconds != nil {
+				return fmt.Sprintf("[no human response within %.0fs]", *p.TimeoutSeconds)
+			}
+			return "[no human response: cancelled]"
+		}
+		return fmt.Sprintf("Error: %s", err.Error())
+	}
+	return resp
+}
+
+func errIsTimeout(err error, ctx context.Context) bool {
+	if err == nil {
+		return false
+	}
+	return ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled
+}

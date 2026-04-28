@@ -13,8 +13,9 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/mark3labs/mcp-go v0.46.0
+	github.com/mlund01/squadron-gateway-sdk v0.0.1
 	github.com/mlund01/squadron-sdk v0.0.30
-	github.com/mlund01/squadron-wire v0.0.40
+	github.com/mlund01/squadron-wire v0.0.41
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
 	github.com/openai/openai-go v1.12.0

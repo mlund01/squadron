@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -20,6 +21,8 @@ import (
 
 	"squadron/config"
 	"squadron/config/vault"
+	"squadron/gateway"
+	"squadron/humaninput"
 	"squadron/internal/browser"
 	"squadron/internal/daemon"
 	"squadron/internal/paths"
@@ -84,6 +87,11 @@ func runEngage(cmd *cobra.Command, args []string) {
 	// In a container, the process IS the daemon — don't double-fork.
 	if isContainer() {
 		engageForeground = true
+	}
+
+	if err := applyHome(engageConfigPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
 	}
 
 	if warning, err := validateConfigDir(engageConfigPath); err != nil {
@@ -302,6 +310,35 @@ func runEngage(cmd *cobra.Command, args []string) {
 		cfgErrMsg = cfgErr.Error()
 	}
 	client := wsbridge.NewClient(cfg, cfgErr == nil, cfgErrMsg, engageConfigPath, stores, Version)
+
+	// In-process notifier — gateways subscribe to it for human-input
+	// events. The wsbridge ask + resolve paths publish here in
+	// addition to firing wire-protocol mission events for commander.
+	notifier := humaninput.New()
+	client.SetHumanInputNotifier(notifier)
+
+	// Optional gateway subprocess. The HCL block is enforced singleton
+	// at parse time so cfg.Gateway is at most one Gateway. Failures are
+	// logged but don't abort engage — squadron + commander stay
+	// functional without the gateway.
+	var gatewayMgr *gateway.Manager
+	if cfgErr == nil && cfg != nil && cfg.Gateway != nil {
+		gatewayMgr = gateway.NewManager(stores, notifier, client.HumanInputListener())
+		if err := gatewayMgr.Start(context.Background(), gateway.Config{
+			Name:     cfg.Gateway.Name,
+			Source:   cfg.Gateway.Source,
+			Version:  cfg.Gateway.Version,
+			Settings: cfg.Gateway.Settings,
+		}); err != nil {
+			log.Printf("gateway %q failed to start: %v", cfg.Gateway.Name, err)
+			gatewayMgr = nil
+		}
+	}
+	defer func() {
+		if gatewayMgr != nil {
+			gatewayMgr.Stop()
+		}
+	}()
 
 	sched := scheduler.New(client.RunScheduledMission)
 	client.SetConcurrencyTracker(sched)

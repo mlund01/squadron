@@ -10,11 +10,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// varsConfigPath is shared across every `squadron vars ...` subcommand
+// so operators can point at a specific config directory. Without it the
+// command defaults to ./.squadron in the current working directory.
+var varsConfigPath string
+
 var varsCmd = &cobra.Command{
 	Use:   "vars",
 	Short: "Manage variables",
 	Long:  `Manage encrypted variables stored in the Squadron vault.`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
+		if err := applyHome(varsConfigPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		if !config.IsVaultInitialized() {
 			fmt.Fprintf(os.Stderr, "Error: Squadron not initialized. Run 'squadron init' first.\n")
 			os.Exit(1)
@@ -213,6 +222,9 @@ func init() {
 	varsCmd.AddCommand(varsDeleteCmd)
 	varsCmd.AddCommand(varsChangePassphraseCmd)
 	varsCmd.AddCommand(varsExportCmd)
+
+	varsCmd.PersistentFlags().StringVarP(&varsConfigPath, "config", "c", "",
+		"Path to config directory (vault lives at <config>/.squadron/vars.vault)")
 
 	varsChangePassphraseCmd.Flags().String("new-passphrase-file", "", "Path to file containing new passphrase")
 	varsChangePassphraseCmd.Flags().String("provider", "",

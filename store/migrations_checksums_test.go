@@ -35,16 +35,10 @@ import (
 //
 //	shasum -a 256 store/migrations/<file>
 var migrationChecksums = map[string]string{
-	"0001_baseline.sqlite.sql":                       "ea7a46271d90d7e19daff1b608d67137a091811dba1382f9f4267828c1d9ffa6",
-	"0001_baseline.postgres.sql":                     "ada6e4e89800425c2512877f20b090f22eacb8e9fa3aea3d8ebb94e953448c8f",
-	"0002_human_input_requests.sqlite.sql":           "455ec2f472793b7278e9f7281037208846b992fe53dbe640db10c5fafe060398",
-	"0002_human_input_requests.postgres.sql":         "b1c4f0f8aea08de4e04620f43f8394ddcaaf1e91146c07ba6311d85f6ed82481",
-	"0003_human_input_short_summary.sqlite.sql":      "f09de44befcbd0d8ce8c893264bbebeb173465aacbc7b1ffd9c014c3377f8294",
-	"0003_human_input_short_summary.postgres.sql":    "f09de44befcbd0d8ce8c893264bbebeb173465aacbc7b1ffd9c014c3377f8294",
-	"0004_human_input_additional_context.sqlite.sql":  "05a41dd13c70867abc0a02dfb5831657dd47397aacede058658fd38e434aed3f",
-	"0004_human_input_additional_context.postgres.sql": "05a41dd13c70867abc0a02dfb5831657dd47397aacede058658fd38e434aed3f",
-	"0005_human_input_multi_select.sqlite.sql":         "3c2f0650351de62f76d0bd94a700aa371ff4812e68a73dd0bdbef9283b01251f",
-	"0005_human_input_multi_select.postgres.sql":       "708403aa23399b64255b3916c30a9ddcdc675ec410ce07cbba21214a54a41db8",
+	"0001_baseline.sqlite.sql":               "ea7a46271d90d7e19daff1b608d67137a091811dba1382f9f4267828c1d9ffa6",
+	"0001_baseline.postgres.sql":             "ada6e4e89800425c2512877f20b090f22eacb8e9fa3aea3d8ebb94e953448c8f",
+	"0002_human_input_requests.sqlite.sql":   "fba61b19e6012c83812b575426d16af148717c31c18bf225af4157a47ce55859",
+	"0002_human_input_requests.postgres.sql": "65efa3f72f005b8b01424616115177da6bca365cabb1abc9824529755fe6e2ee",
 }
 
 var _ = Describe("Migration checksums", func() {

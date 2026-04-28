@@ -4,7 +4,7 @@ title: Gateways
 
 # gateway
 
-A `gateway` block runs a managed subprocess that bridges Squadron to an external system — Discord channel, Slack workspace, PagerDuty, custom dashboards, anything you build against the Gateway SDK.
+A `gateway` block runs a managed subprocess that bridges Squadron to an external system — a Discord channel, a Slack workspace, a Microsoft Teams chat, a custom web dashboard, anything you build against the Gateway SDK.
 
 The gateway subscribes to live `human_input_requested` / `human_input_resolved` events from Squadron and surfaces them in its target system; user actions in that system flow back to Squadron through the same record store. From the agent's perspective, an answer in Discord is indistinguishable from one typed into the Command Center Inbox.
 

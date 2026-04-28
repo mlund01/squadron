@@ -2,10 +2,10 @@ package aitools
 
 import "context"
 
-// missionContextKey is a private context key for mission/task identifiers
-// that scoped tools (like ask) read when invoked. The orchestrator
-// sets these before calling a tool; tools read them via
-// MissionContextFromContext.
+// Tools like `ask` need to know which mission/task they're running
+// inside. The orchestrator threads those ids through ctx; tools read
+// them with MissionContextFromContext.
+
 type missionContextKey struct{}
 
 type missionContext struct {
@@ -13,9 +13,6 @@ type missionContext struct {
 	taskID    string
 }
 
-// WithMissionContext returns a child context carrying the mission and
-// task identifiers. Call this at the orchestrator boundary just before
-// invoking a tool.
 func WithMissionContext(ctx context.Context, missionID, taskID string) context.Context {
 	return context.WithValue(ctx, missionContextKey{}, missionContext{
 		missionID: missionID,
@@ -23,8 +20,7 @@ func WithMissionContext(ctx context.Context, missionID, taskID string) context.C
 	})
 }
 
-// MissionContextFromContext returns the mission and task identifiers
-// previously set via WithMissionContext, or empty strings if unset.
+// MissionContextFromContext returns ("", "") if not set.
 func MissionContextFromContext(ctx context.Context) (missionID, taskID string) {
 	mc, _ := ctx.Value(missionContextKey{}).(missionContext)
 	return mc.missionID, mc.taskID

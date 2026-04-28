@@ -10,9 +10,8 @@ import (
 	"squadron/store"
 )
 
-// squadronAPI implements gwsdk.SquadronAPI. The gateway subprocess
-// calls these methods over the broker stream that the host plugin set
-// up during connection.
+// squadronAPI implements gwsdk.SquadronAPI — gateways call back into
+// these methods over the broker stream the host plugin set up.
 type squadronAPI struct {
 	stores   *store.Bundle
 	notifier *humaninput.Notifier

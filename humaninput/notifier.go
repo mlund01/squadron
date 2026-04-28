@@ -1,11 +1,6 @@
-// Package humaninput provides the in-process publish/subscribe hub for
-// builtins.human.ask events. The wsbridge AskHuman path and the
-// gateway runtime both publish to this notifier; consumers (gateway
-// dispatcher, future commander-side observers) subscribe to it.
-//
-// Splitting this from wsbridge avoids an import cycle: gateway needs
-// to consume events but cannot import wsbridge (which needs the
-// gateway to forward events).
+// Package humaninput is the in-process pub/sub hub for human.ask
+// events. Lives in its own package to break the wsbridge ↔ gateway
+// import cycle (both publish, both subscribe).
 package humaninput
 
 import (
@@ -14,7 +9,6 @@ import (
 	"squadron/store"
 )
 
-// EventKind classifies a notifier event.
 type EventKind string
 
 const (
@@ -22,33 +16,25 @@ const (
 	EventKindResolved EventKind = "resolved"
 )
 
-// Event is a single notifier delivery — a state change on a single
-// human-input request.
 type Event struct {
 	Kind   EventKind
 	Record store.HumanInputRequestRecord
 }
 
-// Notifier fans events out to subscribers in process. Best-effort
-// delivery: a slow subscriber drops events rather than backing up the
-// publisher, on the principle that subscribers can always ListRequests
-// to catch up if they fall behind.
+// Notifier fans events out to subscribers. Slow subscribers drop
+// rather than back-pressure the publisher — a fallen-behind consumer
+// can always re-sync via ListRequests.
 type Notifier struct {
 	mu   sync.Mutex
 	subs map[chan<- Event]struct{}
 }
 
-// New constructs an empty notifier ready for Subscribe / Publish.
 func New() *Notifier {
 	return &Notifier{subs: make(map[chan<- Event]struct{})}
 }
 
-// Subscribe returns a channel that receives every event published
-// after the call returns. The returned cancel func deregisters the
-// subscription and closes the channel; callers should always defer it.
-//
-// The channel is buffered (cap 32). Slow consumers see drops rather
-// than back-pressure on the publisher.
+// Subscribe returns a buffered channel (cap 32) and a cancel func.
+// Callers must defer the cancel.
 func (n *Notifier) Subscribe() (<-chan Event, func()) {
 	ch := make(chan Event, 32)
 	n.mu.Lock()
@@ -66,9 +52,8 @@ func (n *Notifier) Subscribe() (<-chan Event, func()) {
 	return ch, cancel
 }
 
-// Publish fans an event out to every active subscriber. Holds the
-// lock for the entire iteration so a concurrent unsubscribe can't
-// close a subscriber's channel mid-send.
+// Publish holds the lock through the fan-out so a concurrent
+// unsubscribe can't close a channel mid-send.
 func (n *Notifier) Publish(ev Event) {
 	n.mu.Lock()
 	defer n.mu.Unlock()

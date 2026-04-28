@@ -66,14 +66,11 @@ type Client struct {
 	// Concurrency tracker for mission max_parallel enforcement
 	concurrency ConcurrencyTracker
 
-	// Human-input listeners — keyed by tool_call_id. AskHuman registers a
-	// channel before sending; incoming HumanInputResponse envelopes route
-	// back to the waiter via handleHumanInputResponse.
+	// Per-tool-call listener registry — AskHuman registers a channel
+	// before sending; resolutions route back through it.
 	humanInputs *humanInputListeners
 
-	// In-process notifier for human-input events. Set when the engage
-	// command spins up gateways or other observers; nil leaves the
-	// publish path a no-op.
+	// In-process notifier for human-input events; nil = no-op.
 	humanInputNotifier *humaninput.Notifier
 
 	// Lifecycle
@@ -105,12 +102,9 @@ func (noopConcurrency) NotifyMissionDone(string)         {}
 // RequestHandler processes an incoming request from commander and returns a response payload.
 type RequestHandler func(env *protocol.Envelope) (*protocol.Envelope, error)
 
-// NewClient creates a new wsbridge client. cfgReady indicates whether the config
-// is fully loaded and validated (false = partial config with just vars/plugins).
-// cfgError is the error message when config failed to load (empty if cfgReady is true).
-//
-// SetHumanInputNotifier wires an in-process notifier (used by gateways)
-// after construction.
+// NewClient creates a wsbridge client. cfgReady=false means partial
+// config (vars/plugins only) and cfgError carries the load failure.
+// Wire human-input notifier after construction via SetHumanInputNotifier.
 func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath string, stores *store.Bundle, version string) *Client {
 	ctx, stop := context.WithCancel(context.Background())
 	c := &Client{
@@ -136,17 +130,10 @@ func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath st
 	return c
 }
 
-// SetHumanInputNotifier installs an in-process pub/sub for human-input
-// events. The wsbridge AskHuman + Resolve paths publish to it on top
-// of the wire-protocol mission-event emit, so gateways and other
-// in-process observers see every state change.
-//
-// Calling this also subscribes the client to the notifier and starts a
-// goroutine that translates every resolved event into a wire event, so
-// resolutions originated by gateways (which never go through the wire
-// protocol) still push the commander UI in real time.
-//
-// Pass nil to disable.
+// SetHumanInputNotifier wires the in-process pub/sub. Calling it also
+// subscribes the client and translates every resolved event into a
+// wire event — so resolutions from gateways (which never touch the
+// wire protocol) still push the commander UI. Pass nil to disable.
 func (c *Client) SetHumanInputNotifier(n *humaninput.Notifier) {
 	c.humanInputNotifier = n
 	if n == nil {
@@ -171,9 +158,8 @@ func (c *Client) SetHumanInputNotifier(n *humaninput.Notifier) {
 	}()
 }
 
-// HumanInputListener exposes the wsbridge listener registry as a
-// humaninput.Listener so the gateway SquadronAPI surface can wake the
-// blocking AskHuman call when a gateway resolves a request.
+// HumanInputListener exposes the listener registry as a
+// humaninput.Listener so gateways can wake blocking AskHuman calls.
 func (c *Client) HumanInputListener() humaninput.Listener {
 	return c.humanInputs
 }

@@ -68,8 +68,7 @@ type AgentManagerConfig struct {
 	Provider llm.Provider
 	// Budget flows to spawned agents so their LLM turns contribute to the same tally.
 	Budget BudgetChecker
-	// HumanBridge powers builtins.human.ask on spawned agents. Nil
-	// disables HITL.
+	// HumanBridge — nil disables builtins.human.ask on spawned agents.
 	HumanBridge aitools.HumanInputBridge
 }
 

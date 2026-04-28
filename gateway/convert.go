@@ -1,16 +1,14 @@
 package gateway
 
 import (
-	"time"
-
 	gwsdk "github.com/mlund01/squadron-gateway-sdk"
 
 	"squadron/store"
 )
 
-// storeRecordToSDK converts a squadron-internal record to the SDK's
-// gateway-facing shape. The two are intentionally separate types so
-// store mutations don't ripple through every gateway implementation.
+// Separate types intentional: store schema can evolve without
+// rippling through every gateway implementation.
+
 func storeRecordToSDK(r store.HumanInputRequestRecord) gwsdk.HumanInputRecord {
 	out := gwsdk.HumanInputRecord{
 		ID:                r.ID,
@@ -33,10 +31,6 @@ func storeRecordToSDK(r store.HumanInputRequestRecord) gwsdk.HumanInputRecord {
 	return out
 }
 
-// filterFromSDK translates an SDK-side filter to the store filter.
-// The SDK exposes Since as a time.Time; the store expects nothing
-// extra yet — this function is the integration point if/when we add
-// store-level Since support.
 func filterFromSDK(f gwsdk.HumanInputFilter) store.HumanInputFilter {
 	return store.HumanInputFilter{
 		State:       string(f.State),
@@ -44,10 +38,9 @@ func filterFromSDK(f gwsdk.HumanInputFilter) store.HumanInputFilter {
 		OldestFirst: f.OldestFirst,
 		Limit:       f.Limit,
 		Offset:      f.Offset,
-		// Since is currently filtered post-query inside the store
-		// abstraction — see the squadron-side ListRequests call site
-		// for the implementation. Once the store gains a native
-		// Since column, this passes through directly.
+		// Since is filtered post-query in the store today; this is
+		// the integration point if the store later gains a native
+		// Since column.
 	}
 }
 
@@ -57,6 +50,3 @@ func deref(p *string) string {
 	}
 	return *p
 }
-
-// Compile-time assertion the SDK time format matches what we emit.
-var _ = time.RFC3339Nano

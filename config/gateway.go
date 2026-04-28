@@ -4,21 +4,15 @@ import (
 	"fmt"
 )
 
-// Gateway is the parsed `gateway "name" { ... }` HCL block.
-//
-// Squadron supports at most one gateway per instance for now: a
-// gateway is a long-lived subprocess that bridges the squadron event
-// stream to a single external system (Discord, Slack, etc.). Adding
-// "type": adapter mapping is reserved for the future when multiple
-// gateways become useful.
+// Gateway is the parsed `gateway "name" { ... }` HCL block. Squadron
+// supports at most one gateway per instance — enforced at parse time.
 type Gateway struct {
 	Name     string            `hcl:"name,label"`
 	Source   string            `hcl:"source,optional"`
 	Version  string            `hcl:"version"`
-	Settings map[string]string `hcl:"-"` // Parsed manually from settings block
+	Settings map[string]string `hcl:"-"` // parsed manually from the settings block/attribute
 }
 
-// Validate checks the gateway configuration is well-formed.
 func (g *Gateway) Validate() error {
 	if g.Name == "" {
 		return fmt.Errorf("gateway name is required")
@@ -35,6 +29,6 @@ func (g *Gateway) Validate() error {
 	return nil
 }
 
-// IsLocal reports whether the gateway points at a developer-built
-// binary already present in the cache (skip download path).
+// IsLocal — version="local" skips the GitHub download path and uses
+// the binary already present in the cache.
 func (g *Gateway) IsLocal() bool { return g.Version == "local" }

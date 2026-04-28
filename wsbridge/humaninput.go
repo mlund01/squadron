@@ -15,9 +15,8 @@ import (
 	"squadron/store"
 )
 
-// humanInputListeners is a per-Client map of tool_call_id → listener
-// channel, used to route an incoming HumanInputResponse back to the
-// blocking AskHuman call that initiated it.
+// humanInputListeners routes a resolution back to the goroutine in
+// AskHuman that's blocked waiting for it. Keyed by tool_call_id.
 type humanInputListeners struct {
 	mu sync.Mutex
 	m  map[string]chan<- protocol.ResolveHumanInputPayload
@@ -53,10 +52,9 @@ func (l *humanInputListeners) deliver(resp protocol.ResolveHumanInputPayload) bo
 	}
 }
 
-// DeliverResolution implements humaninput.Listener — the gateway
-// SquadronAPI surface and the wire-protocol resolve handler both fire
-// this so the agent's blocking AskHuman call wakes up regardless of
-// which surface accepted the answer.
+// DeliverResolution implements humaninput.Listener so wsbridge,
+// gateways, and any future surface all wake the same blocking
+// AskHuman call regardless of which surface accepted the answer.
 func (l *humanInputListeners) DeliverResolution(toolCallID, response, responderUserID string) {
 	l.deliver(protocol.ResolveHumanInputPayload{
 		ToolCallID:      toolCallID,
@@ -65,14 +63,9 @@ func (l *humanInputListeners) DeliverResolution(toolCallID, response, responderU
 	})
 }
 
-// AskHuman implements aitools.HumanInputBridge. Squadron owns the record:
-// before blocking, it writes an "open" row to its own store AND emits an
-// EventHumanInputRequested mission event. Commander learns about the
-// request either through that event stream (live) or by querying the
-// store via TypeGetHumanInputs (on-demand). When a human response lands
-// via TypeResolveHumanInput, squadron persists the resolution, emits
-// EventHumanInputResolved, and delivers to the listener that unblocks
-// this call.
+// AskHuman implements aitools.HumanInputBridge. The open record is
+// written before blocking so a squadron crash between send and reply
+// can be reconstructed on resume.
 func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (string, error) {
 	if req.ToolCallID == "" {
 		return "", fmt.Errorf("ask: tool_call_id required")
@@ -81,9 +74,6 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 		return "", fmt.Errorf("ask: no store configured")
 	}
 
-	// Write the open record first so a squadron crash between send and
-	// reply doesn't lose the question — on resume, commander can query
-	// and re-surface.
 	record := &store.HumanInputRequestRecord{
 		MissionID:         req.MissionID,
 		TaskID:            req.TaskID,
@@ -100,11 +90,10 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 
 	c.emitHumanInputRequested(req)
 
-	// Re-read the canonical row so the in-process notifier carries the
-	// authoritative state (ID, RequestedAt) rather than just the input
-	// fields. Errors are non-fatal: the wire-protocol path already
-	// fired, the agent is still waiting, and gateway listeners can
-	// catch up via SquadronAPI.ListHumanInputs.
+	// Re-read so the in-process notifier carries the canonical row
+	// (ID, RequestedAt) rather than just the input fields. Best-effort —
+	// the wire path already fired and gateways can still catch up via
+	// SquadronAPI.ListHumanInputs.
 	if c.humanInputNotifier != nil {
 		if stored, err := c.stores.HumanInputs.GetByToolCallID(req.ToolCallID); err == nil {
 			humaninput.PublishCreated(c.humanInputNotifier, *stored)
@@ -123,8 +112,8 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 	}
 }
 
-// handleGetHumanInputs lets commander query the store. Squadron is the
-// source of truth; commander is a passthrough.
+// handleGetHumanInputs is a list passthrough — squadron is the source
+// of truth, commander only reads.
 func (c *Client) handleGetHumanInputs(env *protocol.Envelope) (*protocol.Envelope, error) {
 	var payload protocol.GetHumanInputsPayload
 	if err := protocol.DecodePayload(env, &payload); err != nil {
@@ -149,12 +138,11 @@ func (c *Client) handleGetHumanInputs(env *protocol.Envelope) (*protocol.Envelop
 		return nil, err
 	}
 
-	// Resolve mission/task names once per id so the Inbox doesn't have to
-	// render bare ULIDs. Best-effort: a missing or errored lookup leaves
-	// the name field blank rather than failing the whole list.
+	// Resolve mission/task names once per id so the Inbox renders names
+	// not bare ULIDs. Best-effort: a missing lookup leaves the field blank.
 	missionNames := map[string]string{}
 	taskNames := map[string]string{}
-	if c.stores != nil && c.stores.Missions != nil {
+	if c.stores.Missions != nil {
 		for _, r := range rows {
 			if r.MissionID != "" {
 				if _, ok := missionNames[r.MissionID]; !ok {
@@ -190,10 +178,10 @@ func (c *Client) handleGetHumanInputs(env *protocol.Envelope) (*protocol.Envelop
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetHumanInputsResult, result)
 }
 
-// handleResolveHumanInput is called when commander forwards a human's
-// response. Delegates to the shared humaninput.Resolve helper so
-// commander, gateways, and any future surface use exactly the same
-// store / listener / notifier flow.
+// handleResolveHumanInput delegates to humaninput.Resolve so
+// commander, gateways, and any future surface flow through the same
+// store / listener / notifier path. The resolved wire event is fanned
+// out by the notifier subscription set up in SetHumanInputNotifier.
 func (c *Client) handleResolveHumanInput(env *protocol.Envelope) (*protocol.Envelope, error) {
 	var payload protocol.ResolveHumanInputPayload
 	if err := protocol.DecodePayload(env, &payload); err != nil {
@@ -223,19 +211,14 @@ func (c *Client) handleResolveHumanInput(env *protocol.Envelope) (*protocol.Enve
 	if out.AlreadyResolved {
 		log.Printf("resolve_human_input for %s arrived after a prior resolution — replaying existing record", payload.ToolCallID)
 	}
-	// The wire event for resolved state is fanned out by the notifier
-	// subscription in SetHumanInputNotifier — every Resolve path
-	// (commander, gateway, mission-failure cancel) publishes there.
-
 	return protocol.NewResponse(env.RequestID, protocol.TypeResolveHumanInputResult, &protocol.ResolveHumanInputResultPayload{
 		Accepted:   true,
 		HumanInput: recordToProtocol(out.Record),
 	})
 }
 
-// emitHumanInputRequested fires a mission event if this request is
-// attached to a running mission. Standalone invocations (empty mission
-// id) skip the event — there's no mission stream to flow through.
+// emitHumanInputRequested fires only when there's a mission to attach
+// to and a subscriber for the event.
 func (c *Client) emitHumanInputRequested(req aitools.HumanInputRequest) {
 	if req.MissionID == "" {
 		return
@@ -271,9 +254,7 @@ func (c *Client) emitHumanInputResolved(rec store.HumanInputRequestRecord) {
 	if !c.subscriptions.ShouldSend(string(protocol.EventHumanInputResolved), rec.MissionID) {
 		return
 	}
-	data := protocol.HumanInputResolvedData{
-		ToolCallID: rec.ToolCallID,
-	}
+	data := protocol.HumanInputResolvedData{ToolCallID: rec.ToolCallID}
 	if rec.Response != nil {
 		data.Response = *rec.Response
 	}
@@ -294,16 +275,11 @@ func (c *Client) emitHumanInputResolved(rec store.HumanInputRequestRecord) {
 	}
 }
 
-// cancelOpenHumanInputsForMission auto-resolves any still-open human
-// input requests attached to a mission that has just failed or
-// stopped. Without this, questions linger in the Inbox and on
-// connected gateways even though the mission they belong to is gone
-// and nobody is listening for the answer anymore.
-//
-// Each open row is resolved through the shared humaninput.Resolve
-// helper with a synthetic "system" responder and a sentinel response,
-// so commander UI, gateways, and the in-process notifier all see the
-// state transition through the same path as a normal answer.
+// cancelOpenHumanInputsForMission auto-resolves still-open requests
+// for a mission that's failed or stopped, so the Inbox and connected
+// gateways don't linger on dead questions. Each row goes through the
+// shared Resolve helper with a "system" responder and sentinel
+// response — same code path as a real answer.
 func (c *Client) cancelOpenHumanInputsForMission(missionID, reason string) {
 	if missionID == "" || c.stores == nil || c.stores.HumanInputs == nil {
 		return
@@ -317,8 +293,6 @@ func (c *Client) cancelOpenHumanInputsForMission(missionID, reason string) {
 		return
 	}
 	for _, r := range rows {
-		// Wire event is fanned out by the notifier subscription in
-		// SetHumanInputNotifier — Resolve publishes there.
 		if _, err := humaninput.Resolve(c.stores, c.humanInputs, c.humanInputNotifier,
 			r.ToolCallID, reason, "system"); err != nil {
 			log.Printf("cancel open human input %s: %v", r.ToolCallID, err)
@@ -326,7 +300,6 @@ func (c *Client) cancelOpenHumanInputsForMission(missionID, reason string) {
 	}
 }
 
-// recordToProtocol converts a store record to its wire DTO.
 func recordToProtocol(rec store.HumanInputRequestRecord) protocol.HumanInputRecord {
 	out := protocol.HumanInputRecord{
 		ID:                rec.ID,
@@ -352,4 +325,3 @@ func recordToProtocol(rec store.HumanInputRequestRecord) protocol.HumanInputReco
 	}
 	return out
 }
-

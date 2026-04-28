@@ -16,25 +16,20 @@ import (
 	"squadron/store"
 )
 
-// Config is the host-side description of a gateway to launch. Built
-// from the HCL `gateway "name" { ... }` block.
+// Config is the host-side description of a gateway to launch.
+// Built from the HCL `gateway "name" { ... }` block.
 type Config struct {
-	// Name from the HCL label.
 	Name string
 	// Source is the GitHub source ("github.com/owner/repo"). Empty
 	// when the operator has placed the binary at the cached path
 	// manually (mirrors the local-version override path plugins use).
-	Source string
-	// Version is the release tag to install.
-	Version string
-	// Settings is the HCL `settings = { ... }` map, passed through to
-	// the gateway's Configure method.
+	Source   string
+	Version  string
 	Settings map[string]string
 }
 
 // gatewayClient is the subset of the host-side gRPC client interface
-// the manager relies on. Defined as an interface so tests can supply a
-// fake without spawning a real subprocess.
+// the manager uses; injectable so tests can swap in a fake.
 type gatewayClient interface {
 	Configure(ctx context.Context, settings map[string]string) error
 	OnHumanInputRequested(ctx context.Context, rec gwsdk.HumanInputRecord) error
@@ -42,48 +37,31 @@ type gatewayClient interface {
 	Shutdown(ctx context.Context) error
 }
 
-// subprocess represents the lifecycle of a launched gateway binary.
-// `Exited` reports whether the underlying OS process is still running;
-// `Kill` terminates it. For real gateways this is a thin wrapper around
-// hashicorp/go-plugin's Client. For tests it's a fake.
+// subprocess wraps the OS-level handle the watchdog inspects.
 type subprocess interface {
 	Exited() bool
 	Kill()
 }
 
-// launcher knows how to bring a gateway subprocess up. It returns the
-// gRPC client used to talk to the gateway plus the OS-level handle the
-// watchdog inspects for crashes.
-//
-// Defaulted to defaultLauncher in NewManager; tests inject their own to
-// drive watchdog behavior without spawning binaries.
+// launcher brings up a subprocess and returns its gRPC client +
+// process handle. defaultLauncher is the production impl; tests
+// inject their own to drive watchdog behavior without spawning bins.
 type launcher func(ctx context.Context, cfg Config, host *gwsdk.HostPlugin) (gatewayClient, subprocess, error)
 
-// Manager owns the lifecycle of the (single) gateway subprocess. It
-// subscribes to humaninput events, dispatches them to the gateway, and
-// exposes a SquadronAPI implementation the gateway can call back into.
-//
-// A watchdog goroutine watches the subprocess for crashes and re-runs
-// the launch+configure flow with the same Config when it dies. Stop()
-// cancels the watchdog cleanly so a deliberate teardown isn't
-// misinterpreted as a crash.
-//
-// Squadron supports at most one gateway per instance for now — the HCL
-// parser enforces the singleton — so the manager intentionally holds a
-// single client rather than a registry.
+// Manager owns a single gateway subprocess: launch + configure + event
+// dispatch + restart-on-crash watchdog. The HCL parser enforces the
+// singleton (one gateway block per config) so we hold a single client
+// rather than a registry.
 type Manager struct {
 	stores   *store.Bundle
 	notifier *humaninput.Notifier
 	listener humaninput.Listener
 	launch   launcher
 
-	// watchdogInterval is how often the watchdog polls subprocess.Exited().
-	// Exposed for tests so they don't pay multi-second sleeps.
+	// Tunables — exposed mainly so tests can shrink them.
 	watchdogInterval time.Duration
-	// initialBackoff is the wait before the first restart attempt after a
-	// crash. Doubles up to maxBackoff on consecutive failures.
-	initialBackoff time.Duration
-	maxBackoff     time.Duration
+	initialBackoff   time.Duration
+	maxBackoff       time.Duration
 
 	mu     sync.Mutex
 	cfg    *Config
@@ -97,9 +75,8 @@ type Manager struct {
 	watchdogDone   chan struct{}
 }
 
-// NewManager constructs a manager. stores and notifier are required;
-// listener is the wsbridge-side per-tool-call listener registry, used
-// to wake the agent's blocking AskHuman call when a gateway resolves.
+// NewManager — listener is the wsbridge per-tool-call registry, used
+// to wake a blocking AskHuman call when a gateway resolves.
 func NewManager(stores *store.Bundle, notifier *humaninput.Notifier, listener humaninput.Listener) *Manager {
 	return &Manager{
 		stores:           stores,
@@ -112,10 +89,8 @@ func NewManager(stores *store.Bundle, notifier *humaninput.Notifier, listener hu
 	}
 }
 
-// Start brings the gateway subprocess up: install (if needed), launch,
-// configure, begin dispatching events, and arm the restart watchdog.
-// Idempotent — a second Start with the same config is a no-op; with a
-// different config it stops the running gateway first.
+// Start launches the gateway and arms the watchdog. Idempotent on
+// identical Config; replaces the running gateway when Config differs.
 func (m *Manager) Start(ctx context.Context, cfg Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -124,7 +99,6 @@ func (m *Manager) Start(ctx context.Context, cfg Config) error {
 		if sameConfig(m.cfg, &cfg) {
 			return nil
 		}
-		// Different gateway requested — tear the old one down first.
 		m.stopLocked()
 	}
 
@@ -132,8 +106,7 @@ func (m *Manager) Start(ctx context.Context, cfg Config) error {
 		return err
 	}
 
-	// Watchdog polls subprocess.Exited and restarts on crash. Uses a
-	// fresh context independent of ctx so a Configure-time ctx
+	// Watchdog uses an independent context so a Configure-time ctx
 	// cancellation doesn't kill the long-running watchdog. Stop()
 	// cancels it explicitly.
 	wctx, wcancel := context.WithCancel(context.Background())
@@ -146,11 +119,10 @@ func (m *Manager) Start(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// launchLocked installs (if needed), launches the subprocess, calls
-// Configure, and starts the dispatch loop. Caller holds m.mu.
-//
-// Used both from Start and from the watchdog's restart path so a crash
-// recovery follows the exact same sequence as initial startup.
+// launchLocked runs the full launch + configure + dispatcher startup
+// sequence. Used by both Start and the watchdog so crash-recovery
+// follows exactly the same sequence as initial startup. Caller holds
+// m.mu.
 func (m *Manager) launchLocked(ctx context.Context, cfg Config) error {
 	host := &gwsdk.HostPlugin{API: &squadronAPI{
 		stores:   m.stores,
@@ -162,7 +134,6 @@ func (m *Manager) launchLocked(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
-
 	if err := gw.Configure(ctx, cfg.Settings); err != nil {
 		proc.Kill()
 		return fmt.Errorf("gateway %q: configure: %w", cfg.Name, err)
@@ -172,11 +143,8 @@ func (m *Manager) launchLocked(ctx context.Context, cfg Config) error {
 	m.gw = gw
 	m.cfg = &cfg
 
-	// Subscribe synchronously so the caller is guaranteed that an
-	// event published immediately after Start returns will reach the
-	// dispatcher. (If we subscribed inside the goroutine, the
-	// goroutine schedule could race with the publisher and drop early
-	// events.)
+	// Subscribe synchronously so an event published immediately after
+	// Start returns can't race ahead of the dispatcher goroutine.
 	events, cancelSub := m.notifier.Subscribe()
 	dispatchCtx, cancel := context.WithCancel(context.Background())
 	m.cancelEvents = cancel
@@ -186,12 +154,10 @@ func (m *Manager) launchLocked(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// Stop tears the gateway down, including the watchdog. Safe to call
-// multiple times.
+// Stop is safe to call multiple times.
 func (m *Manager) Stop() {
-	// Cancel the watchdog without holding m.mu so a watchdog-in-flight
-	// restart can finish its mu-holding section and observe the
-	// cancellation on the next loop iteration.
+	// Cancel the watchdog without holding m.mu so a watchdog mid-restart
+	// can finish its mu-holding section and observe the cancellation.
 	m.mu.Lock()
 	cancelWD := m.cancelWatchdog
 	doneWD := m.watchdogDone
@@ -208,12 +174,8 @@ func (m *Manager) Stop() {
 	m.stopLocked()
 }
 
-// stopLocked tears down the dispatch loop + subprocess but not the
-// watchdog. Caller holds m.mu.
-//
-// Used by Start (replacing one gateway with another) and Stop. The
-// watchdog's restart path uses the lower-level tearDownClientLocked
-// instead because it wants to keep the watchdog alive.
+// stopLocked tears down dispatch + subprocess and clears m.cfg, but
+// leaves the watchdog alone. Caller holds m.mu.
 func (m *Manager) stopLocked() {
 	m.tearDownClientLocked()
 	if m.cfg != nil {
@@ -222,9 +184,9 @@ func (m *Manager) stopLocked() {
 	m.cfg = nil
 }
 
-// tearDownClientLocked stops the dispatch loop and kills the
-// subprocess but leaves m.cfg intact. Caller holds m.mu. Used by both
-// stopLocked and the watchdog's restart path.
+// tearDownClientLocked stops the dispatcher and kills the subprocess
+// without touching m.cfg or the watchdog. The watchdog's restart path
+// uses this so it can re-launch under the same Config. Caller holds m.mu.
 func (m *Manager) tearDownClientLocked() {
 	if m.cancelEvents != nil {
 		m.cancelEvents()
@@ -233,7 +195,6 @@ func (m *Manager) tearDownClientLocked() {
 		m.eventDone = nil
 	}
 	if m.gw != nil {
-		// Best-effort graceful shutdown before killing the subprocess.
 		_ = m.gw.Shutdown(context.Background())
 	}
 	if m.client != nil && !m.client.Exited() {
@@ -243,14 +204,10 @@ func (m *Manager) tearDownClientLocked() {
 	m.gw = nil
 }
 
-// watchdog polls m.client.Exited at watchdogInterval. When the
-// subprocess has died (and Stop hasn't been called), it tears the
-// dead client down and re-runs launchLocked with the original Config.
-// Restart failures back off exponentially capped at maxBackoff.
-//
-// The done channel is passed in (not read from the struct) so Stop
-// can clear m.watchdogDone after capturing it, without racing the
-// watchdog's deferred close.
+// watchdog re-launches when the subprocess crashes. Restart failures
+// back off exponentially up to maxBackoff. The done channel is passed
+// in (not read from the struct) so Stop can capture and clear
+// m.watchdogDone without racing the deferred close here.
 func (m *Manager) watchdog(ctx context.Context, done chan struct{}) {
 	defer close(done)
 	backoff := m.initialBackoff
@@ -266,12 +223,8 @@ func (m *Manager) watchdog(ctx context.Context, done chan struct{}) {
 			m.mu.Unlock()
 			return
 		}
-		// Two situations require a launch attempt:
-		//   1. m.client != nil and the subprocess has exited (a crash
-		//      we're discovering for the first time).
-		//   2. m.client == nil — a previous restart attempt failed
-		//      Configure, so we left the slot empty for the watchdog
-		//      to retry on the next tick.
+		// m.client == nil happens when a previous restart failed
+		// Configure — we left the slot empty for the next tick to retry.
 		needsLaunch := m.client == nil || m.client.Exited()
 		if !needsLaunch {
 			m.mu.Unlock()
@@ -305,10 +258,6 @@ func (m *Manager) watchdog(ctx context.Context, done chan struct{}) {
 	}
 }
 
-// dispatchLoop forwards notifier events to the gateway. The
-// subscription is created synchronously by launchLocked and handed in,
-// so Start returning implies a live subscription — events published
-// immediately after Start cannot race ahead of the dispatcher.
 func (m *Manager) dispatchLoop(ctx context.Context, events <-chan humaninput.Event, cancelSub func()) {
 	defer close(m.eventDone)
 	defer cancelSub()
@@ -366,10 +315,6 @@ func sameConfig(a, b *Config) bool {
 	return true
 }
 
-// defaultLauncher is the production launcher. It locates / installs the
-// gateway binary, hands hashicorp/go-plugin a CommandContext for it,
-// dispenses the registered plugin, and returns the gRPC client adapter
-// plus a subprocess wrapper for the watchdog.
 func defaultLauncher(ctx context.Context, cfg Config, host *gwsdk.HostPlugin) (gatewayClient, subprocess, error) {
 	bin, err := ensureInstalled(cfg.Name, cfg.Version, cfg.Source)
 	if err != nil {
@@ -377,12 +322,10 @@ func defaultLauncher(ctx context.Context, cfg Config, host *gwsdk.HostPlugin) (g
 	}
 
 	client := plugin.NewClient(&plugin.ClientConfig{
-		HandshakeConfig: gwsdk.HostHandshake(),
-		Plugins:         host.PluginMap(),
-		Cmd:             exec.CommandContext(ctx, bin),
-		AllowedProtocols: []plugin.Protocol{
-			plugin.ProtocolGRPC,
-		},
+		HandshakeConfig:  gwsdk.HostHandshake(),
+		Plugins:          host.PluginMap(),
+		Cmd:              exec.CommandContext(ctx, bin),
+		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 		Logger: hclog.New(&hclog.LoggerOptions{
 			Name:   "gateway:" + cfg.Name,
 			Level:  hclog.Info,
@@ -395,23 +338,18 @@ func defaultLauncher(ctx context.Context, cfg Config, host *gwsdk.HostPlugin) (g
 		client.Kill()
 		return nil, nil, fmt.Errorf("gateway %q: dial subprocess: %w", cfg.Name, err)
 	}
-
 	raw, err := rpcClient.Dispense(gwsdk.PluginName)
 	if err != nil {
 		client.Kill()
 		return nil, nil, fmt.Errorf("gateway %q: dispense: %w", cfg.Name, err)
 	}
-
 	gw, ok := raw.(*gwsdk.GRPCGatewayClient)
 	if !ok {
 		client.Kill()
 		return nil, nil, fmt.Errorf("gateway %q: unexpected client type %T", cfg.Name, raw)
 	}
-
 	return gw, pluginSubprocess{client}, nil
 }
 
-// pluginSubprocess adapts a hashicorp/go-plugin Client to the
-// subprocess interface so the manager can poll for crashes without
-// caring about the concrete plugin type.
+// pluginSubprocess satisfies subprocess for the real go-plugin Client.
 type pluginSubprocess struct{ *plugin.Client }

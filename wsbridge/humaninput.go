@@ -65,7 +65,7 @@ func (l *humanInputListeners) DeliverResolution(toolCallID, response, responderU
 	})
 }
 
-// AskHuman implements aitools.AskHumanBridge. Squadron owns the record:
+// AskHuman implements aitools.HumanInputBridge. Squadron owns the record:
 // before blocking, it writes an "open" row to its own store AND emits an
 // EventHumanInputRequested mission event. Commander learns about the
 // request either through that event stream (live) or by querying the
@@ -73,12 +73,12 @@ func (l *humanInputListeners) DeliverResolution(toolCallID, response, responderU
 // via TypeResolveHumanInput, squadron persists the resolution, emits
 // EventHumanInputResolved, and delivers to the listener that unblocks
 // this call.
-func (c *Client) AskHuman(ctx context.Context, req aitools.AskHumanRequest) (string, error) {
+func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (string, error) {
 	if req.ToolCallID == "" {
-		return "", fmt.Errorf("ask_human: tool_call_id required")
+		return "", fmt.Errorf("ask: tool_call_id required")
 	}
 	if c.stores == nil || c.stores.HumanInputs == nil {
-		return "", fmt.Errorf("ask_human: no store configured")
+		return "", fmt.Errorf("ask: no store configured")
 	}
 
 	// Write the open record first so a squadron crash between send and
@@ -95,7 +95,7 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.AskHumanRequest) (str
 		MultiSelect:       req.MultiSelect,
 	}
 	if err := c.stores.HumanInputs.CreateRequest(record); err != nil {
-		return "", fmt.Errorf("ask_human: persist open request: %w", err)
+		return "", fmt.Errorf("ask: persist open request: %w", err)
 	}
 
 	c.emitHumanInputRequested(req)
@@ -236,7 +236,7 @@ func (c *Client) handleResolveHumanInput(env *protocol.Envelope) (*protocol.Enve
 // emitHumanInputRequested fires a mission event if this request is
 // attached to a running mission. Standalone invocations (empty mission
 // id) skip the event — there's no mission stream to flow through.
-func (c *Client) emitHumanInputRequested(req aitools.AskHumanRequest) {
+func (c *Client) emitHumanInputRequested(req aitools.HumanInputRequest) {
 	if req.MissionID == "" {
 		return
 	}

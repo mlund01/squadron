@@ -77,10 +77,10 @@ type Runner struct {
 	// Provider factory for testing — when set, commanders and agents use this instead of creating real providers
 	providerFactory func() llm.Provider
 
-	// HumanBridge powers builtins.human.ask_human on agents spawned by
+	// HumanBridge powers builtins.human.ask on agents spawned by
 	// this mission. Nil when no commander is attached (e.g. CLI runs);
 	// the tool then surfaces "[no human available]" instead of blocking.
-	humanBridge aitools.AskHumanBridge
+	humanBridge aitools.HumanInputBridge
 
 	// Task state manager — single authority for task lifecycle
 	stateMgr *TaskStateManager
@@ -139,11 +139,11 @@ func WithProviderFactory(factory func() llm.Provider) RunnerOption {
 }
 
 // WithHumanBridge wires a human-input bridge into agents spawned by this
-// mission so builtins.human.ask_human can pause for an operator response
+// mission so builtins.human.ask can pause for an operator response
 // and unblock when commander returns one. Pass nil (or omit the option)
 // to disable HITL — the tool then returns the no-human-available
 // observation instead of blocking.
-func WithHumanBridge(bridge aitools.AskHumanBridge) RunnerOption {
+func WithHumanBridge(bridge aitools.HumanInputBridge) RunnerOption {
 	return func(r *Runner) {
 		r.humanBridge = bridge
 	}

@@ -81,7 +81,7 @@ var _ = Describe("Client.AskHuman", func() {
 	It("persists an open request and unblocks when a resolution arrives", func() {
 		c := newBareClient()
 
-		req := aitools.AskHumanRequest{
+		req := aitools.HumanInputRequest{
 			ToolCallID: "call-42",
 			MissionID:  "m-1",
 			Question:   "pick one",
@@ -140,7 +140,7 @@ var _ = Describe("Client.AskHuman", func() {
 		c := newBareClient()
 		ctx, cancel := context.WithCancel(context.Background())
 
-		req := aitools.AskHumanRequest{ToolCallID: "call-x", Question: "q"}
+		req := aitools.HumanInputRequest{ToolCallID: "call-x", Question: "q"}
 		done := make(chan error, 1)
 		go func() {
 			_, err := c.AskHuman(ctx, req)
@@ -164,7 +164,7 @@ var _ = Describe("Client.AskHuman", func() {
 
 	It("errors immediately when tool_call_id is empty", func() {
 		c := newBareClient()
-		_, err := c.AskHuman(context.Background(), aitools.AskHumanRequest{Question: "q"})
+		_, err := c.AskHuman(context.Background(), aitools.HumanInputRequest{Question: "q"})
 		Expect(err).To(HaveOccurred())
 	})
 })
@@ -304,7 +304,7 @@ var _ = Describe("Client.cancelOpenHumanInputsForMission", func() {
 	It("wakes any AskHuman caller waiting on a row that gets cancelled", func() {
 		c := newBareClient()
 
-		req := aitools.AskHumanRequest{ToolCallID: "live-call", MissionID: "doomed", Question: "?"}
+		req := aitools.HumanInputRequest{ToolCallID: "live-call", MissionID: "doomed", Question: "?"}
 		done := make(chan error, 1)
 		go func() {
 			_, err := c.AskHuman(context.Background(), req)

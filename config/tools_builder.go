@@ -21,7 +21,7 @@ import (
 // humanBridge is optional and powers the `builtins.human.ask` tool. Pass
 // nil when no commander is attached; the tool is still registered and returns
 // a stable "[no human available]" observation to the agent instead of blocking.
-func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient, loadedMCPClients map[string]*squadronmcp.Client, datasetStore aitools.DatasetStore, humanBridge aitools.AskHumanBridge) map[string]aitools.Tool {
+func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient, loadedMCPClients map[string]*squadronmcp.Client, datasetStore aitools.DatasetStore, humanBridge aitools.HumanInputBridge) map[string]aitools.Tool {
 	tools := make(map[string]aitools.Tool)
 
 	// Build a lookup map for custom tool definitions
@@ -161,7 +161,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 // datasetStore is optional and required for dataset tools.
 // humanBridge is optional; when nil, the ask tool returns a stable
 // "[no human available]" observation rather than blocking.
-func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore, humanBridge aitools.AskHumanBridge) aitools.Tool {
+func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore, humanBridge aitools.HumanInputBridge) aitools.Tool {
 	switch ref {
 	case "builtins.http.get":
 		return &aitools.HTTPGetTool{}
@@ -182,7 +182,7 @@ func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore, humanBridge a
 	case "builtins.utils.sleep":
 		return &aitools.SleepTool{}
 	case "builtins.human.ask":
-		return &aitools.AskHumanTool{Bridge: humanBridge}
+		return &aitools.HumanInputTool{Bridge: humanBridge}
 	default:
 		return nil
 	}

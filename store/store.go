@@ -300,7 +300,7 @@ type DateFieldCostRow struct {
 	TotalCost float64 `json:"totalCost"`
 }
 
-// HumanInputStore persists ask_human requests and their resolutions so
+// HumanInputStore persists human-input requests and their resolutions so
 // they survive restarts and can be proxied to command center on demand.
 // States are "open" (waiting for a human) and "resolved" (a human has
 // answered). CreateRequest is idempotent on tool_call_id so a squadron
@@ -321,7 +321,7 @@ const (
 	HumanInputStateResolved = "resolved"
 )
 
-// HumanInputRequestRecord is one ask_human request row.
+// HumanInputRequestRecord is one human-input request row.
 //
 //   - ShortSummary: one-line preview shown in the Inbox row.
 //   - Question: the direct ask, kept concise — shown in full when the

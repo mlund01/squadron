@@ -312,7 +312,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 	client := wsbridge.NewClient(cfg, cfgErr == nil, cfgErrMsg, engageConfigPath, stores, Version)
 
 	// In-process notifier — gateways subscribe to it for human-input
-	// events. The wsbridge ask_human + resolve paths publish here in
+	// events. The wsbridge ask + resolve paths publish here in
 	// addition to firing wire-protocol mission events for commander.
 	notifier := humaninput.New()
 	client.SetHumanInputNotifier(notifier)

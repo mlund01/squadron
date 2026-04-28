@@ -99,10 +99,10 @@ type CommanderOptions struct {
 	// skips the internal provider factory and uses this provider instead.
 	// The caller retains ownership — the commander will NOT close it.
 	Provider llm.Provider
-	// HumanBridge powers builtins.human.ask_human on agents this commander
+	// HumanBridge powers builtins.human.ask on agents this commander
 	// spawns. Nil disables HITL — the tool then returns
 	// "[no human available]" instead of blocking.
-	HumanBridge aitools.AskHumanBridge
+	HumanBridge aitools.HumanInputBridge
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -166,7 +166,7 @@ type CommanderToolCallbacks struct {
 	// TaskID is the store task ID for session creation (required if SessionLogger is set)
 	TaskID string
 	// MissionID is the store mission ID. Propagated to spawned agents
-	// so tools like builtins.human.ask_human can correlate questions
+	// so tools like builtins.human.ask can correlate questions
 	// back to the mission they came from.
 	MissionID string
 	// IterationIndex identifies this specific iteration's session (nil for non-iterated tasks).
@@ -343,7 +343,7 @@ type Commander struct {
 	pruneOn            int                    // Trigger pruning at this many turns (0 = disabled)
 	pruneTo            int                    // Prune down to this many turns
 	budget             BudgetChecker          // Optional token/dollar budget enforcer
-	humanBridge        aitools.AskHumanBridge // Optional bridge for builtins.human.ask_human
+	humanBridge        aitools.HumanInputBridge // Optional bridge for builtins.human.ask
 }
 
 // NewCommander creates a new commander for a mission task

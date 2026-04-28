@@ -3,7 +3,7 @@ package aitools
 import "context"
 
 // missionContextKey is a private context key for mission/task identifiers
-// that scoped tools (like ask_human) read when invoked. The orchestrator
+// that scoped tools (like ask) read when invoked. The orchestrator
 // sets these before calling a tool; tools read them via
 // MissionContextFromContext.
 type missionContextKey struct{}

@@ -21,7 +21,7 @@ var GlobalEvents = map[string]bool{
 	"mission_resumed":        true,
 	"session_turn":           true, // for cost tracking
 	// Commander needs these at instance scope (not per-mission) so the
-	// Inbox / alerts surfaces see ask_human activity across every
+	// Inbox / alerts surfaces see ask activity across every
 	// running mission without subscribing to each one individually.
 	"human_input_requested": true,
 	"human_input_resolved":  true,

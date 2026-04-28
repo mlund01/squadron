@@ -93,10 +93,10 @@ type Options struct {
 	// skips the internal provider factory and uses this provider instead.
 	// The caller retains ownership — the agent will NOT close it.
 	Provider llm.Provider
-	// HumanBridge powers the `builtins.human.ask_human` tool. When nil, the
+	// HumanBridge powers the `builtins.human.ask` tool. When nil, the
 	// tool is still registered but returns "[no human available]" instead of
 	// blocking (e.g. standalone squadron with no commander attached).
-	HumanBridge aitools.AskHumanBridge
+	HumanBridge aitools.HumanInputBridge
 }
 
 // New creates a new agent from config

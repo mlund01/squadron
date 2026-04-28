@@ -45,7 +45,7 @@ type AgentManager struct {
 	pricingOverrides map[string]*llm.ModelPricing
 	provider         llm.Provider // optional injected provider for agents
 	budget           BudgetChecker
-	humanBridge      aitools.AskHumanBridge // bridge for builtins.human.ask_human on spawned agents
+	humanBridge      aitools.HumanInputBridge // bridge for builtins.human.ask on spawned agents
 }
 
 // AgentManagerConfig holds the dependencies needed to create an AgentManager.
@@ -68,9 +68,9 @@ type AgentManagerConfig struct {
 	Provider llm.Provider
 	// Budget flows to spawned agents so their LLM turns contribute to the same tally.
 	Budget BudgetChecker
-	// HumanBridge powers builtins.human.ask_human on spawned agents. Nil
+	// HumanBridge powers builtins.human.ask on spawned agents. Nil
 	// disables HITL.
-	HumanBridge aitools.AskHumanBridge
+	HumanBridge aitools.HumanInputBridge
 }
 
 // NewAgentManager creates a new AgentManager.
@@ -148,7 +148,7 @@ func (m *AgentManager) RunAgent(ctx context.Context, name, task, response string
 	}
 
 	// Stamp mission / task ids on the context so mission-scoped
-	// builtins (e.g. builtins.human.ask_human) can attribute their
+	// builtins (e.g. builtins.human.ask) can attribute their
 	// calls to the right run without threading ids through every tool
 	// invocation path.
 	ctx = aitools.WithMissionContext(ctx, m.missionID, m.taskID)

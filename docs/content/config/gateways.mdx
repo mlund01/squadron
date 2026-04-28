@@ -21,7 +21,7 @@ variable "discord_channel_id" {}
 
 gateway "discord" {
   source  = "github.com/mlund01/squadron-gateway-discord"
-  version = "v0.1.0"
+  version = "v0.0.1"
 
   settings = {
     bot_token       = vars.discord_bot_token
@@ -39,7 +39,7 @@ Restart Squadron and the next `builtins.human.ask` call will appear in the confi
 |-------|------|----------|-------------|
 | `name` (label) | string | yes | Used in logs and the install path (`.squadron/gateways/<platform>/<name>/<version>/gateway`). |
 | `source` | string | yes (unless `version = "local"`) | GitHub source path. Squadron downloads the matching release archive on first load. |
-| `version` | string | yes | Release tag (e.g. `v0.1.0`) or `local` to use a developer-built binary. |
+| `version` | string | yes | Release tag (e.g. `v0.0.1`) or `local` to use a developer-built binary. |
 | `settings` | map | no | Free-form key/value map passed to the gateway's `Configure`. Each gateway documents its own keys. |
 
 ## Lifecycle
@@ -76,31 +76,4 @@ Adjust the platform path to match `runtime.GOOS-runtime.GOARCH`.
 
 ## Building Your Own
 
-Gateways are Go programs that implement the [`squadron-gateway-sdk`](https://github.com/mlund01/squadron-gateway-sdk) `Gateway` interface and call `gateway.Serve`:
-
-```go
-type myGateway struct{ api gateway.SquadronAPI }
-
-func (g *myGateway) Configure(ctx context.Context, settings map[string]string, api gateway.SquadronAPI) error {
-    g.api = api
-    return nil
-}
-
-func (g *myGateway) OnHumanInputRequested(ctx context.Context, rec gateway.HumanInputRecord) error {
-    // surface rec in your external system
-    return nil
-}
-
-func (g *myGateway) OnHumanInputResolved(ctx context.Context, rec gateway.HumanInputRecord) error {
-    // mark answered in your external system
-    return nil
-}
-
-func (g *myGateway) Shutdown(ctx context.Context) error { return nil }
-
-func main() { gateway.Serve(&myGateway{}) }
-```
-
-When the user takes an action in your external system, call `g.api.ResolveHumanInput(ctx, toolCallID, response, responderID)` to record the answer back in Squadron. Resolution is idempotent — `AlreadyResolved` and `NotFound` surface as flags rather than errors, so you can treat them as state-sync hints.
-
-See the SDK README for catch-up patterns, distribution requirements, and a full hello-world.
+Gateways are Go programs built against [`squadron-gateway-sdk`](https://github.com/mlund01/squadron-gateway-sdk). See the SDK README for the `Gateway` interface, hello-world template, catch-up patterns, and the release-archive shape Squadron expects when distributing your gateway.

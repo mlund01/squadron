@@ -14,6 +14,7 @@ import (
 
 	"squadron/agent"
 	"squadron/config"
+	"squadron/humaninput"
 	"squadron/store"
 )
 
@@ -65,6 +66,16 @@ type Client struct {
 	// Concurrency tracker for mission max_parallel enforcement
 	concurrency ConcurrencyTracker
 
+	// Human-input listeners — keyed by tool_call_id. AskHuman registers a
+	// channel before sending; incoming HumanInputResponse envelopes route
+	// back to the waiter via handleHumanInputResponse.
+	humanInputs *humanInputListeners
+
+	// In-process notifier for human-input events. Set when the engage
+	// command spins up gateways or other observers; nil leaves the
+	// publish path a no-op.
+	humanInputNotifier *humaninput.Notifier
+
 	// Lifecycle
 	done chan struct{}
 	ctx  context.Context
@@ -97,6 +108,9 @@ type RequestHandler func(env *protocol.Envelope) (*protocol.Envelope, error)
 // NewClient creates a new wsbridge client. cfgReady indicates whether the config
 // is fully loaded and validated (false = partial config with just vars/plugins).
 // cfgError is the error message when config failed to load (empty if cfgReady is true).
+//
+// SetHumanInputNotifier wires an in-process notifier (used by gateways)
+// after construction.
 func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath string, stores *store.Bundle, version string) *Client {
 	ctx, stop := context.WithCancel(context.Background())
 	c := &Client{
@@ -113,12 +127,55 @@ func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath st
 		runningMissions: make(map[string]*runningMission),
 		subscriptions:   NewSubscriptionManager(),
 		concurrency:     noopConcurrency{},
+		humanInputs:     newHumanInputListeners(),
 		done:         make(chan struct{}),
 		ctx:        ctx,
 		stop:       stop,
 	}
 	c.registerHandlers()
 	return c
+}
+
+// SetHumanInputNotifier installs an in-process pub/sub for human-input
+// events. The wsbridge AskHuman + Resolve paths publish to it on top
+// of the wire-protocol mission-event emit, so gateways and other
+// in-process observers see every state change.
+//
+// Calling this also subscribes the client to the notifier and starts a
+// goroutine that translates every resolved event into a wire event, so
+// resolutions originated by gateways (which never go through the wire
+// protocol) still push the commander UI in real time.
+//
+// Pass nil to disable.
+func (c *Client) SetHumanInputNotifier(n *humaninput.Notifier) {
+	c.humanInputNotifier = n
+	if n == nil {
+		return
+	}
+	events, cancel := n.Subscribe()
+	go func() {
+		defer cancel()
+		for {
+			select {
+			case <-c.ctx.Done():
+				return
+			case ev, ok := <-events:
+				if !ok {
+					return
+				}
+				if ev.Kind == humaninput.EventKindResolved {
+					c.emitHumanInputResolved(ev.Record)
+				}
+			}
+		}
+	}()
+}
+
+// HumanInputListener exposes the wsbridge listener registry as a
+// humaninput.Listener so the gateway SquadronAPI surface can wake the
+// blocking AskHuman call when a gateway resolves a request.
+func (c *Client) HumanInputListener() humaninput.Listener {
+	return c.humanInputs
 }
 
 // ConnectTo dials a specific command center URL, registers, and starts read/write pumps.
@@ -395,15 +452,19 @@ func (c *Client) dispatch(env *protocol.Envelope) {
 
 	// Handlers that work without a loaded config
 	configFreeHandlers := map[protocol.MessageType]bool{
-		protocol.TypeReloadConfig:    true,
-		protocol.TypeGetConfig:       true,
-		protocol.TypeSetVariable:     true,
-		protocol.TypeDeleteVariable:  true,
-		protocol.TypeGetVariables:    true,
-		protocol.TypeListConfigFiles: true,
-		protocol.TypeGetConfigFile:   true,
-		protocol.TypeWriteConfigFile: true,
-		protocol.TypeValidateConfig:  true,
+		protocol.TypeReloadConfig:       true,
+		protocol.TypeGetConfig:          true,
+		protocol.TypeSetVariable:        true,
+		protocol.TypeDeleteVariable:     true,
+		protocol.TypeGetVariables:       true,
+		protocol.TypeListConfigFiles:    true,
+		protocol.TypeGetConfigFile:      true,
+		protocol.TypeWriteConfigFile:    true,
+		protocol.TypeValidateConfig:     true,
+		// Human-in-the-loop endpoints operate purely against the
+		// store, which exists independently of the HCL config.
+		protocol.TypeGetHumanInputs:     true,
+		protocol.TypeResolveHumanInput:  true,
 	}
 
 	// Handle incoming requests from commander

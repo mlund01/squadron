@@ -99,6 +99,10 @@ type CommanderOptions struct {
 	// skips the internal provider factory and uses this provider instead.
 	// The caller retains ownership — the commander will NOT close it.
 	Provider llm.Provider
+	// HumanBridge powers builtins.human.ask_human on agents this commander
+	// spawns. Nil disables HITL — the tool then returns
+	// "[no human available]" instead of blocking.
+	HumanBridge aitools.AskHumanBridge
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -161,6 +165,10 @@ type CommanderToolCallbacks struct {
 	SessionLogger SessionLogger
 	// TaskID is the store task ID for session creation (required if SessionLogger is set)
 	TaskID string
+	// MissionID is the store mission ID. Propagated to spawned agents
+	// so tools like builtins.human.ask_human can correlate questions
+	// back to the mission they came from.
+	MissionID string
 	// IterationIndex identifies this specific iteration's session (nil for non-iterated tasks).
 	IterationIndex *int
 	// ExistingSessionID, if set, reuses this session instead of creating a new one.
@@ -325,6 +333,7 @@ type Commander struct {
 	sessionID          string                 // Store session ID (empty if not tracking)
 	agentSessionIDs    map[string]string      // Agent name → store session ID (for agent session tracking)
 	callbacksTaskID    string                 // Task ID from callbacks (for agent session creation)
+	callbacksMissionID string                 // Mission ID from callbacks (for mission-scoped tool plumbing)
 	iterationIndex     *int                   // Iteration index (nil for non-iterated tasks)
 	agentMgr           *AgentManager          // Manages agent lifecycle (creation, session, resume)
 	pricingOverrides   map[string]*llm.ModelPricing
@@ -334,6 +343,7 @@ type Commander struct {
 	pruneOn            int                    // Trigger pruning at this many turns (0 = disabled)
 	pruneTo            int                    // Prune down to this many turns
 	budget             BudgetChecker          // Optional token/dollar budget enforcer
+	humanBridge        aitools.AskHumanBridge // Optional bridge for builtins.human.ask_human
 }
 
 // NewCommander creates a new commander for a mission task
@@ -450,6 +460,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		pruneTo:          opts.PruneTo,
 		pricingOverrides: opts.PricingOverrides,
 		budget:           opts.Budget,
+		humanBridge:      opts.HumanBridge,
 	}
 
 	// Add result tools to commander's tool map
@@ -535,6 +546,7 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 	if callbacks.SessionLogger != nil {
 		s.sessionLogger = callbacks.SessionLogger
 		s.callbacksTaskID = callbacks.TaskID
+		s.callbacksMissionID = callbacks.MissionID
 		s.agentSessionIDs = make(map[string]string)
 		if callbacks.ExistingSessionID != "" {
 			// Reuse existing session (resume — found by runner from stored state)
@@ -702,6 +714,7 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		FolderStore:      s.folderStore,
 		SessionLogger:    s.sessionLogger,
 		TaskID:           s.callbacksTaskID,
+		MissionID:        s.callbacksMissionID,
 		TaskName:         s.TaskName,
 		IterationIndex:   s.iterationIndex,
 		Callbacks:        callbacks,
@@ -709,6 +722,7 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		PricingOverrides: s.pricingOverrides,
 		Provider:         s.provider,
 		Budget:           s.budget,
+		HumanBridge:      s.humanBridge,
 	})
 }
 

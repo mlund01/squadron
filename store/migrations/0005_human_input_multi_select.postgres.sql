@@ -1,0 +1,1 @@
+ALTER TABLE human_input_requests ADD COLUMN IF NOT EXISTS multi_select BOOLEAN NOT NULL DEFAULT FALSE;

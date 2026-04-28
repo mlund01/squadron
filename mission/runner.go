@@ -23,15 +23,15 @@ import (
 type Runner struct {
 	cfg        *config.Config
 	configPath string
-	mission   *config.Mission
+	mission    *config.Mission
 
 	// Input values for objective resolution
 	varsValues  map[string]cty.Value
 	inputValues map[string]cty.Value
 
 	// Resolved secrets for tool call injection
-	secretValues map[string]string    // secret name → actual value
-	secretInfos  []agent.SecretInfo   // name + description for prompts
+	secretValues map[string]string  // secret name → actual value
+	secretInfos  []agent.SecretInfo // name + description for prompts
 
 	// Pricing overrides from config (API model name → pricing)
 	pricingOverrides map[string]*llm.ModelPricing
@@ -42,10 +42,10 @@ type Runner struct {
 	missionID        string
 
 	// Task state management
-	mu                   sync.RWMutex
-	taskCommanders      map[string]*agent.Commander             // Commanders for completed tasks (for ask_commander queries)
-	iterationCommanders map[string]map[int]*agent.Commander     // Commanders for iterated tasks: taskName -> index -> commander
-	taskSummaries       map[string]string                       // Push summaries from completed tasks (taskName -> summary)
+	mu                  sync.RWMutex
+	taskCommanders      map[string]*agent.Commander         // Commanders for completed tasks (for ask_commander queries)
+	iterationCommanders map[string]map[int]*agent.Commander // Commanders for iterated tasks: taskName -> index -> commander
+	taskSummaries       map[string]string                   // Push summaries from completed tasks (taskName -> summary)
 
 	// Knowledge store for structured task outputs (reads from MissionStore)
 	knowledgeStore KnowledgeStore
@@ -67,8 +67,8 @@ type Runner struct {
 	folderStore aitools.FolderStore
 
 	// Conditional routing state
-	routerPending []routerActivation   // queue of tasks activated by routers
-	routerParents map[string]string    // taskName → routerTaskName that activated it
+	routerPending []routerActivation // queue of tasks activated by routers
+	routerParents map[string]string  // taskName → routerTaskName that activated it
 
 	// Cross-mission routing result (set when a router chooses a mission target)
 	nextMission       string            // mission name to launch, or ""
@@ -76,6 +76,11 @@ type Runner struct {
 
 	// Provider factory for testing — when set, commanders and agents use this instead of creating real providers
 	providerFactory func() llm.Provider
+
+	// HumanBridge powers builtins.human.ask_human on agents spawned by
+	// this mission. Nil when no commander is attached (e.g. CLI runs);
+	// the tool then surfaces "[no human available]" instead of blocking.
+	humanBridge aitools.AskHumanBridge
 
 	// Task state manager — single authority for task lifecycle
 	stateMgr *TaskStateManager
@@ -130,6 +135,17 @@ func WithResume(missionID string) RunnerOption {
 func WithProviderFactory(factory func() llm.Provider) RunnerOption {
 	return func(r *Runner) {
 		r.providerFactory = factory
+	}
+}
+
+// WithHumanBridge wires a human-input bridge into agents spawned by this
+// mission so builtins.human.ask_human can pause for an operator response
+// and unblock when commander returns one. Pass nil (or omit the option)
+// to disable HITL — the tool then returns the no-human-available
+// observation instead of blocking.
+func WithHumanBridge(bridge aitools.AskHumanBridge) RunnerOption {
+	return func(r *Runner) {
+		r.humanBridge = bridge
 	}
 }
 
@@ -198,16 +214,16 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 	}
 
 	r := &Runner{
-		cfg:                  cfg,
-		configPath:           configPath,
+		cfg:                 cfg,
+		configPath:          configPath,
 		mission:             mission,
-		varsValues:           cfg.ResolvedVars,
-		rawInputs:            inputs,
-		datasetIDs:           make(map[string]string),
+		varsValues:          cfg.ResolvedVars,
+		rawInputs:           inputs,
+		datasetIDs:          make(map[string]string),
 		taskCommanders:      make(map[string]*agent.Commander),
 		taskSummaries:       make(map[string]string),
 		iterationCommanders: make(map[string]map[int]*agent.Commander),
-		stores:               stores,
+		stores:              stores,
 		askCommanderStore: &askCommanderStore{
 			questions: make(map[string][]*questionEntry),
 		},
@@ -963,17 +979,17 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 
 		// Create commander with same config (gets correct system prompts, tools, provider)
 		sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
-			Config:           r.cfg,
-			ConfigPath:       r.configPath,
-			MissionName:     r.mission.Name,
-			TaskName:         taskName,
-			Commander:  r.mission.Commander.Model,
-			AgentNames:       agents,
-			DepSummaries:     depSummaries,
-			DepOutputSchemas: depOutputSchemas,
-			TaskOutputSchema: taskOutputSchema,
-			SecretInfos:      r.secretInfos,
-			SecretValues:     r.secretValues,
+			Config:              r.cfg,
+			ConfigPath:          r.configPath,
+			MissionName:         r.mission.Name,
+			TaskName:            taskName,
+			Commander:           r.mission.Commander.Model,
+			AgentNames:          agents,
+			DepSummaries:        depSummaries,
+			DepOutputSchemas:    depOutputSchemas,
+			TaskOutputSchema:    taskOutputSchema,
+			SecretInfos:         r.secretInfos,
+			SecretValues:        r.secretValues,
 			IsIteration:         isIterated,
 			FolderStore:         r.folderStore,
 			Compaction:          r.commanderCompaction(),
@@ -984,6 +1000,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			MissionLocalAgents:  r.mission.LocalAgents,
 			Provider:            r.testProvider(),
 			Budget:              r.budgetTracker.For(taskName),
+			HumanBridge:         r.humanBridge,
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -1010,6 +1027,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			},
 			SessionLogger:     r.stores.Sessions,
 			TaskID:            taskRecord.ID,
+			MissionID:         r.missionID,
 			ExistingSessionID: existingSessionID,
 		}, depSummaries)
 
@@ -1027,10 +1045,10 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 				})
 			}
 			restoredAgent, err := agent.RestoreAgent(ctx, agent.Options{
-				ConfigPath: r.configPath,
-				Config:     r.cfg,
-				AgentName:  agentName,
-				SecretInfos: r.secretInfos,
+				ConfigPath:   r.configPath,
+				Config:       r.cfg,
+				AgentName:    agentName,
+				SecretInfos:  r.secretInfos,
 				SecretValues: r.secretValues,
 			}, agentLLMMsgs)
 			if err != nil {
@@ -1238,7 +1256,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		ConfigPath:          r.configPath,
 		MissionName:         r.mission.Name,
 		TaskName:            task.Name,
-		Commander:            r.mission.Commander.Model,
+		Commander:           r.mission.Commander.Model,
 		AgentNames:          agents,
 		DepSummaries:        depSummaries,
 		DepOutputSchemas:    depOutputSchemas,
@@ -1257,6 +1275,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		MissionLocalAgents:  r.mission.LocalAgents,
 		Provider:            r.testProvider(),
 		Budget:              r.budgetTracker.For(task.Name),
+		HumanBridge:         r.humanBridge,
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -1303,9 +1322,9 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		},
 		OnAgentCompaction:  agentCompactionCallback(streamer),
 		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
-		DatasetStore:   r,
-		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
-		DebugLogger:    r.debugLoggerInterface(),
+		DatasetStore:       r,
+		KnowledgeStore:     &knowledgeStoreAdapter{store: r.knowledgeStore},
+		DebugLogger:        r.debugLoggerInterface(),
 		GetCommanderForQuery: func(taskName string, iterationIndex int) (*agent.Commander, error) {
 			return r.getCommanderForQuery(taskName, iterationIndex, task.Name)
 		},
@@ -1325,6 +1344,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		},
 		SessionLogger:     r.stores.Sessions,
 		TaskID:            taskID,
+		MissionID:         r.missionID,
 		ExistingSessionID: existingSessionID,
 		OnSessionCreated: func(taskName, agentName, sessionID string) {
 			if agentName == "commander" {
@@ -2005,20 +2025,20 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 
 	// Create single commander with all items
 	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
-		Config:            r.cfg,
-		ConfigPath:        r.configPath,
-		MissionName:      r.mission.Name,
-		TaskName:          task.Name,
-		Commander:   r.mission.Commander.Model,
-		AgentNames:        agents,
-		DepSummaries:      depSummaries,
-		DepOutputSchemas:  depOutputSchemas,
-		TaskOutputSchema:  taskOutputSchema,
-		SecretInfos:       r.secretInfos,
-		SecretValues:      r.secretValues,
-		IsIteration:       true,
-		IsParallel:        false,
-		DebugFile:         debugFile,
+		Config:              r.cfg,
+		ConfigPath:          r.configPath,
+		MissionName:         r.mission.Name,
+		TaskName:            task.Name,
+		Commander:           r.mission.Commander.Model,
+		AgentNames:          agents,
+		DepSummaries:        depSummaries,
+		DepOutputSchemas:    depOutputSchemas,
+		TaskOutputSchema:    taskOutputSchema,
+		SecretInfos:         r.secretInfos,
+		SecretValues:        r.secretValues,
+		IsIteration:         true,
+		IsParallel:          false,
+		DebugFile:           debugFile,
 		SequentialDataset:   items,
 		FolderStore:         r.folderStore,
 		Compaction:          r.commanderCompaction(),
@@ -2030,6 +2050,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		MissionLocalAgents:  r.mission.LocalAgents,
 		Provider:            r.testProvider(),
 		Budget:              r.budgetTracker.For(task.Name),
+		HumanBridge:         r.humanBridge,
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -2073,9 +2094,9 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		},
 		OnAgentCompaction:  agentCompactionCallback(streamer),
 		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
-		DatasetStore:   r,
-		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
-		DebugLogger:    r.debugLoggerInterface(),
+		DatasetStore:       r,
+		KnowledgeStore:     &knowledgeStoreAdapter{store: r.knowledgeStore},
+		DebugLogger:        r.debugLoggerInterface(),
 		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
 			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},
@@ -2100,6 +2121,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		},
 		SessionLogger: r.stores.Sessions,
 		TaskID:        taskID,
+		MissionID:     r.missionID,
 		OnSessionCreated: func(taskName, agentName, sessionID string) {
 			if agentName == "commander" {
 				seqCmdSessionID = sessionID
@@ -2456,21 +2478,21 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 
 	// Create commander for remaining items
 	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
-		Config:            r.cfg,
-		ConfigPath:        r.configPath,
-		MissionName:      r.mission.Name,
-		TaskName:          task.Name,
-		Commander:   r.mission.Commander.Model,
-		AgentNames:        agents,
-		DepSummaries:      depSummaries,
-		DepOutputSchemas:  depOutputSchemas,
-		TaskOutputSchema:  taskOutputSchema,
-		SecretInfos:       r.secretInfos,
-		SecretValues:      r.secretValues,
-		IsIteration:       true,
-		IsParallel:        false,
-		DebugFile:         debugFile,
-		SequentialDataset: remainingItems,
+		Config:              r.cfg,
+		ConfigPath:          r.configPath,
+		MissionName:         r.mission.Name,
+		TaskName:            task.Name,
+		Commander:           r.mission.Commander.Model,
+		AgentNames:          agents,
+		DepSummaries:        depSummaries,
+		DepOutputSchemas:    depOutputSchemas,
+		TaskOutputSchema:    taskOutputSchema,
+		SecretInfos:         r.secretInfos,
+		SecretValues:        r.secretValues,
+		IsIteration:         true,
+		IsParallel:          false,
+		DebugFile:           debugFile,
+		SequentialDataset:   remainingItems,
 		FolderStore:         r.folderStore,
 		Compaction:          r.commanderCompaction(),
 		PruneOn:             r.commanderPruneOn(),
@@ -2480,6 +2502,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		MissionLocalAgents:  r.mission.LocalAgents,
 		Provider:            r.testProvider(),
 		Budget:              r.budgetTracker.For(task.Name),
+		HumanBridge:         r.humanBridge,
 	})
 	if err != nil {
 		return append(iterations, IterationResult{
@@ -2518,9 +2541,9 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		},
 		OnAgentCompaction:  agentCompactionCallback(streamer),
 		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
-		DatasetStore:   r,
-		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
-		DebugLogger:    r.debugLoggerInterface(),
+		DatasetStore:       r,
+		KnowledgeStore:     &knowledgeStoreAdapter{store: r.knowledgeStore},
+		DebugLogger:        r.debugLoggerInterface(),
 		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
 			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},
@@ -2547,6 +2570,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		},
 		SessionLogger:     r.stores.Sessions,
 		TaskID:            taskID,
+		MissionID:         r.missionID,
 		ExistingSessionID: existingSessionID,
 		OnSessionCreated: func(taskName, agentName, sessionID string) {
 			if agentName == "commander" {
@@ -2686,30 +2710,31 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 
 	// Create commander for this iteration
 	sup, err := agent.NewCommander(ctx, agent.CommanderOptions{
-		Config:                 r.cfg,
-		ConfigPath:             r.configPath,
-		MissionName:           r.mission.Name,
-		TaskName:               iterTaskName,
-		Commander:        r.mission.Commander.Model,
-		AgentNames:             agents,
-		DepSummaries:           depSummaries,
-		DepOutputSchemas:       depOutputSchemas,
-		TaskOutputSchema:       taskOutputSchema,
-		PrevIterationOutput:    prevOutput,
-		SecretInfos:            r.secretInfos,
-		SecretValues:           r.secretValues,
-		IsIteration:            true,
-		IsParallel:             task.Iterator.Parallel,
-		DebugFile:              debugFile,
-		FolderStore:            r.folderStore,
-		Compaction:             r.commanderCompaction(),
-		PruneOn:                r.commanderPruneOn(),
-		PruneTo:                r.commanderPruneTo(),
-		ToolResponseMaxSize:    r.mission.Commander.GetToolResponseMaxBytes(),
-		PricingOverrides:       r.pricingOverrides,
-		MissionLocalAgents:     r.mission.LocalAgents,
-		Provider:               r.testProvider(),
-		Budget:                 r.budgetTracker.For(task.Name),
+		Config:              r.cfg,
+		ConfigPath:          r.configPath,
+		MissionName:         r.mission.Name,
+		TaskName:            iterTaskName,
+		Commander:           r.mission.Commander.Model,
+		AgentNames:          agents,
+		DepSummaries:        depSummaries,
+		DepOutputSchemas:    depOutputSchemas,
+		TaskOutputSchema:    taskOutputSchema,
+		PrevIterationOutput: prevOutput,
+		SecretInfos:         r.secretInfos,
+		SecretValues:        r.secretValues,
+		IsIteration:         true,
+		IsParallel:          task.Iterator.Parallel,
+		DebugFile:           debugFile,
+		FolderStore:         r.folderStore,
+		Compaction:          r.commanderCompaction(),
+		PruneOn:             r.commanderPruneOn(),
+		PruneTo:             r.commanderPruneTo(),
+		ToolResponseMaxSize: r.mission.Commander.GetToolResponseMaxBytes(),
+		PricingOverrides:    r.pricingOverrides,
+		MissionLocalAgents:  r.mission.LocalAgents,
+		Provider:            r.testProvider(),
+		Budget:              r.budgetTracker.For(task.Name),
+		HumanBridge:         r.humanBridge,
 	})
 	if err != nil {
 		streamer.IterationFailed(task.Name, index, err)
@@ -2758,9 +2783,9 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		},
 		OnAgentCompaction:  agentCompactionCallback(streamer),
 		OnAgentSessionTurn: agentSessionTurnCallback(streamer),
-		DatasetStore:   r,
-		KnowledgeStore: &knowledgeStoreAdapter{store: r.knowledgeStore},
-		DebugLogger:    r.debugLoggerInterface(),
+		DatasetStore:       r,
+		KnowledgeStore:     &knowledgeStoreAdapter{store: r.knowledgeStore},
+		DebugLogger:        r.debugLoggerInterface(),
 		GetCommanderForQuery: func(depTaskName string, iterationIndex int) (*agent.Commander, error) {
 			return r.getCommanderForQuery(depTaskName, iterationIndex, task.Name)
 		},
@@ -2781,6 +2806,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		},
 		SessionLogger:     r.stores.Sessions,
 		TaskID:            taskID,
+		MissionID:         r.missionID,
 		IterationIndex:    &iterIdx,
 		ExistingSessionID: existingSessionID,
 		OnSessionCreated: func(taskName, agentName, sessionID string) {

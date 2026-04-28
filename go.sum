@@ -162,10 +162,10 @@ github.com/microcosm-cc/bluemonday v1.0.27 h1:MpEUotklkwCSLeH+Qdx1VJgNqLlpY2KXwX
 github.com/microcosm-cc/bluemonday v1.0.27/go.mod h1:jFi9vgW+H7c3V0lb6nR74Ib/DIB5OBs92Dimizgw2cA=
 github.com/mitchellh/go-wordwrap v1.0.1 h1:TLuKupo69TCn6TQSyGxwI1EblZZEsQ0vMlAFQflz0v0=
 github.com/mitchellh/go-wordwrap v1.0.1/go.mod h1:R62XHJLzvMFRBbcrT7m7WgmE1eOyTSsCt+hzestvNj0=
+github.com/mlund01/squadron-gateway-sdk v0.0.0-20260428012704-d6d909843b6d h1:/DIueEOSPsKTFOZ1c78QjO184bJ0H9784UL6LWagV0I=
+github.com/mlund01/squadron-gateway-sdk v0.0.0-20260428012704-d6d909843b6d/go.mod h1:G1TD///Cn18dz6LDELlYuwnavrzMAMnVVrW2hO6jkkw=
 github.com/mlund01/squadron-sdk v0.0.30 h1:/tG12XwmqPNXOmEx1EV8ELgFIYkCkSeSU2NtgP997xw=
 github.com/mlund01/squadron-sdk v0.0.30/go.mod h1:OIbaq0s33LUPN8OUtJLVLVXGgizTU5jS6CH5yPFY+go=
-github.com/mlund01/squadron-wire v0.0.40 h1:umcnOIzRgNP4m7AThrLIAP6s4j1sC798FII4Tx6Ijec=
-github.com/mlund01/squadron-wire v0.0.40/go.mod h1:BmgUAhEkibCiJ2Cre+qfLs/KjeqTmm4BkfcMu6M+jLU=
 github.com/mtibben/percent v0.2.1 h1:5gssi8Nqo8QU/r2pynCm+hBQHpkB/uNK7BJCFogWdzs=
 github.com/mtibben/percent v0.2.1/go.mod h1:KG9uO+SZkUp+VkRHsCdYQV3XSZrrSpR3O9ibNBTZrns=
 github.com/muesli/reflow v0.3.0 h1:IFsN6K9NfGtjeggFP+68I4chLZV2yIKsXJFNZ+eWh6s=

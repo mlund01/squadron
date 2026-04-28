@@ -93,6 +93,10 @@ type Options struct {
 	// skips the internal provider factory and uses this provider instead.
 	// The caller retains ownership — the agent will NOT close it.
 	Provider llm.Provider
+	// HumanBridge powers the `builtins.human.ask_human` tool. When nil, the
+	// tool is still registered but returns "[no human available]" instead of
+	// blocking (e.g. standalone squadron with no commander attached).
+	HumanBridge aitools.AskHumanBridge
 }
 
 // New creates a new agent from config
@@ -150,7 +154,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 
 	// Build tools map and add sanitized aliases so LLM tool calls
 	// (which use API-safe names like "plugins_shell_echo") resolve correctly
-	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, cfg.LoadedMCPClients, opts.DatasetStore)
+	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, cfg.LoadedMCPClients, opts.DatasetStore, opts.HumanBridge)
 	aitools.AddSanitizedAliases(tools)
 
 	// Create result store and interceptor for large results
@@ -192,7 +196,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			AvailableSkills: availableSkills,
 			AgentTools:      tools,
 			ToolBuilder: func(toolRefs []string) map[string]aitools.Tool {
-				t := config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, cfg.LoadedMCPClients, opts.DatasetStore)
+				t := config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, cfg.LoadedMCPClients, opts.DatasetStore, opts.HumanBridge)
 				aitools.AddSanitizedAliases(t)
 				return t
 			},

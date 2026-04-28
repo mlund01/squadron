@@ -52,6 +52,8 @@ func (c *Client) registerHandlers() {
 	c.handlers[protocol.TypeGetCostSummary] = c.handleGetCostSummary
 	c.handlers[protocol.TypeSubscribe] = c.handleSubscribe
 	c.handlers[protocol.TypeUnsubscribe] = c.handleUnsubscribe
+	c.handlers[protocol.TypeGetHumanInputs] = c.handleGetHumanInputs
+	c.handlers[protocol.TypeResolveHumanInput] = c.handleResolveHumanInput
 }
 
 func (c *Client) handleReloadConfig(env *protocol.Envelope) (*protocol.Envelope, error) {
@@ -118,7 +120,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 
 	// Create mission runner with no-op debug logger
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger))
+	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c))
 	if err != nil {
 		c.concurrency.NotifyMissionDone(payload.MissionName)
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
@@ -229,6 +231,7 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, nil,
 		mission.WithDebugLogger(debugLogger),
 		mission.WithResume(payload.MissionID),
+		mission.WithHumanBridge(c),
 	)
 	if err != nil {
 		return protocol.NewResponse(env.RequestID, protocol.TypeResumeMissionAck, &protocol.ResumeMissionAckPayload{
@@ -255,6 +258,7 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 			if missionCtx.Err() != nil {
 				status = "stopped"
 			}
+			c.cancelOpenHumanInputsForMission(mid, "[cancelled: mission "+status+"]")
 			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
 				MissionID: mid,
 				Status:    status,
@@ -1245,6 +1249,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 			if ctx.Err() != nil {
 				status = "stopped"
 			}
+			c.cancelOpenHumanInputsForMission(mid, "[cancelled: mission "+status+"]")
 			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
 				MissionID: mid,
 				Status:    status,
@@ -1280,7 +1285,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		cfg := c.getConfig()
 		debugLogger, _ := mission.NewDebugLogger("")
 		var newErr error
-		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, mission.WithDebugLogger(debugLogger))
+		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c))
 		if newErr != nil {
 			log.Printf("Failed to create runner for chained mission %q: %v", nextMission, newErr)
 			return
@@ -1346,6 +1351,7 @@ func (c *Client) ResumeOrphanedMissions() {
 		runner, err := mission.NewRunner(cfg, c.configPath, r.MissionName, nil,
 			mission.WithDebugLogger(debugLogger),
 			mission.WithResume(r.ID),
+			mission.WithHumanBridge(c),
 		)
 		if err != nil {
 			log.Printf("auto-resume: failed to create runner for %q: %v", r.MissionName, err)
@@ -1395,7 +1401,7 @@ func (c *Client) RunScheduledMission(missionName, source string, inputs map[stri
 	log.Printf("scheduler: starting mission %q (%s)", missionName, source)
 
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger))
+	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c))
 	if err != nil {
 		log.Printf("scheduler: failed to create runner for %q: %v", missionName, err)
 		c.concurrency.NotifyMissionDone(missionName)
@@ -1451,7 +1457,7 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 
 	// Create mission runner
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger))
+	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c))
 	if err != nil {
 		c.concurrency.NotifyMissionDone(missionName)
 		return "", fmt.Errorf("failed to create runner: %w", err)

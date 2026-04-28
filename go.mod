@@ -2,6 +2,10 @@ module squadron
 
 go 1.25.4
 
+// TEMP: local replace for unpublished squadron-wire HITL messages.
+// Revert + publish a new squadron-wire tag before merging.
+replace github.com/mlund01/squadron-wire => ../squadron-wire
+
 require (
 	github.com/99designs/keyring v1.2.2
 	github.com/anthropics/anthropic-sdk-go v1.19.0
@@ -13,6 +17,7 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/mark3labs/mcp-go v0.46.0
+	github.com/mlund01/squadron-gateway-sdk v0.0.0-20260428012704-d6d909843b6d
 	github.com/mlund01/squadron-sdk v0.0.30
 	github.com/mlund01/squadron-wire v0.0.40
 	github.com/onsi/ginkgo/v2 v2.28.1

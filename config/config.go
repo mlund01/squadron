@@ -32,6 +32,7 @@ type Config struct {
 	Variables   []Variable   `hcl:"variable,block"`
 	CustomTools []CustomTool `hcl:"tool,block"`
 	Plugins     []Plugin     `hcl:"plugin,block"`
+	Gateway     *Gateway     `hcl:"-"` // Parsed manually — at most one per config; settings come from a child block
 	MCPServers  []MCPServer  `hcl:"-"`
 	Missions   []Mission   `hcl:"mission,block"`
 	Skills     []Skill     `hcl:"-"`
@@ -686,6 +687,7 @@ type parsedBlocks struct {
 	SharedFolders []*hcl.Block
 	MCPHost       []*hcl.Block
 	Skills        []*hcl.Block
+	Gateways      []*hcl.Block
 }
 
 // loadFromFiles implements staged loading: variables → models → agents → tools
@@ -722,6 +724,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "mcp_host"},
 				{Type: "mcp", LabelNames: []string{"name"}},
 				{Type: "skill", LabelNames: []string{"name"}},
+				{Type: "gateway", LabelNames: []string{"name"}},
 			},
 		})
 		if diags.HasErrors() {
@@ -757,6 +760,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.MCPServers = append(pb.MCPServers, block)
 			case "skill":
 				pb.Skills = append(pb.Skills, block)
+			case "gateway":
+				pb.Gateways = append(pb.Gateways, block)
 			}
 		}
 		allParsedBlocks = append(allParsedBlocks, pb)
@@ -999,6 +1004,28 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 	}
 
+	// Stage 1.5a: Parse the optional gateway block. Squadron supports
+	// at most one gateway per instance — extra blocks are a config
+	// error caught here. Subprocess lifecycle (download, launch,
+	// configure) is owned by `cmd/engage.go` so `verify` and direct
+	// `mission` runs don't pay the startup cost.
+	var gatewayCfg *Gateway
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.Gateways {
+			g, err := parseGatewayBlock(block, varsCtx)
+			if err != nil {
+				return nil, err
+			}
+			if err := g.Validate(); err != nil {
+				return nil, err
+			}
+			if gatewayCfg != nil {
+				return nil, fmt.Errorf("gateway %q: only one gateway block is supported per config (found %q earlier)", g.Name, gatewayCfg.Name)
+			}
+			gatewayCfg = g
+		}
+	}
+
 	// Stage 1.5b: Load consumer-side MCP servers (same vars context as plugins).
 	// For source-backed servers this triggers the auto-installer on first load
 	// (npm install or github release download); cached installs skip the network.
@@ -1184,6 +1211,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		LoadedMCPClients: loadedMCPClients,
 		LoadedMCPErrors:  loadedMCPErrors,
 		ResolvedVars:     resolvedVars,
+		Gateway:          gatewayCfg,
 	}, nil
 }
 
@@ -2750,6 +2778,98 @@ func parsePluginBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Plugin, error) {
 
 	_ = remainBody // No remaining body expected
 	return p, nil
+}
+
+// parseGatewayBlock parses a `gateway "name" { source, version, settings { ... } }`
+// block. Mirrors the plugin parser since gateways follow the same source +
+// version + settings shape on disk.
+func parseGatewayBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Gateway, error) {
+	name := block.Labels[0]
+
+	content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "source"},
+			{Name: "version", Required: true},
+			{Name: "settings"},
+		},
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "settings"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("gateway %q: %w", name, diags)
+	}
+
+	g := &Gateway{Name: name, Settings: make(map[string]string)}
+
+	if attr, ok := content.Attributes["source"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("gateway %q: %w", name, diags)
+		}
+		g.Source = val.AsString()
+	}
+
+	versionVal, diags := content.Attributes["version"].Expr.Value(ctx)
+	if diags.HasErrors() {
+		return nil, fmt.Errorf("gateway %q: %w", name, diags)
+	}
+	g.Version = versionVal.AsString()
+
+	storeSetting := func(k string, v cty.Value) error {
+		switch {
+		case v.Type() == cty.String:
+			g.Settings[k] = v.AsString()
+		case v.Type() == cty.Bool:
+			g.Settings[k] = fmt.Sprintf("%v", v.True())
+		case v.Type() == cty.Number:
+			g.Settings[k] = v.AsBigFloat().String()
+		default:
+			return fmt.Errorf("gateway %q setting %q: must be a string/bool/number primitive", name, k)
+		}
+		return nil
+	}
+
+	// Attribute-style: `settings = { key = value, ... }` (documented form).
+	if attr, ok := content.Attributes["settings"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("gateway %q settings: %w", name, diags)
+		}
+		if !val.Type().IsObjectType() && !val.Type().IsMapType() {
+			return nil, fmt.Errorf("gateway %q: settings must be an object", name)
+		}
+		it := val.ElementIterator()
+		for it.Next() {
+			k, v := it.Element()
+			if err := storeSetting(k.AsString(), v); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Block-style: `settings { key = value }` (legacy form, kept for parity
+	// with how plugin settings are written).
+	for _, settingsBlock := range content.Blocks {
+		if settingsBlock.Type != "settings" {
+			continue
+		}
+		attrs, diags := settingsBlock.Body.JustAttributes()
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("gateway %q settings: %w", name, diags)
+		}
+		for k, attr := range attrs {
+			val, diags := attr.Expr.Value(ctx)
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("gateway %q setting %q: %w", name, k, diags)
+			}
+			if err := storeSetting(k, val); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	return g, nil
 }
 
 // parseMCPServerBlock parses a consumer-side `mcp "name" { ... }` block.

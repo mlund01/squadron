@@ -17,6 +17,7 @@ import (
 var (
 	initPassphraseFile string
 	initVaultProvider  string
+	initConfigPath     string
 )
 
 var initCmd = &cobra.Command{
@@ -42,6 +43,10 @@ auto-generating one.
 For guided setup that also picks a provider, stores an API key, and
 generates a starter mission, use 'squadron quickstart' instead.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := applyHome(initConfigPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		if err := RunInit(initPassphraseFile, initVaultProvider); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -54,6 +59,8 @@ func init() {
 	initCmd.Flags().StringVar(&initPassphraseFile, "passphrase-file", "", "Path to file containing vault passphrase")
 	initCmd.Flags().StringVar(&initVaultProvider, "vault-provider", vault.ProviderFile,
 		fmt.Sprintf("Vault provider: %q or %q", vault.ProviderFile, vault.ProviderKeychain))
+	initCmd.Flags().StringVarP(&initConfigPath, "config", "c", "",
+		"Path to config directory (initializes <config>/.squadron/). Default: ./.squadron")
 }
 
 // RunInit performs the initialization logic. Called by quickstart and the

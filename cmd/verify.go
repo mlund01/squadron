@@ -19,6 +19,10 @@ var verifyCmd = &cobra.Command{
 		if len(args) > 0 {
 			configPath = args[0]
 		}
+		if err := applyHome(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		cfg, err := config.LoadAndValidate(configPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)

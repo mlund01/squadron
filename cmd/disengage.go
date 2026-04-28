@@ -19,6 +19,11 @@ var disengageCmd = &cobra.Command{
 
 This is the counterpart to 'squadron engage'.`,
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := applyHome(disengageConfigPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
+
 		didSomething := false
 
 		running, pid := daemon.IsRunning(disengageConfigPath)

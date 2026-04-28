@@ -37,6 +37,7 @@ type AgentManager struct {
 	folderStore    aitools.FolderStore
 	sessionLogger  SessionLogger
 	taskID         string
+	missionID      string
 	taskName       string
 	iterationIndex   *int
 	callbacks        *CommanderToolCallbacks
@@ -44,6 +45,7 @@ type AgentManager struct {
 	pricingOverrides map[string]*llm.ModelPricing
 	provider         llm.Provider // optional injected provider for agents
 	budget           BudgetChecker
+	humanBridge      aitools.AskHumanBridge // bridge for builtins.human.ask_human on spawned agents
 }
 
 // AgentManagerConfig holds the dependencies needed to create an AgentManager.
@@ -56,6 +58,7 @@ type AgentManagerConfig struct {
 	FolderStore    aitools.FolderStore
 	SessionLogger  SessionLogger
 	TaskID         string
+	MissionID      string
 	TaskName       string
 	IterationIndex *int
 	Callbacks        *CommanderToolCallbacks
@@ -65,6 +68,9 @@ type AgentManagerConfig struct {
 	Provider llm.Provider
 	// Budget flows to spawned agents so their LLM turns contribute to the same tally.
 	Budget BudgetChecker
+	// HumanBridge powers builtins.human.ask_human on spawned agents. Nil
+	// disables HITL.
+	HumanBridge aitools.AskHumanBridge
 }
 
 // NewAgentManager creates a new AgentManager.
@@ -81,6 +87,7 @@ func NewAgentManager(cfg AgentManagerConfig) *AgentManager {
 		folderStore:    cfg.FolderStore,
 		sessionLogger:  cfg.SessionLogger,
 		taskID:         cfg.TaskID,
+		missionID:      cfg.MissionID,
 		taskName:       cfg.TaskName,
 		iterationIndex: cfg.IterationIndex,
 		callbacks:        cfg.Callbacks,
@@ -88,6 +95,7 @@ func NewAgentManager(cfg AgentManagerConfig) *AgentManager {
 		pricingOverrides: cfg.PricingOverrides,
 		provider:         cfg.Provider,
 		budget:           cfg.Budget,
+		humanBridge:      cfg.HumanBridge,
 	}
 }
 
@@ -138,6 +146,12 @@ func (m *AgentManager) RunAgent(ctx context.Context, name, task, response string
 	if m.callbacks != nil && m.callbacks.GetAgentHandler != nil {
 		handler = m.callbacks.GetAgentHandler(m.taskName, name)
 	}
+
+	// Stamp mission / task ids on the context so mission-scoped
+	// builtins (e.g. builtins.human.ask_human) can attribute their
+	// calls to the right run without threading ids through every tool
+	// invocation path.
+	ctx = aitools.WithMissionContext(ctx, m.missionID, m.taskID)
 
 	// Execute
 	var result ChatResult
@@ -270,6 +284,7 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 		OnSessionTurn:    onSessionTurn,
 		PricingOverrides: m.pricingOverrides,
 		Budget:           m.budget,
+		HumanBridge:      m.humanBridge,
 	})
 }
 

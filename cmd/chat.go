@@ -28,6 +28,10 @@ var chatCmd = &cobra.Command{
 	Long:  `Start an interactive chat session with the specified agent.`,
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
+		if err := applyHome(configPath); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		if err := EnsureInitialized(chatAutoInit); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)

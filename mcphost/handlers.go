@@ -611,8 +611,10 @@ func (h *handlers) listVars(_ context.Context, _ mcp.CallToolRequest) (*mcp.Call
 		Default  string `json:"default,omitempty"`
 	}
 
-	details := make([]varDetail, 0, len(cfgVars))
+	declared := make(map[string]struct{}, len(cfgVars))
+	details := make([]varDetail, 0, len(cfgVars)+len(fileVars))
 	for _, v := range cfgVars {
+		declared[v.Name] = struct{}{}
 		d := varDetail{
 			Name:   v.Name,
 			Secret: v.Secret,
@@ -640,6 +642,22 @@ func (h *handlers) listVars(_ context.Context, _ mcp.CallToolRequest) (*mcp.Call
 		}
 
 		details = append(details, d)
+	}
+
+	// Vault-only keys have no declared `secret` flag; show the full value
+	// like any other non-secret. Declare a `variable` block with
+	// `secret = true` to opt into masking.
+	for name, val := range fileVars {
+		if _, ok := declared[name]; ok {
+			continue
+		}
+		details = append(details, varDetail{
+			Name:     name,
+			Secret:   false,
+			HasValue: true,
+			Source:   "override",
+			Value:    val,
+		})
 	}
 
 	return toolResult(map[string]any{
@@ -672,7 +690,19 @@ func (h *handlers) getVar(_ context.Context, req mcp.CallToolRequest) (*mcp.Call
 	}
 
 	if varDef == nil {
-		return mcp.NewToolResultError(fmt.Sprintf("variable %q not found in config", name)), nil
+		// Fall back to the vault — vault keys don't require a `variable` block.
+		// Without a declared `secret` flag, return the value unmasked.
+		fileVal, ok := fileVars[name]
+		if !ok {
+			return mcp.NewToolResultError(fmt.Sprintf("variable %q not found", name)), nil
+		}
+		return toolResult(map[string]any{
+			"name":     name,
+			"secret":   false,
+			"hasValue": true,
+			"source":   "override",
+			"value":    fileVal,
+		})
 	}
 
 	result := map[string]any{

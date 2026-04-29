@@ -6,15 +6,30 @@ title: Variables
 
 Variables store configuration values that can be referenced throughout your HCL files.
 
-## Defining Variables
+Anything you set via `squadron vars set` is automatically available as `vars.<name>` — no `variable` block required. Declaring a `variable` block is only needed when you want to attach metadata like `secret` (for masking) or `default` (fallback when the vault has no value).
+
+## Setting Values
+
+Use the CLI to set variable values:
+
+```bash
+squadron vars set api_key sk-ant-...
+squadron vars set app_name production-app
+```
+
+Values are encrypted at rest in `.squadron/vars.vault`. The vault is initialized automatically the first time you run `squadron engage`. Once set, reference them as `vars.api_key` / `vars.app_name` from any HCL file.
+
+## Defining Variables (optional)
+
+Use `variable` blocks when you want to mark a value as a secret or supply a default:
 
 ```hcl
 variable "api_key" {
-  secret = true  # Mask value in output
+  secret = true  # Mask value in CLI / UI output
 }
 
 variable "app_name" {
-  default = "myapp"  # Optional default value
+  default = "myapp"  # Used only if the vault has no value
 }
 
 variable "max_retries" {
@@ -26,19 +41,8 @@ variable "max_retries" {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `secret` | bool | If true, value is masked in CLI output |
+| `secret` | bool | If true, value is masked in CLI / UI output |
 | `default` | any | Default value if not set via `squadron vars set` |
-
-## Setting Values
-
-Use the CLI to set variable values:
-
-```bash
-squadron vars set api_key sk-ant-...
-squadron vars set app_name production-app
-```
-
-Values are encrypted at rest in `.squadron/vars.vault`. The vault is initialized automatically the first time you run `squadron engage`.
 
 ## Referencing Variables
 
@@ -57,8 +61,9 @@ agent "assistant" {
 ## Resolution Order
 
 1. Value set via `squadron vars set` (encrypted in `.squadron/vars.vault`)
-2. Default value from `variable` block
-3. Error if neither exists
+2. Default value from `variable` block (if declared)
+3. Empty string if a `variable` block is declared with no default and no vault value
+4. HCL evaluation error if `vars.<name>` is referenced but neither the vault nor a `variable` block has it
 
 ## Best Practices
 

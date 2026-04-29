@@ -1123,8 +1123,10 @@ func (c *Client) handleGetVariables(env *protocol.Envelope) (*protocol.Envelope,
 	if cfg != nil {
 		cfgVars = cfg.Variables
 	}
-	details := make([]protocol.VariableDetail, 0, len(cfgVars))
+	declared := make(map[string]struct{}, len(cfgVars))
+	details := make([]protocol.VariableDetail, 0, len(cfgVars)+len(fileVars))
 	for _, v := range cfgVars {
+		declared[v.Name] = struct{}{}
 		detail := protocol.VariableDetail{
 			Name:   v.Name,
 			Secret: v.Secret,
@@ -1154,6 +1156,23 @@ func (c *Client) handleGetVariables(env *protocol.Envelope) (*protocol.Envelope,
 		details = append(details, detail)
 	}
 
+	// Surface vault keys that have no `variable` block. With no declared
+	// `secret = true`, treat them like any other non-secret value and show
+	// the full content — declaring a `variable` block is the opt-in for
+	// masking.
+	for name, val := range fileVars {
+		if _, ok := declared[name]; ok {
+			continue
+		}
+		details = append(details, protocol.VariableDetail{
+			Name:     name,
+			Secret:   false,
+			HasValue: true,
+			Source:   "override",
+			Value:    val,
+		})
+	}
+
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetVariablesResult, &protocol.GetVariablesResultPayload{
 		Variables: details,
 	})
@@ -1165,23 +1184,6 @@ func (c *Client) handleSetVariable(env *protocol.Envelope) (*protocol.Envelope, 
 		return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
 			Error: "invalid payload: " + err.Error(),
 		})
-	}
-
-	// Validate variable exists in config (skip if config not yet loaded)
-	cfg := c.getConfig()
-	if cfg != nil {
-		found := false
-		for _, v := range cfg.Variables {
-			if v.Name == payload.Name {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return protocol.NewResponse(env.RequestID, protocol.TypeSetVariableResult, &protocol.SetVariableResultPayload{
-				Error: fmt.Sprintf("variable %q not defined in config", payload.Name),
-			})
-		}
 	}
 
 	if err := config.SetVar(payload.Name, payload.Value); err != nil {

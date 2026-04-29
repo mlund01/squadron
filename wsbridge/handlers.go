@@ -1156,18 +1156,20 @@ func (c *Client) handleGetVariables(env *protocol.Envelope) (*protocol.Envelope,
 		details = append(details, detail)
 	}
 
-	// Surface vault keys that have no `variable` block. We don't know if
-	// they're sensitive, so default to masking.
+	// Surface vault keys that have no `variable` block. With no declared
+	// `secret = true`, treat them like any other non-secret value and show
+	// the full content — declaring a `variable` block is the opt-in for
+	// masking.
 	for name, val := range fileVars {
 		if _, ok := declared[name]; ok {
 			continue
 		}
 		details = append(details, protocol.VariableDetail{
 			Name:     name,
-			Secret:   true,
+			Secret:   false,
 			HasValue: true,
 			Source:   "override",
-			Value:    maskSecret(val),
+			Value:    val,
 		})
 	}
 

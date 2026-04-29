@@ -39,6 +39,9 @@ func ComputeTurnCost(pricing *ModelPricing, inputTokens, outputTokens, cacheRead
 var DefaultPricing = map[string]*ModelPricing{
 	// === Anthropic (verified April 2026) ===
 	// Cache read = 0.1x input, cache write (5min) = 1.25x input
+	"claude-opus-4-7": {
+		Input: 5.00, Output: 25.00, CacheRead: 0.50, CacheWrite: 6.25,
+	},
 	"claude-opus-4-6": {
 		Input: 5.00, Output: 25.00, CacheRead: 0.50, CacheWrite: 6.25,
 	},
@@ -49,8 +52,14 @@ var DefaultPricing = map[string]*ModelPricing{
 		Input: 1.00, Output: 5.00, CacheRead: 0.10, CacheWrite: 1.25,
 	},
 	// Legacy Anthropic models
+	"claude-opus-4-5-20251101": {
+		Input: 5.00, Output: 25.00, CacheRead: 0.50, CacheWrite: 6.25,
+	},
 	"claude-opus-4-20250514": {
 		Input: 15.00, Output: 75.00, CacheRead: 1.50, CacheWrite: 18.75,
+	},
+	"claude-sonnet-4-5-20250929": {
+		Input: 3.00, Output: 15.00, CacheRead: 0.30, CacheWrite: 3.75,
 	},
 	"claude-sonnet-4-20250514": {
 		Input: 3.00, Output: 15.00, CacheRead: 0.30, CacheWrite: 3.75,
@@ -63,7 +72,32 @@ var DefaultPricing = map[string]*ModelPricing{
 	},
 
 	// === OpenAI (verified April 2026) ===
-	// Flagship models (gpt-5.4 series — mapped from our gpt_5/gpt_5_mini/gpt_5_nano aliases)
+	// Cached input = 10% of input (standard OpenAI rate); cache write = input price.
+	// Current flagship: gpt-5.5 family (released 2026-04-23)
+	"gpt-5.5": {
+		Input: 5.00, Output: 30.00, CacheRead: 0.50, CacheWrite: 5.00,
+	},
+	"gpt-5.5-pro": {
+		Input: 30.00, Output: 180.00, CacheRead: 3.00, CacheWrite: 30.00,
+	},
+	"gpt-5.4": {
+		Input: 2.50, Output: 15.00, CacheRead: 0.25, CacheWrite: 2.50,
+	},
+	"gpt-5.4-mini": {
+		Input: 0.75, Output: 4.50, CacheRead: 0.075, CacheWrite: 0.75,
+	},
+	"gpt-5.4-nano": {
+		Input: 0.20, Output: 1.25, CacheRead: 0.02, CacheWrite: 0.20,
+	},
+	"gpt-5.4-pro": {
+		Input: 30.00, Output: 180.00, CacheRead: 3.00, CacheWrite: 30.00,
+	},
+	"gpt-5.3-codex": {
+		Input: 1.75, Output: 14.00, CacheRead: 0.175, CacheWrite: 1.75,
+	},
+	"gpt-5.2": {
+		Input: 1.75, Output: 14.00, CacheRead: 0.175, CacheWrite: 1.75,
+	},
 	"gpt-5": {
 		Input: 2.50, Output: 15.00, CacheRead: 0.25, CacheWrite: 2.50,
 	},

@@ -21,8 +21,11 @@ model "anthropic" {
 
 | Key | API name | Input | Output | Cache read | Cache write |
 |-----|----------|------:|-------:|-----------:|------------:|
+| `claude_opus_4_7` | `claude-opus-4-7` | $5.00 | $25.00 | $0.50 | $6.25 |
 | `claude_opus_4_6` | `claude-opus-4-6` | $5.00 | $25.00 | $0.50 | $6.25 |
+| `claude_opus_4_5` | `claude-opus-4-5-20251101` | $5.00 | $25.00 | $0.50 | $6.25 |
 | `claude_sonnet_4_6` | `claude-sonnet-4-6` | $3.00 | $15.00 | $0.30 | $3.75 |
+| `claude_sonnet_4_5` | `claude-sonnet-4-5-20250929` | $3.00 | $15.00 | $0.30 | $3.75 |
 | `claude_haiku_4_5` | `claude-haiku-4-5-20251001` | $1.00 | $5.00 | $0.10 | $1.25 |
 | `claude_opus_4` | `claude-opus-4-20250514` | $15.00 | $75.00 | $1.50 | $18.75 |
 | `claude_sonnet_4` | `claude-sonnet-4-20250514` | $3.00 | $15.00 | $0.30 | $3.75 |
@@ -37,11 +40,19 @@ model "openai" {
   api_key  = vars.openai_api_key
 }
 
-# Reference: models.openai.gpt_5
+# Reference: models.openai.gpt_5_5
 ```
 
 | Key | API name | Input | Output | Cache read | Cache write |
 |-----|----------|------:|-------:|-----------:|------------:|
+| `gpt_5_5` | `gpt-5.5` | $5.00 | $30.00 | $0.50 | $5.00 |
+| `gpt_5_5_pro` | `gpt-5.5-pro` | $30.00 | $180.00 | $3.00 | $30.00 |
+| `gpt_5_4` | `gpt-5.4` | $2.50 | $15.00 | $0.25 | $2.50 |
+| `gpt_5_4_mini` | `gpt-5.4-mini` | $0.75 | $4.50 | $0.075 | $0.75 |
+| `gpt_5_4_nano` | `gpt-5.4-nano` | $0.20 | $1.25 | $0.02 | $0.20 |
+| `gpt_5_4_pro` | `gpt-5.4-pro` | $30.00 | $180.00 | $3.00 | $30.00 |
+| `gpt_5_3_codex` | `gpt-5.3-codex` | $1.75 | $14.00 | $0.175 | $1.75 |
+| `gpt_5_2` | `gpt-5.2` | $1.75 | $14.00 | $0.175 | $1.75 |
 | `gpt_5` | `gpt-5` | $2.50 | $15.00 | $0.25 | $2.50 |
 | `gpt_5_mini` | `gpt-5-mini` | $0.75 | $4.50 | $0.075 | $0.75 |
 | `gpt_5_nano` | `gpt-5-nano` | $0.20 | $1.25 | $0.02 | $0.20 |

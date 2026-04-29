@@ -16,6 +16,9 @@ type SharedFolder struct {
 }
 
 func (fb *SharedFolder) Validate() error {
+	if fb.Name == "mission" || fb.Name == "run" {
+		return fmt.Errorf("name %q is reserved for mission-scoped folders", fb.Name)
+	}
 	if fb.Path == "" {
 		return fmt.Errorf("path is required")
 	}

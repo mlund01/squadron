@@ -286,14 +286,11 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		}
 		r.secretValues = secretValues
 		r.secretInfos = secretInfos
-
-		// Build folder store from mission config
-		folderStore, err := buildFolderStore(mission, cfg.SharedFolders)
-		if err != nil {
-			return nil, fmt.Errorf("mission '%s': %w", missionName, err)
-		}
-		r.folderStore = folderStore
 	}
+
+	// Folder store is built later in Run() once missionID is known — the per-run
+	// folder path depends on it. Shared + persistent folders only would let us
+	// build here, but deferring is simpler than branching on mission.RunFolder.
 
 	return r, nil
 }
@@ -569,6 +566,19 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		// Free in-memory datasets — the store is now the source of truth
 		r.resolvedDatasets = nil
 	}
+
+	// Folder store depends on missionID (for run_folder path), so build it
+	// here rather than in NewRunner. Sweep expired run folders async — the
+	// result doesn't affect this run's correctness, only disk usage.
+	if r.mission.RunFolder != nil {
+		base := ResolvedRunFolderBase(r.mission.RunFolder)
+		go func() { _, _ = SweepExpiredRunFolders(base) }()
+	}
+	folderStore, err := buildFolderStore(r.mission, r.cfg.SharedFolders, missionID)
+	if err != nil {
+		return fmt.Errorf("mission '%s': build folder store: %w", r.mission.Name, err)
+	}
+	r.folderStore = folderStore
 
 	streamer.MissionStarted(r.mission.Name, missionID, len(r.mission.Tasks))
 

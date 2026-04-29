@@ -1368,10 +1368,19 @@ func parseToolBlock(block *hcl.Block, baseCtx *hcl.EvalContext, loadedPlugins ma
 func buildVarsContext(vars []Variable) (*hcl.EvalContext, map[string]cty.Value) {
 	varsMap := make(map[string]cty.Value)
 	fileVars, _ := LoadVarsFromFile()
+
+	// Expose every vault key as vars.<name> with no declaration required.
+	for k, val := range fileVars {
+		varsMap[k] = cty.StringVal(val)
+	}
+
+	// Declared variables still apply defaults / empty fallback when the vault
+	// has no value for them. A vault value always wins over a declared default.
 	for _, v := range vars {
-		if val, ok := fileVars[v.Name]; ok {
-			varsMap[v.Name] = cty.StringVal(val)
-		} else if v.Default != "" {
+		if _, ok := varsMap[v.Name]; ok {
+			continue
+		}
+		if v.Default != "" {
 			varsMap[v.Name] = cty.StringVal(v.Default)
 		} else {
 			varsMap[v.Name] = cty.StringVal("")

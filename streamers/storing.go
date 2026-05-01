@@ -248,6 +248,9 @@ func (h *StoringMissionHandler) CommanderReasoningStarted(taskName string) {
 
 func (h *StoringMissionHandler) CommanderReasoningCompleted(taskName string, content string) {
 	sessionKey := taskName + ":commander"
+	if content == "" {
+		content = reasoningPlaceholder
+	}
 	h.storeEvent(protocol.EventCommanderReasoningCompleted, &taskName, &sessionKey, extractIterationIndex(taskName), protocol.CommanderReasoningCompletedData{
 		TaskName: taskName,
 		Content:  content,
@@ -407,6 +410,13 @@ type storingChatHandler struct {
 	answerBuf    strings.Builder
 }
 
+// reasoningPlaceholder is the content used in agent_reasoning_completed events
+// when the provider did reasoning but returned no summary text (OpenAI
+// o-series / gpt-5 occasionally reason silently even with Summary: "detailed").
+// The Started/Completed pair still fires so the UI can show that reasoning
+// happened — just with placeholder text instead of an empty body.
+const reasoningPlaceholder = "(no reasoning summary returned by the model)"
+
 func (c *storingChatHandler) Welcome(agentName string, modelName string) {
 	c.inner.Welcome(agentName, modelName)
 }
@@ -464,14 +474,21 @@ func (c *storingChatHandler) PublishReasoningChunk(chunk string) {
 }
 
 func (c *storingChatHandler) ReasoningCompleted() {
-	if c.reasoningBuf.Len() > 0 {
-		c.parent.storeEvent(protocol.EventAgentReasoningCompleted, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentReasoningCompletedData{
-			TaskName:  c.taskName,
-			AgentName: c.agentName,
-			Content:   c.reasoningBuf.String(),
-		})
-		c.reasoningBuf.Reset()
+	// Always emit the completed event so every Started has a matching
+	// Completed pair in the event log. If the model reasoned silently
+	// (no summary text streamed), use a placeholder so consumers can
+	// distinguish "reasoning happened but model didn't summarize" from
+	// "reasoning didn't happen at all".
+	content := c.reasoningBuf.String()
+	if content == "" {
+		content = reasoningPlaceholder
 	}
+	c.parent.storeEvent(protocol.EventAgentReasoningCompleted, &c.taskName, &c.sessionKey, extractIterationIndex(c.taskName), protocol.AgentReasoningCompletedData{
+		TaskName:  c.taskName,
+		AgentName: c.agentName,
+		Content:   content,
+	})
+	c.reasoningBuf.Reset()
 	c.inner.ReasoningCompleted()
 }
 

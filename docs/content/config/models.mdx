@@ -43,6 +43,8 @@ model "anthropic" {
 
 The `ollama` provider connects to any OpenAI-compatible local inference server. Use `aliases` to define which models are available and map HCL-safe keys to the actual model names.
 
+> **Requires Ollama 0.13.3 or newer** (or any other server that implements `/v1/responses`). Squadron speaks to OpenAI-compatible servers via the Responses API, not the older Chat Completions API. vLLM (recent versions) and LiteLLM also support this.
+
 ```hcl
 model "local" {
   provider = "ollama"
@@ -85,6 +87,7 @@ The `base_url` should point to the OpenAI-compatible API endpoint. Common values
 | `base_url` | string | no | Override the provider's API endpoint (required for `ollama`; optional for cloud providers to route through a compatible proxy) |
 | `aliases` | map | `ollama` only | Map of HCL key → API model name |
 | `prompt_caching` | bool | no | Enable prompt caching (default: `true`) |
+| `reasoning_models` | list | no | Alias keys (or API names) to treat as reasoning-capable. Required for Ollama if you want native reasoning; useful elsewhere to pre-enable a newly released cloud model. |
 
 ## Supported Models
 
@@ -174,3 +177,25 @@ The pricing block label must match a model key. Costs are shown in the command c
 ### Local Models and Cost Tracking
 
 Local models (Ollama provider) have no built-in pricing since they run on your own hardware. Squadron still tracks **token usage** for every turn, so you can monitor how many tokens your local models consume even though the dollar cost is $0.
+
+## Native Reasoning
+
+Squadron supports native reasoning ("extended thinking" on Anthropic, `reasoning_effort` on OpenAI, `thinking_config` on Gemini). Agents and commanders enable it via the `reasoning` attribute (`"low"`, `"medium"`, or `"high"`); see [Agents → Reasoning](/config/agents#reasoning).
+
+For cloud providers, Squadron knows which models support reasoning and silently enables it when requested. For Ollama (and any other provider where the model name doesn't match the cloud naming conventions), you must declare reasoning-capable models via `reasoning_models`:
+
+```hcl
+model "ollama" {
+  provider = "ollama"
+  base_url = "http://localhost:11434/v1"
+  aliases = {
+    deepseek_r1 = "deepseek-r1:7b"
+    qwen3       = "qwen3:8b"
+    gpt_oss     = "gpt-oss:20b"
+    llama3      = "llama3:8b"
+  }
+  reasoning_models = ["deepseek_r1", "qwen3", "gpt_oss"]
+}
+```
+
+Each entry is either an alias key (left side of `aliases`) or a raw API model name. Unknown entries error at config load.

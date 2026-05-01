@@ -11,7 +11,8 @@ import (
 
 // TestOpenAIProvider_BaseURL verifies that a custom base_url routes requests
 // to that host instead of the default api.openai.com — the proxy escape hatch
-// users declare via `base_url = "..."` on model blocks.
+// users declare via `base_url = "..."` on model blocks. Squadron now uses
+// the Responses API (`/responses`) end-to-end.
 func TestOpenAIProvider_BaseURL(t *testing.T) {
 	hit := make(chan string, 1)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -21,7 +22,8 @@ func TestOpenAIProvider_BaseURL(t *testing.T) {
 		}
 		_, _ = io.Copy(io.Discard, r.Body)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"id":"x","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}`))
+		// Minimal valid Response shape so the client doesn't error.
+		_, _ = w.Write([]byte(`{"id":"resp_x","object":"response","created_at":0,"status":"completed","output":[],"error":null,"incomplete_details":null,"instructions":null,"parallel_tool_calls":true,"tool_choice":"auto","tools":[],"model":"gpt-4o-mini","metadata":{},"temperature":1,"top_p":1,"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}}}`))
 	}))
 	defer srv.Close()
 
@@ -33,8 +35,8 @@ func TestOpenAIProvider_BaseURL(t *testing.T) {
 
 	select {
 	case path := <-hit:
-		if !strings.Contains(path, "chat/completions") {
-			t.Fatalf("expected chat/completions path, got %q", path)
+		if !strings.Contains(path, "responses") {
+			t.Fatalf("expected /responses path, got %q", path)
 		}
 	default:
 		t.Fatal("OpenAI provider did not send request to custom base_url")

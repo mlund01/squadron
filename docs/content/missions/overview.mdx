@@ -11,7 +11,8 @@ Missions orchestrate multi-task pipelines using commanders and agents.
 ```hcl
 mission "data_pipeline" {
   commander {
-    model = models.anthropic.claude_sonnet_4
+    model     = models.anthropic.claude_sonnet_4
+    reasoning = "medium" # optional — see Agents → Reasoning
   }
   agents = [agents.researcher, agents.writer]
 
@@ -36,7 +37,7 @@ mission "data_pipeline" {
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `directive` | string | High-level description of the mission's purpose |
-| `commander` | string or block | Model for task commanders (block form: `commander { model = ... }`) |
+| `commander` | string or block | Model for task commanders (block form: `commander { model = ...; reasoning = "low\|medium\|high" }`; see [Agents → Reasoning](/config/agents#reasoning)) |
 | `agents` | list | Agents available to all tasks |
 | `agent` | block | Mission-scoped agent definition (repeatable, see [Agents](/config/agents#mission-scoped-agents)) |
 | `input` | block | Mission input parameters (repeatable) |

@@ -21,7 +21,8 @@ type Session struct {
 	stopSequences []string
 	tools         []ToolDefinition // Tool definitions for native tool calling
 	promptCaching        bool
-	conversationCaching  bool // Whether to cache conversation history (disabled when pruning is active)
+	conversationCaching  bool   // Whether to cache conversation history (disabled when pruning is active)
+	reasoning            string // Native reasoning level: "", "low", "medium", "high"
 }
 
 func NewSession(provider Provider, model string, systemPrompts ...string) *Session {
@@ -40,6 +41,17 @@ func NewSession(provider Provider, model string, systemPrompts ...string) *Sessi
 func (s *Session) SetPromptCaching(enabled bool, conversationCaching bool) {
 	s.promptCaching = enabled
 	s.conversationCaching = conversationCaching
+}
+
+// SetReasoning sets the native reasoning level for this session. Valid values:
+// "", "low", "medium", "high". Providers that don't support reasoning ignore it.
+func (s *Session) SetReasoning(level string) {
+	s.reasoning = level
+}
+
+// GetReasoning returns the configured reasoning level (empty if none).
+func (s *Session) GetReasoning() string {
+	return s.reasoning
 }
 
 // retryableStatusCodes are HTTP status codes that indicate a transient error
@@ -310,6 +322,13 @@ func (s *Session) Clone() *Session {
 						IsError:   part.ToolResult.IsError,
 					}
 				}
+				if part.Thinking != nil {
+					messagesCopy[i].Parts[j].Thinking = &ThinkingBlock{
+						Text:         part.Thinking.Text,
+						Signature:    part.Thinking.Signature,
+						RedactedData: part.Thinking.RedactedData,
+					}
+				}
 			}
 		}
 		if msg.Metadata != nil {
@@ -330,13 +349,16 @@ func (s *Session) Clone() *Session {
 	copy(toolsCopy, s.tools)
 
 	return &Session{
-		provider:      s.provider, // Shared - providers are thread-safe
-		model:         s.model,
-		systemPrompts: systemPromptsCopy,
-		messages:      messagesCopy,
-		stopSequences: stopSequencesCopy,
-		tools:         toolsCopy,
-		debugFile:     nil, // Don't share debug file - clones are for isolated queries
+		provider:            s.provider, // Shared - providers are thread-safe
+		model:               s.model,
+		systemPrompts:       systemPromptsCopy,
+		messages:            messagesCopy,
+		stopSequences:       stopSequencesCopy,
+		tools:               toolsCopy,
+		promptCaching:       s.promptCaching,
+		conversationCaching: s.conversationCaching,
+		reasoning:           s.reasoning,
+		debugFile:           nil, // Don't share debug file - clones are for isolated queries
 	}
 }
 
@@ -366,12 +388,13 @@ func (s *Session) Send(ctx context.Context, userMessage string) (*ChatResponse, 
 	s.logMessage("User Message", userMessage)
 
 	req := &ChatRequest{
-		Model:         s.model,
-		Messages:      s.buildMessages(userMessage),
-		StopSequences: s.stopSequences,
-		Tools:         s.tools,
+		Model:               s.model,
+		Messages:            s.buildMessages(userMessage),
+		StopSequences:       s.stopSequences,
+		Tools:               s.tools,
 		PromptCaching:       s.promptCaching,
 		ConversationCaching: s.conversationCaching,
+		Reasoning:           s.reasoning,
 	}
 
 	resp, err := s.provider.Chat(ctx, req)
@@ -391,23 +414,37 @@ func (s *Session) Send(ctx context.Context, userMessage string) (*ChatResponse, 
 }
 
 // buildAssistantMessage constructs the assistant message for session history.
-// If contentBlocks contain tool_use blocks, the message uses Parts for structured content.
-// Otherwise, it falls back to simple text content.
+// If contentBlocks contain tool_use or thinking blocks, the message uses Parts
+// for structured content. Otherwise, it falls back to simple text content.
+//
+// Thinking blocks must be preserved in history because Anthropic's extended
+// thinking API requires prior thinking blocks to be echoed back (in their
+// original order, before any tool_use blocks) on subsequent multi-turn
+// requests — dropping them causes a 400 on the next turn.
 func (s *Session) buildAssistantMessage(textContent string, contentBlocks []ContentBlock) Message {
 	hasToolUse := false
+	hasThinking := false
 	for _, b := range contentBlocks {
-		if b.Type == ContentTypeToolUse {
+		switch b.Type {
+		case ContentTypeToolUse:
 			hasToolUse = true
-			break
+		case ContentTypeThinking:
+			hasThinking = true
 		}
 	}
 
-	if !hasToolUse {
+	if !hasToolUse && !hasThinking {
 		return Message{Role: RoleAssistant, Content: textContent}
 	}
 
-	// Build Parts: include text block(s) and tool_use blocks
+	// Build Parts: thinking blocks first (Anthropic requires them before
+	// tool_use), then text, then tool_use blocks.
 	var parts []ContentBlock
+	for _, b := range contentBlocks {
+		if b.Type == ContentTypeThinking {
+			parts = append(parts, b)
+		}
+	}
 	if textContent != "" {
 		parts = append(parts, ContentBlock{Type: ContentTypeText, Text: textContent})
 	}
@@ -428,12 +465,13 @@ func (s *Session) SendStream(ctx context.Context, userMessage string, onChunk fu
 	s.logMessage("User Message", userMessage)
 
 	req := &ChatRequest{
-		Model:         s.model,
-		Messages:      s.buildMessages(userMessage),
-		StopSequences: s.stopSequences,
-		Tools:         s.tools,
+		Model:               s.model,
+		Messages:            s.buildMessages(userMessage),
+		StopSequences:       s.stopSequences,
+		Tools:               s.tools,
 		PromptCaching:       s.promptCaching,
 		ConversationCaching: s.conversationCaching,
+		Reasoning:           s.reasoning,
 	}
 
 	sr, err := s.streamWithRetry(ctx, req, onChunk)
@@ -473,12 +511,13 @@ func (s *Session) ContinueStream(ctx context.Context, onChunk func(StreamChunk))
 	s.logMessage("Continue", "(resuming from existing state)")
 
 	req := &ChatRequest{
-		Model:         s.model,
-		Messages:      s.buildCurrentMessages(),
-		StopSequences: s.stopSequences,
-		Tools:         s.tools,
+		Model:               s.model,
+		Messages:            s.buildCurrentMessages(),
+		StopSequences:       s.stopSequences,
+		Tools:               s.tools,
 		PromptCaching:       s.promptCaching,
 		ConversationCaching: s.conversationCaching,
+		Reasoning:           s.reasoning,
 	}
 
 	sr, err := s.streamWithRetry(ctx, req, onChunk)
@@ -778,12 +817,13 @@ func (s *Session) SendMessageStream(ctx context.Context, userMsg Message, onChun
 	}
 
 	req := &ChatRequest{
-		Model:         s.model,
-		Messages:      s.buildMessagesWithMessage(userMsg),
-		StopSequences: s.stopSequences,
-		Tools:         s.tools,
+		Model:               s.model,
+		Messages:            s.buildMessagesWithMessage(userMsg),
+		StopSequences:       s.stopSequences,
+		Tools:               s.tools,
 		PromptCaching:       s.promptCaching,
 		ConversationCaching: s.conversationCaching,
+		Reasoning:           s.reasoning,
 	}
 
 	sr, err := s.streamWithRetry(ctx, req, onChunk)

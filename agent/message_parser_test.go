@@ -79,48 +79,26 @@ func TestParseAnswer_TrailingNewlinesStripped(t *testing.T) {
 	}
 }
 
-func TestParseReasoning(t *testing.T) {
+// Reasoning is no longer parsed from text — it streams as separate
+// StreamChunk fields from native-thinking providers. The MessageParser only
+// handles ANSWER tags now. See agent/orchestrator.go onChunk for the
+// reasoning event wiring.
+
+func TestParser_IgnoresReasoningTags(t *testing.T) {
+	// Verify that legacy <REASONING>...</REASONING> tags from old transcripts
+	// don't crash the parser. They're treated as plain text and silently
+	// dropped (no answer chunks emitted because no <ANSWER> tag present).
 	s := &mockStreamer{}
 	p := NewMessageParser(s)
 
-	p.ProcessChunk("<REASONING>Let me think about this step by step.</REASONING>")
-	p.Finish()
-
-	combined := strings.Join(s.reasoningChunks, "")
-	if combined != "Let me think about this step by step." {
-		t.Fatalf("reasoning = %q, want %q", combined, "Let me think about this step by step.")
-	}
-	if s.finishReasoningCount != 1 {
-		t.Fatalf("finishReasoning called %d times, want 1", s.finishReasoningCount)
-	}
-}
-
-func TestParseReasoning_LeadingNewlinesStripped(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("<REASONING>\n\nThinking</REASONING>")
-	p.Finish()
-
-	combined := strings.Join(s.reasoningChunks, "")
-	if combined != "Thinking" {
-		t.Fatalf("reasoning = %q, want %q", combined, "Thinking")
-	}
-}
-
-func TestParseReasoningThenAnswer(t *testing.T) {
-	s := &mockStreamer{}
-	p := NewMessageParser(s)
-
-	p.ProcessChunk("<REASONING>The answer is clear.</REASONING>")
-	p.ProcessChunk("<ANSWER>42</ANSWER>")
+	p.ProcessChunk("<REASONING>old text</REASONING><ANSWER>42</ANSWER>")
 	p.Finish()
 
 	if p.GetAnswer() != "42" {
 		t.Fatalf("answer = %q, want %q", p.GetAnswer(), "42")
 	}
-	if s.finishReasoningCount != 1 {
-		t.Fatalf("finishReasoning called %d times, want 1", s.finishReasoningCount)
+	if len(s.reasoningChunks) != 0 {
+		t.Fatalf("reasoning chunks emitted from legacy tags: %v", s.reasoningChunks)
 	}
 }
 

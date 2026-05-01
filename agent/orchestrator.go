@@ -121,7 +121,8 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			}
 		}
 
-		// Create parser for streaming text content (REASONING/ANSWER tags)
+		// Create parser for streaming text content (ANSWER tags). Reasoning
+		// is emitted via dedicated StreamChunk fields (see onChunk below).
 		parser := NewMessageParser(o.streamer)
 
 		if o.eventLogger != nil {
@@ -132,13 +133,17 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		var resp *llm.ChatResponse
 		var err error
 
-		// Callback for streaming chunks — routes text to parser, tool events to streamer
+		relay := newReasoningRelay(o.streamer.ReasoningStarted, o.streamer.PublishReasoningChunk, o.streamer.ReasoningCompleted)
+
 		onChunk := func(chunk llm.StreamChunk) {
+			relay.Handle(chunk)
 			if chunk.Content != "" {
+				// Visible answer text closes the reasoning window before
+				// the parser sees it — the agent ANSWER protocol shouldn't
+				// be tangled up in a reasoning span.
+				relay.Close()
 				parser.ProcessChunk(chunk.Content)
 			}
-			// Note: tool call start events are emitted later with full payload (line ~290)
-			// Don't emit here to avoid duplicate events
 		}
 
 		if resume {
@@ -226,6 +231,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 				turnCost = c.TotalCost
 			}
 			if err := o.budget.RecordUsage(resp.Usage.Total(), turnCost); err != nil {
+				relay.Close()
 				parser.Finish()
 				o.streamer.Error(err)
 				return ChatResult{}, err
@@ -249,6 +255,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			o.eventLogger.LogEvent("agent_llm_end", eventData)
 		}
 
+		relay.Close()
 		parser.Finish()
 
 		if err != nil {

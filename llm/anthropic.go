@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -30,10 +31,26 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRe
 		maxTokens = 8192
 	}
 
+	// Extended thinking: budget_tokens must be < max_tokens, so clamp upward
+	// when needed. Anthropic also requires temperature=1 and rejects
+	// top_p/top_k when thinking is on; we don't set those today, but any
+	// future code that does must skip them when params.Thinking is set.
+	var thinkingBudget int64
+	if req.Reasoning != "" {
+		thinkingBudget = anthropicBudgetTokens(req.Reasoning)
+		if thinkingBudget > 0 && maxTokens < thinkingBudget+8192 {
+			maxTokens = thinkingBudget + 8192
+		}
+	}
+
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(req.Model),
 		MaxTokens: maxTokens,
 		Messages:  msgs,
+	}
+
+	if thinkingBudget > 0 {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(thinkingBudget)
 	}
 
 	if len(systemPrompts) > 0 {
@@ -73,6 +90,23 @@ func (p *AnthropicProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatRe
 					Input: tb.Input,
 				},
 			})
+		case "thinking":
+			tb := block.AsThinking()
+			contentBlocks = append(contentBlocks, ContentBlock{
+				Type: ContentTypeThinking,
+				Thinking: &ThinkingBlock{
+					Text:      tb.Thinking,
+					Signature: tb.Signature,
+				},
+			})
+		case "redacted_thinking":
+			rb := block.AsRedactedThinking()
+			contentBlocks = append(contentBlocks, ContentBlock{
+				Type: ContentTypeThinking,
+				Thinking: &ThinkingBlock{
+					RedactedData: rb.Data,
+				},
+			})
 		}
 	}
 
@@ -98,10 +132,22 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 		maxTokens = 8192
 	}
 
+	var thinkingBudget int64
+	if req.Reasoning != "" {
+		thinkingBudget = anthropicBudgetTokens(req.Reasoning)
+		if thinkingBudget > 0 && maxTokens < thinkingBudget+8192 {
+			maxTokens = thinkingBudget + 8192
+		}
+	}
+
 	params := anthropic.MessageNewParams{
 		Model:     anthropic.Model(req.Model),
 		MaxTokens: maxTokens,
 		Messages:  msgs,
+	}
+
+	if thinkingBudget > 0 {
+		params.Thinking = anthropic.ThinkingConfigParamOfEnabled(thinkingBudget)
 	}
 
 	if len(systemPrompts) > 0 {
@@ -129,7 +175,15 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 		// Track the current tool call being streamed
 		var currentToolID string
 		var currentToolName string
-		var currentToolInput string
+		var currentToolInput strings.Builder
+		// Track the current thinking block being streamed. Anthropic sends
+		// thinking content via thinking_delta and the cryptographic signature
+		// via signature_delta — both within the same content block, so we
+		// accumulate both until ContentBlockStopEvent finalizes them.
+		var currentThinkingText strings.Builder
+		var currentThinkingSignature strings.Builder
+		var currentThinkingRedacted string
+		var inThinkingBlock bool
 
 		for stream.Next() {
 			event := stream.Current()
@@ -140,7 +194,7 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 				case "tool_use":
 					currentToolID = e.ContentBlock.ID
 					currentToolName = e.ContentBlock.Name
-					currentToolInput = ""
+					currentToolInput.Reset()
 					chunks <- StreamChunk{
 						ToolCallStart: &ToolCallStartChunk{
 							ID:   currentToolID,
@@ -148,7 +202,28 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 						},
 					}
 				case "text":
-					// Text block starting — nothing to emit yet
+				case "thinking":
+					inThinkingBlock = true
+					currentThinkingText.Reset()
+					currentThinkingSignature.Reset()
+					currentThinkingRedacted = ""
+					if e.ContentBlock.Thinking != "" {
+						currentThinkingText.WriteString(e.ContentBlock.Thinking)
+					}
+					if e.ContentBlock.Signature != "" {
+						currentThinkingSignature.WriteString(e.ContentBlock.Signature)
+					}
+					chunks <- StreamChunk{ReasoningStart: true}
+					if e.ContentBlock.Thinking != "" {
+						chunks <- StreamChunk{ReasoningDelta: e.ContentBlock.Thinking}
+					}
+				case "redacted_thinking":
+					// Redacted thinking has no surfaceable text — round-trip
+					// the encrypted data without emitting reasoning events.
+					inThinkingBlock = true
+					currentThinkingText.Reset()
+					currentThinkingSignature.Reset()
+					currentThinkingRedacted = e.ContentBlock.Data
 				}
 
 			case anthropic.ContentBlockDeltaEvent:
@@ -158,21 +233,25 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 						Content: e.Delta.Text,
 					}
 				case "input_json_delta":
-					currentToolInput += e.Delta.PartialJSON
+					currentToolInput.WriteString(e.Delta.PartialJSON)
 					chunks <- StreamChunk{
 						ToolCallDelta: e.Delta.PartialJSON,
 					}
+				case "thinking_delta":
+					currentThinkingText.WriteString(e.Delta.Thinking)
+					chunks <- StreamChunk{ReasoningDelta: e.Delta.Thinking}
+				case "signature_delta":
+					currentThinkingSignature.WriteString(e.Delta.Signature)
 				}
 
 			case anthropic.ContentBlockStopEvent:
-				// If we were accumulating a tool call, finalize it
 				if currentToolID != "" {
 					contentBlocks = append(contentBlocks, ContentBlock{
 						Type: ContentTypeToolUse,
 						ToolUse: &ToolUseBlock{
 							ID:    currentToolID,
 							Name:  currentToolName,
-							Input: json.RawMessage(currentToolInput),
+							Input: json.RawMessage(currentToolInput.String()),
 						},
 					})
 					id := currentToolID
@@ -181,7 +260,26 @@ func (p *AnthropicProvider) ChatStream(ctx context.Context, req *ChatRequest) (<
 					}
 					currentToolID = ""
 					currentToolName = ""
-					currentToolInput = ""
+					currentToolInput.Reset()
+				}
+				if inThinkingBlock {
+					contentBlocks = append(contentBlocks, ContentBlock{
+						Type: ContentTypeThinking,
+						Thinking: &ThinkingBlock{
+							Text:         currentThinkingText.String(),
+							Signature:    currentThinkingSignature.String(),
+							RedactedData: currentThinkingRedacted,
+						},
+					})
+					// Redacted thinking never opened a reasoning window —
+					// don't emit a Done event for it either.
+					if currentThinkingRedacted == "" {
+						chunks <- StreamChunk{ReasoningDone: true}
+					}
+					inThinkingBlock = false
+					currentThinkingText.Reset()
+					currentThinkingSignature.Reset()
+					currentThinkingRedacted = ""
 				}
 
 			case anthropic.MessageDeltaEvent:
@@ -330,6 +428,19 @@ func (p *AnthropicProvider) buildContentBlocks(m Message) []anthropic.ContentBlo
 		case ContentTypeToolResult:
 			if part.ToolResult != nil {
 				blocks = append(blocks, anthropic.NewToolResultBlock(part.ToolResult.ToolUseID, part.ToolResult.Content, part.ToolResult.IsError))
+			}
+		case ContentTypeThinking:
+			// Anthropic requires thinking blocks to be echoed back on
+			// subsequent turns when extended thinking is enabled and the
+			// previous turn used tools — multi-turn requests fail otherwise.
+			// Session.buildAssistantMessage places thinking parts first; the
+			// loop here preserves that order.
+			if part.Thinking != nil {
+				if part.Thinking.RedactedData != "" {
+					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(part.Thinking.RedactedData))
+				} else {
+					blocks = append(blocks, anthropic.NewThinkingBlock(part.Thinking.Signature, part.Thinking.Text))
+				}
 			}
 		}
 	}

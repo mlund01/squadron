@@ -1,9 +1,6 @@
 package config
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestNormalizeReasoning(t *testing.T) {
 	cases := []struct {
@@ -74,68 +71,18 @@ func TestBuiltinReasoningSupport(t *testing.T) {
 	}
 }
 
-func TestModelSupportsReasoning_OverrideForcesEnabled(t *testing.T) {
-	// Ollama model with no built-in support — user declares deepseek_r1
-	// as reasoning-capable; llama3 is not declared.
-	m := &Model{
-		Provider: ProviderOllama,
-		BaseURL:  "http://localhost:11434/v1",
-		Aliases: map[string]string{
-			"deepseek_r1": "deepseek-r1:7b",
-			"llama3":      "llama3:8b",
-		},
-		ReasoningModels: []string{"deepseek_r1"},
-	}
-
-	if !ModelSupportsReasoning(m, "deepseek-r1:7b") {
-		t.Error("expected deepseek-r1:7b to be supported via reasoning_models override")
-	}
-	if ModelSupportsReasoning(m, "llama3:8b") {
-		t.Error("llama3:8b is not declared and Ollama has no built-in support — should be false")
-	}
-}
-
-func TestModelSupportsReasoning_OverrideAcceptsApiNames(t *testing.T) {
-	// Override entries can be either alias keys or raw API names.
-	m := &Model{
-		Provider: ProviderOllama,
-		BaseURL:  "http://localhost:11434/v1",
-		Aliases: map[string]string{
-			"qwen3": "qwen3:8b",
-		},
-		ReasoningModels: []string{"qwen3:8b"},
-	}
-	if !ModelSupportsReasoning(m, "qwen3:8b") {
-		t.Error("expected qwen3:8b to be supported via API-name override")
-	}
-}
-
-func TestModelSupportsReasoning_BuiltinFallback(t *testing.T) {
-	// Anthropic with no override — falls back to built-in detector.
-	m := &Model{
-		Provider: ProviderAnthropic,
-		APIKey:   "test",
-	}
+func TestModelSupportsReasoning_BuiltinPrefixDetector(t *testing.T) {
+	m := &Model{Provider: ProviderAnthropic, APIKey: "test"}
 	if !ModelSupportsReasoning(m, "claude-opus-4-7") {
-		t.Error("Claude 4 should be supported via built-in detector")
+		t.Error("Claude 4 should be supported")
 	}
 	if ModelSupportsReasoning(m, "claude-3-5-sonnet-20241022") {
 		t.Error("Claude 3.5 should NOT be supported")
 	}
-}
 
-func TestModel_Validate_RejectsUnknownReasoningModel(t *testing.T) {
-	m := &Model{
-		Provider: ProviderOllama,
-		BaseURL:  "http://localhost:11434/v1",
-		Aliases: map[string]string{
-			"qwen3": "qwen3:8b",
-		},
-		ReasoningModels: []string{"missing_alias"},
-	}
-	err := m.Validate()
-	if err == nil || !strings.Contains(err.Error(), "missing_alias") {
-		t.Errorf("expected validation error mentioning missing_alias, got %v", err)
+	ollama := &Model{Provider: ProviderOllama, BaseURL: "http://localhost:11434/v1", Aliases: map[string]string{"x": "x"}}
+	if ModelSupportsReasoning(ollama, "deepseek-r1:7b") {
+		t.Error("Ollama should always return false from the built-in detector")
 	}
 }
 

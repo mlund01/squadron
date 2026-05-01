@@ -95,11 +95,6 @@ type Model struct {
 	BaseURL        string            `hcl:"base_url,optional"`
 	PromptCaching  *bool             `hcl:"prompt_caching,optional"`
 	Pricing        map[string]*ModelPricingConfig `json:"-"` // model name → pricing override
-	// ReasoningModels lists alias keys (or API model names) that should be
-	// treated as reasoning-capable, even if the built-in detector doesn't
-	// know about them. Required for Ollama (where users register their own
-	// aliases) and useful for newly released cloud models or custom proxies.
-	ReasoningModels []string `hcl:"-"` // parsed manually
 }
 
 // AvailableModels returns all model keys available for this provider.
@@ -151,33 +146,12 @@ func (m *Model) Validate() error {
 		if len(m.Aliases) == 0 {
 			return fmt.Errorf("aliases are required for provider '%s' — define model mappings like: aliases = { gemma4 = \"gemma4\" }", m.Provider)
 		}
-	} else {
-		// Cloud providers require an API key
-		if m.APIKey == "" {
-			return fmt.Errorf("api_key is required for provider '%s'", m.Provider)
-		}
+		return nil
 	}
 
-	// Validate that each reasoning_models entry resolves to a known model
-	// (alias key or built-in API name).
-	if len(m.ReasoningModels) > 0 {
-		available := m.AvailableModels()
-		for _, entry := range m.ReasoningModels {
-			if _, ok := available[entry]; ok {
-				continue
-			}
-			// Also accept raw API names (e.g. "deepseek-r1" instead of the alias key)
-			matched := false
-			for _, apiName := range available {
-				if apiName == entry {
-					matched = true
-					break
-				}
-			}
-			if !matched {
-				return fmt.Errorf("reasoning_models entry %q: no such model on provider %q", entry, m.Provider)
-			}
-		}
+	// Cloud providers require an API key
+	if m.APIKey == "" {
+		return fmt.Errorf("api_key is required for provider '%s'", m.Provider)
 	}
 
 	return nil

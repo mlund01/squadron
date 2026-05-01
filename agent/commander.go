@@ -428,10 +428,12 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (opts.PruneOn == 0 || (opts.PruneOn-opts.PruneTo) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
-	// Enable native reasoning on the commander when both opts asks for it
-	// and the resolved model supports it on this provider.
-	if opts.Reasoning != "" && config.ModelSupportsReasoning(modelConfig, actualModelName) {
-		session.SetReasoning(opts.Reasoning)
+	if opts.Reasoning != "" {
+		if config.ModelSupportsReasoning(modelConfig, actualModelName) {
+			session.SetReasoning(opts.Reasoning)
+		} else {
+			log.Printf("[commander %q] reasoning=%q ignored — model %q does not support native reasoning", opts.TaskName, opts.Reasoning, actualModelName)
+		}
 	}
 
 	// Note: tools are set on the session in SetToolCallbacks after all tools are registered

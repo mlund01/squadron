@@ -806,16 +806,16 @@ the underlying `llm.Session` only when:
 1. The user set a level on the agent/commander, AND
 2. The resolved model supports native reasoning on its provider.
 
-Capability detection is two-layered:
+Capability is detected via a prefix match in `config/reasoning.go`:
+Anthropic `claude-opus-4*`/`claude-sonnet-4*`/`claude-haiku-4*`, OpenAI
+`o3*`/`o4*`/`gpt-5*`, Gemini `gemini-2.5*`/`gemini-3*`. Ollama and other
+local-server providers always return false — reasoning on user-named
+models would need either a per-deployment probe or an explicit user
+declaration, neither of which we ship today.
 
-- **Built-in prefix detector** in `config/reasoning.go` covers cloud-managed
-  models with stable naming (Anthropic `claude-opus-4*`/`claude-sonnet-4*`/
-  `claude-haiku-4*`, OpenAI `o3*`/`o4*`/`gpt-5*`, Gemini `gemini-2.5*`/
-  `gemini-3*`).
-- **Model-block override** via `reasoning_models = [...]` is required for
-  Ollama (where users register their own aliases like `deepseek_r1`/`qwen3`/
-  `gpt_oss`) and useful for newly released cloud models the built-in list
-  doesn't know yet. The override is additive — force-enable only.
+If `reasoning` is set on an agent or commander whose model isn't
+recognised, the gate logs a warning at startup and the session runs
+without reasoning. No chain-of-thought fallback.
 
 The level → token-budget mapping (Anthropic / Gemini): `low` = 2 048,
 `medium` = 8 192, `high` = 24 576. For OpenAI, `low|medium|high` maps to the

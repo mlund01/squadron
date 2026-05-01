@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/mlund01/squadron-wire/protocol"
@@ -254,11 +255,12 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (agentCfg.GetPruneOn() == 0 || (agentCfg.GetPruneOn()-agentCfg.GetPruneTo()) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
 
-	// Enable native reasoning when both the agent requested it and the
-	// resolved model supports it. Unsupported models silently no-op — there's
-	// no chain-of-thought fallback.
-	if agentCfg.Reasoning != "" && config.ModelSupportsReasoning(modelConfig, actualModelName) {
-		session.SetReasoning(agentCfg.Reasoning)
+	if agentCfg.Reasoning != "" {
+		if config.ModelSupportsReasoning(modelConfig, actualModelName) {
+			session.SetReasoning(agentCfg.Reasoning)
+		} else {
+			log.Printf("[agent %q] reasoning=%q ignored — model %q does not support native reasoning", agentCfg.Name, agentCfg.Reasoning, actualModelName)
+		}
 	}
 
 	// Set tools on session for native tool calling

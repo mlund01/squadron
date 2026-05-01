@@ -858,7 +858,6 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Name: "api_key"},
 				{Name: "base_url"},
 				{Name: "prompt_caching"},
-				{Name: "reasoning_models"},
 			},
 			Blocks: []hcl.BlockHeaderSchema{
 				{Type: "pricing", LabelNames: []string{"model"}},
@@ -912,17 +911,6 @@ func loadFromFiles(files []string) (*Config, error) {
 			}
 			b := val.True()
 			m.PromptCaching = &b
-		}
-
-		if attr, ok := content.Attributes["reasoning_models"]; ok {
-			val, d := attr.Expr.Value(ctx)
-			if d.HasErrors() {
-				return nil, d
-			}
-			for it := val.ElementIterator(); it.Next(); {
-				_, v := it.Element()
-				m.ReasoningModels = append(m.ReasoningModels, v.AsString())
-			}
 		}
 
 		// Parse pricing sub-blocks

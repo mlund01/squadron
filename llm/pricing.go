@@ -64,12 +64,6 @@ var DefaultPricing = map[string]*ModelPricing{
 	"claude-sonnet-4-20250514": {
 		Input: 3.00, Output: 15.00, CacheRead: 0.30, CacheWrite: 3.75,
 	},
-	"claude-3-5-haiku-20241022": {
-		Input: 0.80, Output: 4.00, CacheRead: 0.08, CacheWrite: 1.00,
-	},
-	"claude-3-5-sonnet-20241022": {
-		Input: 3.00, Output: 15.00, CacheRead: 0.30, CacheWrite: 3.75,
-	},
 
 	// === OpenAI (verified April 2026) ===
 	// Cached input = 10% of input (standard OpenAI rate); cache write = input price.
@@ -128,9 +122,6 @@ var DefaultPricing = map[string]*ModelPricing{
 	"o1": {
 		Input: 15.00, Output: 60.00, CacheRead: 7.50, CacheWrite: 15.00,
 	},
-	"o1-mini": {
-		Input: 1.10, Output: 4.40, CacheRead: 0.55, CacheWrite: 1.10,
-	},
 	"o3": {
 		Input: 10.00, Output: 40.00, CacheRead: 2.50, CacheWrite: 10.00,
 	},
@@ -170,12 +161,6 @@ var DefaultPricing = map[string]*ModelPricing{
 	},
 	"gemini-2.0-flash-exp": {
 		Input: 0.10, Output: 0.40, CacheRead: 0.025, CacheWrite: 0.10,
-	},
-	"gemini-1.5-pro": {
-		Input: 1.25, Output: 5.00, CacheRead: 0.3125, CacheWrite: 1.25,
-	},
-	"gemini-1.5-flash": {
-		Input: 0.075, Output: 0.30, CacheRead: 0.01875, CacheWrite: 0.075,
 	},
 }
 

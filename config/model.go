@@ -50,9 +50,11 @@ var SupportedModels = map[Provider]map[string]ModelInfo{
 		"gpt_5":         {APIName: "gpt-5", Reasoning: true},
 		"gpt_5_mini":    {APIName: "gpt-5-mini", Reasoning: true},
 		"gpt_5_nano":    {APIName: "gpt-5-nano", Reasoning: true},
-		"o3":            {APIName: "o3", Reasoning: true},
-		"o4_mini":       {APIName: "o4-mini", Reasoning: true},
-		"o3_mini":       {APIName: "o3-mini", Reasoning: true},
+		// o3, o4-mini, o3-mini are deprecated (API shutdown 2026-10-23) but
+		// still functional today; keep them registered until shutdown.
+		"o3":      {APIName: "o3", Reasoning: true},
+		"o4_mini": {APIName: "o4-mini", Reasoning: true},
+		"o3_mini": {APIName: "o3-mini", Reasoning: true},
 
 		// Non-reasoning chat models.
 		"gpt_4_1":      {APIName: "gpt-4.1"},
@@ -60,9 +62,11 @@ var SupportedModels = map[Provider]map[string]ModelInfo{
 		"gpt_4_1_nano": {APIName: "gpt-4.1-nano"},
 		"gpt_4o":       {APIName: "gpt-4o"},
 		"gpt_4o_mini":  {APIName: "gpt-4o-mini"},
-		"gpt_4_turbo":  {APIName: "gpt-4-turbo"},
-		"o1":           {APIName: "o1"},
-		"o1_mini":      {APIName: "o1-mini"},
+		// gpt-4-turbo and o1 are deprecated (shutdown 2026-10-23). o1-mini
+		// is fully retired (shutdown 2025-10-27) and removed from the
+		// registry — requests to it return 404 now.
+		"gpt_4_turbo": {APIName: "gpt-4-turbo"},
+		"o1":          {APIName: "o1"},
 	},
 	ProviderGemini: {
 		// Gemini 2.5+ and 3.x support thinking.
@@ -73,15 +77,19 @@ var SupportedModels = map[Provider]map[string]ModelInfo{
 		"gemini_2_5_flash":              {APIName: "gemini-2.5-flash", Reasoning: true},
 		"gemini_2_5_flash_lite":         {APIName: "gemini-2.5-flash-lite", Reasoning: true},
 
-		// Earlier Gemini families don't support thinking.
+		// Earlier Gemini families don't support thinking. Gemini 2.0 flash
+		// variants are deprecated with a 2026-06-01 shutdown — keep them
+		// registered until then. The entire 1.5 family was retired in
+		// September 2025 (API returns 404) and is no longer registered.
 		"gemini_2_0_flash":      {APIName: "gemini-2.0-flash"},
 		"gemini_2_0_flash_lite": {APIName: "gemini-2.0-flash-lite"},
 		"gemini_2_0_flash_exp":  {APIName: "gemini-2.0-flash-exp"},
-		"gemini_1_5_pro":        {APIName: "gemini-1.5-pro"},
-		"gemini_1_5_flash":      {APIName: "gemini-1.5-flash"},
 	},
 	ProviderAnthropic: {
-		// Claude 4.x family supports extended thinking.
+		// Claude 4.x family supports extended thinking. claude-opus-4 and
+		// claude-sonnet-4 (the original 2025-05-14 SKUs) are deprecated as
+		// of 2026-04-14 with shutdown on 2026-06-15 — kept registered until
+		// then so existing missions don't break.
 		"claude_opus_4_7":   {APIName: "claude-opus-4-7", Reasoning: true},
 		"claude_opus_4_6":   {APIName: "claude-opus-4-6", Reasoning: true},
 		"claude_opus_4_5":   {APIName: "claude-opus-4-5-20251101", Reasoning: true},
@@ -90,10 +98,8 @@ var SupportedModels = map[Provider]map[string]ModelInfo{
 		"claude_sonnet_4":   {APIName: "claude-sonnet-4-20250514", Reasoning: true},
 		"claude_opus_4":     {APIName: "claude-opus-4-20250514", Reasoning: true},
 		"claude_haiku_4_5":  {APIName: "claude-haiku-4-5-20251001", Reasoning: true},
-
-		// Claude 3.x — no extended thinking.
-		"claude_3_5_haiku":  {APIName: "claude-3-5-haiku-20241022"},
-		"claude_3_5_sonnet": {APIName: "claude-3-5-sonnet-20241022"},
+		// Claude 3.5 Sonnet was retired 2025-10-28; Claude 3.5 Haiku was
+		// retired 2026-02-19. Both removed from the registry.
 	},
 	// Ollama models are user-registered via `aliases` on the model block.
 	// Capability flags can't be inferred and aren't currently surfaced —

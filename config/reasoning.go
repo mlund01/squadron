@@ -26,45 +26,17 @@ func NormalizeReasoning(s string) (string, error) {
 	}
 }
 
-// ModelSupportsReasoning returns true if the given API model name has native
-// reasoning on the model's provider. Detection is prefix-based on stable
-// cloud-provider naming (Claude 4.x, o3/o4/gpt-5, Gemini 2.5+/3.x). Models
-// hosted by local servers (Ollama and OpenAI-compatible proxies) return
-// false — reasoning on those is opt-out via no-op rather than opt-in via
-// declaration, matching the conventional "set the flag, model decides"
-// pattern.
+// ModelSupportsReasoning returns true if the API model name resolves to a
+// registered ModelInfo with Reasoning=true on the model's provider. Models
+// that aren't in SupportedModels (notably user-aliased Ollama models) return
+// false — capability is opt-in via registry entry, not by inference.
 func ModelSupportsReasoning(m *Model, apiName string) bool {
 	if m == nil {
 		return false
 	}
-	return builtinReasoningSupport(m.Provider, apiName)
-}
-
-func builtinReasoningSupport(provider Provider, apiName string) bool {
-	m := strings.ToLower(apiName)
-	switch provider {
-	case ProviderAnthropic:
-		switch {
-		case strings.HasPrefix(m, "claude-opus-4"),
-			strings.HasPrefix(m, "claude-sonnet-4"),
-			strings.HasPrefix(m, "claude-haiku-4"):
-			return true
-		}
-	case ProviderOpenAI:
-		switch {
-		case strings.HasPrefix(m, "o3"),
-			strings.HasPrefix(m, "o4"),
-			strings.HasPrefix(m, "gpt-5"):
-			return true
-		}
-	case ProviderGemini:
-		switch {
-		case strings.HasPrefix(m, "gemini-2.5"),
-			strings.HasPrefix(m, "gemini-3"):
-			return true
-		}
-	case ProviderOllama:
+	info, ok := m.ModelInfoByAPIName(apiName)
+	if !ok {
 		return false
 	}
-	return false
+	return info.Reasoning
 }

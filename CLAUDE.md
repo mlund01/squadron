@@ -519,7 +519,7 @@ Route decisions (both `router` choices and `send_to` activations) are persisted 
 - `ContinueStream()` resumes from existing state without adding a new user message (used for mission resume)
 - `LoadMessages()` restores session from persisted state
 
-Model keys (used in HCL) map to actual API model names in `config/model.go:SupportedModels`. Add new models there before using them in config.
+Model keys (used in HCL) and capability flags live in `config/model.go:SupportedModels`. Each entry is a `ModelInfo` with the API name and any capability flags (currently `Reasoning bool`). To add a new model, add an entry under the right provider with the API name and whichever flags apply — every capability check (`ModelSupportsReasoning` etc.) routes through this registry, so there's no separate prefix list or capability table to keep in sync.
 
 ---
 
@@ -806,16 +806,18 @@ the underlying `llm.Session` only when:
 1. The user set a level on the agent/commander, AND
 2. The resolved model supports native reasoning on its provider.
 
-Capability is detected via a prefix match in `config/reasoning.go`:
-Anthropic `claude-opus-4*`/`claude-sonnet-4*`/`claude-haiku-4*`, OpenAI
-`o3*`/`o4*`/`gpt-5*`, Gemini `gemini-2.5*`/`gemini-3*`. Ollama and other
-local-server providers always return false — reasoning on user-named
-models would need either a per-deployment probe or an explicit user
-declaration, neither of which we ship today.
+Capability is read from the `SupportedModels` registry in
+`config/model.go`. Each entry is a `ModelInfo` with the API name plus
+flags like `Reasoning bool`; `ModelSupportsReasoning` looks up the
+`ModelInfo` by API name and returns the flag. Adding reasoning support
+for a new model is a one-line registry change with no separate prefix
+list or capability table to keep in sync. Ollama models registered
+through user `aliases` aren't in the registry, so capability lookups
+always return false for them.
 
 If `reasoning` is set on an agent or commander whose model isn't
-recognised, the gate logs a warning at startup and the session runs
-without reasoning. No chain-of-thought fallback.
+flagged in the registry, the gate logs a warning at startup and the
+session runs without reasoning. No chain-of-thought fallback.
 
 The level → token-budget mapping (Anthropic / Gemini): `low` = 2 048,
 `medium` = 8 192, `high` = 24 576. For OpenAI, `low|medium|high` maps to the

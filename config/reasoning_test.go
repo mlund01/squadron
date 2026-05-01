@@ -30,19 +30,23 @@ func TestNormalizeReasoning(t *testing.T) {
 	}
 }
 
-func TestBuiltinReasoningSupport(t *testing.T) {
+// TestModelSupportsReasoning_FromRegistry exercises the registry-backed
+// capability lookup. Adding a new model to SupportedModels with
+// Reasoning: true is the only step needed for it to be picked up — there's
+// no separate prefix list to keep in sync.
+func TestModelSupportsReasoning_FromRegistry(t *testing.T) {
 	cases := []struct {
 		provider Provider
-		model    string
+		apiName  string
 		want     bool
 	}{
-		// Anthropic — Claude 4+ supports extended thinking, 3.x does not.
+		// Anthropic — Claude 4 family is reasoning-capable, 3.x is not.
 		{ProviderAnthropic, "claude-opus-4-7", true},
 		{ProviderAnthropic, "claude-sonnet-4-6", true},
 		{ProviderAnthropic, "claude-haiku-4-5-20251001", true},
 		{ProviderAnthropic, "claude-3-5-sonnet-20241022", false},
 		{ProviderAnthropic, "claude-3-5-haiku-20241022", false},
-		// OpenAI — o3/o4/gpt-5 family. o1 excluded (rejects param).
+		// OpenAI — o3/o4/gpt-5 family flagged; o1 and gpt-4* are not.
 		{ProviderOpenAI, "o3", true},
 		{ProviderOpenAI, "o3-mini", true},
 		{ProviderOpenAI, "o4-mini", true},
@@ -52,37 +56,44 @@ func TestBuiltinReasoningSupport(t *testing.T) {
 		{ProviderOpenAI, "o1-mini", false},
 		{ProviderOpenAI, "gpt-4o", false},
 		{ProviderOpenAI, "gpt-4.1", false},
-		// Gemini — 2.5+ and 3.x.
+		// Gemini — 2.5+/3.x flagged; 2.0 and 1.5 are not.
 		{ProviderGemini, "gemini-2.5-pro", true},
 		{ProviderGemini, "gemini-2.5-flash", true},
 		{ProviderGemini, "gemini-3.1-pro-preview", true},
 		{ProviderGemini, "gemini-2.0-flash", false},
 		{ProviderGemini, "gemini-1.5-pro", false},
-		// Ollama — never via prefix; user must declare.
+		// Ollama — empty registry, every lookup is false.
 		{ProviderOllama, "deepseek-r1", false},
 		{ProviderOllama, "qwen3", false},
-		{ProviderOllama, "llama3", false},
+		// Unknown API name on a known provider — false (not registered).
+		{ProviderAnthropic, "claude-7-imaginary", false},
 	}
 	for _, tc := range cases {
-		got := builtinReasoningSupport(tc.provider, tc.model)
-		if got != tc.want {
-			t.Errorf("builtinReasoningSupport(%v, %q) = %v, want %v", tc.provider, tc.model, got, tc.want)
+		m := &Model{Provider: tc.provider}
+		if got := ModelSupportsReasoning(m, tc.apiName); got != tc.want {
+			t.Errorf("ModelSupportsReasoning(%v, %q) = %v, want %v", tc.provider, tc.apiName, got, tc.want)
 		}
 	}
 }
 
-func TestModelSupportsReasoning_BuiltinPrefixDetector(t *testing.T) {
-	m := &Model{Provider: ProviderAnthropic, APIKey: "test"}
-	if !ModelSupportsReasoning(m, "claude-opus-4-7") {
-		t.Error("Claude 4 should be supported")
-	}
-	if ModelSupportsReasoning(m, "claude-3-5-sonnet-20241022") {
-		t.Error("Claude 3.5 should NOT be supported")
-	}
-
-	ollama := &Model{Provider: ProviderOllama, BaseURL: "http://localhost:11434/v1", Aliases: map[string]string{"x": "x"}}
-	if ModelSupportsReasoning(ollama, "deepseek-r1:7b") {
-		t.Error("Ollama should always return false from the built-in detector")
+// TestModelInfoByAPIName_RegistryConsistency catches drift between the
+// SupportedModels keys and their registered API names — every entry must be
+// findable via reverse-lookup, since that's how capability checks resolve.
+func TestModelInfoByAPIName_RegistryConsistency(t *testing.T) {
+	for provider, models := range SupportedModels {
+		m := &Model{Provider: provider}
+		for hclKey, info := range models {
+			got, ok := m.ModelInfoByAPIName(info.APIName)
+			if !ok {
+				t.Errorf("%s/%s: API name %q not findable via ModelInfoByAPIName", provider, hclKey, info.APIName)
+				continue
+			}
+			if got.APIName != info.APIName {
+				t.Errorf("%s/%s: reverse lookup APIName = %q, want %q", provider, hclKey, got.APIName, info.APIName)
+			}
+			if got.Reasoning != info.Reasoning {
+				t.Errorf("%s/%s: reverse lookup Reasoning = %v, want %v", provider, hclKey, got.Reasoning, info.Reasoning)
+			}
+		}
 	}
 }
-

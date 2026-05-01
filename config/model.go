@@ -11,64 +11,98 @@ const (
 	ProviderOllama    Provider = "ollama"
 )
 
-// SupportedModels maps provider to their supported model names
-// The keys are the variable names used in HCL references (e.g., models.openai.gpt_4o)
-var SupportedModels = map[Provider]map[string]string{
+// ModelInfo describes a single registered model: the wire-name sent to the
+// provider and the capability flags Squadron needs to know about.
+//
+// To register a new model: add an entry to SupportedModels (keyed by the
+// HCL-friendly identifier the user references, e.g. `models.openai.gpt_5`)
+// with the API name and any capability flags. New capability flags should
+// be added as additional fields here, not as side tables.
+type ModelInfo struct {
+	// APIName is the wire identifier sent in the provider's request body.
+	APIName string
+
+	// Reasoning is true when the model supports native provider-side
+	// reasoning (Anthropic extended thinking, OpenAI Responses reasoning,
+	// Gemini ThinkingConfig). Setting `reasoning = "..."` on an agent
+	// whose resolved model has this false logs a warning at startup and
+	// the session runs without reasoning.
+	Reasoning bool
+}
+
+// SupportedModels is the registry of every model Squadron ships built-in
+// support for. Provider → HCL-friendly key → ModelInfo.
+//
+// HCL refs (`models.openai.gpt_5`) resolve through this table. Ollama keeps
+// an empty map because users register their own models via `aliases`.
+var SupportedModels = map[Provider]map[string]ModelInfo{
 	ProviderOpenAI: {
-		"gpt_5_5":          "gpt-5.5",
-		"gpt_5_5_pro":      "gpt-5.5-pro",
-		"gpt_5_4":          "gpt-5.4",
-		"gpt_5_4_mini":     "gpt-5.4-mini",
-		"gpt_5_4_nano":     "gpt-5.4-nano",
-		"gpt_5_4_pro":      "gpt-5.4-pro",
-		"gpt_5_3_codex":    "gpt-5.3-codex",
-		"gpt_5_2":          "gpt-5.2",
-		"gpt_5":            "gpt-5",
-		"gpt_5_mini":       "gpt-5-mini",
-		"gpt_5_nano":       "gpt-5-nano",
-		"gpt_4_1":      "gpt-4.1",
-		"gpt_4_1_mini": "gpt-4.1-mini",
-		"gpt_4_1_nano": "gpt-4.1-nano",
-		"o3":           "o3",
-		"o4_mini":      "o4-mini",
-		"gpt_4o":       "gpt-4o",
-		"gpt_4o_mini":  "gpt-4o-mini",
-		"gpt_4_turbo":  "gpt-4-turbo",
-		"o1":           "o1",
-		"o1_mini":      "o1-mini",
-		"o3_mini":      "o3-mini",
+		// Reasoning models — gpt-5 family, o-series 3 and 4. o1 is
+		// excluded because the API rejects reasoning_effort on it.
+		"gpt_5_5":       {APIName: "gpt-5.5", Reasoning: true},
+		"gpt_5_5_pro":   {APIName: "gpt-5.5-pro", Reasoning: true},
+		"gpt_5_4":       {APIName: "gpt-5.4", Reasoning: true},
+		"gpt_5_4_mini":  {APIName: "gpt-5.4-mini", Reasoning: true},
+		"gpt_5_4_nano":  {APIName: "gpt-5.4-nano", Reasoning: true},
+		"gpt_5_4_pro":   {APIName: "gpt-5.4-pro", Reasoning: true},
+		"gpt_5_3_codex": {APIName: "gpt-5.3-codex", Reasoning: true},
+		"gpt_5_2":       {APIName: "gpt-5.2", Reasoning: true},
+		"gpt_5":         {APIName: "gpt-5", Reasoning: true},
+		"gpt_5_mini":    {APIName: "gpt-5-mini", Reasoning: true},
+		"gpt_5_nano":    {APIName: "gpt-5-nano", Reasoning: true},
+		"o3":            {APIName: "o3", Reasoning: true},
+		"o4_mini":       {APIName: "o4-mini", Reasoning: true},
+		"o3_mini":       {APIName: "o3-mini", Reasoning: true},
+
+		// Non-reasoning chat models.
+		"gpt_4_1":      {APIName: "gpt-4.1"},
+		"gpt_4_1_mini": {APIName: "gpt-4.1-mini"},
+		"gpt_4_1_nano": {APIName: "gpt-4.1-nano"},
+		"gpt_4o":       {APIName: "gpt-4o"},
+		"gpt_4o_mini":  {APIName: "gpt-4o-mini"},
+		"gpt_4_turbo":  {APIName: "gpt-4-turbo"},
+		"o1":           {APIName: "o1"},
+		"o1_mini":      {APIName: "o1-mini"},
 	},
 	ProviderGemini: {
-		"gemini_3_1_pro_preview":        "gemini-3.1-pro-preview",
-		"gemini_3_1_flash_lite_preview": "gemini-3.1-flash-lite-preview",
-		"gemini_3_flash_preview":        "gemini-3-flash-preview",
-		"gemini_2_5_pro":                "gemini-2.5-pro",
-		"gemini_2_5_flash":              "gemini-2.5-flash",
-		"gemini_2_5_flash_lite":         "gemini-2.5-flash-lite",
-		"gemini_2_0_flash":              "gemini-2.0-flash",
-		"gemini_2_0_flash_lite":         "gemini-2.0-flash-lite",
-		"gemini_2_0_flash_exp":          "gemini-2.0-flash-exp",
-		"gemini_1_5_pro":                "gemini-1.5-pro",
-		"gemini_1_5_flash":              "gemini-1.5-flash",
+		// Gemini 2.5+ and 3.x support thinking.
+		"gemini_3_1_pro_preview":        {APIName: "gemini-3.1-pro-preview", Reasoning: true},
+		"gemini_3_1_flash_lite_preview": {APIName: "gemini-3.1-flash-lite-preview", Reasoning: true},
+		"gemini_3_flash_preview":        {APIName: "gemini-3-flash-preview", Reasoning: true},
+		"gemini_2_5_pro":                {APIName: "gemini-2.5-pro", Reasoning: true},
+		"gemini_2_5_flash":              {APIName: "gemini-2.5-flash", Reasoning: true},
+		"gemini_2_5_flash_lite":         {APIName: "gemini-2.5-flash-lite", Reasoning: true},
+
+		// Earlier Gemini families don't support thinking.
+		"gemini_2_0_flash":      {APIName: "gemini-2.0-flash"},
+		"gemini_2_0_flash_lite": {APIName: "gemini-2.0-flash-lite"},
+		"gemini_2_0_flash_exp":  {APIName: "gemini-2.0-flash-exp"},
+		"gemini_1_5_pro":        {APIName: "gemini-1.5-pro"},
+		"gemini_1_5_flash":      {APIName: "gemini-1.5-flash"},
 	},
 	ProviderAnthropic: {
-		"claude_opus_4_7":   "claude-opus-4-7",
-		"claude_opus_4_6":   "claude-opus-4-6",
-		"claude_opus_4_5":   "claude-opus-4-5-20251101",
-		"claude_sonnet_4_6": "claude-sonnet-4-6",
-		"claude_sonnet_4_5": "claude-sonnet-4-5-20250929",
-		"claude_sonnet_4":   "claude-sonnet-4-20250514",
-		"claude_opus_4":     "claude-opus-4-20250514",
-		"claude_haiku_4_5":  "claude-haiku-4-5-20251001",
-		"claude_3_5_haiku":  "claude-3-5-haiku-20241022",
-		"claude_3_5_sonnet": "claude-3-5-sonnet-20241022",
+		// Claude 4.x family supports extended thinking.
+		"claude_opus_4_7":   {APIName: "claude-opus-4-7", Reasoning: true},
+		"claude_opus_4_6":   {APIName: "claude-opus-4-6", Reasoning: true},
+		"claude_opus_4_5":   {APIName: "claude-opus-4-5-20251101", Reasoning: true},
+		"claude_sonnet_4_6": {APIName: "claude-sonnet-4-6", Reasoning: true},
+		"claude_sonnet_4_5": {APIName: "claude-sonnet-4-5-20250929", Reasoning: true},
+		"claude_sonnet_4":   {APIName: "claude-sonnet-4-20250514", Reasoning: true},
+		"claude_opus_4":     {APIName: "claude-opus-4-20250514", Reasoning: true},
+		"claude_haiku_4_5":  {APIName: "claude-haiku-4-5-20251001", Reasoning: true},
+
+		// Claude 3.x — no extended thinking.
+		"claude_3_5_haiku":  {APIName: "claude-3-5-haiku-20241022"},
+		"claude_3_5_sonnet": {APIName: "claude-3-5-sonnet-20241022"},
 	},
+	// Ollama models are user-registered via `aliases` on the model block.
+	// Capability flags can't be inferred and aren't currently surfaced —
+	// `reasoning = "..."` on an Ollama agent is a no-op + warning.
 	ProviderOllama: {},
 }
 
-// Model represents a model provider configuration
-// BuildPricingOverrides builds a map of API model name → pricing from all model configs.
-// Only includes models that have explicit pricing blocks.
+// BuildPricingOverrides builds a map of API model name → pricing from all
+// model configs. Only includes models that have explicit pricing blocks.
 func BuildPricingOverrides(models []Model) map[string]*ModelPricingConfig {
 	overrides := make(map[string]*ModelPricingConfig)
 	for _, m := range models {
@@ -88,33 +122,44 @@ func BuildPricingOverrides(models []Model) map[string]*ModelPricingConfig {
 }
 
 type Model struct {
-	Name           string            `hcl:"name,label"`
-	Provider       Provider          `hcl:"provider"`
-	Aliases        map[string]string `hcl:"-"` // HCL key → API model name (parsed manually)
-	APIKey         string            `hcl:"api_key,optional"`
-	BaseURL        string            `hcl:"base_url,optional"`
-	PromptCaching  *bool             `hcl:"prompt_caching,optional"`
-	Pricing        map[string]*ModelPricingConfig `json:"-"` // model name → pricing override
+	Name          string                         `hcl:"name,label"`
+	Provider      Provider                       `hcl:"provider"`
+	Aliases       map[string]string              `hcl:"-"` // HCL key → API model name (parsed manually)
+	APIKey        string                         `hcl:"api_key,optional"`
+	BaseURL       string                         `hcl:"base_url,optional"`
+	PromptCaching *bool                          `hcl:"prompt_caching,optional"`
+	Pricing       map[string]*ModelPricingConfig `json:"-"` // model name → pricing override
 }
 
-// AvailableModels returns all model keys available for this provider.
-// Combines: all SupportedModels for this provider + Aliases.
+// AvailableModels returns all HCL keys available for this provider mapped to
+// their API name. Combines built-in SupportedModels entries with any user
+// Aliases (the Aliases map wins on conflict).
 func (m *Model) AvailableModels() map[string]string {
 	result := make(map[string]string)
-
-	// Add all internal mappings for this provider
 	if supported, ok := SupportedModels[m.Provider]; ok {
-		for key, apiName := range supported {
-			result[key] = apiName
+		for key, info := range supported {
+			result[key] = info.APIName
 		}
 	}
-
-	// Aliases override/extend
 	for key, apiName := range m.Aliases {
 		result[key] = apiName
 	}
-
 	return result
+}
+
+// ModelInfoByAPIName looks up the registered ModelInfo for a given API name
+// on this model's provider. Returns ok=false if the API name isn't registered
+// (e.g. a user-aliased Ollama model). Linear scan; the registry is small and
+// this is only called at agent construction.
+func (m *Model) ModelInfoByAPIName(apiName string) (ModelInfo, bool) {
+	if supported, ok := SupportedModels[m.Provider]; ok {
+		for _, info := range supported {
+			if info.APIName == apiName {
+				return info, true
+			}
+		}
+	}
+	return ModelInfo{}, false
 }
 
 // ModelPricingConfig holds per-million-token cost overrides for a model.
@@ -138,7 +183,6 @@ func (m *Model) Validate() error {
 		return fmt.Errorf("unsupported provider '%s'", m.Provider)
 	}
 
-	// Ollama (and other local providers) require base_url instead of api_key
 	if m.Provider == ProviderOllama {
 		if m.BaseURL == "" {
 			return fmt.Errorf("base_url is required for provider '%s'", m.Provider)
@@ -149,7 +193,6 @@ func (m *Model) Validate() error {
 		return nil
 	}
 
-	// Cloud providers require an API key
 	if m.APIKey == "" {
 		return fmt.Errorf("api_key is required for provider '%s'", m.Provider)
 	}

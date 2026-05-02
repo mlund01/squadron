@@ -43,6 +43,8 @@ model "anthropic" {
 
 The `ollama` provider connects to any OpenAI-compatible local inference server. Use `aliases` to define which models are available and map HCL-safe keys to the actual model names.
 
+> **Requires Ollama 0.13.3 or newer** (or any other server that implements `/v1/responses`). Squadron speaks to OpenAI-compatible servers via the Responses API, not the older Chat Completions API. vLLM (recent versions) and LiteLLM also support this.
+
 ```hcl
 model "local" {
   provider = "ollama"
@@ -174,3 +176,9 @@ The pricing block label must match a model key. Costs are shown in the command c
 ### Local Models and Cost Tracking
 
 Local models (Ollama provider) have no built-in pricing since they run on your own hardware. Squadron still tracks **token usage** for every turn, so you can monitor how many tokens your local models consume even though the dollar cost is $0.
+
+## Native Reasoning
+
+Squadron supports native reasoning ("extended thinking" on Anthropic, reasoning summaries on OpenAI Responses, `thinking_config` on Gemini). Agents and commanders enable it via the `reasoning` attribute (`"low"`, `"medium"`, or `"high"`); see [Agents → Reasoning](/config/agents#reasoning).
+
+Capability is read from Squadron's built-in model registry: each model that supports native reasoning is flagged at registration. Claude 4.x, OpenAI o3/o4/gpt-5, and Gemini 2.5+/3.x are flagged today. Setting `reasoning` on an agent or commander whose model isn't flagged is a no-op and logs a warning at startup; the agent runs as if the attribute weren't set. Models that come in through Ollama via user `aliases` aren't in the registry — `reasoning` on those is also a no-op.

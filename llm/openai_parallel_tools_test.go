@@ -2,18 +2,14 @@ package llm
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
-// TestConvertMessages_ParallelToolResults is a regression test for the
-// "tool_calls must be followed by tool messages responding to each tool_call_id"
-// bug. Before the fix, a bundled tool-result message with N parts was
-// collapsed into a single OpenAI tool message (emitting only m.Parts[0]),
-// so when the LLM emitted parallel tool calls in one turn, all but the first
-// tool result were silently dropped and the next API call failed.
-//
-// The converter must expand N tool_result parts into N separate tool messages,
-// each carrying its own tool_call_id.
+// TestConvertMessages_ParallelToolResults regression-tests the parallel
+// tool-result expansion in the Responses API path. A bundled tool-result
+// user message with N parts must produce N separate function_call_output
+// items so each tool_call_id is acknowledged independently.
 func TestConvertMessages_ParallelToolResults(t *testing.T) {
 	p := &OpenAIProvider{}
 
@@ -21,18 +17,9 @@ func TestConvertMessages_ParallelToolResults(t *testing.T) {
 		{
 			Role: RoleAssistant,
 			Parts: []ContentBlock{
-				{
-					Type:    ContentTypeToolUse,
-					ToolUse: &ToolUseBlock{ID: "call_1", Name: "read_file", Input: json.RawMessage(`{"path":"/a"}`)},
-				},
-				{
-					Type:    ContentTypeToolUse,
-					ToolUse: &ToolUseBlock{ID: "call_2", Name: "read_file", Input: json.RawMessage(`{"path":"/b"}`)},
-				},
-				{
-					Type:    ContentTypeToolUse,
-					ToolUse: &ToolUseBlock{ID: "call_3", Name: "read_file", Input: json.RawMessage(`{"path":"/c"}`)},
-				},
+				{Type: ContentTypeToolUse, ToolUse: &ToolUseBlock{ID: "call_1", Name: "read_file", Input: json.RawMessage(`{"path":"/a"}`)}},
+				{Type: ContentTypeToolUse, ToolUse: &ToolUseBlock{ID: "call_2", Name: "read_file", Input: json.RawMessage(`{"path":"/b"}`)}},
+				{Type: ContentTypeToolUse, ToolUse: &ToolUseBlock{ID: "call_3", Name: "read_file", Input: json.RawMessage(`{"path":"/c"}`)}},
 			},
 		},
 		{
@@ -45,34 +32,35 @@ func TestConvertMessages_ParallelToolResults(t *testing.T) {
 		},
 	}
 
-	out := p.convertMessages(messages)
+	_, items := p.convertMessages(messages)
 
-	var toolMessages []string
-	var assistantCount int
-	for _, m := range out {
-		if m.OfAssistant != nil {
-			assistantCount++
-			continue
+	var functionCallIDs []string
+	var functionCallOutputIDs []string
+	for _, item := range items {
+		if item.OfFunctionCall != nil {
+			functionCallIDs = append(functionCallIDs, item.OfFunctionCall.CallID)
 		}
-		if m.OfTool != nil {
-			toolMessages = append(toolMessages, m.OfTool.ToolCallID)
+		if item.OfFunctionCallOutput != nil {
+			functionCallOutputIDs = append(functionCallOutputIDs, item.OfFunctionCallOutput.CallID)
 		}
 	}
 
-	if assistantCount != 1 {
-		t.Errorf("expected 1 assistant message, got %d", assistantCount)
+	if len(functionCallIDs) != 3 {
+		t.Fatalf("expected 3 function_call items, got %d: %v", len(functionCallIDs), functionCallIDs)
 	}
-	if len(toolMessages) != 3 {
-		t.Fatalf("expected 3 tool messages (one per parallel call), got %d: %v", len(toolMessages), toolMessages)
+	if len(functionCallOutputIDs) != 3 {
+		t.Fatalf("expected 3 function_call_output items, got %d: %v", len(functionCallOutputIDs), functionCallOutputIDs)
 	}
 
-	// Order must match the original tool_use order so tool_call_ids line up
-	// with the assistant's tool_calls array — OpenAI requires positional
-	// correspondence.
 	want := []string{"call_1", "call_2", "call_3"}
-	for i, id := range toolMessages {
+	for i, id := range functionCallIDs {
 		if id != want[i] {
-			t.Errorf("tool message %d: got id=%q, want %q", i, id, want[i])
+			t.Errorf("function_call %d: got call_id=%q, want %q", i, id, want[i])
+		}
+	}
+	for i, id := range functionCallOutputIDs {
+		if id != want[i] {
+			t.Errorf("function_call_output %d: got call_id=%q, want %q", i, id, want[i])
 		}
 	}
 }
@@ -95,19 +83,19 @@ func TestConvertMessages_SingleToolResult(t *testing.T) {
 		},
 	}
 
-	out := p.convertMessages(messages)
+	_, items := p.convertMessages(messages)
 
-	var toolCount int
-	for _, m := range out {
-		if m.OfTool != nil {
-			if m.OfTool.ToolCallID != "call_solo" {
-				t.Errorf("tool call id = %q, want call_solo", m.OfTool.ToolCallID)
+	var outputs int
+	for _, item := range items {
+		if item.OfFunctionCallOutput != nil {
+			if item.OfFunctionCallOutput.CallID != "call_solo" {
+				t.Errorf("function_call_output id = %q, want call_solo", item.OfFunctionCallOutput.CallID)
 			}
-			toolCount++
+			outputs++
 		}
 	}
-	if toolCount != 1 {
-		t.Errorf("expected 1 tool message, got %d", toolCount)
+	if outputs != 1 {
+		t.Errorf("expected 1 function_call_output, got %d", outputs)
 	}
 }
 
@@ -116,42 +104,37 @@ func TestConvertMessages_TextUserMessage(t *testing.T) {
 	messages := []Message{
 		{Role: RoleUser, Content: "hello"},
 	}
-	out := p.convertMessages(messages)
-	if len(out) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(out))
+	_, items := p.convertMessages(messages)
+	if len(items) != 1 {
+		t.Fatalf("expected 1 input item, got %d", len(items))
 	}
-	if out[0].OfUser == nil {
-		t.Fatalf("expected user message, got %+v", out[0])
+	if items[0].OfMessage == nil {
+		t.Fatalf("expected easy-input message item, got %+v", items[0])
+	}
+	if items[0].OfMessage.Role != "user" {
+		t.Errorf("expected role=user, got %q", items[0].OfMessage.Role)
 	}
 }
 
-// TestConvertMessages_MixedUserParts pins the current behavior when a user
-// message mixes tool results with other content parts: the converter takes
-// the non-tool-result branch, producing exactly one UserMessage. This means
-// any ToolResultBlock caught inside a mixed message is silently dropped,
-// which is an unrelated shortcoming of the openai converter. The test exists
-// to make sure the parallel-tool-results fix did not accidentally redirect
-// mixed-parts messages into the expansion branch.
-func TestConvertMessages_MixedUserParts(t *testing.T) {
+func TestConvertMessages_SystemPromptCollapsesToInstructions(t *testing.T) {
 	p := &OpenAIProvider{}
 	messages := []Message{
-		{
-			Role: RoleUser,
-			Parts: []ContentBlock{
-				{Type: ContentTypeToolResult, ToolResult: &ToolResultBlock{ToolUseID: "call_x", Content: "x"}},
-				{Type: ContentTypeText, Text: "hey"},
-			},
-		},
+		{Role: RoleSystem, Content: "you are a helpful agent"},
+		{Role: RoleSystem, Content: "always answer concisely"},
+		{Role: RoleUser, Content: "hi"},
 	}
-	out := p.convertMessages(messages)
+	instructions, items := p.convertMessages(messages)
 
-	if len(out) != 1 {
-		t.Fatalf("expected exactly 1 output message, got %d", len(out))
+	if instructions == "" {
+		t.Fatal("expected non-empty instructions from system messages")
 	}
-	if out[0].OfUser == nil {
-		t.Errorf("mixed parts should produce a user message, got %+v", out[0])
+	if !strings.Contains(instructions, "helpful agent") || !strings.Contains(instructions, "concisely") {
+		t.Errorf("expected both system messages in instructions, got %q", instructions)
 	}
-	if out[0].OfTool != nil {
-		t.Errorf("mixed parts should not produce a tool message")
+	// The system messages should NOT appear as input items.
+	for _, item := range items {
+		if item.OfMessage != nil && item.OfMessage.Role == "system" {
+			t.Errorf("system message leaked into input items: %+v", item)
+		}
 	}
 }

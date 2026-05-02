@@ -320,6 +320,10 @@ type MissionCommander struct {
 	Compaction   *Compaction         `json:"compaction,omitempty"`
 	Pruning      *CommanderPruning   `json:"pruning,omitempty"`
 	ToolResponse *ToolResponseConfig `json:"toolResponse,omitempty"`
+	// Reasoning controls native provider reasoning for the commander.
+	// Valid values: "", "low", "medium", "high". Silently no-op on models
+	// that don't support native reasoning.
+	Reasoning string `json:"reasoning,omitempty"`
 }
 
 // GetToolResponseMaxBytes returns the configured max size in bytes for tool responses, falling back to default.
@@ -421,6 +425,20 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 		}
 		if w.Commander.Pruning.PruneTo >= w.Commander.Pruning.PruneOn {
 			return fmt.Errorf("commander pruning prune_to must be less than prune_on")
+		}
+	}
+
+	// Validate commander reasoning level
+	if normalized, err := NormalizeReasoning(w.Commander.Reasoning); err != nil {
+		return fmt.Errorf("commander: %w", err)
+	} else {
+		w.Commander.Reasoning = normalized
+	}
+
+	// Validate mission-scoped (local) agents
+	for i := range w.LocalAgents {
+		if err := w.LocalAgents[i].Validate(); err != nil {
+			return err
 		}
 	}
 

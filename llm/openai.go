@@ -4,28 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/packages/param"
+	"github.com/openai/openai-go/responses"
 	"github.com/openai/openai-go/shared"
 )
 
-// modelSupportsStop returns false for models that reject the 'stop' parameter
-// (reasoning models like o-series and GPT-5 family).
-func modelSupportsStop(model string) bool {
-	m := strings.ToLower(model)
-	switch {
-	case strings.HasPrefix(m, "o1"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"):
-		return false
-	case strings.HasPrefix(m, "gpt-5"):
-		return false
-	default:
-		return true
+// openaiTraceEvents enables verbose logging of every Responses API stream
+// event type. Useful for debugging reasoning-summary streaming on a new
+// OpenAI-compatible server. Toggle by setting SQUADRON_OPENAI_TRACE=1.
+var openaiTraceEvents = os.Getenv("SQUADRON_OPENAI_TRACE") != ""
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
 	}
+	return s[:n] + "...[truncated]"
 }
 
+// OpenAIProvider speaks to the OpenAI Responses API (`/v1/responses`) and
+// any OpenAI-compatible server that implements it (Ollama 0.13.3+, recent
+// vLLM, LiteLLM). Stateless mode only — full conversation history is sent
+// every turn, no previous_response_id, so Ollama's non-stateful subset is
+// sufficient.
 type OpenAIProvider struct {
 	client *openai.Client
 }
@@ -41,6 +47,8 @@ func NewOpenAIProvider(apiKey, baseURL string) *OpenAIProvider {
 
 // NewOpenAICompatibleProvider creates a provider that targets an OpenAI-compatible
 // API at the given base URL (e.g. Ollama at http://localhost:11434/v1).
+// Requires the server to implement /v1/responses (Ollama 0.13.3+, recent vLLM,
+// LiteLLM with default routing).
 func NewOpenAICompatibleProvider(baseURL string) *OpenAIProvider {
 	client := openai.NewClient(
 		option.WithBaseURL(baseURL),
@@ -50,279 +58,334 @@ func NewOpenAICompatibleProvider(baseURL string) *OpenAIProvider {
 }
 
 func (p *OpenAIProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
-	msgs := p.convertMessages(req.Messages)
-
-	params := openai.ChatCompletionNewParams{
-		Model:    req.Model,
-		Messages: msgs,
-	}
-
-	if req.MaxTokens > 0 {
-		params.MaxCompletionTokens = openai.Int(int64(req.MaxTokens))
-	}
-
-	if req.Temperature > 0 {
-		params.Temperature = openai.Float(req.Temperature)
-	}
-
-	if len(req.StopSequences) > 0 && modelSupportsStop(req.Model) {
-		params.Stop = openai.ChatCompletionNewParamsStopUnion{
-			OfStringArray: req.StopSequences,
-		}
-	}
-
-	if len(req.Tools) > 0 {
-		params.Tools = p.convertTools(req.Tools)
-	}
-
-	resp, err := p.client.Chat.Completions.New(ctx, params)
+	params, err := p.buildResponseParams(req)
 	if err != nil {
 		return nil, err
 	}
 
-	var content string
-	var contentBlocks []ContentBlock
-	if len(resp.Choices) > 0 {
-		msg := resp.Choices[0].Message
-		content = msg.Content
-
-		// Add text content block if present
-		if content != "" {
-			contentBlocks = append(contentBlocks, ContentBlock{
-				Type: ContentTypeText,
-				Text: content,
-			})
-		}
-
-		// Add tool call content blocks
-		for _, tc := range msg.ToolCalls {
-			contentBlocks = append(contentBlocks, ContentBlock{
-				Type: ContentTypeToolUse,
-				ToolUse: &ToolUseBlock{
-					ID:    tc.ID,
-					Name:  tc.Function.Name,
-					Input: json.RawMessage(tc.Function.Arguments),
-				},
-			})
-		}
+	resp, err := p.client.Responses.New(ctx, params)
+	if err != nil {
+		return nil, err
 	}
 
-	usage := Usage{
-		InputTokens:  int(resp.Usage.PromptTokens),
-		OutputTokens: int(resp.Usage.CompletionTokens),
-	}
-	// OpenAI includes cached tokens within prompt_tokens (subset), but our Usage
-	// convention treats cache tokens as separate (like Anthropic). Normalize by
-	// subtracting cached from input so totals are consistent across providers.
-	if resp.Usage.PromptTokensDetails.CachedTokens > 0 {
-		usage.CacheReadTokens = int(resp.Usage.PromptTokensDetails.CachedTokens)
-		usage.InputTokens -= usage.CacheReadTokens
-	}
-
-	var finishReason string
-	if len(resp.Choices) > 0 {
-		finishReason = string(resp.Choices[0].FinishReason)
-	}
+	content, contentBlocks := extractResponseOutput(resp)
 
 	return &ChatResponse{
 		ID:            resp.ID,
 		Content:       content,
 		ContentBlocks: contentBlocks,
-		FinishReason:  finishReason,
-		Usage:         usage,
+		FinishReason:  string(resp.Status),
+		Usage:         usageFromResponse(resp.Usage),
 	}, nil
 }
 
 func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
-	msgs := p.convertMessages(req.Messages)
-
-	params := openai.ChatCompletionNewParams{
-		Model:    req.Model,
-		Messages: msgs,
-		// Enable usage reporting in streaming responses
-		StreamOptions: openai.ChatCompletionStreamOptionsParam{
-			IncludeUsage: openai.Bool(true),
-		},
+	params, err := p.buildResponseParams(req)
+	if err != nil {
+		return nil, err
 	}
 
-	if req.MaxTokens > 0 {
-		params.MaxCompletionTokens = openai.Int(int64(req.MaxTokens))
-	}
-
-	if req.Temperature > 0 {
-		params.Temperature = openai.Float(req.Temperature)
-	}
-
-	if len(req.StopSequences) > 0 && modelSupportsStop(req.Model) {
-		params.Stop = openai.ChatCompletionNewParamsStopUnion{
-			OfStringArray: req.StopSequences,
+	if openaiTraceEvents {
+		// Log only the model + reasoning config so we can verify the request
+		// shape without dumping prompts/tools to stdout.
+		if reqJSON, err := json.Marshal(params); err == nil {
+			var trimmed map[string]any
+			_ = json.Unmarshal(reqJSON, &trimmed)
+			delete(trimmed, "instructions")
+			delete(trimmed, "input")
+			delete(trimmed, "tools")
+			if b, err := json.Marshal(trimmed); err == nil {
+				log.Printf("[openai-trace] REQUEST_PARAMS %s", string(b))
+			}
 		}
 	}
 
-	if len(req.Tools) > 0 {
-		params.Tools = p.convertTools(req.Tools)
-	}
+	stream := p.client.Responses.NewStreaming(ctx, params)
 
-	stream := p.client.Chat.Completions.NewStreaming(ctx, params)
+	// gpt-5 and o-series reason by default whether or not we asked for it.
+	// When the agent didn't opt in via reasoning="...", suppress all
+	// reasoning stream events so the UI/event log only shows reasoning
+	// when the user explicitly enabled it.
+	emitReasoning := req.Reasoning != ""
 
 	chunks := make(chan StreamChunk)
 
 	go func() {
 		defer close(chunks)
 
-		var finalUsage Usage
-		var stopReason string
 		var contentBlocks []ContentBlock
+		var stopReason string
+		var finalUsage Usage
 
-		// Track in-progress tool calls by index
-		type toolCallState struct {
-			id        string
+		// Track in-progress streamed items by output_index. The Responses
+		// API sends arguments deltas keyed only by the item's output_index;
+		// we cache the function call's id/name from output_item.added so we
+		// can surface ToolCallStart/Done with full identity.
+		type funcCallState struct {
+			callID    string
 			name      string
-			arguments string
+			arguments strings.Builder
 		}
-		toolCalls := make(map[int]*toolCallState)
+		funcCalls := make(map[int64]*funcCallState)
+
+		// Reasoning text accumulator. The API emits reasoning in summary
+		// "parts" — each part is independent text — so we coalesce parts
+		// from the same item into a single ThinkingBlock and a single
+		// ReasoningStarted/Completed event pair.
+		type reasoningState struct {
+			text    strings.Builder
+			emitted bool // whether ReasoningStart was sent
+		}
+		reasoning := make(map[int64]*reasoningState)
 
 		for stream.Next() {
-			chunk := stream.Current()
+			event := stream.Current()
 
-			// Capture usage from final chunk (when include_usage is enabled)
-			if chunk.Usage.PromptTokens > 0 || chunk.Usage.CompletionTokens > 0 {
-				finalUsage.InputTokens = int(chunk.Usage.PromptTokens)
-				finalUsage.OutputTokens = int(chunk.Usage.CompletionTokens)
-				if chunk.Usage.PromptTokensDetails.CachedTokens > 0 {
-					finalUsage.CacheReadTokens = int(chunk.Usage.PromptTokensDetails.CachedTokens)
-					finalUsage.InputTokens -= finalUsage.CacheReadTokens
-				}
+			if openaiTraceEvents {
+				log.Printf("[openai-trace] type=%s output_index=%d summary_index=%d item_type=%s delta_str_len=%d args_len=%d text_len=%d part_type=%s part_text_len=%d raw=%s",
+					event.Type, event.OutputIndex, event.SummaryIndex, event.Item.Type,
+					len(event.Delta.OfString), len(event.Arguments), len(event.Text),
+					event.Part.Type, len(event.Part.Text),
+					truncate(event.RawJSON(), 400))
 			}
 
-			if len(chunk.Choices) > 0 {
-				choice := chunk.Choices[0]
-				delta := choice.Delta
+			switch event.Type {
+			case "response.created":
+				// nothing to surface
 
-				// Stream text content
-				if delta.Content != "" {
+			case "response.output_item.added":
+				// A new output item is starting. Could be a message,
+				// function_call, or reasoning item.
+				switch event.Item.Type {
+				case "function_call":
+					funcCalls[event.OutputIndex] = &funcCallState{
+						callID: event.Item.CallID,
+						name:   event.Item.Name,
+					}
 					chunks <- StreamChunk{
-						Content: delta.Content,
+						ToolCallStart: &ToolCallStartChunk{
+							ID:   event.Item.CallID,
+							Name: event.Item.Name,
+						},
 					}
+				case "reasoning":
+					if !emitReasoning {
+						break
+					}
+					// Open the reasoning event window NOW — even if no
+					// summary text follows. OpenAI o-series and gpt-5
+					// models often reason without emitting summary text;
+					// surfacing the start gives the UI a visible signal
+					// that reasoning is in progress.
+					reasoning[event.OutputIndex] = &reasoningState{}
+					chunks <- StreamChunk{ReasoningStart: true}
+					reasoning[event.OutputIndex].emitted = true
 				}
 
-				// Stream tool calls
-				for _, tc := range delta.ToolCalls {
-					idx := int(tc.Index)
-					state, exists := toolCalls[idx]
-					if !exists {
-						state = &toolCallState{}
-						toolCalls[idx] = state
-					}
-
-					if tc.ID != "" {
-						state.id = tc.ID
-					}
-					if tc.Function.Name != "" {
-						state.name = tc.Function.Name
-						// Emit tool call start
-						chunks <- StreamChunk{
-							ToolCallStart: &ToolCallStartChunk{
-								ID:   state.id,
-								Name: state.name,
-							},
-						}
-					}
-					if tc.Function.Arguments != "" {
-						state.arguments += tc.Function.Arguments
-						chunks <- StreamChunk{
-							ToolCallDelta: tc.Function.Arguments,
-						}
-					}
+			case "response.output_text.delta":
+				// Visible answer text streaming.
+				if event.Delta.OfString != "" {
+					chunks <- StreamChunk{Content: event.Delta.OfString}
 				}
 
-				if choice.FinishReason != "" {
-					stopReason = string(choice.FinishReason)
+			case "response.reasoning_summary_text.delta",
+				"response.reasoning_summary.delta":
+				if !emitReasoning {
+					break
+				}
+				// Reasoning summary is streamed incrementally. The first
+				// non-empty delta opens the reasoning event window.
+				rs, ok := reasoning[event.OutputIndex]
+				if !ok {
+					rs = &reasoningState{}
+					reasoning[event.OutputIndex] = rs
+				}
+				if !rs.emitted {
+					chunks <- StreamChunk{ReasoningStart: true}
+					rs.emitted = true
+				}
+				if event.Delta.OfString != "" {
+					text := event.Delta.OfString
+					rs.text.WriteString(text)
+					chunks <- StreamChunk{ReasoningDelta: text}
+				}
 
-					// Finalize any tool calls
-					for _, state := range toolCalls {
-						if state.id != "" {
-							contentBlocks = append(contentBlocks, ContentBlock{
-								Type: ContentTypeToolUse,
-								ToolUse: &ToolUseBlock{
-									ID:    state.id,
-									Name:  state.name,
-									Input: json.RawMessage(state.arguments),
-								},
-							})
-							id := state.id
-							chunks <- StreamChunk{
-								ToolCallDone: &id,
-							}
-						}
+			case "response.reasoning_summary_text.done",
+				"response.reasoning_summary.done":
+				// One summary part finished. There may be more parts in
+				// the same reasoning item — close on output_item.done
+				// instead so we capture them all into one ThinkingBlock.
+
+			case "response.output_item.done":
+				// Close any reasoning window when the reasoning output
+				// item finishes — covers both the "summary text emitted"
+				// and "internal reasoning, no summary" cases uniformly.
+				if event.Item.Type == "reasoning" && emitReasoning {
+					rs, ok := reasoning[event.OutputIndex]
+					if ok && rs.emitted {
+						chunks <- StreamChunk{ReasoningDone: true}
 					}
+					if ok && rs.text.Len() > 0 {
+						contentBlocks = append(contentBlocks, ContentBlock{
+							Type:     ContentTypeThinking,
+							Thinking: &ThinkingBlock{Text: rs.text.String()},
+						})
+					}
+					delete(reasoning, event.OutputIndex)
+				}
 
+			case "response.function_call_arguments.delta":
+				fc, ok := funcCalls[event.OutputIndex]
+				if !ok {
+					break
+				}
+				if event.Delta.OfString != "" {
+					fc.arguments.WriteString(event.Delta.OfString)
+					chunks <- StreamChunk{ToolCallDelta: event.Delta.OfString}
+				}
+
+			case "response.function_call_arguments.done":
+				fc, ok := funcCalls[event.OutputIndex]
+				if !ok {
+					break
+				}
+				args := fc.arguments.String()
+				// The .done event sometimes carries the canonical full
+				// arguments string; prefer it over our accumulated copy
+				// to avoid drift if any deltas were dropped.
+				if event.Arguments != "" {
+					args = event.Arguments
+				}
+				contentBlocks = append(contentBlocks, ContentBlock{
+					Type: ContentTypeToolUse,
+					ToolUse: &ToolUseBlock{
+						ID:    fc.callID,
+						Name:  fc.name,
+						Input: json.RawMessage(args),
+					},
+				})
+				id := fc.callID
+				chunks <- StreamChunk{ToolCallDone: &id}
+				delete(funcCalls, event.OutputIndex)
+
+			case "response.completed":
+				// Final event with full Response object — captures usage
+				// and the canonical stop reason.
+				stopReason = string(event.Response.Status)
+				finalUsage = usageFromResponse(event.Response.Usage)
+
+			case "response.failed", "response.incomplete":
+				stopReason = string(event.Response.Status)
+				if event.Response.Error.Message != "" {
 					chunks <- StreamChunk{
-						Done:          true,
-						Usage:         &finalUsage,
-						StopReason:    stopReason,
-						ContentBlocks: contentBlocks,
+						Error: fmt.Errorf("openai response %s: %s", event.Type, event.Response.Error.Message),
+						Done:  true,
 					}
+					return
 				}
+
+			case "error":
+				chunks <- StreamChunk{
+					Error: fmt.Errorf("openai stream error: %s", event.Message),
+					Done:  true,
+				}
+				return
 			}
 		}
 
 		if err := stream.Err(); err != nil {
-			chunks <- StreamChunk{
-				Error: err,
-				Done:  true,
-			}
+			chunks <- StreamChunk{Error: err, Done: true}
+			return
+		}
+
+		// Final aggregated done chunk.
+		chunks <- StreamChunk{
+			Done:          true,
+			Usage:         &finalUsage,
+			StopReason:    stopReason,
+			ContentBlocks: contentBlocks,
 		}
 	}()
 
 	return chunks, nil
 }
 
-// convertTools converts provider-agnostic ToolDefinitions to OpenAI tool params
-func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []openai.ChatCompletionToolParam {
-	result := make([]openai.ChatCompletionToolParam, 0, len(tools))
-	for _, t := range tools {
-		// Parse the JSON schema into FunctionParameters (map[string]any)
-		var params shared.FunctionParameters
-		if err := json.Unmarshal(t.InputSchema, &params); err != nil {
-			continue
-		}
+// buildResponseParams converts our provider-agnostic ChatRequest into a
+// ResponseNewParams ready for the SDK. System messages collapse into
+// Instructions; everything else maps to ResponseInputItemUnionParam.
+func (p *OpenAIProvider) buildResponseParams(req *ChatRequest) (responses.ResponseNewParams, error) {
+	instructions, items := p.convertMessages(req.Messages)
 
-		result = append(result, openai.ChatCompletionToolParam{
-			Function: shared.FunctionDefinitionParam{
-				Name:        t.Name,
-				Description: param.NewOpt(t.Description),
-				Parameters:  params,
-			},
-		})
+	params := responses.ResponseNewParams{
+		Model: shared.ResponsesModel(req.Model),
+		Input: responses.ResponseNewParamsInputUnion{OfInputItemList: items},
 	}
-	return result
+
+	if instructions != "" {
+		params.Instructions = param.NewOpt(instructions)
+	}
+
+	if req.MaxTokens > 0 {
+		params.MaxOutputTokens = param.NewOpt(int64(req.MaxTokens))
+	}
+
+	if req.Temperature > 0 {
+		params.Temperature = param.NewOpt(req.Temperature)
+	}
+
+	if effort := openAIReasoningEffort(req.Reasoning); effort != "" {
+		// Use "detailed" so reasoning summaries are emitted on every turn
+		// where reasoning actually happened. "auto" lets the model skip
+		// the summary on simple turns, which means UI consumers see no
+		// reasoning text even though tokens were spent on reasoning.
+		params.Reasoning = shared.ReasoningParam{
+			Effort:  effort,
+			Summary: shared.ReasoningSummaryDetailed,
+		}
+	}
+
+	if len(req.Tools) > 0 {
+		params.Tools = p.convertTools(req.Tools)
+	}
+
+	// Stateless mode — we send full conversation history every turn. Avoids
+	// any dependence on previous_response_id (which Ollama doesn't support).
+	params.Store = param.NewOpt(false)
+
+	return params, nil
 }
 
-func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessageParamUnion {
-	var msgs []openai.ChatCompletionMessageParamUnion
+// convertMessages walks the conversation history and produces (a) a single
+// instructions string from system messages and (b) a list of input items
+// for the Responses API.
+func (p *OpenAIProvider) convertMessages(messages []Message) (string, responses.ResponseInputParam) {
+	var sysBuf strings.Builder
+	var items responses.ResponseInputParam
 
 	for _, m := range messages {
 		switch m.Role {
 		case RoleSystem:
-			msgs = append(msgs, openai.SystemMessage(m.Content))
+			if sysBuf.Len() > 0 {
+				sysBuf.WriteString("\n\n")
+			}
+			sysBuf.WriteString(m.GetTextContent())
 		case RoleUser:
-			msgs = append(msgs, p.buildUserMessages(m)...)
+			items = append(items, p.convertUserMessage(m)...)
 		case RoleAssistant:
-			msgs = append(msgs, p.buildAssistantMessage(m))
+			items = append(items, p.convertAssistantMessage(m)...)
 		}
 	}
 
-	return msgs
+	return sysBuf.String(), items
 }
 
-// buildUserMessages creates one or more OpenAI messages from a single squadron user
-// message. A bundle of N tool results expands into N separate tool messages
-// (OpenAI requires one tool message per tool_call_id), while plain text /
-// multimodal content collapses to a single user message.
-func (p *OpenAIProvider) buildUserMessages(m Message) []openai.ChatCompletionMessageParamUnion {
+// convertUserMessage emits zero or more input items for a single user-role
+// message. A bundle of tool results expands into N function_call_output
+// items (one per tool call); plain text/image content collapses to a single
+// input message.
+func (p *OpenAIProvider) convertUserMessage(m Message) []responses.ResponseInputItemUnionParam {
 	if m.HasParts() {
-		// If ALL parts are tool results, emit one tool message per part.
+		// All-tool-results bundle → one output item per result.
 		allToolResults := true
 		for _, part := range m.Parts {
 			if part.Type != ContentTypeToolResult {
@@ -331,78 +394,192 @@ func (p *OpenAIProvider) buildUserMessages(m Message) []openai.ChatCompletionMes
 			}
 		}
 		if allToolResults && len(m.Parts) > 0 {
-			out := make([]openai.ChatCompletionMessageParamUnion, 0, len(m.Parts))
+			out := make([]responses.ResponseInputItemUnionParam, 0, len(m.Parts))
 			for _, part := range m.Parts {
 				tr := part.ToolResult
 				if tr == nil {
 					continue
 				}
-				out = append(out, openai.ToolMessage(tr.Content, tr.ToolUseID))
+				out = append(out, responses.ResponseInputItemUnionParam{
+					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+						CallID: tr.ToolUseID,
+						Output: tr.Content,
+					},
+				})
 			}
 			return out
 		}
 	}
 
-	// If no Parts, use simple text content
+	// Plain text content
 	if !m.HasParts() {
-		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(m.Content)}
-	}
-
-	// Build content parts from Parts
-	var parts []openai.ChatCompletionContentPartUnionParam
-	for _, part := range m.Parts {
-		switch part.Type {
-		case ContentTypeText:
-			parts = append(parts, openai.TextContentPart(part.Text))
-		case ContentTypeImage:
-			if part.ImageData != nil {
-				// OpenAI expects data URLs for base64 images
-				dataURL := fmt.Sprintf("data:%s;base64,%s", part.ImageData.MediaType, part.ImageData.Data)
-				parts = append(parts, openai.ImageContentPart(openai.ChatCompletionContentPartImageImageURLParam{
-					URL: dataURL,
-				}))
-			}
+		if m.Content == "" {
+			return nil
+		}
+		return []responses.ResponseInputItemUnionParam{
+			responses.ResponseInputItemParamOfMessage(m.Content, responses.EasyInputMessageRoleUser),
 		}
 	}
 
-	return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(parts)}
-}
-
-// buildAssistantMessage creates an OpenAI assistant message, including tool calls if present
-func (p *OpenAIProvider) buildAssistantMessage(m Message) openai.ChatCompletionMessageParamUnion {
-	if !m.HasParts() {
-		return openai.AssistantMessage(m.GetTextContent())
-	}
-
-	// Check if the message has tool use blocks
-	var toolCalls []openai.ChatCompletionMessageToolCallParam
-	var textContent string
+	// Multimodal content — collapse to a single input message with a
+	// content list (text + image parts).
+	var content responses.ResponseInputMessageContentListParam
 	for _, part := range m.Parts {
 		switch part.Type {
 		case ContentTypeText:
-			textContent += part.Text
-		case ContentTypeToolUse:
-			if part.ToolUse != nil {
-				toolCalls = append(toolCalls, openai.ChatCompletionMessageToolCallParam{
-					ID: part.ToolUse.ID,
-					Function: openai.ChatCompletionMessageToolCallFunctionParam{
-						Name:      part.ToolUse.Name,
-						Arguments: string(part.ToolUse.Input),
+			content = append(content, responses.ResponseInputContentUnionParam{
+				OfInputText: &responses.ResponseInputTextParam{Text: part.Text},
+			})
+		case ContentTypeImage:
+			if part.ImageData != nil {
+				dataURL := fmt.Sprintf("data:%s;base64,%s", part.ImageData.MediaType, part.ImageData.Data)
+				content = append(content, responses.ResponseInputContentUnionParam{
+					OfInputImage: &responses.ResponseInputImageParam{
+						ImageURL: param.NewOpt(dataURL),
+						Detail:   responses.ResponseInputImageDetailAuto,
 					},
 				})
 			}
 		}
 	}
+	if len(content) == 0 {
+		return nil
+	}
+	return []responses.ResponseInputItemUnionParam{
+		responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser),
+	}
+}
 
-	if len(toolCalls) > 0 {
-		// Assistant message with tool calls
-		var assistant openai.ChatCompletionAssistantMessageParam
-		if textContent != "" {
-			assistant.Content.OfString = param.NewOpt(textContent)
+// convertAssistantMessage emits zero or more input items for a single
+// assistant-role message. Text becomes an assistant message item; each
+// tool_use block becomes a function_call item. Reasoning blocks captured
+// from prior turns are dropped — the Responses API re-reasons fresh in
+// stateless mode and re-injecting reasoning text without the encrypted
+// signature would be invalid.
+func (p *OpenAIProvider) convertAssistantMessage(m Message) []responses.ResponseInputItemUnionParam {
+	if !m.HasParts() {
+		if text := m.GetTextContent(); text != "" {
+			return []responses.ResponseInputItemUnionParam{
+				responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant),
+			}
 		}
-		assistant.ToolCalls = toolCalls
-		return openai.ChatCompletionMessageParamUnion{OfAssistant: &assistant}
+		return nil
 	}
 
-	return openai.AssistantMessage(textContent)
+	var out []responses.ResponseInputItemUnionParam
+	var textBuf strings.Builder
+	for _, part := range m.Parts {
+		switch part.Type {
+		case ContentTypeText:
+			textBuf.WriteString(part.Text)
+		case ContentTypeToolUse:
+			if part.ToolUse != nil {
+				out = append(out, responses.ResponseInputItemUnionParam{
+					OfFunctionCall: &responses.ResponseFunctionToolCallParam{
+						CallID:    part.ToolUse.ID,
+						Name:      part.ToolUse.Name,
+						Arguments: string(part.ToolUse.Input),
+					},
+				})
+			}
+		case ContentTypeThinking:
+			// Drop reasoning blocks on input — see method comment.
+		}
+	}
+	if textBuf.Len() > 0 {
+		out = append(out, responses.ResponseInputItemParamOfMessage(textBuf.String(), responses.EasyInputMessageRoleAssistant))
+	}
+	return out
 }
+
+// convertTools maps provider-agnostic tool definitions into the function
+// tool params that Responses API expects (note: flat shape, not nested
+// under a {function: {...}} envelope like Chat Completions).
+func (p *OpenAIProvider) convertTools(tools []ToolDefinition) []responses.ToolUnionParam {
+	result := make([]responses.ToolUnionParam, 0, len(tools))
+	for _, t := range tools {
+		var params map[string]any
+		if err := json.Unmarshal(t.InputSchema, &params); err != nil {
+			continue
+		}
+		// strict=false — Squadron-defined schemas are not always closed-world
+		// compatible with OpenAI's strict mode (e.g., free-form objects).
+		result = append(result, responses.ToolUnionParam{
+			OfFunction: &responses.FunctionToolParam{
+				Name:        t.Name,
+				Description: param.NewOpt(t.Description),
+				Parameters:  params,
+				Strict:      param.NewOpt(false),
+			},
+		})
+	}
+	return result
+}
+
+// extractResponseOutput walks a non-streaming Response and produces the
+// canonical text content + structured ContentBlocks (text, thinking, tool_use).
+func extractResponseOutput(resp *responses.Response) (string, []ContentBlock) {
+	var textBuf strings.Builder
+	var blocks []ContentBlock
+
+	for _, item := range resp.Output {
+		switch item.Type {
+		case "message":
+			// Output message — collect text content from all content parts.
+			for _, c := range item.Content {
+				if c.Type == "output_text" && c.Text != "" {
+					textBuf.WriteString(c.Text)
+				}
+			}
+		case "function_call":
+			blocks = append(blocks, ContentBlock{
+				Type: ContentTypeToolUse,
+				ToolUse: &ToolUseBlock{
+					ID:    item.CallID,
+					Name:  item.Name,
+					Input: json.RawMessage(item.Arguments),
+				},
+			})
+		case "reasoning":
+			// Concatenate all summary parts into one ThinkingBlock.
+			var rb strings.Builder
+			for _, s := range item.Summary {
+				if rb.Len() > 0 {
+					rb.WriteString("\n")
+				}
+				rb.WriteString(s.Text)
+			}
+			if rb.Len() > 0 {
+				blocks = append(blocks, ContentBlock{
+					Type:     ContentTypeThinking,
+					Thinking: &ThinkingBlock{Text: rb.String()},
+				})
+			}
+		}
+	}
+
+	text := textBuf.String()
+	if text != "" {
+		// Prepend a text content block so callers that read ContentBlocks
+		// (without falling back to Content) see the visible answer.
+		blocks = append([]ContentBlock{{Type: ContentTypeText, Text: text}}, blocks...)
+	}
+
+	return text, blocks
+}
+
+func usageFromResponse(u responses.ResponseUsage) Usage {
+	usage := Usage{
+		InputTokens:  int(u.InputTokens),
+		OutputTokens: int(u.OutputTokens),
+	}
+	if u.InputTokensDetails.CachedTokens > 0 {
+		usage.CacheReadTokens = int(u.InputTokensDetails.CachedTokens)
+		usage.InputTokens -= usage.CacheReadTokens
+		if usage.InputTokens < 0 {
+			usage.InputTokens = 0
+		}
+	}
+	return usage
+}
+

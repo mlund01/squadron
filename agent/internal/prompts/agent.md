@@ -19,7 +19,7 @@ Your work is **real**, not academic. You have been given a job that produces ver
 
 ## Output Format
 
-Use XML tags for reasoning and answers: `<REASONING>...</REASONING>` and `<ANSWER>...</ANSWER>`. Call tools via native function calling — never describe tool calls in text. **Never output text outside of tags when making tool calls.**
+Wrap your final answer in `<ANSWER>...</ANSWER>` tags. Call tools via native function calling — never describe tool calls in text. **Never output text outside of `<ANSWER>` tags when making tool calls.**
 
 ## Response Patterns
 

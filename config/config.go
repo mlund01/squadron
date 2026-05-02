@@ -431,8 +431,8 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	for _, a := range c.Agents {
-		if err := a.Validate(); err != nil {
+	for i := range c.Agents {
+		if err := c.Agents[i].Validate(); err != nil {
 			return err
 		}
 	}
@@ -1609,6 +1609,7 @@ func parseAgentBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Agent, error) {
 			{Name: "role", Required: true},
 			{Name: "tools"},
 			{Name: "skills"},
+			{Name: "reasoning"},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "skill", LabelNames: []string{"name"}},
@@ -1701,6 +1702,13 @@ func parseAgentBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Agent, error) {
 			a.Skills = append(a.Skills, v.AsString())
 		}
 	}
+	if attr, ok := content.Attributes["reasoning"]; ok {
+		val, d := attr.Expr.Value(agentCtx)
+		if d.HasErrors() {
+			return nil, fmt.Errorf("agent '%s' reasoning: %w", a.Name, d)
+		}
+		a.Reasoning = val.AsString()
+	}
 
 	// Decode sub-blocks
 	for _, b := range content.Blocks {
@@ -1776,6 +1784,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		cmdContent, _, cmdDiags := cmdBlock.Body.PartialContent(&hcl.BodySchema{
 			Attributes: []hcl.AttributeSchema{
 				{Name: "model", Required: true},
+				{Name: "reasoning"},
 			},
 			Blocks: []hcl.BlockHeaderSchema{
 				{Type: "compaction"},
@@ -1796,6 +1805,15 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 
 		missionCommander = &MissionCommander{
 			Model: modelVal.AsString(),
+		}
+
+		// Optional reasoning attribute
+		if reasoningAttr, ok := cmdContent.Attributes["reasoning"]; ok {
+			reasoningVal, reasoningDiags := reasoningAttr.Expr.Value(ctx)
+			if reasoningDiags.HasErrors() {
+				return nil, fmt.Errorf("mission '%s' commander reasoning: %w", missionName, reasoningDiags)
+			}
+			missionCommander.Reasoning = reasoningVal.AsString()
 		}
 
 		// Parse optional compaction and pruning sub-blocks

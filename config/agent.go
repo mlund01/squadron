@@ -116,6 +116,12 @@ type Agent struct {
 
 	// Tool response size limits (optional block)
 	ToolResponse *ToolResponseConfig `hcl:"tool_response,block"`
+
+	// Reasoning controls native provider reasoning (extended thinking on
+	// Anthropic, reasoning_effort on OpenAI, thinking_config on Gemini).
+	// Valid values: "", "low", "medium", "high". Silently no-op on models
+	// that don't support native reasoning.
+	Reasoning string `hcl:"reasoning,optional"`
 }
 
 // ToolResponseConfig configures how large tool call responses are handled.
@@ -162,6 +168,11 @@ func (a *Agent) GetPruneTo() int {
 // Validate checks that the agent configuration is valid
 // Note: Toolbox tools are validated in Config.Validate() since we need access to custom tool definitions
 func (a *Agent) Validate() error {
+	normalized, err := NormalizeReasoning(a.Reasoning)
+	if err != nil {
+		return fmt.Errorf("agent %q: %w", a.Name, err)
+	}
+	a.Reasoning = normalized
 	return nil
 }
 

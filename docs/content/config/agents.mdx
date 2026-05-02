@@ -28,6 +28,7 @@ agent "assistant" {
 | `personality` | string | Personality traits for the agent |
 | `role` | string | Description of the agent's purpose |
 | `tools` | list | Tools available to the agent (optional) |
+| `reasoning` | string | Native reasoning level: `"low"`, `"medium"`, or `"high"` (optional) |
 
 ## Tools
 
@@ -186,3 +187,45 @@ mission "example" {
   }
 }
 ```
+
+## Reasoning
+
+Use the optional `reasoning` attribute to enable native provider reasoning ("extended thinking" on Anthropic, `reasoning_effort` on OpenAI, `thinking_config` on Gemini). Valid values: `"low"`, `"medium"`, `"high"`.
+
+```hcl
+agent "researcher" {
+  model       = models.anthropic.claude_opus_4_7
+  personality = "Methodical analyst"
+  role        = "Deep-research agent for hard problems"
+  reasoning   = "high"
+  tools       = [builtins.http.get]
+}
+```
+
+The same attribute is available on the mission commander:
+
+```hcl
+mission "complex_orchestration" {
+  commander {
+    model     = models.anthropic.claude_sonnet_4_6
+    reasoning = "medium"
+  }
+  agents = [agents.researcher]
+  task "investigate" { objective = "Find the root cause" }
+}
+```
+
+**Per-provider behaviour:**
+
+| Provider | Reasoning-capable models | Reasoning events streamed? |
+|----------|--------------------------|----------------------------|
+| Anthropic | Claude 4 family (`claude-opus-4*`, `claude-sonnet-4*`, `claude-haiku-4*`) | **Yes** — thinking blocks streamed as `agent_reasoning_*` events |
+| OpenAI | `o3*`, `o4*`, `gpt-5*` | **Yes** — reasoning summaries streamed via the Responses API (`/v1/responses`) |
+| Gemini | Gemini 2.5+ and 3.x | **Yes** — thought parts streamed as `agent_reasoning_*` events |
+| Ollama / OpenAI-compat proxies | Not auto-detected | No — Squadron can't tell which user-named local models support reasoning |
+
+**Models that don't support native reasoning silently ignore the `reasoning` attribute** and log a warning at agent startup. They produce direct answers with no reasoning step; there is no chain-of-thought fallback.
+
+**OpenAI / Ollama use the Responses API.** Squadron talks to OpenAI and OpenAI-compatible servers (Ollama, vLLM, LiteLLM) over `/v1/responses`, not the legacy `/v1/chat/completions`. The Responses API is what surfaces reasoning summaries on o-series and gpt-5 models. Ollama supports `/v1/responses` since v0.13.3 — older versions will need to be upgraded.
+
+**Token budgets** (for providers that accept a budget): `low` ≈ 2 048 tokens, `medium` ≈ 8 192, `high` ≈ 24 576. For Anthropic, the provider clamps `max_tokens` upward when needed so the budget fits.

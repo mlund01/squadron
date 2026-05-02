@@ -83,6 +83,9 @@ type CommanderOptions struct {
 	PruneOn int
 	// PruneTo reduces conversation to this many turns when pruning triggers
 	PruneTo int
+	// Reasoning is the abstract reasoning level ("low"/"medium"/"high"/"")
+	// requested for the commander. Silently no-op on unsupported models.
+	Reasoning string
 	// Routes contains conditional routing options for this task (nil if no router)
 	Routes []aitools.RouteOption
 	// ToolResponseMaxSize overrides the default tool response size limit (0 = default)
@@ -424,6 +427,14 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	// message window invalidates the cache every turn, wasting cache creation tokens.
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (opts.PruneOn == 0 || (opts.PruneOn-opts.PruneTo) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
+
+	if opts.Reasoning != "" {
+		if config.ModelSupportsReasoning(modelConfig, actualModelName) {
+			session.SetReasoning(opts.Reasoning)
+		} else {
+			log.Printf("[commander %q] reasoning=%q ignored — model %q does not support native reasoning", opts.TaskName, opts.Reasoning, actualModelName)
+		}
+	}
 
 	// Note: tools are set on the session in SetToolCallbacks after all tools are registered
 
@@ -1257,9 +1268,6 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			}
 		}
 
-		// Create reasoning parser for this turn
-		parser := newCommanderReasoningParser(streamer)
-
 		if s.debugLogger != nil {
 			s.debugLogger.LogEvent("commander_llm_start", map[string]any{"task": s.TaskName})
 		}
@@ -1268,12 +1276,18 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		var resp *llm.ChatResponse
 		var err error
 
-		// Callback for streaming chunks — routes text to reasoning parser
-		onChunk := func(chunk llm.StreamChunk) {
-			if chunk.Content != "" {
-				parser.ProcessChunk(chunk.Content)
-			}
-		}
+		// Commander reasoning is buffered and emitted as a single text
+		// payload to ReasoningCompleted (vs. agent which streams deltas).
+		var reasoningBuf strings.Builder
+		relay := newReasoningRelay(
+			streamer.ReasoningStarted,
+			func(s string) { reasoningBuf.WriteString(s) },
+			func() {
+				streamer.ReasoningCompleted(reasoningBuf.String())
+				reasoningBuf.Reset()
+			},
+		)
+		onChunk := func(chunk llm.StreamChunk) { relay.Handle(chunk) }
 
 		if resume {
 			// Resume — no new user message needed.
@@ -1346,13 +1360,13 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 			if s.budget != nil {
 				if err := s.budget.RecordUsage(resp.Usage.Total(), turnData.Cost); err != nil {
-					parser.Finish()
+					relay.Close()
 					return err
 				}
 			}
 		}
 
-		parser.Finish()
+		relay.Close()
 
 		if err != nil {
 			return err
@@ -1890,96 +1904,6 @@ func createCommanderProvider(ctx context.Context, modelConfig *config.Model) (ll
 		return llm.NewOpenAICompatibleProvider(modelConfig.BaseURL), false, nil
 	default:
 		return nil, false, fmt.Errorf("unknown provider: %s", modelConfig.Provider)
-	}
-}
-
-// =============================================================================
-// Commander Reasoning Parser - parses REASONING XML tags from streaming output
-// =============================================================================
-
-// commanderReasoningParser parses <REASONING> tags from streaming text content.
-// Tool calls are handled via native SDK tool calling (ContentBlocks), not parsed from text.
-type commanderReasoningParser struct {
-	streamer         CommanderStreamer
-	inReasoning      bool
-	buffer           strings.Builder
-	reasoningStarted bool
-	reasoningText    strings.Builder
-}
-
-// newCommanderReasoningParser creates a new reasoning-only parser
-func newCommanderReasoningParser(streamer CommanderStreamer) *commanderReasoningParser {
-	return &commanderReasoningParser{
-		streamer: streamer,
-	}
-}
-
-// ProcessChunk processes an incoming chunk of streamed text content
-func (p *commanderReasoningParser) ProcessChunk(chunk string) {
-	p.buffer.WriteString(chunk)
-	p.processBuffer()
-}
-
-// Finish signals that streaming is complete
-func (p *commanderReasoningParser) Finish() {
-	// If we're still in reasoning when stream ends, emit what we have
-	if p.inReasoning && p.reasoningText.Len() > 0 {
-		p.streamer.ReasoningCompleted(p.reasoningText.String())
-	}
-}
-
-func (p *commanderReasoningParser) processBuffer() {
-	content := p.buffer.String()
-
-	for {
-		if !p.inReasoning {
-			// Look for <REASONING> opening tag
-			if idx := strings.Index(content, "<REASONING>"); idx != -1 {
-				p.streamer.ReasoningStarted()
-				p.inReasoning = true
-				content = content[idx+11:]
-				p.buffer.Reset()
-				p.buffer.WriteString(content)
-				continue
-			}
-			return
-		}
-
-		// Inside reasoning — buffer until </REASONING>
-		if !p.reasoningStarted {
-			content = strings.TrimLeft(content, "\n")
-			p.buffer.Reset()
-			p.buffer.WriteString(content)
-			if len(content) > 0 {
-				p.reasoningStarted = true
-			}
-		}
-
-		if idx := strings.Index(content, "</REASONING>"); idx != -1 {
-			finalContent := strings.TrimRight(content[:idx], "\n")
-			if len(finalContent) > 0 {
-				p.reasoningText.WriteString(finalContent)
-			}
-			if p.reasoningText.Len() > 0 {
-				p.streamer.ReasoningCompleted(p.reasoningText.String())
-			}
-			p.reasoningText.Reset()
-			p.reasoningStarted = false
-			p.inReasoning = false
-			content = content[idx+12:]
-			p.buffer.Reset()
-			p.buffer.WriteString(content)
-			continue
-		}
-		// Buffer content for reasoning, keeping enough to detect split tag
-		if len(content) > 12 {
-			safeLen := len(content) - 12
-			p.reasoningText.WriteString(content[:safeLen])
-			content = content[safeLen:]
-			p.buffer.Reset()
-			p.buffer.WriteString(content)
-		}
-		return
 	}
 }
 

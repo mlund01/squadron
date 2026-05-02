@@ -1194,3 +1194,104 @@ func TestUniqueStrings(t *testing.T) {
 		}
 	}
 }
+
+// captureProvider records every ChatRequest it sees so tests can assert
+// that session-level fields (Reasoning, etc.) propagate to the wire.
+type captureProvider struct {
+	requests []*ChatRequest
+}
+
+func (p *captureProvider) Chat(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
+	p.requests = append(p.requests, req)
+	return &ChatResponse{Content: "ok"}, nil
+}
+
+func (p *captureProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-chan StreamChunk, error) {
+	p.requests = append(p.requests, req)
+	ch := make(chan StreamChunk, 2)
+	ch <- StreamChunk{Content: "ok"}
+	ch <- StreamChunk{Done: true, Usage: &Usage{}}
+	close(ch)
+	return ch, nil
+}
+
+func TestSetReasoning_PropagatesToAllRequestPaths(t *testing.T) {
+	cases := []struct {
+		name string
+		send func(*Session) error
+	}{
+		{
+			name: "Send",
+			send: func(s *Session) error {
+				_, err := s.Send(context.Background(), "hi")
+				return err
+			},
+		},
+		{
+			name: "SendStream",
+			send: func(s *Session) error {
+				_, err := s.SendStream(context.Background(), "hi", nil)
+				return err
+			},
+		},
+		{
+			name: "ContinueStream",
+			send: func(s *Session) error {
+				_, err := s.ContinueStream(context.Background(), nil)
+				return err
+			},
+		},
+		{
+			name: "SendMessageStream",
+			send: func(s *Session) error {
+				_, err := s.SendMessageStream(context.Background(), NewTextMessage(RoleUser, "hi"), nil)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &captureProvider{}
+			s := NewSession(p, "test-model")
+			s.SetReasoning("medium")
+			if err := tc.send(s); err != nil {
+				t.Fatalf("send: %v", err)
+			}
+			if len(p.requests) != 1 {
+				t.Fatalf("requests=%d, want 1", len(p.requests))
+			}
+			if p.requests[0].Reasoning != "medium" {
+				t.Errorf("ChatRequest.Reasoning = %q, want %q", p.requests[0].Reasoning, "medium")
+			}
+		})
+	}
+}
+
+func TestSession_Clone_PreservesReasoning(t *testing.T) {
+	p := &captureProvider{}
+	s := NewSession(p, "test-model")
+	s.SetReasoning("high")
+
+	clone := s.Clone()
+	if clone.GetReasoning() != "high" {
+		t.Errorf("clone reasoning = %q, want %q", clone.GetReasoning(), "high")
+	}
+
+	// Mutating the clone shouldn't bleed back to the original.
+	clone.SetReasoning("low")
+	if s.GetReasoning() != "high" {
+		t.Errorf("original reasoning = %q after clone mutation, want still %q", s.GetReasoning(), "high")
+	}
+}
+
+func TestSetReasoning_DefaultsToEmpty(t *testing.T) {
+	p := &captureProvider{}
+	s := NewSession(p, "test-model")
+	if _, err := s.Send(context.Background(), "hi"); err != nil {
+		t.Fatal(err)
+	}
+	if p.requests[0].Reasoning != "" {
+		t.Errorf("Reasoning = %q, want empty when never set", p.requests[0].Reasoning)
+	}
+}

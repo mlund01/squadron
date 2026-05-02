@@ -66,6 +66,27 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 		var allBlocks []ContentBlock
 		var usage Usage
 		var stopReason string
+		// Gemini interleaves thought parts with answer parts when
+		// IncludeThoughts is true. Track whether we're currently in a
+		// reasoning run so we can emit ReasoningStart on entry and
+		// ReasoningDone on the first non-thought part.
+		var inThought bool
+		var thinkingBuf string
+
+		flushThought := func() {
+			if !inThought {
+				return
+			}
+			if thinkingBuf != "" {
+				allBlocks = append(allBlocks, ContentBlock{
+					Type:     ContentTypeThinking,
+					Thinking: &ThinkingBlock{Text: thinkingBuf},
+				})
+			}
+			chunks <- StreamChunk{ReasoningDone: true}
+			inThought = false
+			thinkingBuf = ""
+		}
 
 		for resp, err := range p.client.Models.GenerateContentStream(ctx, req.Model, contents, cfg) {
 			if err != nil {
@@ -83,6 +104,19 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 					continue
 				}
 				for _, part := range cand.Content.Parts {
+					if part != nil && part.Thought && part.Text != "" {
+						if !inThought {
+							inThought = true
+							chunks <- StreamChunk{ReasoningStart: true}
+						}
+						thinkingBuf += part.Text
+						chunks <- StreamChunk{ReasoningDelta: part.Text}
+						continue
+					}
+					// Any non-thought part ends the current reasoning run.
+					if inThought {
+						flushThought()
+					}
 					block, ok := partToBlock(part)
 					if !ok {
 						continue
@@ -103,6 +137,8 @@ func (p *GeminiProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 				}
 			}
 		}
+		// Stream ended while still inside a thought run — finalize.
+		flushThought()
 
 		chunks <- StreamChunk{
 			Done:          true,
@@ -143,6 +179,12 @@ func (p *GeminiProvider) buildConfig(req *ChatRequest, sysInstr *genai.Content) 
 	}
 	if len(req.Tools) > 0 {
 		cfg.Tools = convertGeminiTools(req.Tools)
+	}
+	if budget := geminiBudgetTokens(req.Reasoning); budget > 0 {
+		cfg.ThinkingConfig = &genai.ThinkingConfig{
+			IncludeThoughts: true,
+			ThinkingBudget:  &budget,
+		}
 	}
 	return cfg
 }
@@ -245,6 +287,10 @@ func messageToParts(m Message, toolNames map[string]string) []*genai.Part {
 					},
 				})
 			}
+		case ContentTypeThinking:
+			// Don't echo Gemini thought text back to the API — thoughts are
+			// surface-only output, not input. The relevant continuity hint
+			// (thought_signature) rides on tool_use blocks via ToolUseBlock.
 		}
 	}
 	return parts
@@ -253,12 +299,29 @@ func messageToParts(m Message, toolNames map[string]string) []*genai.Part {
 func (p *GeminiProvider) extractResponse(resp *genai.GenerateContentResponse) (string, []ContentBlock) {
 	var content string
 	var blocks []ContentBlock
+	// Coalesce consecutive thought parts into a single ThinkingBlock — Gemini
+	// can split a single reasoning trace across multiple parts.
+	var thoughtBuf string
+	flushThought := func() {
+		if thoughtBuf != "" {
+			blocks = append(blocks, ContentBlock{
+				Type:     ContentTypeThinking,
+				Thinking: &ThinkingBlock{Text: thoughtBuf},
+			})
+			thoughtBuf = ""
+		}
+	}
 
 	for _, cand := range resp.Candidates {
 		if cand.Content == nil {
 			continue
 		}
 		for _, part := range cand.Content.Parts {
+			if part != nil && part.Thought && part.Text != "" {
+				thoughtBuf += part.Text
+				continue
+			}
+			flushThought()
 			block, ok := partToBlock(part)
 			if !ok {
 				continue
@@ -271,6 +334,7 @@ func (p *GeminiProvider) extractResponse(resp *genai.GenerateContentResponse) (s
 			blocks = append(blocks, block)
 		}
 	}
+	flushThought()
 	return content, blocks
 }
 

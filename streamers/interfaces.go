@@ -26,13 +26,14 @@ type ChatHandler interface {
 	// ToolComplete is called when a tool finishes execution, with the observation result fed to the LLM
 	ToolComplete(toolCallId string, toolName string, result string)
 
-	// ReasoningStarted is called when a REASONING block opens
+	// ReasoningStarted is called when a native reasoning trace opens
+	// (Anthropic extended thinking, Gemini thought parts).
 	ReasoningStarted()
 
-	// PublishReasoningChunk is called for each chunk of the REASONING as it streams
+	// PublishReasoningChunk is called for each chunk of the reasoning trace as it streams.
 	PublishReasoningChunk(chunk string)
 
-	// ReasoningCompleted is called when the REASONING block is complete
+	// ReasoningCompleted is called when the reasoning trace is complete.
 	ReasoningCompleted()
 
 	// PublishAnswerChunk is called for each chunk of the ANSWER as it streams

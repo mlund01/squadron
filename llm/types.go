@@ -21,6 +21,10 @@ const (
 	ContentTypeImage      ContentType = "image"
 	ContentTypeToolUse    ContentType = "tool_use"
 	ContentTypeToolResult ContentType = "tool_result"
+	// ContentTypeThinking holds a provider-native reasoning block (e.g.
+	// Anthropic extended thinking). Round-tripped back to the provider
+	// in subsequent assistant turns to preserve reasoning context.
+	ContentTypeThinking ContentType = "thinking"
 )
 
 // ImageBlock represents base64-encoded image data
@@ -55,6 +59,22 @@ type ToolResultBlock struct {
 	IsError   bool   `json:"is_error,omitempty"`
 }
 
+// ThinkingBlock holds a provider-native reasoning trace. Currently used by
+// Anthropic extended thinking; may be reused by other providers that expose
+// reasoning content. Signature is provider-opaque and must be round-tripped
+// verbatim — Anthropic rejects multi-turn requests where prior thinking
+// blocks were dropped or had their signatures stripped.
+//
+// When RedactedData is non-empty, this block represents an encrypted thinking
+// trace that the provider declined to surface (Anthropic safety redaction).
+// Text and Signature are empty in that case; the encrypted Data must still be
+// round-tripped or multi-turn requests fail.
+type ThinkingBlock struct {
+	Text         string `json:"text"`
+	Signature    string `json:"signature,omitempty"`
+	RedactedData string `json:"redacted_data,omitempty"`
+}
+
 // ContentBlock represents a single piece of content (text, image, tool use, or tool result)
 type ContentBlock struct {
 	Type       ContentType
@@ -62,6 +82,7 @@ type ContentBlock struct {
 	ImageData  *ImageBlock      // Used when Type == ContentTypeImage
 	ToolUse    *ToolUseBlock    // Used when Type == ContentTypeToolUse
 	ToolResult *ToolResultBlock // Used when Type == ContentTypeToolResult
+	Thinking   *ThinkingBlock   // Used when Type == ContentTypeThinking
 }
 
 // MessageMetadata holds tracking information for messages
@@ -136,6 +157,14 @@ type StreamChunk struct {
 	ToolCallDelta string              // Incremental JSON input for the current tool call
 	ToolCallDone  *string             // Tool call ID when its input is complete
 
+	// Native reasoning streaming fields. Anthropic extended thinking,
+	// OpenAI Responses reasoning summaries, and Gemini thought parts all
+	// surface here. Providers that don't emit reasoning content (or models
+	// that opt out) leave these zero-valued.
+	ReasoningStart bool   // first reasoning chunk in this stream
+	ReasoningDelta string // incremental reasoning content
+	ReasoningDone  bool   // reasoning block complete
+
 	// Final response metadata (populated on Done=true)
 	StopReason    string         // "end_turn", "tool_use", "stop_sequence", etc.
 	ContentBlocks []ContentBlock // Accumulated structured content blocks
@@ -147,9 +176,13 @@ type ChatRequest struct {
 	MaxTokens           int
 	Temperature         float64
 	StopSequences       []string
-	PromptCaching       bool // Cache system prompts
-	ConversationCaching bool // Cache conversation history (last user message breakpoint)
+	PromptCaching       bool             // Cache system prompts
+	ConversationCaching bool             // Cache conversation history (last user message breakpoint)
 	Tools               []ToolDefinition // Tool definitions for native tool calling
+	// Reasoning, when non-empty, requests native provider reasoning at the
+	// given level. Valid values: "low", "medium", "high". Providers that don't
+	// support native reasoning silently ignore this field.
+	Reasoning string
 }
 
 type ChatResponse struct {

@@ -88,7 +88,6 @@ func getModeInstructions(mode config.AgentMode) string {
 	switch mode {
 	case config.ModeMission:
 		return `**MISSION MODE:** You are running as part of an automated mission.
-- Use REASONING when the situation is complex or ambiguous. Skip it for straightforward actions.
 - Continue working until the task is fully complete. Only provide an ANSWER when done.
 - Be autonomous — make reasonable assumptions.`
 
@@ -96,7 +95,6 @@ func getModeInstructions(mode config.AgentMode) string {
 		fallthrough
 	default:
 		return `**CHAT MODE:** You are chatting interactively with a user.
-- REASONING is optional - use it when helpful for complex tasks
 - You may ask clarifying questions if the request is ambiguous
 - Respond conversationally and helpfully`
 	}
@@ -107,7 +105,7 @@ func getResponsePatterns(mode config.AgentMode) string {
 	var sb strings.Builder
 
 	if mode == config.ModeMission {
-		sb.WriteString(`**Working:** Optionally use REASONING tags for complex decisions, then call a tool via function calling.
+		sb.WriteString(`**Working:** Call a tool via native function calling.
 **Done:** Use ANSWER tags with your final result.
 **Need info:** Use ` + "`ask_commander`" + ` — only when critical details are missing.
 
@@ -117,8 +115,7 @@ func getResponsePatterns(mode config.AgentMode) string {
 - ` + "`<NEW_TASK>`" + `: New assignment. **Drop in-flight work** and start fresh on this task.`)
 	} else {
 		sb.WriteString(`**Direct answer:** Wrap response in ANSWER tags.
-**Complex question:** Use REASONING tags, then ANSWER tags.
-**Tool needed:** Use REASONING tags, then call the tool. Never output raw text before a tool call.`)
+**Tool needed:** Call the tool via native function calling. Never output raw text before a tool call.`)
 	}
 
 	return sb.String()
@@ -129,19 +126,17 @@ func getRules(mode config.AgentMode) string {
 	var rules []string
 
 	if mode == config.ModeMission {
-		rules = append(rules, "**Reason when it helps.** Use REASONING for complex decisions, ambiguous situations, or multi-step planning. Skip it for straightforward tool calls.")
 		rules = append(rules, "**Complete the task.** Keep working until the task is done.")
 		rules = append(rules, "**ANSWER means done.** Only use ANSWER when the entire task is complete.")
 		rules = append(rules, "**Be autonomous.** Don't ask questions - make reasonable assumptions and proceed.")
 	} else {
-		rules = append(rules, "**All text in tags.** Never output raw text outside of tags. Any explanation before a tool call goes in REASONING.")
-		rules = append(rules, "**Reasoning is optional.** Use REASONING when it helps, skip it for simple responses.")
+		rules = append(rules, "**Wrap final answers in ANSWER tags.** Never output raw text outside of tags when making tool calls.")
 		rules = append(rules, "**Be conversational.** You may ask clarifying questions if needed.")
 	}
 
 	rules = append(rules, "**Tools are optional.** Only use tools when you need information you don't have or capabilities you lack.")
-	rules = append(rules, "**Handle errors gracefully.** If a tool call fails, reason about why and try a different approach.")
-	rules = append(rules, "**Keep responses concise.** Each response has a ~16,000 token output limit. Keep reasoning brief and avoid producing extremely long content in a single response.")
+	rules = append(rules, "**Handle errors gracefully.** If a tool call fails, try a different approach.")
+	rules = append(rules, "**Keep responses concise.** Each response has a ~16,000 token output limit. Avoid producing extremely long content in a single response.")
 
 	var sb strings.Builder
 	for i, rule := range rules {

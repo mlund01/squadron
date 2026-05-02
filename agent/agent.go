@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/mlund01/squadron-wire/protocol"
@@ -253,6 +254,14 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	session := llm.NewSession(provider, actualModelName, systemPrompts...)
 	conversationCaching := modelConfig.IsPromptCachingEnabled() && (agentCfg.GetPruneOn() == 0 || (agentCfg.GetPruneOn()-agentCfg.GetPruneTo()) >= 3)
 	session.SetPromptCaching(modelConfig.IsPromptCachingEnabled(), conversationCaching)
+
+	if agentCfg.Reasoning != "" {
+		if config.ModelSupportsReasoning(modelConfig, actualModelName) {
+			session.SetReasoning(agentCfg.Reasoning)
+		} else {
+			log.Printf("[agent %q] reasoning=%q ignored — model %q does not support native reasoning", agentCfg.Name, agentCfg.Reasoning, actualModelName)
+		}
+	}
 
 	// Set tools on session for native tool calling
 	session.SetTools(aitools.ToolsToDefinitions(tools))

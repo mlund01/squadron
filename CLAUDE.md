@@ -34,7 +34,7 @@ go build -o squadron ./cmd/cli              # Build the CLI
 
 ## Architecture Overview
 
-Squadron is a declarative framework for building and running AI agent workflows. LLM-powered agents, tools, plugins, and multi-step missions are defined entirely in HCL configuration files — no code required. Agents reason and act autonomously using a two-tier architecture: commanders orchestrate tasks while agents execute tool calls in ReAct loops.
+Squadron is a declarative framework for building and running AI agent workflows. LLM-powered agents, tools, plugins, and multi-step missions are defined entirely in HCL configuration files — no code required. Agents reason and act autonomously using a two-tier architecture: commanders orchestrate tasks while agents execute tool calls via native function calling.
 
 ### Key Directories
 
@@ -519,7 +519,7 @@ Route decisions (both `router` choices and `send_to` activations) are persisted 
 - `ContinueStream()` resumes from existing state without adding a new user message (used for mission resume)
 - `LoadMessages()` restores session from persisted state
 
-Model keys (used in HCL) map to actual API model names in `config/model.go:SupportedModels`. Add new models there before using them in config.
+Model keys (used in HCL) and capability flags live in `config/model.go:SupportedModels`. Each entry is a `ModelInfo` with the API name and any capability flags (currently `Reasoning bool`). To add a new model, add an entry under the right provider with the API name and whichever flags apply — every capability check (`ModelSupportsReasoning` etc.) routes through this registry, so there's no separate prefix list or capability table to keep in sync.
 
 ---
 
@@ -712,7 +712,7 @@ Missions orchestrate multi-agent task execution with dependency management.
 |-----------|------|---------|
 | `Runner` | `runner.go` | Executes missions, manages task dependencies |
 | `Commander` | `agent/commander.go` | Orchestrates agents for a single task |
-| `Agent` | `agent/agent.go` | Executes tool calls with ReAct-style reasoning |
+| `Agent` | `agent/agent.go` | Executes tool calls via native function calling, optionally with native provider reasoning |
 | `KnowledgeStore` | `knowledge.go` | Stores structured task outputs for querying |
 | `DebugLogger` | `debug.go` | Logs events and LLM messages for debugging |
 
@@ -726,9 +726,12 @@ Missions orchestrate multi-agent task execution with dependency management.
    - Delegates work to agents via `call_agent` tool
    - Calls `task_complete` with a `summary` (and `route` if routing is configured)
 4. **Dynamic activation**: After a task completes, its `send_to` targets are immediately queued. If it chose a route, the route target is queued. (See "Task Connectivity" in HCL Config section for full rules.)
-5. **Agents** execute ReAct loops:
-   - Reason → Act (tool call) → Observe (tool result) → Repeat
-   - Return final answer or ask commander for input (`ASK_COMMANDER`)
+5. **Agents** loop over native tool calls:
+   - LLM call → tool calls dispatched → tool results appended → repeat
+   - Return final answer (wrapped in `<ANSWER>` tags) or ask commander for input (`ASK_COMMANDER`)
+   - When the agent has `reasoning` enabled and the model supports it, the
+     model emits a native reasoning trace ahead of each tool/answer turn,
+     surfaced via `agent_reasoning_*` events for Anthropic and Gemini.
 
 ### Task Dependencies & Context Passing
 
@@ -784,25 +787,65 @@ task "process" {
 - `ModeChat`: Interactive chat mode (default)
 - `ModeMission`: Mission execution mode (uses `ASK_COMMANDER` for commander queries)
 
-### ReAct Loop
+### Tool-Calling Loop
 
-Agents use a ReAct (Reason + Act) pattern:
+Agents call tools via the provider's native function-calling API and emit a
+final answer wrapped in `<ANSWER>...</ANSWER>` tags. There is no XML
+chain-of-thought protocol — reasoning, when enabled, comes from the model's
+native reasoning channel (Anthropic extended thinking, Gemini thought parts).
+Tool results are appended to the conversation as `tool_result` content blocks,
+and the agent loops until it emits `<ANSWER>` (or, in mission mode, calls
+`task_complete` via the commander).
 
-```
-<REASONING>Think about what to do...</REASONING>
-<ACTION>tool_name</ACTION>
-<ACTION_INPUT>{"param": "value"}</ACTION_INPUT>
-```
+### Reasoning
 
-Tool results are returned as:
-```
-<OBSERVATION>result from tool</OBSERVATION>
-```
+Both `agent` and `commander` blocks support an optional `reasoning` attribute
+(`"low"`, `"medium"`, `"high"`). The agent layer enables native reasoning on
+the underlying `llm.Session` only when:
 
-Final answers:
-```
-<ANSWER>The task is complete...</ANSWER>
-```
+1. The user set a level on the agent/commander, AND
+2. The resolved model supports native reasoning on its provider.
+
+Capability is read from the `SupportedModels` registry in
+`config/model.go`. Each entry is a `ModelInfo` with the API name plus
+flags like `Reasoning bool`; `ModelSupportsReasoning` looks up the
+`ModelInfo` by API name and returns the flag. Adding reasoning support
+for a new model is a one-line registry change with no separate prefix
+list or capability table to keep in sync. Ollama models registered
+through user `aliases` aren't in the registry, so capability lookups
+always return false for them.
+
+If `reasoning` is set on an agent or commander whose model isn't
+flagged in the registry, the gate logs a warning at startup and the
+session runs without reasoning. No chain-of-thought fallback.
+
+The level → token-budget mapping (Anthropic / Gemini): `low` = 2 048,
+`medium` = 8 192, `high` = 24 576. For OpenAI, `low|medium|high` maps to the
+`shared.ReasoningEffort` enum.
+
+**Streaming events.** All four providers emit reasoning as separate stream
+chunks (`StreamChunk.ReasoningStart`/`Delta`/`Done`), which the
+orchestrator/commander forward as `agent_reasoning_started`/
+`agent_reasoning_completed` (and `commander_*` equivalents) on the streamer.
+
+- **Anthropic** — extended thinking blocks (`thinking_delta` + `signature_delta`).
+- **Gemini** — `Part.Thought == true` thought parts when `IncludeThoughts: true`.
+- **OpenAI / Ollama** — reasoning summaries via the Responses API
+  (`/v1/responses`). Squadron's OpenAI provider speaks Responses end-to-end —
+  it never uses Chat Completions. Reasoning summaries are requested via
+  `params.Reasoning.Summary = "auto"`. Ollama supports `/v1/responses` since
+  v0.13.3 (non-stateful only — Squadron sends full conversation history every
+  turn, so `previous_response_id` isn't needed).
+
+**Anthropic thinking-block round-trip.** Multi-turn requests on Claude 4
+with extended thinking and tool calls require prior `thinking` blocks to be
+echoed back before any subsequent `tool_use` blocks. The provider captures
+thinking blocks (text + opaque signature) into `ContentBlock` parts, and
+`Session.buildAssistantMessage` places them first in the assistant turn so
+follow-up requests don't 400.
+
+**Models without native reasoning silently no-op.** There is no chain-of-thought
+fallback — agents on unsupported models just produce direct answers.
 
 ### Result Interception
 

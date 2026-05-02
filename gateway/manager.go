@@ -316,7 +316,7 @@ func sameConfig(a, b *Config) bool {
 }
 
 func defaultLauncher(ctx context.Context, cfg Config, host *gwsdk.HostPlugin) (gatewayClient, subprocess, error) {
-	bin, err := ensureInstalled(cfg.Name, cfg.Version, cfg.Source)
+	bin, err := EnsureInstalled(cfg.Name, cfg.Version, cfg.Source)
 	if err != nil {
 		return nil, nil, err
 	}

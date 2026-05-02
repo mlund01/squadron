@@ -44,7 +44,9 @@ Restart Squadron and the next `builtins.human.ask` call will appear in the confi
 
 ## Lifecycle
 
-- Squadron launches the gateway as a managed subprocess at startup (same install model as native plugins).
+- `squadron verify` pre-flights the install (download + checksum verify) and exits non-zero if the gateway can't be installed — same fail-loudly behavior as plugins.
+- `squadron engage` re-runs the install pre-flight before the daemon signals ready, so a broken gateway fails the `engage` command instead of leaving you with a half-running daemon.
+- Once installed, Squadron launches the gateway as a managed subprocess at startup (same install model as native plugins).
 - A watchdog polls the subprocess and **automatically restarts** on crash with exponential backoff (capped at 30s).
 - The SDK includes orphan prevention — if the parent Squadron process dies, the gateway exits on the next watchdog tick rather than lingering.
 - On reconnect, the gateway uses a checkpoint (timestamp of the last event it processed) to catch up via `ListHumanInputs(Since=…)` so no questions are dropped during a transient disconnect.

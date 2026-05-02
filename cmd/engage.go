@@ -288,6 +288,21 @@ func runEngage(cmd *cobra.Command, args []string) {
 		go keepAlivePinger(ccPort, pingDone)
 	}
 
+	// Pre-flight gateway install BEFORE signaling ready so the parent
+	// CLI sees the failure (background-mode parent prints "Squadron
+	// engaged" the instant ready fires; if we deferred the install until
+	// after ready, a broken gateway would die invisibly post-fork).
+	// The full gateway start happens later — EnsureInstalled is
+	// idempotent so the cached binary is reused.
+	if cfgErr == nil && cfg != nil && cfg.Gateway != nil {
+		if _, err := gateway.EnsureInstalled(cfg.Gateway.Name, cfg.Gateway.Version, cfg.Gateway.Source); err != nil {
+			wrapped := fmt.Errorf("gateway %q failed to install: %w", cfg.Gateway.Name, err)
+			daemon.SignalFailed(engageConfigPath, wrapped)
+			fmt.Fprintf(os.Stderr, "Error: %v\n", wrapped)
+			os.Exit(1)
+		}
+	}
+
 	daemon.SignalReady(engageConfigPath, ccPort)
 
 	if localCC {
@@ -319,9 +334,11 @@ func runEngage(cmd *cobra.Command, args []string) {
 	client.SetHumanInputNotifier(notifier)
 
 	// Optional gateway subprocess. The HCL block is enforced singleton
-	// at parse time so cfg.Gateway is at most one Gateway. Failures are
-	// logged but don't abort engage — squadron + commander stay
-	// functional without the gateway.
+	// at parse time so cfg.Gateway is at most one Gateway. A configured
+	// gateway that fails to start is fatal — `squadron verify` already
+	// pre-flights install, so by the time engage runs the binary should
+	// be on disk; any failure here means the user has a broken setup
+	// they need to see, not a silent half-running daemon.
 	var gatewayMgr *gateway.Manager
 	if cfgErr == nil && cfg != nil && cfg.Gateway != nil {
 		gatewayMgr = gateway.NewManager(stores, notifier, client.HumanInputListener())
@@ -331,8 +348,8 @@ func runEngage(cmd *cobra.Command, args []string) {
 			Version:  cfg.Gateway.Version,
 			Settings: cfg.Gateway.Settings,
 		}); err != nil {
-			log.Printf("gateway %q failed to start: %v", cfg.Gateway.Name, err)
-			gatewayMgr = nil
+			fmt.Fprintf(os.Stderr, "Error: gateway %q failed to start: %v\n", cfg.Gateway.Name, err)
+			os.Exit(1)
 		}
 	}
 	defer func() {

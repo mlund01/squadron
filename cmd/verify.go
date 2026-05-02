@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"squadron/config"
+	"squadron/gateway"
 
 	"github.com/spf13/cobra"
 )
@@ -27,6 +28,20 @@ var verifyCmd = &cobra.Command{
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
+		}
+
+		// Mirror the plugin install behavior: configured gateways must be
+		// installable, otherwise verify fails. EnsureInstalled covers both
+		// the github-source path (download + checksum + extract) and the
+		// version="local" path (must already exist at the cached path).
+		gatewayBinaryPath := ""
+		if cfg.Gateway != nil {
+			bin, err := gateway.EnsureInstalled(cfg.Gateway.Name, cfg.Gateway.Version, cfg.Gateway.Source)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error: gateway %q failed to install: %v\n", cfg.Gateway.Name, err)
+				os.Exit(1)
+			}
+			gatewayBinaryPath = bin
 		}
 
 		// Check for unset variables
@@ -106,6 +121,14 @@ var verifyCmd = &cobra.Command{
 				}
 			}
 			fmt.Printf("  - %s (%s, %s)\n", s.Name, s.Location(), status)
+		}
+		gatewayCount := 0
+		if cfg.Gateway != nil {
+			gatewayCount = 1
+		}
+		fmt.Printf("Found %d gateway(s)\n", gatewayCount)
+		if cfg.Gateway != nil {
+			fmt.Printf("  - %s (source: %s, version: %s, installed at %s)\n", cfg.Gateway.Name, cfg.Gateway.Source, cfg.Gateway.Version, gatewayBinaryPath)
 		}
 		fmt.Printf("Found %d mission(s)\n", len(cfg.Missions))
 		for _, w := range cfg.Missions {

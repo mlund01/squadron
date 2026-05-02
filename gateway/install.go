@@ -52,11 +52,13 @@ func gatewayBinary(name, version string) (string, error) {
 	return filepath.Join(dir, bin), nil
 }
 
-// ensureInstalled returns the absolute path to a gateway binary,
+// EnsureInstalled returns the absolute path to a gateway binary,
 // downloading and extracting from the configured GitHub source on
 // first load. If the binary already exists at the cached path it is
-// reused — same idempotency guarantee plugins offer.
-func ensureInstalled(name, version, source string) (string, error) {
+// reused — same idempotency guarantee plugins offer. Exported so
+// `squadron verify` can fail loudly when a configured gateway can't
+// be installed, mirroring the plugin install behavior.
+func EnsureInstalled(name, version, source string) (string, error) {
 	bin, err := gatewayBinary(name, version)
 	if err != nil {
 		return "", err

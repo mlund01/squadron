@@ -56,3 +56,5 @@ Error: agent 'assistant': model 'invalid_model' not found
 - Tool references (`builtins.namespace.tool`, `plugins.namespace.tool`, `tools.name`)
 - Mission task dependencies (no cycles)
 - Dataset schemas and bindings
+- Plugin install (download + checksum verify)
+- Gateway install (download + checksum verify; `version = "local"` requires the binary to already exist at the cached path)

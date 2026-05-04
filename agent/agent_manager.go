@@ -307,10 +307,12 @@ func (m *AgentManager) createSessionRecord(name string, a *Agent) {
 		m.callbacks.OnSessionCreated(m.taskName, name, sid)
 	}
 
-	// Persist agent system prompts
+	// Persist agent system prompts as structured text parts so resume rebuilds
+	// them as proper system messages.
 	now := time.Now()
 	for _, sp := range a.session.GetSystemPrompts() {
-		m.sessionLogger.AppendMessage(sid, "system", sp, now, now)
+		msg := llm.NewTextMessage(llm.RoleSystem, sp)
+		m.sessionLogger.AppendStructuredMessage(sid, "system", sp, PartsFromMessage(msg), now, now)
 	}
 }
 

@@ -131,10 +131,14 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 		// Reasoning text accumulator. The API emits reasoning in summary
 		// "parts" — each part is independent text — so we coalesce parts
 		// from the same item into a single ThinkingBlock and a single
-		// ReasoningStarted/Completed event pair.
+		// ReasoningStarted/Completed event pair. We also capture the
+		// item's ID and encrypted_content so the block can round-trip
+		// back on subsequent stateless turns.
 		type reasoningState struct {
-			text    strings.Builder
-			emitted bool // whether ReasoningStart was sent
+			text             strings.Builder
+			emitted          bool
+			providerID       string
+			encryptedContent string
 		}
 		reasoning := make(map[int64]*reasoningState)
 
@@ -169,17 +173,20 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 						},
 					}
 				case "reasoning":
-					if !emitReasoning {
-						break
+					// Always allocate so we can capture provider_id /
+					// encrypted_content even when reasoning is not surfaced
+					// to the UI — the round-trip needs them regardless.
+					rs := &reasoningState{providerID: event.Item.ID}
+					reasoning[event.OutputIndex] = rs
+					if emitReasoning {
+						// Open the reasoning event window NOW — even if no
+						// summary text follows. OpenAI o-series and gpt-5
+						// models often reason without emitting summary
+						// text; surfacing the start gives the UI a visible
+						// signal that reasoning is in progress.
+						chunks <- StreamChunk{ReasoningStart: true}
+						rs.emitted = true
 					}
-					// Open the reasoning event window NOW — even if no
-					// summary text follows. OpenAI o-series and gpt-5
-					// models often reason without emitting summary text;
-					// surfacing the start gives the UI a visible signal
-					// that reasoning is in progress.
-					reasoning[event.OutputIndex] = &reasoningState{}
-					chunks <- StreamChunk{ReasoningStart: true}
-					reasoning[event.OutputIndex].emitted = true
 				}
 
 			case "response.output_text.delta":
@@ -220,16 +227,30 @@ func (p *OpenAIProvider) ChatStream(ctx context.Context, req *ChatRequest) (<-ch
 				// Close any reasoning window when the reasoning output
 				// item finishes — covers both the "summary text emitted"
 				// and "internal reasoning, no summary" cases uniformly.
-				if event.Item.Type == "reasoning" && emitReasoning {
+				if event.Item.Type == "reasoning" {
 					rs, ok := reasoning[event.OutputIndex]
 					if ok && rs.emitted {
 						chunks <- StreamChunk{ReasoningDone: true}
 					}
-					if ok && rs.text.Len() > 0 {
-						contentBlocks = append(contentBlocks, ContentBlock{
-							Type:     ContentTypeThinking,
-							Thinking: &ThinkingBlock{Text: rs.text.String()},
-						})
+					if ok {
+						// Pull the encrypted_content off the final item
+						// (only present when include=reasoning.encrypted_content).
+						if event.Item.EncryptedContent != "" {
+							rs.encryptedContent = event.Item.EncryptedContent
+						}
+						if event.Item.ID != "" {
+							rs.providerID = event.Item.ID
+						}
+						if rs.text.Len() > 0 || rs.providerID != "" || rs.encryptedContent != "" {
+							contentBlocks = append(contentBlocks, ContentBlock{
+								Type: ContentTypeThinking,
+								Thinking: &ThinkingBlock{
+									Text:             rs.text.String(),
+									ProviderID:       rs.providerID,
+									EncryptedContent: rs.encryptedContent,
+								},
+							})
+						}
 					}
 					delete(reasoning, event.OutputIndex)
 				}
@@ -342,6 +363,10 @@ func (p *OpenAIProvider) buildResponseParams(req *ChatRequest) (responses.Respon
 			Effort:  effort,
 			Summary: shared.ReasoningSummaryDetailed,
 		}
+		// Ask the API to return encrypted_content on every reasoning item so
+		// we can echo prior reasoning back on subsequent stateless turns —
+		// without it, multi-turn reasoning loses context.
+		params.Include = append(params.Include, responses.ResponseIncludableReasoningEncryptedContent)
 	}
 
 	if len(req.Tools) > 0 {
@@ -452,10 +477,11 @@ func (p *OpenAIProvider) convertUserMessage(m Message) []responses.ResponseInput
 
 // convertAssistantMessage emits zero or more input items for a single
 // assistant-role message. Text becomes an assistant message item; each
-// tool_use block becomes a function_call item. Reasoning blocks captured
-// from prior turns are dropped — the Responses API re-reasons fresh in
-// stateless mode and re-injecting reasoning text without the encrypted
-// signature would be invalid.
+// tool_use block becomes a function_call item; thinking blocks with a
+// provider_id (i.e. captured from this same provider) are echoed back as
+// reasoning items so stateless multi-turn reasoning round-trips correctly.
+// Thinking blocks without a provider_id were emitted by a different
+// provider and are dropped silently.
 func (p *OpenAIProvider) convertAssistantMessage(m Message) []responses.ResponseInputItemUnionParam {
 	if !m.HasParts() {
 		if text := m.GetTextContent(); text != "" {
@@ -483,7 +509,20 @@ func (p *OpenAIProvider) convertAssistantMessage(m Message) []responses.Response
 				})
 			}
 		case ContentTypeThinking:
-			// Drop reasoning blocks on input — see method comment.
+			if part.Thinking != nil && part.Thinking.ProviderID != "" {
+				rp := &responses.ResponseReasoningItemParam{ID: part.Thinking.ProviderID}
+				if part.Thinking.Text != "" {
+					rp.Summary = []responses.ResponseReasoningItemSummaryParam{{Text: part.Thinking.Text}}
+				}
+				if part.Thinking.EncryptedContent != "" {
+					rp.EncryptedContent = param.NewOpt(part.Thinking.EncryptedContent)
+				}
+				out = append(out, responses.ResponseInputItemUnionParam{OfReasoning: rp})
+			}
+		case ContentTypeProviderRaw:
+			// Reserved for future provider-managed tool blocks. Only echo
+			// back when this raw block originated from OpenAI.
+			_ = part
 		}
 	}
 	if textBuf.Len() > 0 {
@@ -541,7 +580,10 @@ func extractResponseOutput(resp *responses.Response) (string, []ContentBlock) {
 				},
 			})
 		case "reasoning":
-			// Concatenate all summary parts into one ThinkingBlock.
+			// Concatenate all summary parts into one ThinkingBlock. We
+			// capture the provider's reasoning ID and encrypted_content
+			// even when the summary is empty — both are required to
+			// round-trip stateless multi-turn reasoning back to the API.
 			var rb strings.Builder
 			for _, s := range item.Summary {
 				if rb.Len() > 0 {
@@ -549,10 +591,14 @@ func extractResponseOutput(resp *responses.Response) (string, []ContentBlock) {
 				}
 				rb.WriteString(s.Text)
 			}
-			if rb.Len() > 0 {
+			if rb.Len() > 0 || item.ID != "" || item.EncryptedContent != "" {
 				blocks = append(blocks, ContentBlock{
-					Type:     ContentTypeThinking,
-					Thinking: &ThinkingBlock{Text: rb.String()},
+					Type: ContentTypeThinking,
+					Thinking: &ThinkingBlock{
+						Text:             rb.String(),
+						ProviderID:       item.ID,
+						EncryptedContent: item.EncryptedContent,
+					},
 				})
 			}
 		}

@@ -39,6 +39,8 @@ var migrationChecksums = map[string]string{
 	"0001_baseline.postgres.sql":             "ada6e4e89800425c2512877f20b090f22eacb8e9fa3aea3d8ebb94e953448c8f",
 	"0002_human_input_requests.sqlite.sql":   "fba61b19e6012c83812b575426d16af148717c31c18bf225af4157a47ce55859",
 	"0002_human_input_requests.postgres.sql": "65efa3f72f005b8b01424616115177da6bca365cabb1abc9824529755fe6e2ee",
+	"0003_session_message_parts.sqlite.sql":   "40371e8a46c410ca7c06324d998ab1db2177a1011f2e1d6a7ac9ab3ca04c973d",
+	"0003_session_message_parts.postgres.sql": "281190245e3a27f9cd4bf5feec9e973a5857a962d64e35caef8fef6440d6b8d9",
 }
 
 var _ = Describe("Migration checksums", func() {

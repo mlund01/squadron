@@ -169,10 +169,22 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 				}
 			}
 
-			// Log user message to session store
+			// Log user message to session store with structured parts so resume
+			// can rebuild the message faithfully (images, tool results, etc.).
 			if o.sessionLogger != nil && o.sessionID != "" {
 				now := time.Now()
-				o.sessionLogger.AppendMessage(o.sessionID, "user", input, now, now)
+				userMsg := llm.Message{Role: llm.RoleUser}
+				if hasImages {
+					userMsg.Parts = currentParts
+				} else {
+					userMsg.Content = textContent
+				}
+				parts := PartsFromMessage(userMsg)
+				audit := AuditContentForMessage(userMsg)
+				if audit == "" {
+					audit = input
+				}
+				o.sessionLogger.AppendStructuredMessage(o.sessionID, "user", audit, parts, now, now)
 			}
 
 			if hasImages {
@@ -263,15 +275,13 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			return ChatResult{}, err
 		}
 
-		// Log assistant response to session store (include tool calls in content)
+		// Log assistant response to session store with structured parts so
+		// thinking/tool_use blocks round-trip faithfully on resume.
 		if o.sessionLogger != nil && o.sessionID != "" && resp != nil {
-			logContent := resp.Content
-			for _, block := range resp.ContentBlocks {
-				if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
-					logContent += fmt.Sprintf("\n[tool_use: %s(%s)]", block.ToolUse.Name, string(block.ToolUse.Input))
-				}
-			}
-			o.sessionLogger.AppendMessage(o.sessionID, "assistant", logContent, llmStart, time.Now())
+			asstMsg := llm.Message{Role: llm.RoleAssistant, Parts: resp.ContentBlocks, Content: resp.Content}
+			parts := PartsFromMessage(asstMsg)
+			audit := AuditContentForMessage(asstMsg)
+			o.sessionLogger.AppendStructuredMessage(o.sessionID, "assistant", audit, parts, llmStart, time.Now())
 		}
 
 		// Extract tool calls from the response ContentBlocks
@@ -453,11 +463,21 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		// Add all tool results to the session
 		o.session.AddToolResults(toolResults)
 
-		// Log tool results for session store
-		if o.sessionLogger != nil && o.sessionID != "" {
-			for _, tr := range toolResults {
-				o.sessionLogger.AppendMessage(o.sessionID, "user", fmt.Sprintf("[tool_result:%s] %s", tr.ToolUseID, tr.Content), time.Now(), time.Now())
+		// Log tool results to session store. We persist all results from this
+		// turn as a single user message with one tool_result part per call —
+		// matching how the providers see them and what we feed back on resume.
+		if o.sessionLogger != nil && o.sessionID != "" && len(toolResults) > 0 {
+			now := time.Now()
+			parts := make([]llm.ContentBlock, 0, len(toolResults))
+			for i := range toolResults {
+				tr := toolResults[i]
+				parts = append(parts, llm.ContentBlock{
+					Type:       llm.ContentTypeToolResult,
+					ToolResult: &tr,
+				})
 			}
+			msg := llm.Message{Role: llm.RoleUser, Parts: parts}
+			o.sessionLogger.AppendStructuredMessage(o.sessionID, "user", AuditContentForMessage(msg), PartsFromMessage(msg), now, now)
 		}
 
 		// Reset for next iteration

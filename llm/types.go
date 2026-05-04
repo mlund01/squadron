@@ -25,6 +25,12 @@ const (
 	// Anthropic extended thinking). Round-tripped back to the provider
 	// in subsequent assistant turns to preserve reasoning context.
 	ContentTypeThinking ContentType = "thinking"
+	// ContentTypeProviderRaw is an opaque escape hatch for provider-specific
+	// blocks we don't model explicitly (e.g. Anthropic server_tool_use,
+	// provider-managed tool blocks). The verbatim JSON bytes are stored and
+	// echoed back only when the request hits the same provider that emitted
+	// them; otherwise the block is dropped silently.
+	ContentTypeProviderRaw ContentType = "provider_raw"
 )
 
 // ImageBlock represents base64-encoded image data
@@ -73,16 +79,36 @@ type ThinkingBlock struct {
 	Text         string `json:"text"`
 	Signature    string `json:"signature,omitempty"`
 	RedactedData string `json:"redacted_data,omitempty"`
+	// ProviderID identifies the reasoning item with the provider so it can be
+	// echoed back on subsequent turns (e.g. OpenAI Responses "rs_..." IDs).
+	// Empty for providers that don't use opaque IDs.
+	ProviderID string `json:"provider_id,omitempty"`
+	// EncryptedContent is the opaque encrypted reasoning state required by
+	// OpenAI's stateless Responses API to round-trip multi-turn reasoning
+	// context. Empty for other providers.
+	EncryptedContent string `json:"encrypted_content,omitempty"`
+}
+
+// ProviderRawBlock holds an opaque provider-specific content block we don't
+// explicitly model. The Data field carries the verbatim JSON bytes returned
+// by the provider; on the request path each provider only emits these blocks
+// when Provider matches its own provider name and drops them silently
+// otherwise (so a session that switches providers mid-stream stays valid).
+type ProviderRawBlock struct {
+	Provider string          `json:"provider"`
+	Type     string          `json:"type"`
+	Data     json.RawMessage `json:"data"`
 }
 
 // ContentBlock represents a single piece of content (text, image, tool use, or tool result)
 type ContentBlock struct {
-	Type       ContentType
-	Text       string           // Used when Type == ContentTypeText
-	ImageData  *ImageBlock      // Used when Type == ContentTypeImage
-	ToolUse    *ToolUseBlock    // Used when Type == ContentTypeToolUse
-	ToolResult *ToolResultBlock // Used when Type == ContentTypeToolResult
-	Thinking   *ThinkingBlock   // Used when Type == ContentTypeThinking
+	Type        ContentType
+	Text        string            // Used when Type == ContentTypeText
+	ImageData   *ImageBlock       // Used when Type == ContentTypeImage
+	ToolUse     *ToolUseBlock     // Used when Type == ContentTypeToolUse
+	ToolResult  *ToolResultBlock  // Used when Type == ContentTypeToolResult
+	Thinking    *ThinkingBlock    // Used when Type == ContentTypeThinking
+	ProviderRaw *ProviderRawBlock // Used when Type == ContentTypeProviderRaw
 }
 
 // MessageMetadata holds tracking information for messages

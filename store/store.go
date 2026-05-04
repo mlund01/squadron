@@ -136,7 +136,19 @@ type SessionStore interface {
 	CompleteSession(id string, err error)
 	ReopenSession(id string)
 	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
+	// AppendStructuredMessage atomically inserts a session_messages row plus
+	// one session_message_parts row per part. The content string is the
+	// legacy human-readable audit mirror — kept in session_messages.content
+	// for the command-center transcript view. Parts are the source of truth
+	// on resume.
+	AppendStructuredMessage(sessionID, role, content string, parts []MessagePart, createdAt, completedAt time.Time) error
 	GetMessages(sessionID string) ([]SessionMessage, error)
+	// GetStructuredMessages returns each session message together with its
+	// rebuilt content parts. For pre-migration messages with no rows in
+	// session_message_parts, Parts is empty and Content carries the legacy
+	// flat-text representation; callers should fall back to interpreting
+	// Content in that case.
+	GetStructuredMessages(sessionID string) ([]StructuredMessage, error)
 	GetSessionsByTask(taskID string) ([]SessionInfo, error)
 	StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
 	// StartToolCall records a tool call before execution (status=started). Returns a record ID.

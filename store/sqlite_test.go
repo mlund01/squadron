@@ -563,6 +563,110 @@ var _ = Describe("SQLite SessionStore", func() {
 	})
 
 	// =========================================================================
+	// 15a. AppendStructuredMessage / GetStructuredMessages
+	// =========================================================================
+	Describe("AppendStructuredMessage", func() {
+		It("round-trips every part type through the parts table", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, _ := bundle.Sessions.CreateSession(taskID, "agent", "a", "m", nil)
+
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			isErrFalse := false
+			isErrTrue := true
+
+			// Cover every column on the parts table at least once.
+			textPart := store.MessagePart{Type: "text", Text: "hello"}
+			imgPart := store.MessagePart{Type: "image", ImageData: "AAAA", ImageMediaType: "image/png"}
+			toolUsePart := store.MessagePart{
+				Type:             "tool_use",
+				ToolUseID:        "call_1",
+				ToolName:         "do_thing",
+				ToolInputJSON:    `{"x":1}`,
+				ThoughtSignature: []byte{0xde, 0xad, 0xbe, 0xef},
+			}
+			toolResultOK := store.MessagePart{Type: "tool_result", ToolUseID: "call_1", Text: "ok", IsError: &isErrFalse}
+			toolResultErr := store.MessagePart{Type: "tool_result", ToolUseID: "call_2", Text: "boom", IsError: &isErrTrue}
+			thinkPart := store.MessagePart{
+				Type:                 "thinking",
+				Text:                 "reasoning",
+				ThinkingSignature:    "sig123",
+				ThinkingRedactedData: "",
+				ProviderID:           "rs_abc",
+				EncryptedContent:     "encblob",
+			}
+			rawPart := store.MessagePart{
+				Type:             "provider_raw",
+				ProviderName:     "anthropic",
+				ProviderType:     "server_tool_use",
+				ProviderDataJSON: `{"foo":"bar"}`,
+			}
+
+			parts := []store.MessagePart{textPart, imgPart, toolUsePart, toolResultOK, toolResultErr, thinkPart, rawPart}
+			Expect(bundle.Sessions.AppendStructuredMessage(sessionID, "assistant", "audit text", parts, now, now)).To(Succeed())
+
+			got, err := bundle.Sessions.GetStructuredMessages(sessionID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].Role).To(Equal("assistant"))
+			Expect(got[0].Content).To(Equal("audit text"))
+			Expect(got[0].Parts).To(HaveLen(len(parts)))
+
+			// Spot-check round-trip preserved every nontrivial field.
+			Expect(got[0].Parts[0]).To(Equal(textPart))
+			Expect(got[0].Parts[1]).To(Equal(imgPart))
+			Expect(got[0].Parts[2].ThoughtSignature).To(Equal([]byte{0xde, 0xad, 0xbe, 0xef}))
+			Expect(got[0].Parts[2].ToolInputJSON).To(Equal(`{"x":1}`))
+			Expect(got[0].Parts[3].IsError).NotTo(BeNil())
+			Expect(*got[0].Parts[3].IsError).To(BeFalse())
+			Expect(got[0].Parts[4].IsError).NotTo(BeNil())
+			Expect(*got[0].Parts[4].IsError).To(BeTrue())
+			Expect(got[0].Parts[5].ProviderID).To(Equal("rs_abc"))
+			Expect(got[0].Parts[5].EncryptedContent).To(Equal("encblob"))
+			Expect(got[0].Parts[6].ProviderDataJSON).To(Equal(`{"foo":"bar"}`))
+		})
+
+		It("preserves ordering across multiple messages with multiple parts each", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, _ := bundle.Sessions.CreateSession(taskID, "agent", "a", "m", nil)
+
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			Expect(bundle.Sessions.AppendStructuredMessage(sessionID, "user", "u1", []store.MessagePart{
+				{Type: "text", Text: "u1-a"},
+				{Type: "text", Text: "u1-b"},
+			}, now, now)).To(Succeed())
+			Expect(bundle.Sessions.AppendStructuredMessage(sessionID, "assistant", "a1", []store.MessagePart{
+				{Type: "text", Text: "a1-a"},
+				{Type: "tool_use", ToolUseID: "c", ToolName: "n", ToolInputJSON: "{}"},
+			}, now, now)).To(Succeed())
+
+			got, err := bundle.Sessions.GetStructuredMessages(sessionID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(HaveLen(2))
+			Expect(got[0].Parts).To(HaveLen(2))
+			Expect(got[0].Parts[0].Text).To(Equal("u1-a"))
+			Expect(got[0].Parts[1].Text).To(Equal("u1-b"))
+			Expect(got[1].Parts).To(HaveLen(2))
+			Expect(got[1].Parts[1].Type).To(Equal("tool_use"))
+			Expect(got[1].Parts[1].ToolUseID).To(Equal("c"))
+		})
+
+		It("falls back to legacy content when message has no parts (e.g. pre-migration row)", func() {
+			_, taskID := seedMissionAndTask(bundle)
+			sessionID, _ := bundle.Sessions.CreateSession(taskID, "agent", "a", "m", nil)
+
+			now := time.Now().UTC().Truncate(time.Millisecond)
+			Expect(bundle.Sessions.AppendMessage(sessionID, "user", "legacy text", now, now)).To(Succeed())
+
+			got, err := bundle.Sessions.GetStructuredMessages(sessionID)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(got).To(HaveLen(1))
+			Expect(got[0].Role).To(Equal("user"))
+			Expect(got[0].Content).To(Equal("legacy text"))
+			Expect(got[0].Parts).To(BeEmpty())
+		})
+	})
+
+	// =========================================================================
 	// 16. CompleteSession
 	// =========================================================================
 	Describe("CompleteSession", func() {

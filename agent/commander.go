@@ -1167,7 +1167,17 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 				toolRecordID, _ = s.sessionLogger.StartToolCall(s.callbacksTaskID, s.sessionID, tc.ID, tc.Name, actionInput)
 			}
 
-			result := tool.Call(ctx, actionInput)
+			rawResult := tool.Call(ctx, actionInput)
+
+			// Same call_agent invariant as the main tool loop: if ctx
+			// canceled mid-call, leave no misleading "Tool call was
+			// interrupted..." trail. The agent's session is preserved and
+			// a future resume will re-execute via this very branch again.
+			if ctx.Err() != nil {
+				continue
+			}
+
+			result := MaybeInterrupted(ctx, rawResult)
 
 			if toolRecordID != "" {
 				s.sessionLogger.CompleteToolCall(toolRecordID, result)
@@ -1188,25 +1198,104 @@ func (s *Commander) ResumeTask(ctx context.Context, streamer CommanderStreamer) 
 				Content:   resultContent,
 			})
 		} else {
-			// DEFAULT: result was lost, tell the LLM
+			// DEFAULT: tool fired but its result wasn't received before
+			// shutdown. Stay matter-of-fact so the LLM can decide whether
+			// to retry, verify, or move on without us prescribing.
 			toolResults = append(toolResults, llm.ToolResultBlock{
 				ToolUseID: tc.ID,
-				Content: fmt.Sprintf("The result of this %s call was lost due to an interruption. "+
-					"You may need to run it again or attempt to verify whether the call was successful.", tc.Name),
-				IsError: true,
+				Content:   InterruptedToolMessage,
+				IsError:   true,
 			})
 		}
 	}
 
-	// Add tool results and continue the loop
+	// Add synthesized results to the in-memory session AND persist them so
+	// the DB stays well-formed (every tool_use has a matching tool_result).
+	// Without this, a second kill+resume would load a malformed message
+	// sequence — assistant turn followed directly by another assistant
+	// turn — and the provider would 400 on the next request.
 	s.session.AddToolResults(toolResults)
+	if s.sessionLogger != nil && s.sessionID != "" && len(toolResults) > 0 {
+		now := time.Now()
+		parts := make([]llm.ContentBlock, 0, len(toolResults))
+		for i := range toolResults {
+			tr := toolResults[i]
+			parts = append(parts, llm.ContentBlock{
+				Type:       llm.ContentTypeToolResult,
+				ToolResult: &tr,
+			})
+		}
+		msg := llm.Message{Role: llm.RoleUser, Parts: parts}
+		s.sessionLogger.AppendStructuredMessage(s.sessionID, "user", AuditContentForMessage(msg), PartsFromMessage(msg), now, now)
+	}
 	return s.runLoop(ctx, "", true, streamer)
 }
 
 // LoadSessionMessages loads persisted messages into the commander's session.
 // Used when resaturating a commander from stored state (e.g., mission resume).
+//
+// Also rebuilds the task_complete tool's in-memory state from the message
+// history. Without this, a kill that lands between task_complete tool_result
+// persistence and runTask's UpdateTaskStatus(completed) leaves the commander
+// thinking the task is still running on resume — it would loop, fail
+// noToolCallRetries, and end as failed even though the prior run succeeded.
 func (s *Commander) LoadSessionMessages(msgs []llm.Message) {
 	s.session.LoadMessages(msgs)
+	s.rebuildTaskCompleteFromHistory(msgs)
+}
+
+// rebuildTaskCompleteFromHistory walks the message history for the most
+// recent task_complete tool_use whose matching tool_result indicates
+// success, and replays its input through ApplyStateFromSuccessfulInput.
+func (s *Commander) rebuildTaskCompleteFromHistory(msgs []llm.Message) {
+	if s.taskComplete == nil {
+		return
+	}
+	// Walk backwards: most recent successful task_complete wins.
+	for i := len(msgs) - 1; i >= 0; i-- {
+		m := msgs[i]
+		if m.Role != llm.RoleAssistant {
+			continue
+		}
+		for _, part := range m.Parts {
+			if part.Type != llm.ContentTypeToolUse || part.ToolUse == nil {
+				continue
+			}
+			if part.ToolUse.Name != "task_complete" {
+				continue
+			}
+			if !taskCompleteResultSucceeded(msgs, i, part.ToolUse.ID) {
+				continue
+			}
+			s.taskComplete.ApplyStateFromSuccessfulInput(string(part.ToolUse.Input))
+			return
+		}
+	}
+}
+
+// taskCompleteResultSucceeded checks whether the tool_result for the given
+// tool_use_id (in messages after asstIdx) indicates success. We look at the
+// JSON body's "status" field — task_complete returns "ok" on success and
+// "error" otherwise.
+func taskCompleteResultSucceeded(msgs []llm.Message, asstIdx int, toolUseID string) bool {
+	for j := asstIdx + 1; j < len(msgs); j++ {
+		for _, part := range msgs[j].Parts {
+			if part.Type != llm.ContentTypeToolResult || part.ToolResult == nil {
+				continue
+			}
+			if part.ToolResult.ToolUseID != toolUseID {
+				continue
+			}
+			var body struct {
+				Status string `json:"status"`
+			}
+			if err := json.Unmarshal([]byte(part.ToolResult.Content), &body); err != nil {
+				return false
+			}
+			return body.Status == "ok"
+		}
+	}
+	return false
 }
 
 // AddRestoredAgent adds a restored agent to the commander's completed agents map.
@@ -1421,6 +1510,22 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 					})
 				}
 				s.session.AddToolResults(errResults)
+				// Persist so the DB sequence stays well-formed (every
+				// tool_use has a matching tool_result) — see ResumeTask
+				// for the same rationale.
+				if s.sessionLogger != nil && s.sessionID != "" {
+					now := time.Now()
+					parts := make([]llm.ContentBlock, 0, len(errResults))
+					for i := range errResults {
+						tr := errResults[i]
+						parts = append(parts, llm.ContentBlock{
+							Type:       llm.ContentTypeToolResult,
+							ToolResult: &tr,
+						})
+					}
+					msg := llm.Message{Role: llm.RoleUser, Parts: parts}
+					s.sessionLogger.AppendStructuredMessage(s.sessionID, "user", AuditContentForMessage(msg), PartsFromMessage(msg), now, now)
+				}
 				toolUses = nil
 			}
 			if s.maxTokensRetries > 3 {
@@ -1514,7 +1619,19 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 			// Execute the tool
 			toolStart := time.Now()
-			result := tool.Call(ctx, actionInput)
+			rawResult := tool.Call(ctx, actionInput)
+
+			// call_agent is special: when ctx is canceled mid-call, the agent's
+			// session is preserved and ResumeTask re-executes the call_agent on
+			// resume. We don't want a misleading "Tool call was interrupted..."
+			// trail in the audit log, the streamer, or the session — bail out
+			// cleanly. The audit row stays in 'started' state, accurately
+			// reflecting "fired but didn't complete."
+			if tc.Name == "call_agent" && ctx.Err() != nil {
+				continue
+			}
+
+			result := MaybeInterrupted(ctx, rawResult)
 
 			// Complete the tool call record
 			if toolRecordID != "" {
@@ -1554,16 +1671,19 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			}
 		}
 
-		// Send tool results back to the session (must happen before exit
-		// so the session always has matching tool_result for every tool_use)
+		// Send tool results back to the in-memory session for the next turn.
 		s.session.AddToolResults(toolResults)
 
-		// Log tool results as a single structured user message with one
-		// tool_result part per call — matches the wire shape providers see
-		// and what we feed back on resume. Also fixes a latent bug where the
-		// "tool_result" role was being persisted but isn't a valid llm.Role,
-		// so every provider's convertMessages was silently dropping these.
-		if s.sessionLogger != nil && s.sessionID != "" && len(toolResults) > 0 {
+		// Persist tool results as a single user message with one tool_result
+		// part per call — matches the wire shape providers see and what we
+		// feed back on resume. SKIPPED when ctx is canceled (kill / shutdown):
+		// leaving the assistant turn unfinished lets ResumeTask take its
+		// proper branch on resume — re-executing call_agent (which continues
+		// the still-restorable agent session) instead of feeding the
+		// commander a misleading "interrupted" placeholder that prompts a
+		// redundant retry. External tools fall through to the "result was
+		// lost" branch, which is the same outcome we'd persist eagerly.
+		if ctx.Err() == nil && s.sessionLogger != nil && s.sessionID != "" && len(toolResults) > 0 {
 			now := time.Now()
 			parts := make([]llm.ContentBlock, 0, len(toolResults))
 			for i := range toolResults {
@@ -1841,7 +1961,7 @@ Wrap your final answer in <ANSWER> tags.
 				continue
 			}
 
-			result := tool.Call(ctx, string(tc.Input))
+			result := MaybeInterrupted(ctx, tool.Call(ctx, string(tc.Input)))
 			resultContent := result
 			if s.interceptor != nil {
 				ir := s.interceptor.Intercept(tc.Name, result)

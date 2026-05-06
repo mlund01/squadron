@@ -1054,6 +1054,9 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 				AgentName:    agentName,
 				SecretInfos:  r.secretInfos,
 				SecretValues: r.secretValues,
+				DatasetStore: r,
+				FolderStore:  r.folderStore,
+				HumanBridge:  r.humanBridge,
 			}, agentLLMMsgs)
 			if err != nil {
 				continue // Non-fatal: skip agent if it can't be restored
@@ -1135,6 +1138,9 @@ func (r *Runner) restoreAgentSessions(ctx context.Context, sup *agent.Commander,
 			Mode:         &mode,
 			SecretInfos:  r.secretInfos,
 			SecretValues: r.secretValues,
+			DatasetStore: r,
+			FolderStore:  r.folderStore,
+			HumanBridge:  r.humanBridge,
 		}, llmMsgs)
 		if err != nil {
 			continue
@@ -1903,10 +1909,16 @@ func (r *Runner) runIteratedTask(ctx context.Context, task config.Task, missionI
 		}
 	}
 
+	// Treat a canceled context as an interrupted task, not a completed one,
+	// even if every iteration that DID run reported success. Without this,
+	// a kill mid-iteration on a sequential iterator that already submitted
+	// some outputs would mark the whole task completed — and the runner's
+	// resume path would skip the still-pending iterations entirely.
+	if ctx.Err() != nil {
+		return &TaskResult{TaskName: task.Name, Success: false, Error: ctx.Err()}, ctx.Err()
+	}
+
 	if !allSuccess {
-		if ctx.Err() != nil {
-			return &TaskResult{TaskName: task.Name, Success: false, Error: ctx.Err()}, ctx.Err()
-		}
 		errStr := firstError.Error()
 		updateTaskDone(false, nil, &errStr)
 		streamer.TaskFailed(task.Name, firstError)
@@ -2506,9 +2518,19 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		})
 	}
 
-	// Wire up OnNext to emit iteration_started events
+	// Wire up OnNext to emit iteration_started events. On resume, the
+	// dataset cursor starts fresh — if the LLM re-fetches the in-flight
+	// item (because its session has stale dataset_next data), OnNext would
+	// fire for an iteration that was already started pre-kill. Dedupe
+	// against the events store so each iteration emits iteration_started
+	// at most once over the mission's lifetime.
+	alreadyStarted := r.collectStartedIterations(task.Name)
 	sup.SetDatasetOnNext(func(index int) {
 		actualIndex := index + completedCount
+		if alreadyStarted[actualIndex] {
+			return
+		}
+		alreadyStarted[actualIndex] = true
 		streamer.IterationStarted(task.Name, actualIndex, taskObjective)
 	})
 
@@ -3503,4 +3525,36 @@ func (a *knowledgeStoreAdapter) Aggregate(taskName string, query agent.Aggregate
 	}
 
 	return agentResult
+}
+
+// collectStartedIterations returns the set of iteration indices that have
+// already had an iteration_started event emitted for the given task in the
+// current mission. Used by the resume path to suppress duplicate emissions
+// when the dataset cursor re-yields an in-flight item.
+func (r *Runner) collectStartedIterations(taskName string) map[int]bool {
+	started := make(map[int]bool)
+	if r.stores == nil || r.stores.Events == nil {
+		return started
+	}
+	events, err := r.stores.Events.GetEventsByMission(r.missionID, 10000, 0)
+	if err != nil {
+		return started
+	}
+	for _, e := range events {
+		if e.EventType != "iteration_started" {
+			continue
+		}
+		var data struct {
+			TaskName string `json:"taskName"`
+			Index    int    `json:"index"`
+		}
+		if err := json.Unmarshal([]byte(e.DataJSON), &data); err != nil {
+			continue
+		}
+		if data.TaskName != taskName {
+			continue
+		}
+		started[data.Index] = true
+	}
+	return started
 }

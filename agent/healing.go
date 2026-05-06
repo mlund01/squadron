@@ -1,8 +1,34 @@
 package agent
 
 import (
+	"context"
+
 	"squadron/llm"
 )
+
+// Tool-call interruption messages. Each one is matter-of-fact so the LLM
+// has the facts and decides how to proceed (retry vs verify vs skip).
+const (
+	// InterruptedToolMessage — the tool was actively running when the
+	// system was shut down. Side effects may or may not have completed
+	// externally; the result was not received.
+	InterruptedToolMessage = "Tool call was interrupted by a system shutdown before it completed."
+
+	// QueuedToolMessage — the tool was queued in the same assistant turn
+	// as another tool, but the system shut down before this one started.
+	// No side effects; safe to retry.
+	QueuedToolMessage = "Tool call was queued but the system shut down before it started."
+)
+
+// MaybeInterrupted substitutes InterruptedToolMessage for the original
+// result when the context has been canceled. Used at every tool.Call
+// site so the persisted tool_result is comprehensible on resume.
+func MaybeInterrupted(ctx context.Context, result string) string {
+	if ctx.Err() != nil {
+		return InterruptedToolMessage
+	}
+	return result
+}
 
 // HealSessionMessages fixes stored session messages for an interrupted agent.
 // If the last message is assistant with tool_use blocks, the tool call was in-flight
@@ -38,7 +64,7 @@ func HealSessionMessages(msgs []llm.Message) []llm.Message {
 			Type: llm.ContentTypeToolResult,
 			ToolResult: &llm.ToolResultBlock{
 				ToolUseID: id,
-				Content:   "Tool call was interrupted by a system restart. You may need to re-run the tool or verify its result.",
+				Content:   InterruptedToolMessage,
 				IsError:   true,
 			},
 		})

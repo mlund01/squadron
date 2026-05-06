@@ -1044,16 +1044,9 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 
 		// Reconstruct completed agents from stored sessions
 		for agentName, agentSess := range agentSessions {
-			agentMsgs, err := r.stores.Sessions.GetMessages(agentSess.ID)
+			agentLLMMsgs, err := agent.LoadSessionMessages(r.stores.Sessions, agentSess.ID)
 			if err != nil {
 				continue // Non-fatal: skip agent if messages can't be loaded
-			}
-			var agentLLMMsgs []llm.Message
-			for _, m := range agentMsgs {
-				agentLLMMsgs = append(agentLLMMsgs, llm.Message{
-					Role:    llm.Role(m.Role),
-					Content: m.Content,
-				})
 			}
 			restoredAgent, err := agent.RestoreAgent(ctx, agent.Options{
 				ConfigPath:   r.configPath,
@@ -1098,16 +1091,9 @@ func (r *Runner) findAndLoadExistingSession(sup *agent.Commander, taskID string,
 	}
 	for _, s := range sessions {
 		if s.Role == "commander" && intPtrEqual(s.IterationIndex, iterationIndex) {
-			msgs, err := r.stores.Sessions.GetMessages(s.ID)
-			if err != nil || len(msgs) == 0 {
+			llmMsgs, err := agent.LoadSessionMessages(r.stores.Sessions, s.ID)
+			if err != nil || len(llmMsgs) == 0 {
 				return ""
-			}
-			var llmMsgs []llm.Message
-			for _, m := range msgs {
-				llmMsgs = append(llmMsgs, llm.Message{
-					Role:    llm.Role(m.Role),
-					Content: m.Content,
-				})
 			}
 			sup.LoadSessionMessages(llmMsgs)
 			return s.ID
@@ -1133,19 +1119,13 @@ func (r *Runner) restoreAgentSessions(ctx context.Context, sup *agent.Commander,
 		if !intPtrEqual(s.IterationIndex, iterationIndex) {
 			continue
 		}
-		msgs, err := r.stores.Sessions.GetMessages(s.ID)
-		if err != nil || len(msgs) == 0 {
+		llmMsgs, err := agent.LoadSessionMessages(r.stores.Sessions, s.ID)
+		if err != nil || len(llmMsgs) == 0 {
 			continue
 		}
-		var llmMsgs []llm.Message
-		for _, m := range msgs {
-			llmMsgs = append(llmMsgs, llm.Message{
-				Role:    llm.Role(m.Role),
-				Content: m.Content,
-			})
-		}
-		// Heal agent messages before loading: if last message is assistant with ACTION,
-		// the tool call was interrupted — inject a placeholder observation.
+		// Heal agent messages before loading: if last message is assistant with
+		// an in-flight tool call (canceled mid-execution), inject a placeholder
+		// tool_result so the next provider request stays well-formed.
 		llmMsgs = agent.HealSessionMessages(llmMsgs)
 		mode := config.ModeMission
 		restoredAgent, err := agent.RestoreAgent(ctx, agent.Options{

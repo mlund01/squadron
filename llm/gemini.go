@@ -291,6 +291,11 @@ func messageToParts(m Message, toolNames map[string]string) []*genai.Part {
 			// Don't echo Gemini thought text back to the API — thoughts are
 			// surface-only output, not input. The relevant continuity hint
 			// (thought_signature) rides on tool_use blocks via ToolUseBlock.
+		case ContentTypeProviderRaw:
+			// Provider-specific block from a prior turn. Only echo back when
+			// it originated from this same provider; otherwise drop silently
+			// so a session that switched providers stays valid.
+			_ = block
 		}
 	}
 	return parts

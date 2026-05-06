@@ -281,6 +281,7 @@ type SessionLogger interface {
 	CompleteSession(id string, err error)
 	ReopenSession(id string)
 	AppendMessage(sessionID, role, content string, createdAt, completedAt time.Time) error
+	AppendStructuredMessage(sessionID, role, content string, parts []store.MessagePart, createdAt, completedAt time.Time) error
 	StoreToolResult(taskID, sessionID, toolCallId, toolName, inputParams, rawData string, startedAt, finishedAt time.Time) error
 	StartToolCall(taskID, sessionID, toolCallId, toolName, inputParams string) (string, error)
 	CompleteToolCall(id, rawData string) error
@@ -574,10 +575,12 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 				if callbacks.OnSessionCreated != nil {
 					callbacks.OnSessionCreated(s.TaskName, "commander", id)
 				}
-				// Persist system prompts to store
+				// Persist system prompts as structured text parts so resume
+				// rebuilds them as proper system messages.
 				now := time.Now()
 				for _, sp := range s.session.GetSystemPrompts() {
-					s.sessionLogger.AppendMessage(id, "system", sp, now, now)
+					msg := llm.NewTextMessage(llm.RoleSystem, sp)
+					s.sessionLogger.AppendStructuredMessage(id, "system", sp, PartsFromMessage(msg), now, now)
 				}
 			}
 		}
@@ -1297,7 +1300,8 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			// First turn — send the objective as a user message
 			if s.sessionLogger != nil && s.sessionID != "" {
 				now := time.Now()
-				s.sessionLogger.AppendMessage(s.sessionID, "user", currentInput, now, now)
+				msg := llm.NewTextMessage(llm.RoleUser, currentInput)
+				s.sessionLogger.AppendStructuredMessage(s.sessionID, "user", currentInput, PartsFromMessage(msg), now, now)
 			}
 			resp, err = s.session.SendStream(ctx, currentInput, onChunk)
 			firstTurn = false
@@ -1372,15 +1376,11 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 			return err
 		}
 
-		// Log assistant response to session store (include tool calls in content)
+		// Log assistant response with structured parts so thinking/tool_use
+		// blocks survive resume.
 		if s.sessionLogger != nil && s.sessionID != "" && resp != nil {
-			logContent := resp.Content
-			for _, block := range resp.ContentBlocks {
-				if block.Type == llm.ContentTypeToolUse && block.ToolUse != nil {
-					logContent += fmt.Sprintf("\n[tool_use: %s(%s)]", block.ToolUse.Name, string(block.ToolUse.Input))
-				}
-			}
-			s.sessionLogger.AppendMessage(s.sessionID, "assistant", logContent, llmStart, time.Now())
+			asstMsg := llm.Message{Role: llm.RoleAssistant, Parts: resp.ContentBlocks, Content: resp.Content}
+			s.sessionLogger.AppendStructuredMessage(s.sessionID, "assistant", AuditContentForMessage(asstMsg), PartsFromMessage(asstMsg), llmStart, time.Now())
 		}
 
 		// Extract tool calls from the response ContentBlocks
@@ -1558,12 +1558,23 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		// so the session always has matching tool_result for every tool_use)
 		s.session.AddToolResults(toolResults)
 
-		// Log tool results to session store
-		if s.sessionLogger != nil && s.sessionID != "" {
-			for _, tr := range toolResults {
-				now := time.Now()
-				s.sessionLogger.AppendMessage(s.sessionID, "tool_result", fmt.Sprintf("[%s] %s", tr.ToolUseID, tr.Content), now, now)
+		// Log tool results as a single structured user message with one
+		// tool_result part per call — matches the wire shape providers see
+		// and what we feed back on resume. Also fixes a latent bug where the
+		// "tool_result" role was being persisted but isn't a valid llm.Role,
+		// so every provider's convertMessages was silently dropping these.
+		if s.sessionLogger != nil && s.sessionID != "" && len(toolResults) > 0 {
+			now := time.Now()
+			parts := make([]llm.ContentBlock, 0, len(toolResults))
+			for i := range toolResults {
+				tr := toolResults[i]
+				parts = append(parts, llm.ContentBlock{
+					Type:       llm.ContentTypeToolResult,
+					ToolResult: &tr,
+				})
 			}
+			msg := llm.Message{Role: llm.RoleUser, Parts: parts}
+			s.sessionLogger.AppendStructuredMessage(s.sessionID, "user", AuditContentForMessage(msg), PartsFromMessage(msg), now, now)
 		}
 
 		// If task is complete, exit the loop

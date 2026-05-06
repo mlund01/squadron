@@ -588,6 +588,71 @@ func (s *PgSessionStore) AppendMessage(sessionID, role, content string, createdA
 	return err
 }
 
+func (s *PgSessionStore) AppendStructuredMessage(sessionID, role, content string, parts []MessagePart, createdAt, completedAt time.Time) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	var msgID int64
+	if err := tx.QueryRow(
+		`INSERT INTO session_messages (session_id, role, content, created_at, completed_at) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+		sessionID, role, content, tsFrom(createdAt), tsFrom(completedAt),
+	).Scan(&msgID); err != nil {
+		return fmt.Errorf("insert session_message: %w", err)
+	}
+
+	if err := insertPartsPostgres(tx, msgID, parts); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+	return nil
+}
+
+func insertPartsPostgres(tx *sql.Tx, msgID int64, parts []MessagePart) error {
+	if len(parts) == 0 {
+		return nil
+	}
+	stmt, err := tx.Prepare(`INSERT INTO session_message_parts (
+		message_id, position, type,
+		text,
+		tool_use_id, tool_name, tool_input_json, thought_signature, is_error,
+		image_data, image_media_type,
+		thinking_signature, thinking_redacted_data, provider_id, encrypted_content,
+		provider_name, provider_type, provider_data_json
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`)
+	if err != nil {
+		return fmt.Errorf("prepare part insert: %w", err)
+	}
+	defer stmt.Close()
+
+	for i, p := range parts {
+		var isErr sql.NullBool
+		if p.IsError != nil {
+			isErr = sql.NullBool{Bool: *p.IsError, Valid: true}
+		}
+		var thoughtSig interface{}
+		if len(p.ThoughtSignature) > 0 {
+			thoughtSig = p.ThoughtSignature
+		}
+		if _, err := stmt.Exec(
+			msgID, i, p.Type,
+			nullIfEmpty(p.Text),
+			nullIfEmpty(p.ToolUseID), nullIfEmpty(p.ToolName), nullIfEmpty(p.ToolInputJSON), thoughtSig, isErr,
+			nullIfEmpty(p.ImageData), nullIfEmpty(p.ImageMediaType),
+			nullIfEmpty(p.ThinkingSignature), nullIfEmpty(p.ThinkingRedactedData), nullIfEmpty(p.ProviderID), nullIfEmpty(p.EncryptedContent),
+			nullIfEmpty(p.ProviderName), nullIfEmpty(p.ProviderType), nullIfEmpty(p.ProviderDataJSON),
+		); err != nil {
+			return fmt.Errorf("insert part %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
 func (s *PgSessionStore) GetMessages(sessionID string) ([]SessionMessage, error) {
 	rows, err := s.db.Query(
 		`SELECT id, role, content, created_at, completed_at FROM session_messages WHERE session_id = $1 ORDER BY id`,
@@ -615,6 +680,63 @@ func (s *PgSessionStore) GetMessages(sessionID string) ([]SessionMessage, error)
 		msgs = append(msgs, m)
 	}
 	return msgs, nil
+}
+
+func (s *PgSessionStore) GetStructuredMessages(sessionID string) ([]StructuredMessage, error) {
+	// Single LEFT JOIN to avoid N+1 — one query for the whole session
+	// regardless of message count.
+	rows, err := s.db.Query(`SELECT
+		m.id, m.role, m.content,
+		p.type,
+		p.text,
+		p.tool_use_id, p.tool_name, p.tool_input_json, p.thought_signature, p.is_error,
+		p.image_data, p.image_media_type,
+		p.thinking_signature, p.thinking_redacted_data, p.provider_id, p.encrypted_content,
+		p.provider_name, p.provider_type, p.provider_data_json
+		FROM session_messages m
+		LEFT JOIN session_message_parts p ON p.message_id = m.id
+		WHERE m.session_id = $1
+		ORDER BY m.id, p.position`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var msgs []StructuredMessage
+	var current *StructuredMessage
+	for rows.Next() {
+		var (
+			msgID                            int
+			role, content                    string
+			pType                            sql.NullString
+			text, tuID, tuName, tuInput      sql.NullString
+			thoughtSig                       []byte
+			isErr                            sql.NullBool
+			imgData, imgMedia                sql.NullString
+			thSig, thRed, provID, encContent sql.NullString
+			provName, provType, provData     sql.NullString
+		)
+		if err := rows.Scan(
+			&msgID, &role, &content,
+			&pType,
+			&text,
+			&tuID, &tuName, &tuInput, &thoughtSig, &isErr,
+			&imgData, &imgMedia,
+			&thSig, &thRed, &provID, &encContent,
+			&provName, &provType, &provData,
+		); err != nil {
+			return nil, err
+		}
+		if current == nil || current.ID != msgID {
+			msgs = append(msgs, StructuredMessage{ID: msgID, Role: role, Content: content})
+			current = &msgs[len(msgs)-1]
+		}
+		if !pType.Valid {
+			continue
+		}
+		current.Parts = append(current.Parts, scanMessagePart(pType.String, text, tuID, tuName, tuInput, thoughtSig, isErr, imgData, imgMedia, thSig, thRed, provID, encContent, provName, provType, provData))
+	}
+	return msgs, rows.Err()
 }
 
 func (s *PgSessionStore) GetSessionsByTask(taskID string) ([]SessionInfo, error) {

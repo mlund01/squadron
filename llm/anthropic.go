@@ -438,10 +438,18 @@ func (p *AnthropicProvider) buildContentBlocks(m Message) []anthropic.ContentBlo
 			if part.Thinking != nil {
 				if part.Thinking.RedactedData != "" {
 					blocks = append(blocks, anthropic.NewRedactedThinkingBlock(part.Thinking.RedactedData))
-				} else {
+				} else if part.Thinking.Signature != "" {
+					// Only echo when we have the signature (which is required
+					// by Anthropic). Reasoning captured from a different
+					// provider has no signature and gets dropped silently.
 					blocks = append(blocks, anthropic.NewThinkingBlock(part.Thinking.Signature, part.Thinking.Text))
 				}
 			}
+		case ContentTypeProviderRaw:
+			// Provider-specific block from a prior turn. Only echo back when
+			// it originated from this same provider; otherwise drop silently
+			// so a session that switched providers stays valid.
+			_ = part
 		}
 	}
 

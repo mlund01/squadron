@@ -54,7 +54,13 @@ func plistPath() string {
 	return filepath.Join(home, "Library", "LaunchAgents", plistLabel+".plist")
 }
 
-// InstallService generates a launchd plist and loads it.
+// InstallService generates a launchd plist for boot persistence. The plist
+// is written but NOT loaded into the current launchd session — `engage`
+// already forked a foreground daemon for the current session, and loading
+// the plist would race with it (RunAtLoad=true → launchd spawns a second
+// daemon, KeepAlive=true → killing it just respawns it). The plist
+// auto-loads at next user login, which is exactly what we want for boot
+// persistence and nothing more.
 func InstallService(configPath string) error {
 	self, err := os.Executable()
 	if err != nil {
@@ -96,14 +102,6 @@ func InstallService(configPath string) error {
 		return fmt.Errorf("could not write plist: %w", err)
 	}
 
-	// Load the service (suppress stderr — launchctl can emit warnings)
-	cmd := exec.Command("launchctl", "load", plistPath())
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("launchctl load failed: %w", err)
-	}
-
 	return nil
 }
 
@@ -113,12 +111,30 @@ func ServiceInstalled() bool {
 	return err == nil
 }
 
-// UninstallService unloads and removes the launchd plist.
+// UninstallService unloads and removes the launchd plist. Tries the
+// modern bootout syntax first (kills the running job + removes it from
+// the user's launchd session); falls back to legacy `launchctl unload`
+// for older macOS. Both are best-effort — if neither is loaded the
+// commands simply error out, which is fine.
 func UninstallService() error {
 	path := plistPath()
 
-	// Unload (ignore error if not loaded)
-	exec.Command("launchctl", "unload", path).Run()
+	// Try modern bootout: launchctl bootout gui/<uid>/<label>
+	// This is the only reliable way to fully unload a user agent on
+	// macOS 10.10+; plain `unload` is treated as a hint and sometimes
+	// leaves the job alive.
+	uid := os.Getuid()
+	target := fmt.Sprintf("gui/%d/%s", uid, plistLabel)
+	bootout := exec.Command("launchctl", "bootout", target)
+	bootout.Stdout = nil
+	bootout.Stderr = nil
+	_ = bootout.Run()
+
+	// Legacy fallback (pre-10.10 or just-in-case).
+	legacy := exec.Command("launchctl", "unload", path)
+	legacy.Stdout = nil
+	legacy.Stderr = nil
+	_ = legacy.Run()
 
 	// Remove plist file
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {

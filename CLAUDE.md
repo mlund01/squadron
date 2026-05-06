@@ -566,12 +566,27 @@ plugin "playwright" {
   }
 }
 
+# Auto-build a local Go plugin on every config load.
+# `source` resolves relative to CWD and must stay inside the project root.
+# `version` is required to be "local" when `source` is a local path.
+plugin "shell" {
+  source  = "./plugin_shell"
+  version = "local"
+}
+
 # Use specific tools
 tools = [plugins.playwright.browser_navigate, plugins.playwright.browser_screenshot]
 
 # Use all tools from a plugin
 tools = [plugins.playwright.all]
 ```
+
+When `source` is a local path (anything that doesn't start with
+`github.com/`), Stage 1.5 of config load shells out to `go build` before
+calling `LoadPlugin`. Build output lands at
+`.squadron/plugins/<platform>/<name>/local/plugin`. The build runs every
+time — Go's build cache makes the no-op case ~100ms, and any source edit
+is automatically picked up next run.
 
 ### Plugin Registration
 

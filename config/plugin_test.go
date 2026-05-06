@@ -1,6 +1,9 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
+
 	"squadron/config"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -102,6 +105,45 @@ plugin "configured" {
 			err := p.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("version is required"))
+		})
+
+		Context("local source", func() {
+			It("classifies github.com sources as remote", func() {
+				p := config.Plugin{Name: "p", Source: "github.com/x/y", Version: "v1.0.0"}
+				Expect(p.IsLocalSource()).To(BeFalse())
+				Expect(p.Validate()).To(Succeed())
+			})
+
+			It("classifies relative paths as local", func() {
+				p := config.Plugin{Name: "p", Source: "./plugin_src", Version: "local"}
+				Expect(p.IsLocalSource()).To(BeTrue())
+			})
+
+			It("rejects local source with non-local version", func() {
+				p := config.Plugin{Name: "p", Source: "./plugin_src", Version: "v1.0.0"}
+				err := p.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("local source requires version"))
+			})
+
+			It("rejects local source that escapes the project root", func() {
+				p := config.Plugin{Name: "p", Source: "../../../etc/passwd", Version: "local"}
+				err := p.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("outside project root"))
+			})
+
+			It("resolves a local source to an absolute path", func() {
+				dir, _ := writeFixture("plugin_main.go", "package main\nfunc main(){}\n")
+				origWd, err := os.Getwd()
+				Expect(err).NotTo(HaveOccurred())
+				Expect(os.Chdir(dir)).To(Succeed())
+				defer os.Chdir(origWd)
+
+				p := config.Plugin{Name: "p", Source: ".", Version: "local"}
+				Expect(p.Validate()).To(Succeed())
+				Expect(filepath.IsAbs(p.Source)).To(BeTrue())
+			})
 		})
 	})
 })

@@ -2,12 +2,10 @@ package cmd
 
 import (
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"squadron/internal/paths"
 	"squadron/plugin"
 )
 
@@ -121,41 +119,21 @@ var pluginBuildCmd = &cobra.Command{
 
 		version, _ := cmd.Flags().GetString("version")
 
-		// Resolve source path to absolute
-		absSourcePath, err := filepath.Abs(sourcePath)
+		absSourcePath, err := paths.ResolveProjectPath(sourcePath)
 		if err != nil {
 			return fmt.Errorf("failed to resolve source path: %w", err)
 		}
 
-		// Check source exists
-		if _, err := os.Stat(absSourcePath); os.IsNotExist(err) {
-			return fmt.Errorf("source path does not exist: %s", absSourcePath)
-		}
-
-		// Get the plugin directory
-		pluginDir, err := plugin.GetPluginDir(pluginName, version)
+		outputPath, err := plugin.GetPluginPath(pluginName, version)
 		if err != nil {
-			return fmt.Errorf("failed to get plugin directory: %w", err)
+			return fmt.Errorf("failed to resolve plugin output path: %w", err)
 		}
 
-		// Create the directory
-		if err := os.MkdirAll(pluginDir, 0755); err != nil {
-			return fmt.Errorf("failed to create plugin directory: %w", err)
-		}
-
-		// Get the output path
-		outputPath := filepath.Join(pluginDir, "plugin")
-
-		// Run go build
 		fmt.Printf("Building plugin '%s' (version: %s)...\n", pluginName, version)
 		fmt.Printf("  Source: %s\n", absSourcePath)
 		fmt.Printf("  Output: %s\n", outputPath)
 
-		buildCmd := exec.Command("go", "build", "-o", outputPath, absSourcePath)
-		buildCmd.Stdout = os.Stdout
-		buildCmd.Stderr = os.Stderr
-
-		if err := buildCmd.Run(); err != nil {
+		if err := plugin.BuildLocal(pluginName, version, absSourcePath); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
 

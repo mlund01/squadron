@@ -973,6 +973,17 @@ func loadFromFiles(files []string) (*Config, error) {
 			if err != nil {
 				return nil, err
 			}
+			if err := p.Validate(); err != nil {
+				return nil, err
+			}
+
+			// Rebuild local sources every load so edits are picked up automatically.
+			if p.IsLocalSource() {
+				if err := plugin.BuildLocal(p.Name, p.Version, p.Source); err != nil {
+					return nil, fmt.Errorf("plugin %q: build failed: %w", p.Name, err)
+				}
+			}
+
 			allPlugins = append(allPlugins, *p)
 
 			// Load the plugin (passes source for auto-download if not found locally)

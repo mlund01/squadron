@@ -182,6 +182,52 @@ func (t *TaskCompleteTool) Call(ctx context.Context, params string) string {
 func (t *TaskCompleteTool) IsCompleted() bool             { return t.completed }
 func (t *TaskCompleteTool) IsSucceeded() bool             { return t.succeeded }
 func (t *TaskCompleteTool) FailureReason() string         { return t.failureReason }
+
+// ApplyStateFromSuccessfulInput rebuilds in-memory completion state from a
+// task_complete tool_use input JSON that we already know succeeded (the
+// caller has already inspected the matching tool_result). Used on resume so
+// the commander knows the task is done even if the kill landed between the
+// tool_result persistence and the runner's UpdateTaskStatus(completed) call.
+// Skips subtask checks and route validation — those ran when the original
+// call succeeded; we're just restoring what was already true.
+func (t *TaskCompleteTool) ApplyStateFromSuccessfulInput(params string) {
+	if params == "" {
+		return
+	}
+	var input struct {
+		Succeed       *bool             `json:"succeed"`
+		Summary       string            `json:"summary"`
+		Reason        string            `json:"reason"`
+		Route         string            `json:"route"`
+		MissionInputs map[string]string `json:"mission_inputs"`
+	}
+	if err := json.Unmarshal([]byte(params), &input); err != nil {
+		return
+	}
+	succeed := true
+	if input.Succeed != nil {
+		succeed = *input.Succeed
+	}
+	t.summary = input.Summary
+	t.completed = true
+	t.succeeded = succeed
+	if !succeed {
+		t.failureReason = input.Reason
+		return
+	}
+	if input.Route != "" && input.Route != "none" {
+		t.chosenRoute = input.Route
+		for _, r := range t.Routes {
+			if r.Target == input.Route {
+				t.isMissionRoute = r.IsMission
+				if input.MissionInputs != nil {
+					t.missionInputs = input.MissionInputs
+				}
+				break
+			}
+		}
+	}
+}
 func (t *TaskCompleteTool) Summary() string               { return t.summary }
 func (t *TaskCompleteTool) ChosenRoute() string           { return t.chosenRoute }
 func (t *TaskCompleteTool) IsMissionRoute() bool          { return t.isMissionRoute }

@@ -326,6 +326,23 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 					})
 				}
 				o.session.AddToolResults(errResults)
+				// Persist these synthetic results so the DB stays well-formed
+				// (every tool_use has a matching tool_result). Without the
+				// write, a kill before the correction's response persisted
+				// would leave a malformed sequence on resume.
+				if o.sessionLogger != nil && o.sessionID != "" {
+					now := time.Now()
+					parts := make([]llm.ContentBlock, 0, len(errResults))
+					for i := range errResults {
+						tr := errResults[i]
+						parts = append(parts, llm.ContentBlock{
+							Type:       llm.ContentTypeToolResult,
+							ToolResult: &tr,
+						})
+					}
+					msg := llm.Message{Role: llm.RoleUser, Parts: parts}
+					o.sessionLogger.AppendStructuredMessage(o.sessionID, "user", AuditContentForMessage(msg), PartsFromMessage(msg), now, now)
+				}
 				toolUses = nil
 			}
 			if o.maxTokensRetries > 3 {
@@ -413,6 +430,21 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 				continue
 			}
 
+			// Per-tool interruption fate. The model emitted N tool_uses; we
+			// process them serially. If the system shut down partway through,
+			// some tools completed, one was firing, and the rest were merely
+			// queued. Differentiating these on resume tells the LLM which
+			// calls had real side effects and which can be safely retried.
+			if ctx.Err() != nil {
+				o.streamer.ToolComplete(tc.ID, tc.Name, QueuedToolMessage)
+				toolResults = append(toolResults, llm.ToolResultBlock{
+					ToolUseID: tc.ID,
+					Content:   QueuedToolMessage,
+					IsError:   true,
+				})
+				continue
+			}
+
 			// Write-ahead: record tool call before execution
 			var toolRecordID string
 			if o.sessionLogger != nil && o.sessionID != "" {
@@ -426,7 +458,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			}
 
 			toolStart := time.Now()
-			result := tool.Call(ctx, injectedInput)
+			result := MaybeInterrupted(ctx, tool.Call(ctx, injectedInput))
 
 			if o.eventLogger != nil {
 				o.eventLogger.LogEvent("agent_tool_result", map[string]any{
@@ -463,9 +495,12 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		// Add all tool results to the session
 		o.session.AddToolResults(toolResults)
 
-		// Log tool results to session store. We persist all results from this
-		// turn as a single user message with one tool_result part per call —
-		// matching how the providers see them and what we feed back on resume.
+		// Persist tool results from this turn as a single user message with
+		// one tool_result part per call — matches the wire shape providers
+		// see and what we feed back on resume. Each entry is already
+		// labeled with its fate (real result / interrupted / queued) by
+		// the loop above, so the LLM sees the per-tool truth on resume
+		// even when the turn was cut short.
 		if o.sessionLogger != nil && o.sessionID != "" && len(toolResults) > 0 {
 			now := time.Now()
 			parts := make([]llm.ContentBlock, 0, len(toolResults))

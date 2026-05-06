@@ -510,9 +510,17 @@ func (p *OpenAIProvider) convertAssistantMessage(m Message) []responses.Response
 			}
 		case ContentTypeThinking:
 			if part.Thinking != nil && part.Thinking.ProviderID != "" {
-				rp := &responses.ResponseReasoningItemParam{ID: part.Thinking.ProviderID}
+				// Summary is required by the Responses API even when empty —
+				// omitting it returns 400 "Missing required parameter:
+				// 'input[N].summary'". gpt-5-mini frequently emits reasoning
+				// items with no summary text (just encrypted_content), so we
+				// must always send an empty array in that case.
+				rp := &responses.ResponseReasoningItemParam{
+					ID:      part.Thinking.ProviderID,
+					Summary: []responses.ResponseReasoningItemSummaryParam{},
+				}
 				if part.Thinking.Text != "" {
-					rp.Summary = []responses.ResponseReasoningItemSummaryParam{{Text: part.Thinking.Text}}
+					rp.Summary = append(rp.Summary, responses.ResponseReasoningItemSummaryParam{Text: part.Thinking.Text})
 				}
 				if part.Thinking.EncryptedContent != "" {
 					rp.EncryptedContent = param.NewOpt(part.Thinking.EncryptedContent)

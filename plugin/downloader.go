@@ -22,42 +22,58 @@ func DownloadPlugin(source, version, destDir string) error {
 		return fmt.Errorf("create plugin dir: %w", err)
 	}
 
-	wheel, err := findWheelAsset(src, version)
-	if err != nil {
-		return err
-	}
-	if wheel != nil {
-		return downloadAndInstallWheel(*wheel, destDir)
+	assets, _ := release.ListAssets(src, version)
+	if wheel := findWheel(assets); wheel != nil {
+		return downloadAndInstallWheel(*wheel, assets, destDir)
 	}
 
 	return downloadGoBinary(src, version, destDir)
 }
 
-func findWheelAsset(src release.GitHubSource, version string) (*release.Asset, error) {
-	assets, err := release.ListAssets(src, version)
-	if err != nil {
-		return nil, nil
-	}
-	for _, a := range assets {
+func findWheel(assets []release.Asset) *release.Asset {
+	for i, a := range assets {
 		if strings.HasSuffix(a.Name, "-py3-none-any.whl") {
-			return &a, nil
+			return &assets[i]
 		}
 	}
-	for _, a := range assets {
+	for i, a := range assets {
 		if strings.HasSuffix(a.Name, ".whl") {
-			return &a, nil
+			return &assets[i]
 		}
 	}
-	return nil, nil
+	return nil
 }
 
-func downloadAndInstallWheel(asset release.Asset, destDir string) error {
-	fmt.Printf("Downloading wheel %s...\n", asset.Name)
-	wheelPath, err := downloadToFile(asset.DownloadURL, filepath.Join(destDir, asset.Name))
+func findChecksums(assets []release.Asset) *release.Asset {
+	for i, a := range assets {
+		if a.Name == "checksums.txt" {
+			return &assets[i]
+		}
+	}
+	return nil
+}
+
+func downloadAndInstallWheel(wheel release.Asset, assets []release.Asset, destDir string) error {
+	checksums := findChecksums(assets)
+	if checksums == nil {
+		return fmt.Errorf("wheel %s present but checksums.txt missing from release — refusing to install unverified wheel", wheel.Name)
+	}
+
+	expected, err := release.FetchChecksum(checksums.DownloadURL, wheel.Name)
+	if err != nil {
+		return fmt.Errorf("fetch checksum for %s: %w", wheel.Name, err)
+	}
+
+	fmt.Printf("Downloading wheel %s...\n", wheel.Name)
+	wheelPath, err := downloadToFile(wheel.DownloadURL, filepath.Join(destDir, wheel.Name))
 	if err != nil {
 		return fmt.Errorf("download wheel: %w", err)
 	}
 	defer os.Remove(wheelPath)
+
+	if err := release.VerifyChecksum(wheelPath, expected); err != nil {
+		return fmt.Errorf("wheel %s checksum verification failed: %w", wheel.Name, err)
+	}
 
 	scriptName, err := wheelScriptName(wheelPath)
 	if err != nil {

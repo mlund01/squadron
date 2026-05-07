@@ -4,7 +4,10 @@ title: Plugins
 
 # Plugins
 
-Plugins extend Squadron with additional tools.
+Plugins extend Squadron with additional tools. They run as separate
+processes, communicate over gRPC, and can be written in **Go** or
+**Python**. Squadron manages installation, lifecycle, and shutdown — you
+just declare the plugin in HCL and use its tools.
 
 ## Loading Plugins
 
@@ -20,13 +23,16 @@ plugin "playwright" {
 }
 ```
 
-## Attributes
+| Attribute  | Type   | Description                                                |
+|------------|--------|------------------------------------------------------------|
+| `source`   | string | Plugin source (GitHub `owner/repo` path)                   |
+| `version`  | string | Release tag, or `"local"` for local development            |
+| `settings` | block  | Plugin-specific configuration; passed to the plugin's `Configure` (optional) |
 
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `source` | string | Plugin source (GitHub path or local path) |
-| `version` | string | Version tag or `"local"` for local development |
-| `settings` | block | Plugin-specific configuration (optional) |
+On first load Squadron looks up the release on GitHub, downloads the right
+asset (a Go binary tarball **or** a Python wheel — see
+[Distributing](#distributing)), verifies its `sha256` against
+`checksums.txt`, and caches the result. Subsequent loads reuse the cache.
 
 ## Using Plugin Tools
 
@@ -37,7 +43,6 @@ agent "browser" {
   tools = [plugins.playwright.browser_navigate]
 }
 
-# Or use all tools from a plugin
 agent "browser" {
   tools = [plugins.playwright.all]
 }
@@ -45,45 +50,233 @@ agent "browser" {
 
 ## Plugin Paths
 
-Plugins are stored in `.squadron/plugins/<platform>/<name>/<version>/plugin` (e.g. `.squadron/plugins/darwin-arm64/playwright/v0.0.2/plugin`).
+Plugins are cached at `.squadron/plugins/<platform>/<name>/<version>/`.
+Each install carries a `runner.json` that records how to spawn the
+plugin:
+
+```
+.squadron/plugins/darwin-arm64/playwright/v0.0.2/
+├── runner.json   # { "kind": "go", "entry": "plugin" }
+└── plugin        # the Go binary
+```
+
+```
+.squadron/plugins/darwin-arm64/myplug/v0.1.0/
+├── runner.json   # { "kind": "python", "entry": "venv/bin/myplug" }
+└── venv/         # virtualenv with the plugin package installed
+```
+
+If `runner.json` is missing, Squadron falls back to executing a
+`plugin` binary in the install directory (the legacy convention).
 
 ## Creating Plugins
 
-Use the [squadron-sdk](https://github.com/mlund01/squadron-sdk) to build plugins:
+Plugins implement four methods: `Configure`, `Call`, `GetToolInfo`,
+`ListTools`. Both SDKs ship a high-level decorator/generic API on top
+that handles schema reflection, payload validation, and result
+serialization for you — you just write a function.
+
+### Go
+
+Use [squadron-sdk](https://github.com/mlund01/squadron-sdk):
 
 ```go
 package main
 
-import squadron "github.com/mlund01/squadron-sdk"
+import (
+    "context"
+    "strings"
 
-type MyPlugin struct{}
+    squadron "github.com/mlund01/squadron-sdk"
+)
 
-func (p *MyPlugin) Configure(settings map[string]string) error {
-    return nil
-}
-
-func (p *MyPlugin) ListTools() ([]*squadron.ToolInfo, error) {
-    return []*squadron.ToolInfo{
-        {
-            Name:        "my_tool",
-            Description: "Does something useful",
-            Schema:      squadron.Schema{Type: squadron.TypeObject},
-        },
-    }, nil
-}
-
-func (p *MyPlugin) Call(toolName, payload string) (string, error) {
-    return "result", nil
+type EchoInput struct {
+    Message string `json:"message" jsonschema:"required,description=The message"`
+    AllCaps bool   `json:"all_caps,omitempty"`
 }
 
 func main() {
-    squadron.Serve(&MyPlugin{})
+    app := squadron.New()
+
+    app.Configure(func(settings map[string]string) error {
+        return nil
+    })
+
+    squadron.Tool(app, "echo", "Echoes a message back",
+        func(ctx context.Context, in EchoInput) (string, error) {
+            if in.AllCaps {
+                return strings.ToUpper(in.Message), nil
+            }
+            return in.Message, nil
+        })
+
+    app.Serve()
 }
 ```
 
-Build and install:
+Schema is reflected from `EchoInput`'s `jsonschema:` tags. Build and
+install for local use:
 
 ```bash
-mkdir -p .squadron/plugins/darwin-arm64/myplugin/local
-go build -o .squadron/plugins/darwin-arm64/myplugin/local/plugin .
+squadron plugin build myplug ./path/to/source
+```
+
+The build command runs `go build` from the source directory and writes
+`runner.json`.
+
+### Python
+
+Use [squadron-sdk-py](https://github.com/mlund01/squadron-sdk-py):
+
+```python
+from typing import Literal
+from pydantic import Field
+from squadron_sdk import Squadron
+
+app = Squadron()
+
+@app.configure
+def setup(settings: dict[str, str]) -> None:
+    app.prefix = settings.get("prefix", "")
+
+@app.tool
+def echo(
+    message: str = Field(..., description="The message to echo"),
+    all_caps: bool = False,
+) -> str:
+    """Echo a message back."""
+    out = message.upper() if all_caps else message
+    return f"{app.prefix}{out}"
+
+def main():
+    app.serve()
+```
+
+Tool schemas (input *and* output) are reflected from your type hints by
+pydantic; `@app.configure` receives settings just like Go's
+`app.Configure`. The plugin needs a standard `pyproject.toml` with one
+`[project.scripts]` entry that points at this `main`:
+
+```toml
+[project]
+name = "myplug"
+version = "0.1.0"
+dependencies = ["squadron-sdk @ git+https://github.com/mlund01/squadron-sdk-py"]
+
+[project.scripts]
+myplug = "myplug.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+```
+
+Build and install for local use:
+
+```bash
+squadron plugin build myplug ./path/to/source
+```
+
+The build command detects `pyproject.toml`, creates a virtualenv at
+`.squadron/plugins/.../venv/`, runs `pip install <source>`, and writes
+`runner.json` pointing at the entry script.
+
+Splitting tools across files, including a `ToolGroup` from another
+module, and reading app state from group tools are documented in the
+[squadron-sdk-py README](https://github.com/mlund01/squadron-sdk-py).
+
+## Distributing
+
+Squadron downloads released plugins from GitHub. The release must include
+**`checksums.txt`** with a `sha256` line per asset — Squadron refuses to
+install anything it can't verify.
+
+### Go release assets
+
+A Go release ships a tarball per platform:
+
+```
+plugin_myplug_darwin_arm64.tar.gz
+plugin_myplug_darwin_amd64.tar.gz
+plugin_myplug_linux_amd64.tar.gz
+checksums.txt
+```
+
+Each tarball contains a `plugin` binary. [GoReleaser](https://goreleaser.com/)
+handles all of this — see the [squadron-sdk README](https://github.com/mlund01/squadron-sdk#releasing)
+for a working `.goreleaser.yml`.
+
+### Python release assets
+
+A Python release ships a wheel:
+
+```
+myplug-0.1.0-py3-none-any.whl
+checksums.txt
+```
+
+A pure-Python plugin (no C extensions) ships a single `*-py3-none-any.whl`
+that works on every platform Python supports. Build it locally with
+`python -m build --wheel`, then attach to the release alongside
+`checksums.txt`.
+
+A minimal GitHub Actions workflow:
+
+```yaml
+name: Release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install build
+      - run: python -m build --wheel
+      - run: |
+          cd dist
+          shasum -a 256 *.whl > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/checksums.txt
+```
+
+Squadron picks the wheel automatically when it sees a `.whl` asset on the
+release; otherwise it looks for a Go binary tarball.
+
+## Local Development
+
+When iterating on a plugin, build it as version `local`:
+
+```bash
+squadron plugin build myplug ./path/to/source
+```
+
+Then reference `version = "local"` in HCL:
+
+```hcl
+plugin "myplug" {
+  version = "local"
+}
+```
+
+No `source` is needed for local installs.
+
+## CLI Helpers
+
+```bash
+squadron plugin tools <name>                       # list tools the plugin provides
+squadron plugin info  <name> <tool>                # show input + output schemas
+squadron plugin call  <name> <tool> '<json>'       # invoke directly (useful for testing)
+squadron plugin build <name> <source-path>         # build + install (Go or Python)
 ```

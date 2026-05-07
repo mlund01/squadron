@@ -88,9 +88,10 @@ func ToolsToDefinitions(tools map[string]Tool) []llm.ToolDefinition {
 		}
 		seen[sanitized] = true
 		defs = append(defs, llm.ToolDefinition{
-			Name:        sanitized,
-			Description: tool.ToolDescription(),
-			InputSchema: tool.ToolPayloadSchema().ToJSONSchema(),
+			Name:         sanitized,
+			Description:  tool.ToolDescription(),
+			InputSchema:  tool.ToolPayloadSchema().ToJSONSchema(),
+			OutputSchema: ToolOutputSchemaOf(tool),
 		})
 	}
 	return defs

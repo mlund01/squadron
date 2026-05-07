@@ -105,7 +105,10 @@ var pluginInfoCmd = &cobra.Command{
 
 		fmt.Printf("Tool: %s\n", info.Name)
 		fmt.Printf("Description: %s\n", info.Description)
-		fmt.Printf("Schema: %s\n", info.Schema.String())
+		fmt.Printf("Input schema: %s\n", info.Schema.ToJSONSchema())
+		if len(info.OutputSchema) > 0 {
+			fmt.Printf("Output schema: %s\n", info.OutputSchema)
+		}
 		return nil
 	},
 }

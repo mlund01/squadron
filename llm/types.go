@@ -41,9 +41,10 @@ type ImageBlock struct {
 
 // ToolDefinition is a provider-agnostic tool definition passed in API requests
 type ToolDefinition struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	OutputSchema json.RawMessage `json:"output_schema,omitempty"`
 }
 
 // ToolUseBlock represents the model requesting a tool call

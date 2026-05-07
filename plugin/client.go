@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -93,46 +92,45 @@ func LoadPlugin(name, version, source string) (*PluginClient, error) {
 		return existing, nil
 	}
 
-	pluginPath, err := GetPluginPath(name, version)
+	pluginDir, err := GetPluginDir(name, version)
 	if err != nil {
 		return nil, err
 	}
 
-	// If plugin doesn't exist locally, try to download
-	if _, err := os.Stat(pluginPath); os.IsNotExist(err) {
+	if _, err := os.Stat(pluginDir); os.IsNotExist(err) {
 		if source == "" || version == "local" {
-			return nil, fmt.Errorf("plugin not found: %s (version %s) at %s", name, version, pluginPath)
+			return nil, fmt.Errorf("plugin not found: %s (version %s) at %s", name, version, pluginDir)
 		}
 
-		// Download from GitHub
-		pluginDir, _ := GetPluginDir(name, version)
 		fmt.Printf("Downloading plugin %s %s from %s...\n", name, version, source)
 		if err := DownloadPlugin(source, version, pluginDir); err != nil {
 			return nil, fmt.Errorf("failed to download plugin: %w", err)
 		}
 	}
 
-	// Create a logger that discards output (or you can configure it)
+	cmd, err := resolvePluginCommand(pluginDir)
+	if err != nil {
+		return nil, err
+	}
+
 	logger := hclog.New(&hclog.LoggerOptions{
 		Name:   "plugin",
 		Output: os.Stderr,
-		Level:  hclog.Error, // Only show errors
+		Level:  hclog.Error,
 	})
 
-	// Create the plugin client with gRPC
 	client := plugin.NewClient(&plugin.ClientConfig{
 		HandshakeConfig:  Handshake,
 		Plugins:          PluginMap,
-		Cmd:              exec.Command(pluginPath),
+		Cmd:              cmd,
 		Logger:           logger,
 		AllowedProtocols: []plugin.Protocol{plugin.ProtocolGRPC},
 	})
 
-	// Connect and dispense the tool provider
 	provider, err := DispenseToolProvider(client)
 	if err != nil {
 		client.Kill()
-		return nil, fmt.Errorf("plugin %q (version %s) failed to start at %s: %w\n\nThis can happen if the plugin binary is incompatible with the current platform (e.g., built with glibc but running on Alpine/musl). Try rebuilding the plugin with CGO_ENABLED=0.", name, version, pluginPath, err)
+		return nil, fmt.Errorf("plugin %q (version %s) failed to start (%s): %w", name, version, cmd.Path, err)
 	}
 
 	pc := &PluginClient{

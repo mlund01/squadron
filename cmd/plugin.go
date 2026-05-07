@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 
 	"github.com/spf13/cobra"
@@ -115,56 +114,52 @@ var pluginInfoCmd = &cobra.Command{
 
 var pluginBuildCmd = &cobra.Command{
 	Use:   "build <plugin-name> <source-path>",
-	Short: "Build a plugin from source",
-	Long:  `Build a plugin from a Go source directory and install it to ~/.squadron/plugins/<name>/<version>/plugin`,
-	Args:  cobra.ExactArgs(2),
+	Short: "Build a plugin from source (Go or Python)",
+	Long: `Build a plugin from a source directory and install it to
+~/.squadron/plugins/<platform>/<name>/<version>/.
+
+Source detection:
+  - go.mod present       -> go build
+  - pyproject.toml       -> python -m venv + pip install`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pluginName := args[0]
 		sourcePath := args[1]
-
 		version, _ := cmd.Flags().GetString("version")
 
-		// Resolve source path to absolute
 		absSourcePath, err := filepath.Abs(sourcePath)
 		if err != nil {
 			return fmt.Errorf("failed to resolve source path: %w", err)
 		}
-
-		// Check source exists
 		if _, err := os.Stat(absSourcePath); os.IsNotExist(err) {
 			return fmt.Errorf("source path does not exist: %s", absSourcePath)
 		}
 
-		// Get the plugin directory
 		pluginDir, err := plugin.GetPluginDir(pluginName, version)
 		if err != nil {
 			return fmt.Errorf("failed to get plugin directory: %w", err)
 		}
-
-		// Create the directory
 		if err := os.MkdirAll(pluginDir, 0755); err != nil {
 			return fmt.Errorf("failed to create plugin directory: %w", err)
 		}
 
-		// Get the output path
-		outputPath := filepath.Join(pluginDir, "plugin")
-
-		// Run go build
 		fmt.Printf("Building plugin '%s' (version: %s)...\n", pluginName, version)
 		fmt.Printf("  Source: %s\n", absSourcePath)
-		fmt.Printf("  Output: %s\n", outputPath)
 
-		buildCmd := exec.Command("go", "build", "-o", outputPath, absSourcePath)
-		buildCmd.Stdout = os.Stdout
-		buildCmd.Stderr = os.Stderr
-
-		if err := buildCmd.Run(); err != nil {
-			return fmt.Errorf("build failed: %w", err)
+		switch {
+		case fileExists(filepath.Join(absSourcePath, "go.mod")):
+			return plugin.BuildGo(pluginDir, absSourcePath)
+		case fileExists(filepath.Join(absSourcePath, "pyproject.toml")):
+			return plugin.BuildPython(pluginDir, absSourcePath)
+		default:
+			return fmt.Errorf("source %q has no go.mod or pyproject.toml — can't determine plugin language", absSourcePath)
 		}
-
-		fmt.Printf("Plugin '%s' built successfully!\n", pluginName)
-		return nil
 	},
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
 }
 
 func init() {

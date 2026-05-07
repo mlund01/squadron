@@ -33,53 +33,12 @@ func BuildGo(pluginDir, sourcePath string) error {
 }
 
 func BuildPython(pluginDir, sourcePath string) error {
-	if runtime.GOOS == "windows" {
-		return fmt.Errorf("Python plugin builds on Windows are not yet supported")
-	}
-
 	scriptName, err := readPyprojectScript(filepath.Join(sourcePath, "pyproject.toml"))
 	if err != nil {
 		return err
 	}
-
-	pythonBin, err := findPython()
-	if err != nil {
-		return err
-	}
-
-	venvDir := filepath.Join(pluginDir, "venv")
-	venvBin := filepath.Join(venvDir, "bin")
-
-	fmt.Printf("  Output: %s\n", venvDir)
-	fmt.Printf("  Creating venv (%s)...\n", pythonBin)
-	if err := runStreamed(pythonBin, "-m", "venv", venvDir); err != nil {
-		return fmt.Errorf("python venv creation failed: %w", err)
-	}
-
-	pip := filepath.Join(venvBin, "pip")
-	fmt.Println("  Installing source...")
-	if err := runStreamed(pip, "install", "--upgrade", "pip"); err != nil {
-		return fmt.Errorf("pip upgrade failed: %w", err)
-	}
-	if err := runStreamed(pip, "install", sourcePath); err != nil {
-		return fmt.Errorf("pip install failed: %w", err)
-	}
-
-	scriptPath := filepath.Join(venvBin, scriptName)
-	if _, err := os.Stat(scriptPath); err != nil {
-		return fmt.Errorf("expected script %q from [project.scripts] not found at %s after install", scriptName, scriptPath)
-	}
-
-	runner := &Runner{
-		Kind:  "python",
-		Entry: filepath.Join("venv", "bin", scriptName),
-	}
-	if err := writeRunner(pluginDir, runner); err != nil {
-		return fmt.Errorf("write runner.json: %w", err)
-	}
-
-	fmt.Printf("  Entry: %s\n", runner.Entry)
-	return nil
+	fmt.Printf("  Output: %s\n", filepath.Join(pluginDir, "venv"))
+	return installPython(pluginDir, sourcePath, scriptName)
 }
 
 func readPyprojectScript(path string) (string, error) {

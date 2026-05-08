@@ -583,7 +583,7 @@ Python plugins must have a `pyproject.toml` like:
 [project]
 name = "myplug"
 version = "0.1.0"
-dependencies = ["squadron-sdk @ git+https://github.com/mlund01/squadron-sdk-py"]
+dependencies = ["squadron-sdk>=0.1.1"]
 
 [project.scripts]
 myplug = "myplug.main:main"

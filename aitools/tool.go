@@ -1,19 +1,25 @@
 package aitools
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
-// Tool defines the interface for AI agent tools
 type Tool interface {
-	// ToolName returns the name of the tool
 	ToolName() string
-
-	// ToolDescription returns a description of what the tool does
 	ToolDescription() string
-
-	// ToolPayloadSchema returns the JSON schema for the tool's input parameters
 	ToolPayloadSchema() Schema
-
-	// Call executes the tool with the given parameters and returns a stringified response.
-	// Implementations should respect context cancellation for long-running operations.
 	Call(ctx context.Context, params string) string
+}
+
+type OutputSchemaTool interface {
+	Tool
+	ToolOutputSchema() json.RawMessage
+}
+
+func ToolOutputSchemaOf(t Tool) json.RawMessage {
+	if os, ok := t.(OutputSchemaTool); ok {
+		return os.ToolOutputSchema()
+	}
+	return nil
 }

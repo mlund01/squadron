@@ -4,4 +4,5 @@ export default {
   cli: 'CLI Commands',
   config: 'Configuration',
   missions: 'Missions',
+  advanced: 'Advanced',
 }

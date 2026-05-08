@@ -10,38 +10,25 @@ import (
 	"github.com/mlund01/squadron-sdk"
 )
 
-// Re-export SDK types for convenience
 var (
-	// Handshake is the handshake config for plugins
 	Handshake = squadron.Handshake
-
-	// PluginMap is the map of plugins we can dispense
 	PluginMap = squadron.PluginMap
 )
 
-// ToolInfo contains metadata about a tool (with aitools.Schema for internal use)
 type ToolInfo struct {
-	Name        string
-	Description string
-	Schema      aitools.Schema
+	Name         string
+	Description  string
+	Schema       aitools.Schema
+	OutputSchema json.RawMessage
 }
 
-// ToolProvider wraps squadron.ToolProvider to convert schema types
 type ToolProvider interface {
-	// Configure passes settings from HCL config to the plugin
 	Configure(settings map[string]string) error
-
-	// Call invokes a tool with the given JSON payload
 	Call(ctx context.Context, toolName string, payload string) (string, error)
-
-	// GetToolInfo returns metadata about a specific tool
 	GetToolInfo(toolName string) (*ToolInfo, error)
-
-	// ListTools returns info for all tools this plugin provides
 	ListTools() ([]*ToolInfo, error)
 }
 
-// sdkProviderWrapper wraps squadron.ToolProvider to implement our ToolProvider
 type sdkProviderWrapper struct {
 	impl squadron.ToolProvider
 }
@@ -74,26 +61,29 @@ func (w *sdkProviderWrapper) ListTools() ([]*ToolInfo, error) {
 	return tools, nil
 }
 
-// sdkToLocalToolInfo converts squadron.ToolInfo to local ToolInfo with aitools.Schema
 func sdkToLocalToolInfo(t *squadron.ToolInfo) *ToolInfo {
-	// Convert squadron.Schema to aitools.Schema via JSON (same structure)
+	raw := t.RawSchema
+	if len(raw) == 0 {
+		marshaled, _ := json.Marshal(t.Schema)
+		raw = marshaled
+	}
+
 	var schema aitools.Schema
-	schemaJSON, _ := json.Marshal(t.Schema)
-	json.Unmarshal(schemaJSON, &schema)
+	_ = json.Unmarshal(raw, &schema)
+	schema = schema.WithRawJSONSchema(raw)
 
 	return &ToolInfo{
-		Name:        t.Name,
-		Description: t.Description,
-		Schema:      schema,
+		Name:         t.Name,
+		Description:  t.Description,
+		Schema:       schema,
+		OutputSchema: t.OutputSchema,
 	}
 }
 
-// WrapSDKProvider wraps an squadron.ToolProvider to implement our ToolProvider interface
 func WrapSDKProvider(impl squadron.ToolProvider) ToolProvider {
 	return &sdkProviderWrapper{impl: impl}
 }
 
-// DispenseToolProvider gets a ToolProvider from a plugin client
 func DispenseToolProvider(client *goplugin.Client) (ToolProvider, error) {
 	rpcClient, err := client.Client()
 	if err != nil {

@@ -103,20 +103,29 @@ var pluginInfoCmd = &cobra.Command{
 
 		fmt.Printf("Tool: %s\n", info.Name)
 		fmt.Printf("Description: %s\n", info.Description)
-		fmt.Printf("Schema: %s\n", info.Schema.String())
+		fmt.Printf("Input schema: %s\n", info.Schema.ToJSONSchema())
+		if len(info.OutputSchema) > 0 {
+			fmt.Printf("Output schema: %s\n", info.OutputSchema)
+		}
 		return nil
 	},
 }
 
 var pluginBuildCmd = &cobra.Command{
 	Use:   "build <plugin-name> <source-path>",
-	Short: "Build a plugin from source",
-	Long:  `Build a plugin from a Go source directory and install it to ~/.squadron/plugins/<name>/<version>/plugin`,
-	Args:  cobra.ExactArgs(2),
+	Short: "Build a plugin from source (Go or Python)",
+	Long: `Build a plugin from a source directory and install it to
+~/.squadron/plugins/<platform>/<name>/<version>/.
+
+Source detection:
+  - go.mod present       -> go build
+  - pyproject.toml       -> python -m venv + pip install
+
+The source path must live inside the project root.`,
+	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		pluginName := args[0]
 		sourcePath := args[1]
-
 		version, _ := cmd.Flags().GetString("version")
 
 		absSourcePath, err := paths.ResolveProjectPath(sourcePath)
@@ -124,20 +133,12 @@ var pluginBuildCmd = &cobra.Command{
 			return fmt.Errorf("failed to resolve source path: %w", err)
 		}
 
-		outputPath, err := plugin.GetPluginPath(pluginName, version)
-		if err != nil {
-			return fmt.Errorf("failed to resolve plugin output path: %w", err)
-		}
-
 		fmt.Printf("Building plugin '%s' (version: %s)...\n", pluginName, version)
 		fmt.Printf("  Source: %s\n", absSourcePath)
-		fmt.Printf("  Output: %s\n", outputPath)
 
 		if err := plugin.BuildLocal(pluginName, version, absSourcePath); err != nil {
 			return fmt.Errorf("build failed: %w", err)
 		}
-
-		fmt.Printf("Plugin '%s' built successfully!\n", pluginName)
 		return nil
 	},
 }

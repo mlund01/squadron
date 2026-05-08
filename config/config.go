@@ -984,22 +984,8 @@ func loadFromFiles(files []string) (*Config, error) {
 			// the plugin binary is running and ListTools works for metadata
 			loadedPlugins[p.Name] = client
 
-			// Configure the plugin with settings if any
-			if len(p.Settings) > 0 {
-				// Check for empty settings before calling Configure — plugins may
-				// crash on invalid input, killing the gRPC connection
-				var emptySettings []string
-				for k, v := range p.Settings {
-					if v == "" {
-						emptySettings = append(emptySettings, k)
-					}
-				}
-				if len(emptySettings) > 0 {
-					return nil, fmt.Errorf("plugin '%s' failed to configure: settings %v are empty — check that the corresponding variables are set", p.Name, emptySettings)
-				}
-				if err := configureWithRetry(client, p.Name, p.Settings); err != nil {
-					return nil, err
-				}
+			if err := configurePlugin(client, p.Name, p.Settings); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -1228,10 +1214,35 @@ type inputsBlock struct {
 	Fields []inputFieldBlock `hcl:"field,block"`
 }
 
-// parseToolBlock parses a single tool block with dynamic fields based on implemented tool schema
+// pluginConfigurer is the subset of *plugin.PluginClient that configurePlugin
+// needs. Defined as an interface so tests can inject fakes.
+type pluginConfigurer interface {
+	Configure(settings map[string]string) error
+}
+
+// configurePlugin always calls Configure on the plugin — some plugins
+// require it to initialize internal state even when no settings are
+// provided. When the user did supply settings, empty values are
+// rejected up front since plugins may crash on invalid input and kill
+// the gRPC connection.
+func configurePlugin(client pluginConfigurer, name string, settings map[string]string) error {
+	if len(settings) > 0 {
+		var emptySettings []string
+		for k, v := range settings {
+			if v == "" {
+				emptySettings = append(emptySettings, k)
+			}
+		}
+		if len(emptySettings) > 0 {
+			return fmt.Errorf("plugin '%s' failed to configure: settings %v are empty — check that the corresponding variables are set", name, emptySettings)
+		}
+	}
+	return configureWithRetry(client, name, settings)
+}
+
 // configureWithRetry retries plugin Configure() a few times to handle the case
 // where the gRPC process isn't fully ready immediately after launch.
-func configureWithRetry(client *plugin.PluginClient, name string, settings map[string]string) error {
+func configureWithRetry(client pluginConfigurer, name string, settings map[string]string) error {
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
 		if err = client.Configure(settings); err == nil {
@@ -1242,6 +1253,7 @@ func configureWithRetry(client *plugin.PluginClient, name string, settings map[s
 	return fmt.Errorf("plugin '%s' failed to configure: %w", name, err)
 }
 
+// parseToolBlock parses a single tool block with dynamic fields based on implemented tool schema
 func parseToolBlock(block *hcl.Block, baseCtx *hcl.EvalContext, loadedPlugins map[string]*plugin.PluginClient) (*CustomTool, error) {
 	toolName := block.Labels[0]
 

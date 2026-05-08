@@ -1,0 +1,97 @@
+---
+title: Distributing Plugins
+---
+
+# Distributing Plugins
+
+Plugins are distributed as GitHub releases. Squadron downloads the
+release asset on first use, verifies its `sha256` against
+`checksums.txt`, and caches the install. End users just declare:
+
+```hcl
+plugin "myplug" {
+  source  = "github.com/<owner>/<repo>"
+  version = "v0.1.0"
+}
+```
+
+Squadron picks the asset automatically — wheel for Python, binary
+tarball for Go. The release **must** include a `checksums.txt` file;
+unverifiable downloads are refused.
+
+## Go
+
+A Go release ships one tarball per platform plus `checksums.txt`:
+
+```
+plugin_myplug_darwin_arm64.tar.gz
+plugin_myplug_darwin_amd64.tar.gz
+plugin_myplug_linux_amd64.tar.gz
+checksums.txt
+```
+
+Each tarball contains a `plugin` binary at its root. [GoReleaser](https://goreleaser.com/)
+handles cross-compilation, archiving, and `checksums.txt` generation —
+see the [squadron-sdk README](https://github.com/mlund01/squadron-sdk#releasing)
+for a complete `.goreleaser.yml` and Actions workflow.
+
+## Python
+
+A pure-Python plugin ships a single wheel that works on every platform:
+
+```
+myplug-0.1.0-py3-none-any.whl
+checksums.txt
+```
+
+GitHub Actions workflow:
+
+```yaml
+name: Release
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install build
+      - run: python -m build --wheel
+      - run: |
+          cd dist
+          shasum -a 256 *.whl > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.whl
+            dist/checksums.txt
+```
+
+Tag a release and the workflow publishes both files to the GitHub release.
+
+## How Squadron picks the asset
+
+On first load Squadron lists the release's assets via the GitHub API:
+
+1. If a `*.whl` asset exists, it's installed as a Python plugin (download wheel, verify checksum, create a venv, `pip install`).
+2. Otherwise, the platform-matched `<repo>_<os>_<arch>.tar.gz` is downloaded and the `plugin` binary is extracted.
+
+Either way, a `runner.json` is written to the install dir recording how
+to spawn the plugin on subsequent loads.
+
+## Verifying locally
+
+After tagging a release, verify the install path before publishing it:
+
+```bash
+squadron plugin tools myplug -v v0.1.0
+```
+
+Squadron will download, verify, install, and list the plugin's tools.
+A failure here (checksum mismatch, missing asset, broken wheel) means
+the release is broken — fix it before pointing users at it.

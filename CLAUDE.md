@@ -538,21 +538,55 @@ type ToolProvider interface {
 }
 ```
 
-### Plugin Paths
+### Plugin Paths and `runner.json`
 
 Plugins are stored in versioned directories:
+
 ```
-.squadron/plugins/<name>/<version>/plugin
+.squadron/plugins/<platform>/<name>/<version>/
+├── runner.json   # spawn metadata
+├── plugin        # Go: built binary (legacy installs without runner.json still load by convention)
+└── venv/         # Python: virtualenv with package installed
 ```
 
-Example: `.squadron/plugins/playwright/local/plugin`
+`runner.json` tells squadron how to spawn the plugin:
+
+```json
+{ "kind": "go",     "entry": "plugin" }
+{ "kind": "python", "entry": "venv/bin/myplug" }
+```
+
+If `runner.json` is missing (older installs), squadron falls back to executing
+a `plugin` binary in the install dir.
 
 ### Building a Plugin
 
 ```bash
-# Build a plugin to the correct path (plugins are separate repos)
-squadron plugin build shell /path/to/plugin_shell
-squadron plugin build playwright /path/to/plugin_playwright
+squadron plugin build <name> /path/to/source
+```
+
+The build command auto-detects the language by inspecting the source dir:
+
+- **`go.mod` present** → `go build -o <plugin_dir>/plugin .` (run from the source dir).
+- **`pyproject.toml` present** → `python3 -m venv <plugin_dir>/venv` + `pip install <source>`. The plugin must declare exactly one `[project.scripts]` entry; squadron uses that script as the spawn entry.
+
+Both write `runner.json` describing how to spawn the result. Examples:
+
+```bash
+squadron plugin build pinger    /path/to/plugin_pinger        # Go
+squadron plugin build myplug    /path/to/myplug               # Python (uses pyproject.toml)
+```
+
+Python plugins must have a `pyproject.toml` like:
+
+```toml
+[project]
+name = "myplug"
+version = "0.1.0"
+dependencies = ["squadron-sdk @ git+https://github.com/mlund01/squadron-sdk-py"]
+
+[project.scripts]
+myplug = "myplug.main:main"
 ```
 
 ### Plugin Reference in HCL

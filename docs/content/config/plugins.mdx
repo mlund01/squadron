@@ -29,10 +29,11 @@ plugin "playwright" {
 | `version`  | string | Release tag, or `"local"` for local development            |
 | `settings` | block  | Plugin-specific configuration; passed to the plugin's `Configure` (optional) |
 
-On first load Squadron looks up the release on GitHub, downloads the right
-asset (a Go binary tarball **or** a Python wheel — see
-[Distributing](#distributing)), verifies its `sha256` against
-`checksums.txt`, and caches the result. Subsequent loads reuse the cache.
+On first load Squadron downloads the matching release asset from GitHub,
+verifies its `sha256` against `checksums.txt`, and caches the result.
+Subsequent loads reuse the cache. See
+[Distributing Plugins](../advanced/distributing-plugins) for the
+publishing side.
 
 ## Using Plugin Tools
 
@@ -187,72 +188,6 @@ The build command detects `pyproject.toml`, creates a virtualenv at
 Splitting tools across files, including a `ToolGroup` from another
 module, and reading app state from group tools are documented in the
 [squadron-sdk-py README](https://github.com/mlund01/squadron-sdk-py).
-
-## Distributing
-
-Squadron downloads released plugins from GitHub. The release must include
-**`checksums.txt`** with a `sha256` line per asset — Squadron refuses to
-install anything it can't verify.
-
-### Go release assets
-
-A Go release ships a tarball per platform:
-
-```
-plugin_myplug_darwin_arm64.tar.gz
-plugin_myplug_darwin_amd64.tar.gz
-plugin_myplug_linux_amd64.tar.gz
-checksums.txt
-```
-
-Each tarball contains a `plugin` binary. [GoReleaser](https://goreleaser.com/)
-handles all of this — see the [squadron-sdk README](https://github.com/mlund01/squadron-sdk#releasing)
-for a working `.goreleaser.yml`.
-
-### Python release assets
-
-A Python release ships a wheel:
-
-```
-myplug-0.1.0-py3-none-any.whl
-checksums.txt
-```
-
-A pure-Python plugin (no C extensions) ships a single `*-py3-none-any.whl`
-that works on every platform Python supports. Build it locally with
-`python -m build --wheel`, then attach to the release alongside
-`checksums.txt`.
-
-A minimal GitHub Actions workflow:
-
-```yaml
-name: Release
-on:
-  push:
-    tags: ["v*"]
-jobs:
-  release:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with: { python-version: "3.12" }
-      - run: pip install build
-      - run: python -m build --wheel
-      - run: |
-          cd dist
-          shasum -a 256 *.whl > checksums.txt
-      - uses: softprops/action-gh-release@v2
-        with:
-          files: |
-            dist/*.whl
-            dist/checksums.txt
-```
-
-Squadron picks the wheel automatically when it sees a `.whl` asset on the
-release; otherwise it looks for a Go binary tarball.
 
 ## Local Development
 

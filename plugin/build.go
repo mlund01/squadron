@@ -14,6 +14,10 @@ import (
 // (name, version) and writes runner.json. Detects Go (go.mod) vs Python
 // (pyproject.toml) and dispatches to BuildGo / BuildPython.
 //
+// Skips the rebuild when the source tree's content hash matches the
+// previous install's recorded hash and the entry binary still exists.
+// First-time installs and any source edit force a rebuild.
+//
 // The source path must already be absolute and project-root-contained —
 // path containment is the caller's responsibility (config-load and the
 // CLI both go through paths.ResolveProjectPath).
@@ -26,14 +30,52 @@ func BuildLocal(name, version, absSourcePath string) error {
 		return fmt.Errorf("create plugin directory: %w", err)
 	}
 
+	srcHash, err := hashSource(absSourcePath)
+	if err != nil {
+		return fmt.Errorf("hash source: %w", err)
+	}
+
+	if prev, ok := readRunner(pluginDir); ok && prev.SourceHash == srcHash && entryExists(pluginDir, prev) {
+		fmt.Printf("  Source unchanged — skipping rebuild (%s)\n", pluginDir)
+		return nil
+	}
+
 	switch {
 	case fileExists(filepath.Join(absSourcePath, "go.mod")):
-		return BuildGo(pluginDir, absSourcePath)
+		if err := BuildGo(pluginDir, absSourcePath); err != nil {
+			return err
+		}
 	case fileExists(filepath.Join(absSourcePath, "pyproject.toml")):
-		return BuildPython(pluginDir, absSourcePath)
+		if err := BuildPython(pluginDir, absSourcePath); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("source %q has no go.mod or pyproject.toml — can't determine plugin language", absSourcePath)
 	}
+
+	// BuildGo/BuildPython wrote runner.json without the source hash.
+	// Read it back, stamp the hash, write it again so the next load can
+	// short-circuit. A failure here is non-fatal — at worst the next
+	// load rebuilds.
+	if r, ok := readRunner(pluginDir); ok {
+		r.SourceHash = srcHash
+		if err := writeRunner(pluginDir, r); err != nil {
+			return fmt.Errorf("stamp source hash on runner.json: %w", err)
+		}
+	}
+	return nil
+}
+
+// entryExists checks that the binary/script recorded in runner.json
+// is still on disk — guards against a half-cleaned cache where the
+// runner.json survived but its entry was removed.
+func entryExists(pluginDir string, r *Runner) bool {
+	entry := r.Entry
+	if !filepath.IsAbs(entry) {
+		entry = filepath.Join(pluginDir, entry)
+	}
+	_, err := os.Stat(entry)
+	return err == nil
 }
 
 func fileExists(p string) bool {

@@ -621,9 +621,14 @@ When `source` is a local path (anything that doesn't start with
 calling `LoadPlugin`. `BuildLocal` looks at the source dir, dispatches
 to `BuildGo` (go.mod present) or `BuildPython` (pyproject.toml present),
 and writes the same `runner.json`-anchored install layout that a release
-download would produce. The build runs every time — Go's build cache
-makes the no-op case ~100ms; Python pip-installs are slower but the
-workflow is unchanged. Either way, source edits are picked up next run.
+download would produce.
+
+`BuildLocal` stamps a content hash of the source tree into
+`runner.json` (`source_hash`) after each build and skips the rebuild on
+the next config load when the tree still hashes the same and the entry
+binary is on disk. Edits invalidate the cache automatically — the hash
+walk ignores VCS data, virtualenvs, caches, and compiled artifacts so
+incidental changes don't force a rebuild.
 
 ### Plugin Registration
 

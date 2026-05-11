@@ -37,9 +37,9 @@ publishing side.
 
 ## Local Plugin Sources
 
-Point `source` at a local Go or Python package to have Squadron
-rebuild and install the plugin every time the config is loaded — no
-manual `squadron plugin build` step in the dev loop:
+Point `source` at a local Go or Python package and Squadron will
+auto-rebuild on every config load — no manual `squadron plugin build`
+step in the dev loop:
 
 ```hcl
 plugin "shell" {
@@ -61,6 +61,18 @@ Rules:
   build tool's output attached.
 - The compiled binary or installed venv lands at the same cache
   location as a downloaded release: `.squadron/plugins/<platform>/<name>/local/`.
+
+### Build caching
+
+Squadron hashes the source tree after each successful build and stamps
+the digest into `runner.json` (`source_hash`). On the next config load,
+if the tree still hashes the same and the entry binary is on disk, the
+rebuild is skipped — even for Python plugins where `pip install` would
+otherwise dominate startup. Editing any file triggers a fresh build.
+
+The hash walk ignores VCS metadata, virtualenvs, caches, and compiled
+artifacts (`.git/`, `__pycache__/`, `.venv/`, `node_modules/`,
+`*.pyc`, etc.) so incidental changes don't invalidate the cache.
 
 ## Using Plugin Tools
 

@@ -15,6 +15,13 @@ type Runner struct {
 	Kind  string   `json:"kind"`
 	Entry string   `json:"entry"`
 	Args  []string `json:"args,omitempty"`
+
+	// SourceHash records a content hash of the source tree this install
+	// was built from. Populated only for local-source plugins built via
+	// BuildLocal — release downloads leave it empty. BuildLocal uses it
+	// as a staleness signal: if the source tree hashes the same on the
+	// next config load, the rebuild is skipped.
+	SourceHash string `json:"source_hash,omitempty"`
 }
 
 func writeRunner(dir string, r *Runner) error {

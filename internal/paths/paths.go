@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 )
 
@@ -117,4 +118,39 @@ func PlatformDir() string {
 // ResolveFolderPath resolves a folder path to an absolute path.
 func ResolveFolderPath(path string) (string, error) {
 	return filepath.Abs(path)
+}
+
+// ResolveProjectPath resolves a path to absolute and verifies that it
+// stays within the project root (the process CWD). It rejects any path
+// that — after cleaning and joining — falls outside the root, so
+// `../../etc/passwd`-style escapes are blocked at config-parse time.
+//
+// Absolute paths are accepted only if they happen to land inside the
+// root.
+func ResolveProjectPath(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("path is empty")
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	root, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", err
+	}
+
+	cleaned := filepath.Clean(path)
+	var abs string
+	if filepath.IsAbs(cleaned) {
+		abs = cleaned
+	} else {
+		abs = filepath.Join(root, cleaned)
+	}
+
+	rel, err := filepath.Rel(root, abs)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("path %q is outside project root %q", path, root)
+	}
+	return abs, nil
 }

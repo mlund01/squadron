@@ -600,12 +600,35 @@ plugin "playwright" {
   }
 }
 
+# Auto-build a local Go or Python plugin on every config load.
+# `source` resolves relative to CWD and must stay inside the project root.
+# `version` is required to be "local" when `source` is a local path.
+# Source language is auto-detected from go.mod / pyproject.toml.
+plugin "shell" {
+  source  = "./plugin_shell"
+  version = "local"
+}
+
 # Use specific tools
 tools = [plugins.playwright.browser_navigate, plugins.playwright.browser_screenshot]
 
 # Use all tools from a plugin
 tools = [plugins.playwright.all]
 ```
+
+When `source` is a local path (anything that doesn't start with
+`github.com/`), Stage 1.5 of config load runs `plugin.BuildLocal` before
+calling `LoadPlugin`. `BuildLocal` looks at the source dir, dispatches
+to `BuildGo` (go.mod present) or `BuildPython` (pyproject.toml present),
+and writes the same `runner.json`-anchored install layout that a release
+download would produce.
+
+`BuildLocal` stamps a content hash of the source tree into
+`runner.json` (`source_hash`) after each build and skips the rebuild on
+the next config load when the tree still hashes the same and the entry
+binary is on disk. Edits invalidate the cache automatically — the hash
+walk ignores VCS data, virtualenvs, caches, and compiled artifacts so
+incidental changes don't force a rebuild.
 
 ### Plugin Registration
 

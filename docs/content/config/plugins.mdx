@@ -189,7 +189,7 @@ pydantic; `@app.configure` receives settings just like Go's
 [project]
 name = "myplug"
 version = "0.1.0"
-dependencies = ["squadron-sdk @ git+https://github.com/mlund01/squadron-sdk-py"]
+dependencies = ["squadron-sdk>=0.1.1"]
 
 [project.scripts]
 myplug = "myplug.main:main"
@@ -197,9 +197,6 @@ myplug = "myplug.main:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
-
-[tool.hatch.metadata]
-allow-direct-references = true
 ```
 
 Build and install for local use:

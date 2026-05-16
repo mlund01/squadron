@@ -19,8 +19,49 @@ const SITE = 'https://docs.squadron.sh'
 const CONTENT = path.resolve('content')
 const PUBLIC = path.resolve('public')
 
+// Remove MDX-only syntax that's noise in raw markdown: `{/* ... */}` comments
+// and any inline `<script>...</script>` or self-closing `<script ... />` blocks
+// (typically JSON-LD payloads). The self-closing case is parsed by counting
+// braces so we don't truncate at a `/` that lives inside a string literal.
+function stripScriptTags(body) {
+  let out = ''
+  let i = 0
+  while (i < body.length) {
+    const open = body.indexOf('<script', i)
+    if (open === -1) {
+      out += body.slice(i)
+      break
+    }
+    out += body.slice(i, open)
+    // Walk forward tracking brace depth so we don't bail at a `/` inside a
+    // JSX expression like `JSON.stringify({...})`.
+    let depth = 0
+    let j = open + '<script'.length
+    while (j < body.length) {
+      const ch = body[j]
+      if (ch === '{') depth++
+      else if (ch === '}') depth--
+      else if (depth === 0 && ch === '/' && body[j + 1] === '>') {
+        j += 2
+        break
+      } else if (depth === 0 && ch === '<' && body.slice(j, j + 9).toLowerCase() === '</script>') {
+        j += '</script>'.length
+        break
+      }
+      j++
+    }
+    i = j
+  }
+  return out
+}
+
+function stripMdxisms(body) {
+  return stripScriptTags(body.replace(/\{\/\*[\s\S]*?\*\/\}/g, '')).replace(/^\n+/, '')
+}
+
 // Strip frontmatter and return { title, body }. Title preference: frontmatter
-// `title:` → first `# ` heading → null.
+// `title:` → first `# ` heading → null. Body is cleaned of MDX-only syntax so
+// it reads as plain markdown.
 function parseMdx(src) {
   let body = src
   let frontmatterTitle = null
@@ -30,6 +71,7 @@ function parseMdx(src) {
     const t = fmMatch[1].match(/^title:\s*(.+)$/m)
     if (t) frontmatterTitle = t[1].replace(/^['"]|['"]$/g, '').trim()
   }
+  body = stripMdxisms(body)
   let h1Title = null
   const h1 = body.match(/^#\s+(.+)$/m)
   if (h1) h1Title = h1[1].trim()

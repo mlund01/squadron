@@ -1,0 +1,144 @@
+---
+title: FAQ
+description: Frequently asked questions about Squadron — pricing, license, supported LLM providers, on-prem deployment, Model Context Protocol support, state and resume, plugins, and how Squadron compares to LangGraph, CrewAI, AutoGen, and n8n.
+---
+
+{/* FAQPage structured data — keep in sync with the headings below. */}
+<script
+  type="application/ld+json"
+  dangerouslySetInnerHTML={{
+    __html: JSON.stringify({
+      '@context': 'https://schema.org',
+      '@type': 'FAQPage',
+      mainEntity: [
+        { '@type': 'Question', name: 'What is Squadron?', acceptedAnswer: { '@type': 'Answer', text: 'Squadron is a declarative framework for building and running multi-agent AI workflows. Agents, tools, models, and missions are defined entirely in HCL configuration. The runtime is a single Go binary that handles orchestration, state, dependency resolution, conditional routing, persistence, and resume.' } },
+        { '@type': 'Question', name: 'How much does Squadron cost?', acceptedAnswer: { '@type': 'Answer', text: 'Squadron is free and open source under the MIT license. You pay only for the LLM API calls you make through your own provider accounts (Anthropic, OpenAI, Google Gemini). Ollama-hosted models are free.' } },
+        { '@type': 'Question', name: 'Which LLM providers does Squadron support?', acceptedAnswer: { '@type': 'Answer', text: 'Anthropic (Claude), OpenAI (GPT and Responses API), Google Gemini, and Ollama for local models. All four are built in. You can mix providers per agent or per task in the same mission.' } },
+        { '@type': 'Question', name: 'Can I self-host Squadron?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. Squadron is distributed as a single Go binary that runs anywhere — your laptop, a server, a Docker container, or an air-gapped environment. Docker images are published to GitHub Container Registry on every release.' } },
+        { '@type': 'Question', name: 'Does Squadron require Python?', acceptedAnswer: { '@type': 'Answer', text: 'No. Squadron is a standalone Go binary with no runtime dependencies. Python is only required if you want to write a Python plugin (Squadron also supports Go plugins).' } },
+        { '@type': 'Question', name: 'Does Squadron support the Model Context Protocol (MCP)?', acceptedAnswer: { '@type': 'Answer', text: 'Yes — in both directions. Squadron can consume any MCP server (npm packages, GitHub release binaries, HTTP endpoints, or local stdio commands) and expose those tools to its agents. Squadron can also run as an MCP server itself, exposing your missions and tools to MCP-compatible clients like Claude Desktop, Claude Code, and Cursor.' } },
+        { '@type': 'Question', name: 'What happens if a Squadron mission crashes mid-run?', acceptedAnswer: { '@type': 'Answer', text: 'Squadron persists every commander session, agent session, route decision, and task output to SQLite (or Postgres) as the mission runs. Restart with `squadron mission --resume <id>` and the mission picks up from the last completed step, including mid-flight tool calls.' } },
+        { '@type': 'Question', name: 'Can Squadron run scheduled or webhook-triggered missions?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. Each mission can declare a `schedule` block (cron, daily-at-time, or recurring interval, with timezone and weekday filters) or a `trigger` block (webhook). Squadron runs the scheduler in serve mode with per-mission concurrency limits.' } },
+        { '@type': 'Question', name: 'How does Squadron compare to LangGraph?', acceptedAnswer: { '@type': 'Answer', text: 'LangGraph is an imperative Python library built on LangChain — you write code that defines a graph and the runtime executes it. Squadron is declarative HCL configuration and a standalone Go binary — the whole workflow lives in a config file and the runtime handles state, resume, scheduling, and budgets out of the box. See the detailed comparison at /compare/langgraph.' } },
+        { '@type': 'Question', name: 'How does Squadron compare to CrewAI?', acceptedAnswer: { '@type': 'Answer', text: 'Both are role-based multi-agent frameworks, but CrewAI is imperative Python with sequential or hierarchical processes, while Squadron is declarative HCL with an arbitrary DAG, conditional routing, automatic persistence and resume, scheduled missions, and budgets. See /compare/crewai.' } },
+        { '@type': 'Question', name: 'How does Squadron compare to AutoGen?', acceptedAnswer: { '@type': 'Answer', text: 'AutoGen treats multi-agent collaboration as a conversation (GroupChat); Squadron treats it as a workflow (typed task DAG). AutoGen is better for emergent dialogue patterns and research; Squadron is better for deterministic production pipelines. See /compare/autogen.' } },
+        { '@type': 'Question', name: 'How does Squadron compare to n8n?', acceptedAnswer: { '@type': 'Answer', text: 'n8n is a general-purpose visual SaaS-automation tool with an AI node category. Squadron is purpose-built for LLM agent workflows with a multi-agent runtime, MCP, and structured task outputs as first-class concepts. Use n8n for SaaS plumbing; use Squadron for the AI layer. See /compare/n8n.' } },
+        { '@type': 'Question', name: 'Can non-developers edit Squadron workflows?', acceptedAnswer: { '@type': 'Answer', text: 'HCL is a simple key-value configuration language designed for human authoring (it powers Terraform). Someone comfortable with editing config files but not writing Python can read, review, and modify Squadron missions. Workflow changes show up as readable diffs in pull requests.' } },
+        { '@type': 'Question', name: 'How are secrets stored?', acceptedAnswer: { '@type': 'Answer', text: 'Variables marked `secret = true` are encrypted at rest in `.squadron/vars.vault` using AES-256-GCM with an Argon2id-derived key. The passphrase lives in the OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager). Set values with `squadron vars set <name> <value>`.' } },
+        { '@type': 'Question', name: 'Does Squadron support parallel execution?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. Independent tasks in the DAG run concurrently. Tasks with iteration over a dataset can run iterations in parallel with configurable concurrency limits. Mission-level `max_parallel` caps how many instances of a mission can run simultaneously across all triggers.' } },
+        { '@type': 'Question', name: 'Can Squadron enforce a spending budget?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. Missions and individual tasks can declare a `budget { tokens = ...; dollars = ... }` block. The first limit reached halts the current task and fails the mission cleanly. See /missions/budgets.' } },
+        { '@type': 'Question', name: 'What language are Squadron plugins written in?', acceptedAnswer: { '@type': 'Answer', text: 'Plugins can be written in Go or Python. They run as separate subprocesses and communicate with Squadron over gRPC via hashicorp/go-plugin. Squadron auto-builds local plugins from source on every config load with content-hash caching. See /config/plugins.' } },
+        { '@type': 'Question', name: 'Does Squadron have a web UI?', acceptedAnswer: { '@type': 'Answer', text: 'Yes — the command center. Run `squadron serve -w` and a browser opens to a live mission-graph visualizer with run history, log streaming, and webhook routing. Connect multiple Squadron instances to one central command center by declaring a `command_center` block.' } },
+        { '@type': 'Question', name: 'Can I use Squadron in production?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. Squadron is designed for production from day one — persistent state, automatic resume, scheduled execution, webhook triggers, budget enforcement, structured outputs, and a single-binary deployment story. Run it under your favorite process supervisor or in Docker.' } },
+        { '@type': 'Question', name: 'Where can I get help?', acceptedAnswer: { '@type': 'Answer', text: 'File issues at github.com/mlund01/squadron. The full documentation is at docs.squadron.sh.' } },
+      ],
+    }),
+  }}
+/>
+
+# Frequently Asked Questions
+
+Common questions about Squadron — pricing, deployment, models, MCP, plugins, and how it compares to other frameworks. For an overview, start with [What is Squadron?](/what-is-squadron).
+
+## What is Squadron?
+
+Squadron is a declarative framework for building and running multi-agent AI workflows. Agents, tools, models, and missions are defined entirely in HCL configuration. The runtime is a single Go binary that handles orchestration, state, dependency resolution, conditional routing, persistence, and resume.
+
+See [What is Squadron?](/what-is-squadron) for the full overview.
+
+## How much does Squadron cost?
+
+Squadron is **free and open source** under the MIT license. You pay only for the LLM API calls you make through your own provider accounts (Anthropic, OpenAI, Google Gemini). Ollama-hosted models are free to run locally.
+
+## Which LLM providers does Squadron support?
+
+**Anthropic** (Claude), **OpenAI** (GPT and Responses API), **Google Gemini**, and **Ollama** for local models. All four are built in. You can mix providers per agent or per task in the same mission — for example, use Claude Sonnet for orchestration, GPT-4 for code generation, and a local Llama model for sensitive steps.
+
+See [Supported Models](/config/supported-models) for the current list.
+
+## Can I self-host Squadron?
+
+Yes. Squadron is distributed as a single Go binary that runs anywhere — your laptop, a server, a Docker container, an air-gapped environment. [Docker images](/getting-started/docker) are published to GitHub Container Registry on every release.
+
+## Does Squadron require Python?
+
+No. Squadron is a standalone Go binary with no runtime dependencies. Python is only required if you choose to write a Python plugin (Squadron also supports Go plugins).
+
+## Does Squadron support the Model Context Protocol (MCP)?
+
+**Yes — in both directions.**
+
+- [MCP tools](/config/mcp_tools): Squadron can consume any MCP server (npm packages, GitHub release binaries, HTTP endpoints, or local stdio commands) and expose those tools to its agents. Auto-install handled for `npm:` and `github.com/...` sources.
+- [MCP host](/config/mcp_host): Squadron can run as an MCP server itself, exposing your missions and tools to MCP-compatible clients like Claude Desktop, Claude Code, and Cursor.
+
+## What happens if a Squadron mission crashes mid-run?
+
+Squadron persists every commander session, agent session, route decision, and task output to SQLite (or Postgres) as the mission runs. Restart with:
+
+```bash
+squadron mission --resume <mission_id> -c ./config <mission_name>
+```
+
+The mission picks up from the last completed step, including mid-flight tool calls. No checkpoint file to manage.
+
+## Can Squadron run scheduled or webhook-triggered missions?
+
+Yes. Each mission can declare a `schedule` block (cron, daily-at-time, or recurring interval, with timezone and weekday filters) or a `trigger` block (webhook). Squadron runs the scheduler in serve mode with per-mission concurrency limits.
+
+See [Schedules & Triggers](/missions/schedules) for the full syntax.
+
+## How does Squadron compare to LangGraph?
+
+LangGraph is an imperative Python library built on LangChain — you write code that defines a graph and the runtime executes it. Squadron is declarative HCL configuration and a standalone Go binary — the whole workflow lives in a config file and the runtime handles state, resume, scheduling, and budgets out of the box.
+
+See [Squadron vs LangGraph](/compare/langgraph) for the detailed comparison.
+
+## How does Squadron compare to CrewAI?
+
+Both are role-based multi-agent frameworks, but [CrewAI](/compare/crewai) is imperative Python with sequential or hierarchical processes, while Squadron is declarative HCL with an arbitrary DAG, conditional routing, automatic persistence and resume, scheduled missions, and budgets.
+
+## How does Squadron compare to AutoGen?
+
+[AutoGen](/compare/autogen) treats multi-agent collaboration as a conversation (GroupChat); Squadron treats it as a workflow (typed task DAG). AutoGen is better for emergent dialogue patterns and research; Squadron is better for deterministic production pipelines.
+
+## How does Squadron compare to n8n?
+
+[n8n](/compare/n8n) is a general-purpose visual SaaS-automation tool with an AI node category. Squadron is purpose-built for LLM agent workflows with a multi-agent runtime, MCP, and structured task outputs as first-class concepts. Use n8n for SaaS plumbing; use Squadron for the AI layer.
+
+## Can non-developers edit Squadron workflows?
+
+HCL is a simple key-value configuration language designed for human authoring (it powers Terraform). Someone comfortable with editing config files but not writing Python can read, review, and modify Squadron missions. Workflow changes show up as readable diffs in pull requests.
+
+## How are secrets stored?
+
+Variables marked `secret = true` are encrypted at rest in `.squadron/vars.vault` using AES-256-GCM with an Argon2id-derived key. The encryption passphrase lives in the OS keychain (macOS Keychain, Linux Secret Service, Windows Credential Manager). Set values with `squadron vars set <name> <value>`.
+
+See [Variables](/config/variables) for the full story.
+
+## Does Squadron support parallel execution?
+
+Yes. Independent tasks in the DAG run concurrently. Tasks with [iteration over a dataset](/missions/iteration) can run iterations in parallel with configurable concurrency limits. Mission-level `max_parallel` caps how many instances of a mission can run simultaneously across all triggers.
+
+## Can Squadron enforce a spending budget?
+
+Yes. Missions and individual tasks can declare a `budget { tokens = ...; dollars = ... }` block. The first limit reached halts the current task and fails the mission cleanly.
+
+See [Budgets](/missions/budgets) for the full mechanics.
+
+## What language are Squadron plugins written in?
+
+[Plugins](/config/plugins) can be written in **Go** or **Python**. They run as separate subprocesses and communicate with Squadron over gRPC via [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin). Squadron auto-builds local plugins from source on every config load with content-hash caching.
+
+## Does Squadron have a web UI?
+
+Yes — the [command center](/cli/engage). Run `squadron serve -w` and a browser opens to a live mission-graph visualizer with run history, log streaming, and webhook routing. Connect multiple Squadron instances to one central command center by declaring a `command_center` block.
+
+## Can I use Squadron in production?
+
+Yes. Squadron is designed for production from day one — persistent state, automatic resume, scheduled execution, webhook triggers, budget enforcement, structured outputs, and a single-binary deployment story. Run it under your favorite process supervisor or in Docker.
+
+## Where can I get help?
+
+- File issues at [github.com/mlund01/squadron](https://github.com/mlund01/squadron/issues)
+- Full documentation: [docs.squadron.sh](https://docs.squadron.sh)
+- Browse the [CLI command reference](/cli/quickstart) or [configuration reference](/config/overview)

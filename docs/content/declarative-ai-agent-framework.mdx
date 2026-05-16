@@ -1,0 +1,91 @@
+---
+title: Declarative AI Agent Framework
+description: A declarative AI agent framework lets you describe multi-agent workflows as configuration instead of writing imperative orchestration code. Learn what makes a framework declarative, why it matters for production AI, and how Squadron implements the model.
+---
+
+# Declarative AI Agent Framework
+
+A **declarative AI agent framework** is one where you describe the *what* of a multi-agent workflow — which agents exist, what tools they have, how tasks depend on each other, when to branch — as configuration, and let a runtime decide the *how* (when to call which LLM, how to pass data between steps, how to retry, how to resume after a crash). It's the AI-agent equivalent of Terraform or Kubernetes manifests: state the goal in a file, let the engine reconcile it.
+
+The alternative is an **imperative** framework, where you write orchestration code by hand: Python loops, conditional branches, retry decorators, state checkpointing. Most AI agent frameworks today are imperative: LangGraph, CrewAI, AutoGen, Semantic Kernel, AutoChain. You write code that *runs*; the framework provides primitives.
+
+[Squadron](/what-is-squadron) is the canonical declarative AI agent framework: agents, tools, models, missions, schedules, budgets, and routing are all HCL config, and the entire runtime lives in a single Go binary.
+
+## What "declarative" means here
+
+A framework is declarative when:
+
+1. **The workflow is data, not code.** You can serialize the whole thing as a config file, send it to someone else, and they can run it without the source repo.
+2. **A runtime — not your code — drives execution.** The runtime decides when to call the model, what to retry, what to checkpoint, when to fan out, when to resume.
+3. **Changes are reviewable as config diffs.** Adding a step, reordering dependencies, swapping a model — all show up as a small, readable patch.
+4. **There is no hidden state.** All state is either declared (variables, datasets, folders) or persisted by the runtime (sessions, route decisions, outputs).
+
+This is the same shift that happened in infrastructure (Terraform replaced Bash + Ansible scripts), in CI (declarative YAML replaced Makefile-driven pipelines), and in deployment (Kubernetes manifests replaced bespoke deploy scripts). The pattern: when the orchestration part of a workflow is gnarlier than the work itself, push the orchestration into a runtime and let humans edit data.
+
+## Why a declarative model wins for agent workflows
+
+Multi-agent AI workflows have a particular property: the *actual* work — what the LLM says, what tool it picks — is the hard, valuable part. The wrapping code — the loops, the state passing, the retry logic, the resume after a crash — is plumbing.
+
+In an imperative framework, the plumbing dominates the file:
+
+```python
+# 80% plumbing, 20% prompt
+state = load_or_init_state(checkpoint_path)
+try:
+    if "papers" not in state:
+        state["papers"] = await researcher.run({"topic": topic})
+        save_state(state)
+    if "findings" not in state:
+        state["findings"] = await analyst.run({"papers": state["papers"]})
+        save_state(state)
+    if state.get("needs_followup"):
+        ...
+except RetryableError:
+    ...
+```
+
+In a declarative framework, the plumbing is in the runtime and the file is mostly intent:
+
+```hcl
+mission "research" {
+  task "gather"  { objective = "Find the top 5 papers on ${inputs.topic}" }
+  task "analyze" { depends_on = [tasks.gather]; objective = "Extract key findings" }
+}
+```
+
+The runtime handles checkpointing, retry, resume, state passing, and parallelism without you wiring it.
+
+## What you give up
+
+Declarative models trade flexibility for legibility. If your workflow genuinely needs arbitrary Python in the middle of orchestration — a custom state reducer that aggregates dozens of dicts, a custom scheduler that interleaves work in a non-DAG shape, a runtime that mutates the graph during execution based on data — a declarative framework will frustrate you.
+
+The escape hatches in a well-designed declarative framework cover most of those cases:
+
+- **Plugins.** Squadron supports [Go and Python plugins](/config/plugins) that run as subprocesses and expose tools to agents. The plugin's internals are whatever code you want.
+- **MCP.** Any [Model Context Protocol server](/config/mcp_tools) can be a tool source — `pip`, `npm`, GitHub releases, HTTP endpoints, or local binaries.
+- **Functions in HCL.** Built-in functions for schema shaping, interpolation, and references handle most static-config-time logic without dropping to a programming language.
+
+When even that isn't enough, you have an indication that your workflow doesn't fit the declarative model — go imperative for that piece and possibly wrap a declarative orchestrator around it.
+
+## Properties a declarative agent framework should have
+
+If you're evaluating frameworks against this category, the things to look for:
+
+1. **All workflow shape lives in config.** No hidden imperative steps to wire branches together.
+2. **Built-in persistence.** State writes happen automatically, not in your code.
+3. **Automatic resume.** A crashed run can pick up from the last completed step — including a mid-flight tool call — without a manual checkpoint file.
+4. **Reviewable diffs.** A teammate can read a config diff and understand the workflow change without context-switching to runtime semantics.
+5. **Typed data flow.** Tasks declare their outputs as schemas; downstream tasks pull structured data, not conversation transcripts.
+6. **First-class concurrency primitives.** Parallel iteration over datasets, fan-out via `send_to`, conditional routing — all declarative, all with concurrency controls.
+7. **First-class scheduling.** Cron and webhook triggers as config blocks, not external orchestrator setup.
+8. **Provider-agnostic.** Mix model providers (Anthropic, OpenAI, Gemini, Ollama) per agent or per task without writing adapter code.
+9. **Tool ecosystem.** Built-in tools, native plugins, and an open tool protocol (MCP) so you don't get stuck with one framework's tool format.
+
+Squadron satisfies all nine. Compare against [LangGraph](/compare/langgraph), [CrewAI](/compare/crewai), [AutoGen](/compare/autogen), and [n8n](/compare/n8n) for how other frameworks stack up.
+
+## See also
+
+- [What is Squadron?](/what-is-squadron) — the introductory page
+- [The Harness](/missions/harness) — the runtime model behind Squadron's declarative workflows
+- [Missions overview](/missions/overview) — every block, every field
+- [FAQ](/faq) — pricing, providers, deployment, and more

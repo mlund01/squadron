@@ -18,11 +18,11 @@ Ordered by impact-per-effort. Tier 1 first.
 
 Title + H1 must echo the query verbatim. Answer engines extract the first paragraph when the H1 matches.
 
-- [ ] **6. "What is Squadron?"** — one-paragraph definition first, then features.
-- [ ] **7. Comparison pages**: "Squadron vs LangGraph", "Squadron vs CrewAI", "Squadron vs AutoGen", "Squadron vs n8n". Honest comparison tables.
-- [ ] **8. "How to build a multi-agent workflow without writing code"** — long-form, HCL-vs-Python angle.
-- [ ] **9. "Declarative AI agent framework"** — own the category name.
-- [ ] **10. FAQ page** with 15–20 high-intent questions (pricing, license, providers, on-prem, resume, state model, MCP, plugin languages). Each Q as `<h3>` in natural phrasing.
+- [x] **6. "What is Squadron?"** — [`docs/content/what-is-squadron.mdx`](docs/content/what-is-squadron.mdx). Definition-first, includes feature summary and competitor comparison table.
+- [x] **7. Comparison pages**: [`compare/langgraph`](docs/content/compare/langgraph.mdx), [`crewai`](docs/content/compare/crewai.mdx), [`autogen`](docs/content/compare/autogen.mdx), [`n8n`](docs/content/compare/n8n.mdx). Honest tradeoffs, side-by-side code, "when to pick X" sections.
+- [x] **8. "How to build a multi-agent workflow without writing code"** — [`docs/content/no-code-multi-agent-workflow.mdx`](docs/content/no-code-multi-agent-workflow.mdx). Full walkthrough of a daily-brief mission, HCL-vs-Python angle throughout.
+- [x] **9. "Declarative AI agent framework"** — [`docs/content/declarative-ai-agent-framework.mdx`](docs/content/declarative-ai-agent-framework.mdx). Category-defining page with imperative-vs-declarative analysis.
+- [x] **10. FAQ page** — [`docs/content/faq.mdx`](docs/content/faq.mdx). 20 questions covering pricing, license, providers, on-prem, MCP, resume, plugins, comparisons. FAQPage JSON-LD inlined for answer engines.
 
 ## Tier 3 — Off-site signal
 

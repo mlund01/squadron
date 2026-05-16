@@ -1,0 +1,117 @@
+---
+title: Squadron vs AutoGen
+description: Honest comparison of Squadron and Microsoft AutoGen for multi-agent AI workflows. AutoGen is a Python conversational multi-agent framework centered on GroupChat. Squadron is HCL config and a Go binary centered on deterministic task DAGs with structured outputs.
+---
+
+# Squadron vs AutoGen
+
+**AutoGen** (Microsoft) and Squadron both let you compose multiple LLM agents to solve a task, but the two frameworks have very different worldviews. AutoGen treats multi-agent collaboration as a *conversation*. Squadron treats it as a *workflow*.
+
+## TL;DR
+
+| Dimension | Squadron | AutoGen |
+|---|---|---|
+| **Worldview** | Tasks in a DAG with typed outputs | Agents in a conversation |
+| **Style** | Declarative HCL config | Imperative Python |
+| **Runtime** | Standalone Go binary | Python library |
+| **Primary primitive** | `mission` → `task` → `agent` | `GroupChat` / `ConversableAgent` |
+| **Branching** | First-class `router` / `send_to` blocks | Conversation flow, custom speaker selection |
+| **Determinism** | High — explicit DAG, structured outputs | Lower — emergent from agent dialogue |
+| **State persistence** | Built-in, auto-resume | Manual |
+| **LLM providers** | Anthropic, OpenAI, Gemini, Ollama, all built in | OpenAI-first; others via adapters |
+| **Tool ecosystem** | Built-in, plugins (Go/Python), MCP both directions | Python functions, growing tool support |
+| **Best fit** | Production agent pipelines | Multi-agent reasoning, research patterns |
+| **License** | MIT | MIT (CC BY 4.0 docs) |
+
+## What is AutoGen?
+
+[AutoGen](https://github.com/microsoft/autogen) is a Python framework from Microsoft Research for building applications around conversations between multiple LLM agents. Its central abstraction is the `GroupChat` (and its more recent successor, AutoGen Studio's actor model in v0.4), where agents like `UserProxyAgent`, `AssistantAgent`, and custom subclasses take turns speaking. A manager decides who speaks next, and the conversation continues until a termination condition fires.
+
+AutoGen is research-forward and has produced influential patterns for agent collaboration — debate, critique, executor/reviewer pairs, and so on.
+
+## What is Squadron?
+
+[Squadron](/what-is-squadron) is a declarative framework for multi-agent AI *workflows*. You don't write a conversation; you write a task graph. The runtime — a single Go binary — executes the graph, assigning tasks to agents, collecting structured outputs, and routing dynamically when the commander LLM decides which branch to take next.
+
+## The core difference: conversation vs workflow
+
+AutoGen's mental model is: *put several agents in a room and let them talk until they finish*. You get emergent behavior, which is powerful for research patterns but harder to reason about for production.
+
+Squadron's mental model is: *describe what work happens, in what order, with what data flowing between steps*. The commander LLM still makes runtime decisions (which route to take, when a task is complete) but it does so inside an explicit harness.
+
+If you've ever needed to debug *why* an AutoGen GroupChat went off the rails for 40 turns, you know the cost of the conversational model. If you've ever tried to encode a strict process flow into a GroupChat, you know the cost of forcing it.
+
+## Side-by-side
+
+A two-step research workflow in **AutoGen**:
+
+```python
+from autogen import AssistantAgent, UserProxyAgent, GroupChat, GroupChatManager
+
+researcher = AssistantAgent(name="researcher", llm_config={"model": "gpt-4o"})
+analyst    = AssistantAgent(name="analyst",    llm_config={"model": "gpt-4o"})
+user       = UserProxyAgent(name="user", human_input_mode="NEVER")
+
+group = GroupChat(agents=[user, researcher, analyst], messages=[], max_round=20)
+manager = GroupChatManager(groupchat=group, llm_config={"model": "gpt-4o"})
+
+user.initiate_chat(
+    manager,
+    message="Find the top 5 papers on post-quantum cryptography and extract key findings.",
+)
+```
+
+The same in **Squadron**:
+
+```hcl
+mission "research" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.researcher, agents.analyst]
+
+  task "gather"  { objective = "Find the top 5 papers on ${inputs.topic}"; agents = [agents.researcher] }
+  task "analyze" { depends_on = [tasks.gather]; objective = "Extract key findings"; agents = [agents.analyst] }
+}
+```
+
+```bash
+squadron mission research -c ./config --topic "post-quantum cryptography"
+```
+
+AutoGen lets the chat manager decide order. Squadron makes order explicit. Both are valid — they suit different problems.
+
+## When to pick AutoGen
+
+- You're researching multi-agent collaboration patterns themselves (debate, critique, role-playing).
+- You want emergent behavior from a conversation, not a fixed flow.
+- You're invested in OpenAI / Azure OpenAI and the broader Microsoft ML stack.
+- You're building an interactive agent system where the human is in the loop turn-by-turn.
+
+## When to pick Squadron
+
+- You're shipping a **production pipeline** and want deterministic structure, not emergent dialogue.
+- You want **typed structured outputs** flowing between tasks instead of replaying conversation history.
+- You need **scheduled or webhook-triggered** runs with concurrency limits and budgets.
+- You want **automatic state persistence and resume** — Squadron writes every step to SQLite or Postgres.
+- You want **workflows as config** that non-Python teammates can review.
+- You need **MCP both directions** — consume external MCP servers and expose your missions as MCP tools to Claude Desktop / Cursor.
+- You want to **mix LLM providers** at the task level without writing adapter code.
+
+## What AutoGen does better
+
+- Conversational multi-agent patterns where the *content* of the dialogue is the artifact.
+- Tight Microsoft ecosystem integration.
+- Research-grade flexibility — easy to invent new agent role patterns.
+
+## What Squadron does better
+
+- **Predictability.** The DAG is explicit; the commander's runtime choices are constrained to declared routes.
+- **Operational maturity.** Resume, schedules, webhooks, budgets, and a web command center are all first-class.
+- **Reviewable workflows.** One HCL file you diff in a PR.
+- **MCP-first.** Squadron speaks the Model Context Protocol natively in both directions.
+
+## See also
+
+- [What is Squadron?](/what-is-squadron)
+- [Routing](/missions/routing) — how Squadron handles dynamic decisions
+- [Squadron vs LangGraph](/compare/langgraph)
+- [Squadron vs CrewAI](/compare/crewai)

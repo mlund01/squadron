@@ -7,7 +7,7 @@ COPY . .
 RUN CGO_ENABLED=1 go build -ldflags="-s -w -X squadron/cmd.Version=${VERSION}" -o squadron ./cmd/cli
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv python3-pip && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /build/squadron /usr/local/bin/squadron
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENV SQUADRON_CONTAINER=1

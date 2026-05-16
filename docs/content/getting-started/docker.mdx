@@ -132,3 +132,5 @@ docker pull ghcr.io/mlund01/squadron:v0.0.45-debian
 
 - **Alpine** (`latest`) — smaller image, static binary with `CGO_ENABLED=0`. Use this unless you have a reason not to.
 - **Debian** (`latest-debian`) — larger image, built with `CGO_ENABLED=1`. Use this if you have plugins that depend on C libraries or glibc.
+
+Both images ship with `python3` and `pip` so Python plugins (released or built from local `pyproject.toml` source) work out of the box. Python plugins must declare their dependencies in `pyproject.toml`; Squadron creates an isolated venv per plugin under `/config/.squadron/plugins/`.

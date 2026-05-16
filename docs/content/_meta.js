@@ -1,7 +1,6 @@
 export default {
   '__learn': { type: 'separator', title: 'Learn' },
   index: 'Introduction',
-  'what-is-squadron': 'What is Squadron?',
   'declarative-ai-agent-framework': 'Declarative Framework',
   'getting-started': 'Getting Started',
 

@@ -5,7 +5,7 @@ description: Step-by-step guide to building a production-ready multi-agent AI wo
 
 # How to Build a Multi-Agent AI Workflow Without Writing Code
 
-You can build a real, production-grade multi-agent AI workflow — with branching, retries, persistence, and a schedule — without writing a line of Python. This guide walks through it using [Squadron](/what-is-squadron), a [declarative AI agent framework](/declarative-ai-agent-framework) where the whole workflow lives in HCL configuration.
+You can build a real, production-grade multi-agent AI workflow — with branching, retries, persistence, and a schedule — without writing a line of Python. This guide walks through it using [Squadron](/), a [declarative AI agent framework](/declarative-ai-agent-framework) where the whole workflow lives in HCL configuration.
 
 The example: a daily competitor-news pipeline. One agent gathers the day's news on a topic, a second agent summarizes the most important items, and the result lands in a markdown file you can read over coffee. Branching: if the news is genuinely significant, escalate to a deep-dive task; otherwise, just summarize. All of it on a 9 AM cron, with a token budget so it can't spiral.
 
@@ -196,7 +196,7 @@ The whole thing is one HCL directory. Commit it. Diff future changes in PRs. Han
 
 ## See also
 
-- [What is Squadron?](/what-is-squadron) — what the framework is and isn't
+- [What is Squadron?](/) — what the framework is and isn't
 - [The Harness](/missions/harness) — the runtime model
 - [Routing](/missions/routing) — `router`, `send_to`, and dynamic activation
 - [Datasets and iteration](/missions/datasets) — fan out a task over a list

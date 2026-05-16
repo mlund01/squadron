@@ -17,7 +17,7 @@ Both Squadron and **LangGraph** orchestrate multi-agent AI workflows, but they s
 | **State persistence** | Built-in (SQLite or Postgres), auto-resume | Pluggable checkpointer, manual wiring |
 | **Branching** | Declarative `router` / `send_to` blocks | Conditional edges in Python |
 | **LLM-provider mixing** | Per-agent or per-task, all four major providers built in | Whatever LangChain supports |
-| **Tool ecosystem** | Built-in tools, Go/Python plugins, MCP both directions | LangChain tools + custom Python |
+| **Extension model** | Native Go/Python plugins (gRPC subprocess, auto-built) + MCP servers + built-in tools | LangChain tools (Python functions) + custom Python |
 | **Reviewability** | Workflow is one HCL file you diff in a PR | Workflow is Python control flow spread across files |
 | **Deployment** | Single binary, no runtime deps | Python app + dependency tree |
 | **License** | MIT | MIT |
@@ -102,6 +102,34 @@ There is no Python file, no node functions, no manual state passing. The router 
 - You need **scheduled or webhook-triggered missions** with concurrency limits, budgets, and retry — all declarative.
 - You want **first-class MCP support** in both directions: pull tools from any MCP server, *and* expose your own missions as MCP tools to Claude Desktop / Cursor / Claude Code.
 - You prefer **a single binary** over deploying a Python app with its dependency tree.
+
+## Extension model: plugins are the primary primitive
+
+Squadron's primary way of adding capability to agents is **plugins** — small standalone programs you author in **Go or Python**. They communicate with the Squadron runtime over gRPC via [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) and run as separate subprocesses.
+
+```hcl
+plugin "scraper" {
+  source  = "./plugin_scraper"   # local Go or Python source
+  version = "local"              # auto-built on every config load
+}
+
+agent "researcher" {
+  tools = [plugins.scraper.fetch, plugins.scraper.extract]
+}
+```
+
+Why plugins matter relative to LangGraph's "tools are Python functions in the same process":
+
+- **Two languages, picked per problem.** Go for performance-critical or systems-level tools (a browser controller, a network scanner, anything CPU-heavy or needing static binary distribution). Python for things that lean on the existing PyPI ecosystem (a pandas pipeline, a model adapter, a domain SDK).
+- **Process isolation.** A misbehaving plugin can't crash the runtime — gRPC failure mode is a clean error returned to the agent, not a Python exception unwinding through your orchestrator.
+- **Auto-build from source.** Edit `./plugin_scraper/main.go`, restart Squadron, and the plugin rebuilds. Content-hash caching skips the rebuild when nothing changed. No `pip install -e .` cycle, no Docker layer to rebuild.
+- **Stateful across tasks.** Plugins are cached globally for the lifetime of the process. A Playwright plugin can open a browser in task 1 and reuse it in task 5 — the runtime tracks the plugin connection, not the per-task call.
+- **Typed schemas.** Each plugin declares tool input/output schemas; Squadron uses those for native LLM function-calling and for output validation.
+- **Distributable.** Plugins compile to a single binary (Go) or a venv (Python) and are publishable as GitHub releases. Other Squadron configs reference them via `source = "github.com/owner/repo"` and Squadron auto-installs.
+
+**MCP is complementary, not a substitute.** Squadron's [MCP support](/config/mcp_tools) covers the case where someone else has already built the integration you need (the official Filesystem, Linear, Slack MCP servers; anything in the [MCP registry](https://github.com/modelcontextprotocol)). Plugins cover the case where the integration is yours: domain-specific tools, performance-sensitive paths, things you want versioned in your own repo. The right Squadron stack typically uses both.
+
+LangGraph also has a tool concept and integrates with LangChain's tool library, but tools are Python functions in the same process — no language choice, no subprocess isolation, no auto-build of an external artifact, no plugin registry beyond LangChain's own.
 
 ## What about prototyping?
 

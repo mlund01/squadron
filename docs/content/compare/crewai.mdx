@@ -16,7 +16,7 @@ Both **CrewAI** and Squadron are built around the metaphor of a team of role-pla
 | **Workflow shape** | Arbitrary DAG with conditional routing | Sequential, hierarchical, or "flow" (recently added) |
 | **State persistence** | Built-in, auto-resume on crash | Manual / not first-class |
 | **LLM providers** | Anthropic, OpenAI, Gemini, Ollama, all built in | LiteLLM-backed (broad coverage) |
-| **Tool ecosystem** | Built-in, Go/Python plugins, MCP (both directions) | CrewAI Tools library + custom Python |
+| **Extension model** | Native Go/Python plugins (gRPC subprocess, auto-built) + MCP (both directions) + built-in tools | CrewAI Tools library + custom Python classes |
 | **Scheduling / webhooks** | First-class `schedule` / `trigger` blocks | External orchestrator required |
 | **Budgets** | Declarative token + dollar caps per mission / task | None built-in |
 | **Reviewability** | Whole workflow is one HCL file | Spread across Python files |
@@ -99,6 +99,31 @@ Both look reasonable at this size. The differences emerge when the workflow grow
 - You want to **mix LLM providers per task** — fast model for routing, expensive model for the hard subtask, local Ollama for sensitive steps.
 - You want **MCP support in both directions** — pull tools from any MCP server, *and* expose your missions as MCP tools to Claude Desktop and friends.
 - You'd rather deploy a **single binary** than a Python app.
+
+## Extension model: plugins are the primary primitive
+
+Squadron's primary way to extend agents is **plugins** — standalone programs in **Go or Python** that the runtime spawns as subprocesses and talks to over gRPC ([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)).
+
+```hcl
+plugin "domain_api" {
+  source  = "./plugin_domain_api"  # local Go or Python source
+  version = "local"                # auto-built on every config load
+}
+
+agent "specialist" {
+  tools = [plugins.domain_api.all]
+}
+```
+
+Compared to CrewAI's tool model — where tools are Python classes (`BaseTool` subclasses) in the same process as the rest of your code — plugins give you:
+
+- **Language choice.** Go for tools where startup, latency, or static distribution matter (a database client, a system-level scraper, a binary CLI wrapper). Python for things that need NumPy, pandas, or the Python ML stack.
+- **Subprocess isolation.** A crashing tool returns a gRPC error to the agent; the runtime stays up. With CrewAI a bad tool exception unwinds the same process running your crew.
+- **Auto-build from source.** Edit the plugin, reload Squadron, the runtime rebuilds it (with content-hash caching so unchanged source skips the rebuild). No manual `pip install` step.
+- **Stateful across tasks.** The same plugin process is reused across all tasks in a mission. A Playwright plugin opens a browser once and shares it; a DB plugin keeps a connection pool. CrewAI tools either re-init per call or you wire up sharing yourself.
+- **Typed schemas + distribution.** Plugins ship as Go binaries or Python venvs and can be referenced via `source = "github.com/owner/repo"` so other Squadron configs auto-install them.
+
+**MCP is complementary.** [MCP support](/config/mcp_tools) handles the case where someone already wrote the integration (Filesystem, Linear, Slack, anything in the MCP registry). Plugins handle the case where the integration is *yours* — versioned in your repo, language-of-choice, process-isolated. CrewAI added MCP support more recently but doesn't have an equivalent first-party plugin primitive in two languages.
 
 ## What CrewAI does better
 

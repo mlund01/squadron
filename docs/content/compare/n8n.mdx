@@ -17,7 +17,7 @@ description: Honest comparison of Squadron and n8n for AI workflow automation. n
 | **LLM orchestration** | First-class: agents, commanders, missions, routing | A category of nodes — usable but not the centerpiece |
 | **Mental model** | Tasks in a DAG with typed outputs, two-tier commander/agent split | Triggers → nodes → connections (data passes between nodes) |
 | **Branching** | LLM-decided `router` blocks, declarative `send_to` | IF/switch nodes with static expressions |
-| **Integrations** | LLM providers, MCP, plugins, web/shell tools | 400+ SaaS integrations (Slack, Sheets, Postgres, Stripe, ...) |
+| **Extension model** | Native Go/Python plugins (gRPC subprocess, auto-built) + MCP both directions + built-in tools | Custom Node.js community nodes + 400+ pre-built SaaS nodes |
 | **State / resume** | Auto-persist, automatic resume | Per-execution storage; resume support varies |
 | **Best fit** | Production agent pipelines, reviewable workflows | Business automation across SaaS apps, with optional LLM steps |
 | **License** | MIT | Sustainable Use License (source-available, restrictive) |
@@ -47,6 +47,35 @@ n8n's AI nodes let you call OpenAI, build basic LangChain chains, and run an "AI
 - You want **automatic crash recovery** built into the runtime, not a per-node retry config you have to set up.
 - You want **MCP support in both directions** — pull tools from any MCP server, and expose your missions as MCP tools to Claude Desktop and friends.
 - You want to **mix LLM providers per task** without writing per-provider node configs.
+
+## Extension model: plugins + MCP vs custom nodes
+
+The two products extend in very different ways.
+
+**n8n** extends through **community nodes** — TypeScript packages following n8n's node SDK that you publish to npm and install into an n8n instance. Each node is a Node.js class exposing properties, credentials, and an `execute()` method. Authoring a node is a meaningful project: it's a TypeScript package with a build pipeline, n8n's lifecycle hooks, and visual properties for the canvas. n8n's strength is that they (and the community) have already authored 400+ nodes for popular SaaS apps, so most users never need to author one.
+
+**Squadron** extends through **plugins** — standalone programs in **Go or Python** that the runtime spawns as subprocesses and talks to over gRPC ([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)).
+
+```hcl
+plugin "shell" {
+  source  = "./plugin_shell"   # local Go or Python source
+  version = "local"            # auto-built on every config load
+}
+
+agent "ops" {
+  tools = [plugins.shell.exec, plugins.shell.tail]
+}
+```
+
+The differences worth flagging if you're comparing the two:
+
+- **Authoring effort.** A Squadron plugin is a single-file Go or Python program implementing a small interface. Auto-built on config load with content-hash caching. No npm publishing step, no TypeScript build pipeline. The barrier to a one-off custom tool is much lower than authoring an n8n node.
+- **Language fit.** Squadron plugins are Go *or* Python — pick whichever fits the tool. n8n nodes are Node.js. If your domain tooling lives in Python or Go, you'd otherwise spawn a subprocess from inside an n8n function node.
+- **Process isolation.** Each Squadron plugin runs in its own subprocess; a crash is a clean gRPC error to the calling agent. n8n nodes run in the n8n process.
+- **Stateful across tasks.** Squadron plugins are long-lived for the lifetime of the runtime — a Playwright plugin opens a browser once and reuses it across every task in every mission. n8n executions are per-trigger; sharing state requires external persistence.
+- **MCP both directions, native.** Squadron consumes any [MCP server](/config/mcp_tools) (npm, GitHub release, HTTP, or local binary) with a two-line block, and Squadron itself can [run as an MCP server](/config/mcp_host) for Claude Desktop / Claude Code / Cursor. n8n has community MCP nodes but it's not a first-class concept.
+
+If you need broad SaaS coverage *right now*, n8n's pre-built node library is hard to beat. If you're building bespoke AI tooling — domain-specific scrapers, internal API wrappers, performance-critical pipelines — Squadron's plugin model gets you there with less ceremony, in the language that fits, and with the option to share the plugin via GitHub releases.
 
 ## What if you need both?
 

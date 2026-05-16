@@ -19,7 +19,7 @@ description: Honest comparison of Squadron and Microsoft AutoGen for multi-agent
 | **Determinism** | High — explicit DAG, structured outputs | Lower — emergent from agent dialogue |
 | **State persistence** | Built-in, auto-resume | Manual |
 | **LLM providers** | Anthropic, OpenAI, Gemini, Ollama, all built in | OpenAI-first; others via adapters |
-| **Tool ecosystem** | Built-in, plugins (Go/Python), MCP both directions | Python functions, growing tool support |
+| **Extension model** | Native Go/Python plugins (gRPC subprocess, auto-built) + MCP both directions + built-in tools | Python functions registered with agents, growing tool support |
 | **Best fit** | Production agent pipelines | Multi-agent reasoning, research patterns |
 | **License** | MIT | MIT (CC BY 4.0 docs) |
 
@@ -95,6 +95,31 @@ AutoGen lets the chat manager decide order. Squadron makes order explicit. Both 
 - You want **workflows as config** that non-Python teammates can review.
 - You need **MCP both directions** — consume external MCP servers and expose your missions as MCP tools to Claude Desktop / Cursor.
 - You want to **mix LLM providers** at the task level without writing adapter code.
+
+## Extension model: plugins are the primary primitive
+
+Squadron's primary way to give agents new capabilities is **plugins** — standalone programs you write in **Go or Python** that the runtime spawns as subprocesses and talks to over gRPC ([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)).
+
+```hcl
+plugin "domain" {
+  source  = "./plugin_domain"   # local Go or Python source
+  version = "local"             # auto-built on every config load
+}
+
+agent "executor" {
+  tools = [plugins.domain.all]
+}
+```
+
+In AutoGen, tools are Python functions registered with an agent at construction time. They run in the same process as the rest of your code. Squadron's plugin model differs on several axes:
+
+- **Language choice per plugin.** Go for systems-level or performance-critical tools (e.g., a high-throughput crawler, a static binary you can ship without a Python runtime). Python for tools that need PyPI dependencies.
+- **Process isolation via gRPC.** A misbehaving plugin returns a clean error to the agent rather than crashing the runtime. Especially valuable when you're running a long-lived `squadron serve` process with scheduled missions — one bad tool can't take down everything else.
+- **Auto-build with content-hash caching.** Edit a plugin's source, reload, the runtime rebuilds it. Unchanged source skips the rebuild. No manual install loop.
+- **Cross-task state.** The plugin subprocess lives for the lifetime of the Squadron process, not per-task. A browser plugin opens Chromium once; every task in every mission reuses it. AutoGen tools are functions — sharing state means writing your own singleton or module-level cache.
+- **Typed schemas and distribution.** Each plugin declares typed input/output schemas; plugins distribute as GitHub releases and other Squadron configs install them via `source = "github.com/owner/repo"`.
+
+**MCP is complementary.** Squadron's [MCP support](/config/mcp_tools) covers tools someone else built (the official MCP registry, third-party servers). Plugins cover tools *you* build — your domain logic, your performance-critical paths, things you want versioned in your own repo. AutoGen now has some MCP integration but does not have a comparable first-party plugin primitive in two languages.
 
 ## What AutoGen does better
 

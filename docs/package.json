@@ -4,6 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next --turbopack",
+    "generate:llms": "node scripts/generate-llms.mjs",
+    "prebuild": "node scripts/generate-llms.mjs",
+    "predev": "node scripts/generate-llms.mjs",
     "build": "next build",
     "start": "next start"
   },

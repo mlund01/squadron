@@ -1,15 +1,16 @@
 ---
 title: Introduction
+description: Squadron is a declarative framework for building and running multi-agent AI workflows in HCL configuration. Single Go binary, MIT-licensed, supports Anthropic / OpenAI / Gemini / Ollama, and speaks Model Context Protocol both directions.
 ---
 
 # Squadron
 
-Squadron is an agents-as-config tool that lets you build, run, and version multi-agent AI workflows safely and reproducibly. This includes low-level components like individual agents, tools, and models, as well as high-level components like multi-step missions, conditional routing, and scheduled pipelines.
+Squadron is a declarative framework for building and running multi-agent AI workflows. You describe the whole pipeline — agents, tools, models, the task graph, branching, schedules, budgets — in HCL configuration. The runtime is a single Go binary that handles orchestration, state, dependency resolution, conditional routing, persistence, and resume.
 
 ```hcl
 mission "research" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents = [agents.researcher, agents.analyst]
+  agents    = [agents.researcher, agents.analyst]
 
   task "gather" {
     objective = "Find the top 5 papers on ${inputs.topic}"
@@ -20,25 +21,6 @@ mission "research" {
     depends_on = [tasks.gather]
     objective  = "Read each paper and extract the key findings"
     agents     = [agents.analyst]
-
-    router {
-      route {
-        target    = tasks.deep_dive
-        condition = "Findings warrant deeper investigation"
-      }
-      route {
-        target    = tasks.summarize
-        condition = "Findings are routine"
-      }
-    }
-  }
-
-  task "deep_dive" {
-    objective = "Investigate the most promising lead in detail"
-  }
-
-  task "summarize" {
-    objective = "Write a one-page summary"
   }
 }
 ```
@@ -47,43 +29,22 @@ mission "research" {
 squadron mission research -c ./config --topic "post-quantum cryptography"
 ```
 
-That's the entire workflow. No Python. No glue code. No state machines. Just config.
+That's the whole workflow. No Python, no glue code, no state machines. Diff it in a pull request. Review it like infrastructure code.
 
-## Why this matters
+## Where to go next
 
-Every other agent framework asks you to write code: orchestration logic, retry loops, branching, state serialization. You end up with 500 lines of Python wrapping 50 lines of actual prompt — and six months later nobody can read it.
-
-Squadron is declarative from top to bottom. Your entire workflow — agents, tools, how they collaborate, the data flowing between them, the conditions that fire branches, what happens when things crash — is **described up front in one file you can diff in a pull request.**
-
-- **Readable.** A non-engineer can review a mission file. Workflow changes show up in code review like any other config change.
-- **Composable.** Define agents and tools once, reuse them across missions. Mix Anthropic, OpenAI, Gemini, and Ollama in the same run.
-- **Resilient.** State is persisted to SQLite as missions run. Crashes resume from where they failed.
-- **Branchable.** Conditional routing, unconditional fan-out, parallel iteration over datasets — all first-class.
-- **Typed data flow.** Tasks declare structured output schemas. Downstream tasks query that data with filters and aggregations instead of replaying conversation history.
-
-## How it works
-
-Two tiers of LLMs, doing different jobs:
-
-- **Commanders** orchestrate. They break tasks into subtasks, delegate to agents, interpret results, and decide which branch to take next. They reason about *what* needs to happen.
-- **Agents** execute. They pick up objectives and use their tools until the job is done. They reason about *how* to do it.
-- **Missions** wire it together: a graph of tasks, structured outputs flowing between them, and conditional branches the commander chooses at runtime.
-
-Use a fast model for routing, a capable one for the hard stuff. Each role can use a different provider in the same mission.
-
-## What's in the box
-
-- **[Model providers](/config/supported-models)** — Anthropic, OpenAI, Google Gemini, and Ollama for local models, all out of the box; mix and match per agent or even per task
-- **[Web command center](/cli/engage)** — visualize your mission graph, watch it run live, browse past runs
-- **[Schedules & webhooks](/missions/schedules)** — run missions on a cron, or trigger them from an incoming HTTP request
-- **[Plugins](/config/plugins)** — the primary way to extend agents: fast, typed, native Go plugins for browser automation, shell, APIs, or anything you want to build
-- **[MCP tools](/config/mcp_tools)** — also supported, for when you want to pull in something from the MCP ecosystem; drop in a two-line block and Squadron auto-installs the server
-- **[MCP host](/config/mcp_host)** — plug Squadron itself into Claude Desktop, Claude Code, or Cursor so they can see your missions, kick off runs, and browse your config
-- **Single binary** — one command to install, no runtime dependencies, Docker images on every release
-
-## Get started
-
+**New to Squadron?**
+- [What is Squadron?](/what-is-squadron) — definition, when to use it, alternatives
+- [Quick start](/getting-started/quickstart) — first mission in five minutes
 - [Install](/getting-started/installation) — one command, single binary
-- [Quick start](/getting-started/quickstart) — first mission in 5 minutes
-- [Missions](/missions/overview) — the full workflow model
+
+**Building with it?**
+- [Missions](/missions/overview) — the workflow model
+- [The Harness](/missions/harness) — how the commander/agent runtime actually works
 - [Configuration](/config/overview) — every block, every field
+- [No-Code Walkthrough](/guides/no-code-multi-agent-workflow) — full daily-brief pipeline in HCL
+
+**Evaluating it?**
+- [Squadron vs LangGraph](/compare/langgraph) · [vs CrewAI](/compare/crewai) · [vs AutoGen](/compare/autogen) · [vs n8n](/compare/n8n)
+- [FAQ](/faq) — pricing, license, providers, MCP, deployment
+- [Declarative AI Agent Framework](/declarative-ai-agent-framework) — the imperative-vs-declarative case

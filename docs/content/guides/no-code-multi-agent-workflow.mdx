@@ -5,7 +5,7 @@ description: Step-by-step guide to building a production-ready multi-agent AI wo
 
 # How to Build a Multi-Agent AI Workflow Without Writing Code
 
-You can build a real, production-grade multi-agent AI workflow — with branching, retries, persistence, and a schedule — without writing a line of Python. This guide walks through it using [Squadron](/), a [declarative AI agent framework](/declarative-ai-agent-framework) where the whole workflow lives in HCL configuration.
+You can build a real, production-grade multi-agent AI workflow — with branching, retries, persistence, and a schedule — without writing a line of Python. This guide walks through it using [Squadron](/), a [declarative agent framework](/declarative-agent-framework) where the whole workflow lives in HCL configuration.
 
 The example: a daily competitor-news pipeline. One agent gathers the day's news on a topic, a second agent summarizes the most important items, and the result lands in a markdown file you can read over coffee. Branching: if the news is genuinely significant, escalate to a deep-dive task; otherwise, just summarize. All of it on a 9 AM cron, with a token budget so it can't spiral.
 

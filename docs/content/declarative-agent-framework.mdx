@@ -1,15 +1,15 @@
 ---
-title: Declarative AI Agent Framework
-description: A declarative AI agent framework lets you describe multi-agent workflows as configuration instead of writing imperative orchestration code. Learn what makes a framework declarative, why it matters for production AI, and how Squadron implements the model.
+title: Declarative Agent Framework
+description: A declarative agent framework lets you describe multi-agent workflows as configuration instead of writing imperative orchestration code. Learn what makes a framework declarative, why it matters for production AI, and how Squadron implements the model.
 ---
 
-# Declarative AI Agent Framework
+# Declarative Agent Framework
 
-A **declarative AI agent framework** is one where you describe the *what* of a multi-agent workflow — which agents exist, what tools they have, how tasks depend on each other, when to branch — as configuration, and let a runtime decide the *how* (when to call which LLM, how to pass data between steps, how to retry, how to resume after a crash). It's the AI-agent equivalent of Terraform or Kubernetes manifests: state the goal in a file, let the engine reconcile it.
+A **declarative agent framework** is one where you describe the *what* of a multi-agent workflow — which agents exist, what tools they have, how tasks depend on each other, when to branch — as configuration, and let a runtime decide the *how* (when to call which LLM, how to pass data between steps, how to retry, how to resume after a crash). It's the AI-agent equivalent of Terraform or Kubernetes manifests: state the goal in a file, let the engine reconcile it.
 
-The alternative is an **imperative** framework, where you write orchestration code by hand: Python loops, conditional branches, retry decorators, state checkpointing. Most AI agent frameworks today are imperative: LangGraph, CrewAI, AutoGen, Semantic Kernel, AutoChain. You write code that *runs*; the framework provides primitives.
+The alternative is an **imperative** framework, where you write orchestration code by hand: Python loops, conditional branches, retry decorators, state checkpointing. Most agent frameworks today are imperative: LangGraph, CrewAI, AutoGen, Semantic Kernel, AutoChain. You write code that *runs*; the framework provides primitives.
 
-[Squadron](/) is the canonical declarative AI agent framework: agents, tools, models, missions, schedules, budgets, and routing are all HCL config, and the entire runtime lives in a single Go binary.
+[Squadron](/) is the canonical declarative agent framework: agents, tools, models, missions, schedules, budgets, and routing are all HCL config, and the entire runtime lives in a single Go binary.
 
 ## What "declarative" means here
 

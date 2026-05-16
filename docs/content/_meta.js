@@ -1,7 +1,7 @@
 export default {
   '__learn': { type: 'separator', title: 'Learn' },
   index: 'Introduction',
-  'declarative-ai-agent-framework': 'Declarative Framework',
+  'declarative-agent-framework': 'Declarative Framework',
   'getting-started': 'Getting Started',
 
   '__build': { type: 'separator', title: 'Build' },

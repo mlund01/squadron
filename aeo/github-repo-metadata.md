@@ -1,5 +1,11 @@
 # GitHub repo metadata: topics and description
 
+**Status: applied** to `mlund01/squadron` on 2026-05-16. This file is retained as a record of what was set and the rationale; not actionable.
+
+---
+
+
+
 The repo currently has **no topics** set and the description is
 "Declarative agentic workflow orchestration". Updating both is one of the
 cheapest AEO wins available — topics surface Squadron in GitHub's topic

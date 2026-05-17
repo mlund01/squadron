@@ -1,0 +1,204 @@
+---
+title: How to Build a Multi-Agent AI Workflow Without Writing Code
+description: Step-by-step guide to building a production-ready multi-agent AI workflow without writing Python — just HCL config. Covers agents, tools, task dependencies, branching, structured outputs, and running on a schedule.
+---
+
+# How to Build a Multi-Agent AI Workflow Without Writing Code
+
+You can build a real, production-grade multi-agent AI workflow — with branching, retries, persistence, and a schedule — without writing a line of Python. This guide walks through it using [Squadron](/), a [declarative agent framework](/declarative-agent-framework) where the whole workflow lives in HCL configuration.
+
+The example: a daily competitor-news pipeline. One agent gathers the day's news on a topic, a second agent summarizes the most important items, and the result lands in a markdown file you can read over coffee. Branching: if the news is genuinely significant, escalate to a deep-dive task; otherwise, just summarize. All of it on a 9 AM cron, with a token budget so it can't spiral.
+
+No code. Just config.
+
+## Step 1: install Squadron
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mlund01/squadron/main/install.sh | bash
+```
+
+Or grab a binary from [GitHub Releases](https://github.com/mlund01/squadron/releases). One file, no runtime dependencies. Full details on the [installation page](/getting-started/installation).
+
+```bash
+squadron init                 # initialize the encrypted vault
+squadron vars set anthropic_api_key sk-ant-...
+```
+
+## Step 2: declare the model and agents
+
+Create `config/models.hcl`:
+
+```hcl
+variable "anthropic_api_key" { secret = true }
+
+model "anthropic" {
+  provider = "anthropic"
+  api_key  = vars.anthropic_api_key
+}
+```
+
+Create `config/agents.hcl`:
+
+```hcl
+agent "news_gatherer" {
+  model       = models.anthropic.claude_sonnet_4
+  role        = "Tech news researcher"
+  personality = "Skeptical, source-citing, allergic to hype."
+  tools       = [builtins.http.get, builtins.web.search]
+}
+
+agent "summarizer" {
+  model       = models.anthropic.claude_sonnet_4
+  role        = "Executive briefing writer"
+  personality = "Concise. Buries the lede only when there isn't one."
+}
+```
+
+Two agents, each with a model, a role, a tone, and the tools they're allowed to call. You haven't written any prompt engineering glue — those four fields are the entire definition.
+
+## Step 3: declare the mission and tasks
+
+Create `config/missions.hcl`:
+
+```hcl
+mission "daily_brief" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.news_gatherer, agents.summarizer]
+
+  inputs = {
+    topic = string("Topic to brief on", { default = "AI agent frameworks" })
+  }
+
+  folder { path = "./briefs"; description = "Daily brief output" }
+
+  budget { tokens = 200000; dollars = 5 }
+
+  task "gather" {
+    agents    = [agents.news_gatherer]
+    objective = "Find today's top 5 news items on ${inputs.topic}. Include URLs and one-line summaries."
+    output = {
+      items = list(object({
+        title   = string("Headline", true)
+        url     = string("URL", true)
+        summary = string("One-line summary", true)
+      }), "News items", true)
+    }
+  }
+
+  task "triage" {
+    depends_on = [tasks.gather]
+    objective  = "Decide if any of today's items are genuinely significant or if this is a routine day."
+    router {
+      route { target = tasks.deep_dive; condition = "At least one item is genuinely significant" }
+      route { target = tasks.summarize; condition = "It's a routine day with no standouts" }
+    }
+  }
+
+  task "deep_dive" {
+    agents    = [agents.summarizer]
+    objective = "Write a 500-word deep-dive on the most important item. Save to the briefs folder."
+  }
+
+  task "summarize" {
+    agents    = [agents.summarizer]
+    objective = "Write a 200-word digest of all items. Save to the briefs folder."
+  }
+}
+```
+
+That's the whole pipeline. Five blocks of config. The runtime fills in the rest:
+
+- **Dependencies.** `depends_on = [tasks.gather]` tells the runtime that `triage` waits for `gather` to finish.
+- **Routing.** The `router` block lets the commander LLM pick between `deep_dive` and `summarize` based on the conditions you wrote in plain English.
+- **Structured output.** The `output = { items = ... }` declares the shape `gather` produces; downstream tasks can query the items by URL or title without re-reading conversation history.
+- **Budget.** The `budget` block halts the mission if it spends more than 200k tokens or $5.
+- **State and resume.** Squadron persists every step to SQLite. If the process crashes mid-run, `squadron mission --resume <id>` picks up from the last completed tool call.
+
+## Step 4: run it once
+
+```bash
+squadron mission daily_brief -c ./config
+```
+
+Squadron prints live progress: which task is running, which agent it's delegating to, every tool call. The brief lands in `./briefs/`.
+
+## Step 5: put it on a schedule
+
+Add a `schedule` block to the mission:
+
+```hcl
+mission "daily_brief" {
+  # ... everything above ...
+
+  schedule {
+    at       = ["09:00"]
+    weekdays = ["mon", "tue", "wed", "thu", "fri"]
+    timezone = "America/Chicago"
+    inputs = {
+      topic = "AI agent frameworks"
+    }
+  }
+}
+```
+
+Then start Squadron in serve mode:
+
+```bash
+squadron serve -c ./config
+```
+
+Squadron's scheduler now fires the mission every weekday at 9 AM Chicago time. No external cron, no systemd unit, no GitHub Action. The whole job description — what runs, when, with what inputs — is in the same HCL file as the workflow.
+
+See [Schedules & Triggers](/missions/schedules) for webhooks, the `every` interval form, and per-mission concurrency limits.
+
+## Step 6: extend without writing code
+
+Want web scraping? Drop in the [Playwright plugin](/config/plugins):
+
+```hcl
+plugin "playwright" { version = "local" }
+
+agent "news_gatherer" {
+  # ...
+  tools = [plugins.playwright.all]
+}
+```
+
+Want a connector to Linear, Slack, or your filesystem? Use [MCP](/config/mcp_tools):
+
+```hcl
+mcp "filesystem" {
+  source  = "npm:@modelcontextprotocol/server-filesystem"
+  version = "2024.12.1"
+  args    = ["./briefs"]
+}
+
+agent "summarizer" {
+  tools = [mcp.filesystem.write_file]
+}
+```
+
+Want to mix providers — Claude for orchestration, GPT-4 for writing, local Llama for a privacy-sensitive step? Declare a second `model` block and reference it from whichever agent or task needs it. The runtime handles the rest.
+
+## What you got
+
+Without writing a function, an import, or a try/except, you now have:
+
+- A multi-agent workflow with two specialist agents and a commander.
+- Conditional branching the LLM decides at runtime.
+- Structured outputs flowing between tasks.
+- Automatic state persistence and crash recovery.
+- A token + dollar budget.
+- A cron schedule with timezone and weekday filters.
+- A web UI to watch the workflow live (`squadron serve -w`).
+
+The whole thing is one HCL directory. Commit it. Diff future changes in PRs. Hand it to a teammate who has never seen Python.
+
+## See also
+
+- [What is Squadron?](/) — what the framework is and isn't
+- [The Harness](/missions/harness) — the runtime model
+- [Routing](/missions/routing) — `router`, `send_to`, and dynamic activation
+- [Datasets and iteration](/missions/datasets) — fan out a task over a list
+- [MCP tools](/config/mcp_tools) — pull in any MCP server
+- [FAQ](/faq) — common questions

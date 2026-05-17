@@ -19,8 +19,49 @@ const SITE = 'https://docs.squadron.sh'
 const CONTENT = path.resolve('content')
 const PUBLIC = path.resolve('public')
 
+// Remove MDX-only syntax that's noise in raw markdown: `{/* ... */}` comments
+// and any inline `<script>...</script>` or self-closing `<script ... />` blocks
+// (typically JSON-LD payloads). The self-closing case is parsed by counting
+// braces so we don't truncate at a `/` that lives inside a string literal.
+function stripScriptTags(body) {
+  let out = ''
+  let i = 0
+  while (i < body.length) {
+    const open = body.indexOf('<script', i)
+    if (open === -1) {
+      out += body.slice(i)
+      break
+    }
+    out += body.slice(i, open)
+    // Walk forward tracking brace depth so we don't bail at a `/` inside a
+    // JSX expression like `JSON.stringify({...})`.
+    let depth = 0
+    let j = open + '<script'.length
+    while (j < body.length) {
+      const ch = body[j]
+      if (ch === '{') depth++
+      else if (ch === '}') depth--
+      else if (depth === 0 && ch === '/' && body[j + 1] === '>') {
+        j += 2
+        break
+      } else if (depth === 0 && ch === '<' && body.slice(j, j + 9).toLowerCase() === '</script>') {
+        j += '</script>'.length
+        break
+      }
+      j++
+    }
+    i = j
+  }
+  return out
+}
+
+function stripMdxisms(body) {
+  return stripScriptTags(body.replace(/\{\/\*[\s\S]*?\*\/\}/g, '')).replace(/^\n+/, '')
+}
+
 // Strip frontmatter and return { title, body }. Title preference: frontmatter
-// `title:` → first `# ` heading → null.
+// `title:` → first `# ` heading → null. Body is cleaned of MDX-only syntax so
+// it reads as plain markdown.
 function parseMdx(src) {
   let body = src
   let frontmatterTitle = null
@@ -30,6 +71,7 @@ function parseMdx(src) {
     const t = fmMatch[1].match(/^title:\s*(.+)$/m)
     if (t) frontmatterTitle = t[1].replace(/^['"]|['"]$/g, '').trim()
   }
+  body = stripMdxisms(body)
   let h1Title = null
   const h1 = body.match(/^#\s+(.+)$/m)
   if (h1) h1Title = h1[1].trim()
@@ -75,9 +117,18 @@ async function collectPages() {
       if (!seen.has(base)) order.push(base)
     }
 
+    // Track the current section title as we walk this directory. A
+    // `{ type: 'separator', title: 'Learn' }` entry shifts the section so
+    // subsequent pages in the same directory get that grouping in llms.txt.
+    let currentSection = sectionTitle
+
     for (const key of order) {
       const metaValue = meta ? meta[key] : null
-      // Skip non-page meta entries (separators, links objects).
+      if (metaValue && typeof metaValue === 'object' && metaValue.type === 'separator') {
+        if (metaValue.title) currentSection = metaValue.title
+        continue
+      }
+      // Skip other non-page meta entries (links, menus).
       if (metaValue && typeof metaValue === 'object' && metaValue.type && metaValue.type !== 'page') continue
 
       const childDir = path.join(dir, key)
@@ -92,7 +143,11 @@ async function collectPages() {
         typeof metaValue === 'string' ? metaValue : metaValue && metaValue.title ? metaValue.title : null
 
       if (isDir) {
-        await visit(childDir, `${urlPrefix}/${key}`, labelFromMeta || key)
+        // For directories, the child's section is the directory's label (e.g.
+        // "Missions"), but for directories that sit under a separator group
+        // (e.g. a Guides directory under the Build separator), the directory
+        // label is more specific and wins.
+        await visit(childDir, `${urlPrefix}/${key}`, labelFromMeta || currentSection || key)
         continue
       }
 
@@ -107,7 +162,7 @@ async function collectPages() {
         urlPath: urlPath || '/',
         mdPath,
         title,
-        sectionTitle,
+        sectionTitle: currentSection,
         body: parsed.body,
         summary: firstParagraph(parsed.body),
       })
@@ -140,6 +195,34 @@ async function writeRawMd(pages) {
     await fs.mkdir(path.dirname(out), { recursive: true })
     await fs.writeFile(out, p.body + '\n')
   }
+}
+
+// Remove .md mirrors from PUBLIC that no longer correspond to a current page.
+// Without this, renaming or moving a content file leaves a stale mirror behind
+// that ships to production until someone notices.
+async function pruneStaleMirrors(pages) {
+  const valid = new Set(pages.map((p) => path.join(PUBLIC, p.mdPath.replace(/^\//, ''))))
+  async function walk(dir) {
+    let entries
+    try {
+      entries = await fs.readdir(dir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name)
+      if (e.isDirectory()) {
+        await walk(full)
+        // Best-effort: remove the dir if it's empty after pruning.
+        try {
+          await fs.rmdir(full)
+        } catch {}
+      } else if (e.name.endsWith('.md') && !valid.has(full)) {
+        await fs.unlink(full)
+      }
+    }
+  }
+  await walk(PUBLIC)
 }
 
 async function buildSitemap(pages) {
@@ -235,6 +318,7 @@ async function main() {
   console.log(`generate-llms: ${pages.length} pages discovered`)
   await fs.mkdir(PUBLIC, { recursive: true })
   await writeRawMd(pages)
+  await pruneStaleMirrors(pages)
   await fs.writeFile(path.join(PUBLIC, 'llms.txt'), buildLlmsTxt(pages))
   await fs.writeFile(path.join(PUBLIC, 'llms-full.txt'), buildLlmsFullTxt(pages))
   await fs.writeFile(path.join(PUBLIC, 'sitemap.xml'), await buildSitemap(pages))

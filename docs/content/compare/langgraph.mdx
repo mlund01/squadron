@@ -1,0 +1,159 @@
+---
+title: Squadron vs LangGraph
+description: Honest comparison of Squadron and LangGraph for building multi-agent AI workflows. Squadron is declarative HCL config and a standalone Go binary; LangGraph is a Python library on top of LangChain. Compare execution model, state, deployment, and when to pick each.
+---
+
+# Squadron vs LangGraph
+
+Both Squadron and **LangGraph** orchestrate multi-agent AI workflows, but they sit on opposite ends of the code-vs-config spectrum. This page compares them honestly so you can pick the right one for your use case.
+
+## TL;DR
+
+| Dimension | Squadron | LangGraph |
+|---|---|---|
+| **Style** | Declarative HCL config | Imperative Python code |
+| **Runtime** | Standalone Go binary | Python library inside your app |
+| **Mental model** | Tasks in a DAG, commander/agent split | Graph nodes + state, hand-written transitions |
+| **State persistence** | Built-in (SQLite or Postgres), auto-resume | Pluggable checkpointer, manual wiring |
+| **Branching** | Declarative `router` / `send_to` blocks | Conditional edges in Python |
+| **LLM-provider mixing** | Per-agent or per-task, all four major providers built in | Whatever LangChain supports |
+| **Extension model** | Native Go/Python plugins (gRPC subprocess, auto-built) + MCP servers + built-in tools | LangChain tools (Python functions) + custom Python |
+| **Reviewability** | Workflow is one HCL file you diff in a PR | Workflow is Python control flow spread across files |
+| **Deployment** | Single binary, no runtime deps | Python app + dependency tree |
+| **License** | MIT | MIT |
+
+## What is LangGraph?
+
+[LangGraph](https://github.com/langchain-ai/langgraph) is a Python library from the LangChain team for building stateful, multi-actor applications with LLMs. You define a graph of nodes (Python functions or LangChain runnables), edges between them, and a shared state object. The runtime steps through the graph, calling LLMs and tools, accumulating state along the way. Branching and looping are encoded with conditional edges that inspect state.
+
+LangGraph is widely adopted in the Python AI ecosystem and integrates tightly with the rest of LangChain — tools, retrievers, memory, tracing (LangSmith), and the LangServe deployment story.
+
+## What is Squadron?
+
+[Squadron](/) is a declarative framework for multi-agent workflows where the entire pipeline — agents, tools, models, task dependencies, branching, retry, budgets — lives in HCL config files. The runtime is a standalone Go binary that reads the config, orchestrates LLM calls and tool invocations, and persists state to SQLite or Postgres. Resume after a crash is automatic.
+
+## The core difference: imperative vs declarative
+
+A LangGraph workflow is **Python code that runs**:
+
+```python
+from langgraph.graph import StateGraph
+
+def gather(state):
+    # call LLM, append to state["papers"]
+    ...
+
+def analyze(state):
+    # call LLM with state["papers"], decide next step
+    ...
+
+graph = StateGraph(MyState)
+graph.add_node("gather", gather)
+graph.add_node("analyze", analyze)
+graph.add_edge("gather", "analyze")
+graph.add_conditional_edges(
+    "analyze",
+    lambda state: "deep_dive" if state["needs_followup"] else "summarize",
+)
+...
+```
+
+The same workflow in Squadron is **HCL config that the runtime reads**:
+
+```hcl
+mission "research" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.researcher, agents.analyst]
+
+  task "gather" {
+    objective = "Find the top 5 papers on ${inputs.topic}"
+    agents    = [agents.researcher]
+  }
+
+  task "analyze" {
+    depends_on = [tasks.gather]
+    objective  = "Read each paper and extract the key findings"
+    agents     = [agents.analyst]
+    router {
+      route { target = tasks.deep_dive; condition = "Findings warrant deeper investigation" }
+      route { target = tasks.summarize; condition = "Findings are routine" }
+    }
+  }
+
+  task "deep_dive" { objective = "Investigate the most promising lead in detail" }
+  task "summarize" { objective = "Write a one-page summary" }
+}
+```
+
+There is no Python file, no node functions, no manual state passing. The router condition is evaluated by the commander LLM at runtime.
+
+## When to pick LangGraph
+
+- You already have a Python-heavy stack and want everything in one language.
+- You need fine-grained runtime control — arbitrary Python in every node, custom state reducers, complex middleware.
+- You're invested in the LangChain ecosystem: retrievers, tracing via LangSmith, deployed via LangServe.
+- Your workflow has truly dynamic structure (number of nodes depends on data) and you're comfortable expressing that in code.
+
+## When to pick Squadron
+
+- You want your agent workflows to be **reviewable as config** — diff-able in a pull request, readable by people who don't write Python.
+- You're shipping an agent pipeline to production and want **crash recovery and resume** without wiring up a checkpointer yourself.
+- You want to **mix model providers** (Claude for orchestration, GPT-4 for code, Gemini for vision, Ollama for a local fallback) without writing provider-abstraction code.
+- You need **scheduled or webhook-triggered missions** with concurrency limits, budgets, and retry — all declarative.
+- You want **first-class MCP support** in both directions: pull tools from any MCP server, *and* expose your own missions as MCP tools to Claude Desktop / Cursor / Claude Code.
+- You prefer **a single binary** over deploying a Python app with its dependency tree.
+
+## Extension model: plugins are the primary primitive
+
+Squadron's primary way of adding capability to agents is **plugins** — small standalone programs you author in **Go or Python**. They communicate with the Squadron runtime over gRPC via [hashicorp/go-plugin](https://github.com/hashicorp/go-plugin) and run as separate subprocesses.
+
+```hcl
+plugin "scraper" {
+  source  = "./plugin_scraper"   # local Go or Python source
+  version = "local"              # auto-built on every config load
+}
+
+agent "researcher" {
+  tools = [plugins.scraper.fetch, plugins.scraper.extract]
+}
+```
+
+Why plugins matter relative to LangGraph's "tools are Python functions in the same process":
+
+- **Two languages, picked per problem.** Go for performance-critical or systems-level tools (a browser controller, a network scanner, anything CPU-heavy or needing static binary distribution). Python for things that lean on the existing PyPI ecosystem (a pandas pipeline, a model adapter, a domain SDK).
+- **Process isolation.** A misbehaving plugin can't crash the runtime — gRPC failure mode is a clean error returned to the agent, not a Python exception unwinding through your orchestrator.
+- **Auto-build from source.** Edit `./plugin_scraper/main.go`, restart Squadron, and the plugin rebuilds. Content-hash caching skips the rebuild when nothing changed. No `pip install -e .` cycle, no Docker layer to rebuild.
+- **Stateful across tasks.** Plugins are cached globally for the lifetime of the process. A Playwright plugin can open a browser in task 1 and reuse it in task 5 — the runtime tracks the plugin connection, not the per-task call.
+- **Typed schemas.** Each plugin declares tool input/output schemas; Squadron uses those for native LLM function-calling and for output validation.
+- **Distributable.** Plugins compile to a single binary (Go) or a venv (Python) and are publishable as GitHub releases. Other Squadron configs reference them via `source = "github.com/owner/repo"` and Squadron auto-installs.
+
+**MCP is complementary, not a substitute.** Squadron's [MCP support](/config/mcp_tools) covers the case where someone else has already built the integration you need (the official Filesystem, Linear, Slack MCP servers; anything in the [MCP registry](https://github.com/modelcontextprotocol)). Plugins cover the case where the integration is yours: domain-specific tools, performance-sensitive paths, things you want versioned in your own repo. The right Squadron stack typically uses both.
+
+LangGraph also has a tool concept and integrates with LangChain's tool library, but tools are Python functions in the same process — no language choice, no subprocess isolation, no auto-build of an external artifact, no plugin registry beyond LangChain's own.
+
+## What about prototyping?
+
+LangGraph is faster to bend into one-off shapes in a Jupyter notebook. Squadron is faster to ship as a maintained, scheduled production pipeline. Pick based on whichever phase you're in.
+
+## Migration: can you move from LangGraph to Squadron?
+
+In most cases, yes — multi-agent workflows fit a task-DAG model cleanly. The translation is usually:
+
+| LangGraph | Squadron |
+|---|---|
+| `StateGraph` | `mission` block |
+| Node function | `task { objective = "..." }` block |
+| Static edge | `depends_on = [tasks.X]` |
+| Conditional edge | `router { route { ... } }` |
+| Tool function | Built-in tool, plugin, or MCP server |
+| Checkpointer | Built-in, automatic |
+| `chat_models.*` | `model { provider = "..." }` |
+
+Custom Python inside a node has no direct equivalent — you'd move that logic into a Squadron [plugin](/config/plugins) (Go or Python, runs as a subprocess) or an [MCP server](/config/mcp_tools).
+
+## See also
+
+- [What is Squadron?](/) — full overview
+- [The Harness](/missions/harness) — the commander/agent execution model
+- [Squadron vs CrewAI](/compare/crewai)
+- [Squadron vs AutoGen](/compare/autogen)

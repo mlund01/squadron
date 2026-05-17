@@ -1,0 +1,148 @@
+---
+title: Squadron vs CrewAI
+description: Honest comparison of Squadron and CrewAI for multi-agent AI workflows. CrewAI is a Python framework around role-based 'crews' running sequential or hierarchical processes. Squadron is HCL config and a standalone Go binary with a built-in DAG runtime, persistence, and resume.
+---
+
+# Squadron vs CrewAI
+
+Both **CrewAI** and Squadron are built around the metaphor of a team of role-played AI agents collaborating on a task. They diverge sharply on *how* you define the team and *how* the runtime executes the work.
+
+## TL;DR
+
+| Dimension | Squadron | CrewAI |
+|---|---|---|
+| **Style** | Declarative HCL config | Imperative Python code |
+| **Runtime** | Standalone Go binary | Python library |
+| **Workflow shape** | Arbitrary DAG with conditional routing | Sequential, hierarchical, or "flow" (recently added) |
+| **State persistence** | Built-in, auto-resume on crash | Manual / not first-class |
+| **LLM providers** | Anthropic, OpenAI, Gemini, Ollama, all built in | LiteLLM-backed (broad coverage) |
+| **Extension model** | Native Go/Python plugins (gRPC subprocess, auto-built) + MCP (both directions) + built-in tools | CrewAI Tools library + custom Python classes |
+| **Scheduling / webhooks** | First-class `schedule` / `trigger` blocks | External orchestrator required |
+| **Budgets** | Declarative token + dollar caps per mission / task | None built-in |
+| **Reviewability** | Whole workflow is one HCL file | Spread across Python files |
+| **License** | MIT | MIT |
+
+## What is CrewAI?
+
+[CrewAI](https://github.com/crewAIInc/crewAI) is a Python framework for orchestrating role-playing autonomous AI agents. You define agents (each with a role, goal, backstory, and tools), tasks (with a description, expected output, and assigned agent), and a Crew that ties them together with a process (sequential or hierarchical). CrewAI recently added "Flows" for more complex, event-driven workflows.
+
+CrewAI's strengths are a clean Python API, a popular tools library, and a thriving community around quick agent prototypes.
+
+## What is Squadron?
+
+[Squadron](/) is a declarative framework for multi-agent workflows where the entire pipeline — agents, tools, models, the task graph, conditional branches, schedules, budgets — is defined in HCL config. The runtime is a single Go binary that reads the config, runs the workflow, and persists state automatically.
+
+## Side-by-side
+
+A simple two-step research workflow in **CrewAI**:
+
+```python
+from crewai import Agent, Task, Crew, Process
+
+researcher = Agent(
+    role="Researcher",
+    goal="Find the top 5 papers on the given topic",
+    backstory="...",
+    llm=ChatAnthropic(model="claude-sonnet-4"),
+)
+
+analyst = Agent(role="Analyst", goal="...", llm=...)
+
+gather = Task(description="Find papers on {topic}", agent=researcher)
+analyze = Task(description="Extract key findings", agent=analyst, context=[gather])
+
+crew = Crew(agents=[researcher, analyst], tasks=[gather, analyze], process=Process.sequential)
+crew.kickoff(inputs={"topic": "post-quantum cryptography"})
+```
+
+The same in **Squadron**:
+
+```hcl
+agent "researcher" {
+  model = models.anthropic.claude_sonnet_4
+  role  = "Researcher"
+  goal  = "Find the top 5 papers on the given topic"
+}
+
+agent "analyst" {
+  model = models.anthropic.claude_sonnet_4
+  role  = "Analyst"
+}
+
+mission "research" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.researcher, agents.analyst]
+
+  task "gather"   { objective = "Find papers on ${inputs.topic}"; agents = [agents.researcher] }
+  task "analyze"  { depends_on = [tasks.gather]; objective = "Extract key findings"; agents = [agents.analyst] }
+}
+```
+
+```bash
+squadron mission research -c ./config --topic "post-quantum cryptography"
+```
+
+Both look reasonable at this size. The differences emerge when the workflow grows: branching, iteration, resume after crash, scheduling, mixed model providers, budgets, multi-task DAGs.
+
+## When to pick CrewAI
+
+- Your team is Python-native and you want everything in `pip install`.
+- You're prototyping quickly in a notebook or research project.
+- Your workflow is mostly sequential or fits CrewAI's hierarchical process.
+- You want to lean on CrewAI's growing tools library out of the box.
+
+## When to pick Squadron
+
+- You want agent workflows to be **configuration** — reviewed in pull requests, edited by non-Python teammates, versioned alongside infra.
+- You're running missions in production and need **automatic crash resume**, **scheduled** runs, **webhook triggers**, and **budget enforcement** without building the harness yourself.
+- Your workflow is a real **DAG** with conditional branching (`router`) and unconditional fan-out (`send_to`), not just a linear pipeline.
+- You want to **mix LLM providers per task** — fast model for routing, expensive model for the hard subtask, local Ollama for sensitive steps.
+- You want **MCP support in both directions** — pull tools from any MCP server, *and* expose your missions as MCP tools to Claude Desktop and friends.
+- You'd rather deploy a **single binary** than a Python app.
+
+## Extension model: plugins are the primary primitive
+
+Squadron's primary way to extend agents is **plugins** — standalone programs in **Go or Python** that the runtime spawns as subprocesses and talks to over gRPC ([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)).
+
+```hcl
+plugin "domain_api" {
+  source  = "./plugin_domain_api"  # local Go or Python source
+  version = "local"                # auto-built on every config load
+}
+
+agent "specialist" {
+  tools = [plugins.domain_api.all]
+}
+```
+
+Compared to CrewAI's tool model — where tools are Python classes (`BaseTool` subclasses) in the same process as the rest of your code — plugins give you:
+
+- **Language choice.** Go for tools where startup, latency, or static distribution matter (a database client, a system-level scraper, a binary CLI wrapper). Python for things that need NumPy, pandas, or the Python ML stack.
+- **Subprocess isolation.** A crashing tool returns a gRPC error to the agent; the runtime stays up. With CrewAI a bad tool exception unwinds the same process running your crew.
+- **Auto-build from source.** Edit the plugin, reload Squadron, the runtime rebuilds it (with content-hash caching so unchanged source skips the rebuild). No manual `pip install` step.
+- **Stateful across tasks.** The same plugin process is reused across all tasks in a mission. A Playwright plugin opens a browser once and shares it; a DB plugin keeps a connection pool. CrewAI tools either re-init per call or you wire up sharing yourself.
+- **Typed schemas + distribution.** Plugins ship as Go binaries or Python venvs and can be referenced via `source = "github.com/owner/repo"` so other Squadron configs auto-install them.
+
+**MCP is complementary.** [MCP support](/config/mcp_tools) handles the case where someone already wrote the integration (Filesystem, Linear, Slack, anything in the MCP registry). Plugins handle the case where the integration is *yours* — versioned in your repo, language-of-choice, process-isolated. CrewAI added MCP support more recently but doesn't have an equivalent first-party plugin primitive in two languages.
+
+## What CrewAI does better
+
+- Tighter integration with the Python AI ecosystem (LangChain tools, custom Python wherever you want).
+- Newer feature: Flows give event-driven control if you're willing to write more code.
+- Larger community of quick-prototype examples on GitHub.
+
+## What Squadron does better
+
+- **Diff-able workflows.** Your entire mission graph is one HCL file. Reviewers see exactly what changed.
+- **Resume.** Squadron persists every commander session, every agent session, every route decision. A crashed mission resumes from the last completed tool call.
+- **Routing as a first-class block.** `router { route { target = tasks.x; condition = "..." } }` is declarative — the commander decides at runtime which branch to take.
+- **Budgets.** A `budget { tokens = 5000000; dollars = 25 }` block halts the mission cleanly when reached. No `try`/`except` wrapper required.
+- **MCP everywhere.** Two-line block pulls in any MCP server; one block exposes Squadron as an MCP server to AI assistants.
+
+## See also
+
+- [What is Squadron?](/)
+- [Missions overview](/missions/overview)
+- [The Harness](/missions/harness)
+- [Squadron vs LangGraph](/compare/langgraph)
+- [Squadron vs AutoGen](/compare/autogen)

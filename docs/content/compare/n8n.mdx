@@ -1,0 +1,97 @@
+---
+title: Squadron vs n8n
+description: Honest comparison of Squadron and n8n for AI workflow automation. n8n is a visual node-based workflow tool with broad SaaS integrations and an AI extension. Squadron is HCL config and a Go binary built LLM-first around multi-agent missions with structured outputs and conditional routing.
+---
+
+# Squadron vs n8n
+
+**n8n** and Squadron occasionally show up in the same conversation when someone is shopping for "an AI workflow tool." They are very different products. This page lays out where they overlap and where they don't, so you can pick correctly.
+
+## TL;DR
+
+| Dimension | Squadron | n8n |
+|---|---|---|
+| **Primary purpose** | Multi-agent AI workflows | General-purpose SaaS workflow automation (with an AI node set) |
+| **Authoring** | Declarative HCL config | Visual drag-and-drop GUI (also exportable as JSON) |
+| **Runtime** | Standalone Go binary | Node.js server (self-hosted or cloud) |
+| **LLM orchestration** | First-class: agents, commanders, missions, routing | A category of nodes — usable but not the centerpiece |
+| **Mental model** | Tasks in a DAG with typed outputs, two-tier commander/agent split | Triggers → nodes → connections (data passes between nodes) |
+| **Branching** | LLM-decided `router` blocks, declarative `send_to` | IF/switch nodes with static expressions |
+| **Extension model** | Native Go/Python plugins (gRPC subprocess, auto-built) + MCP both directions + built-in tools | Custom Node.js community nodes + 400+ pre-built SaaS nodes |
+| **State / resume** | Auto-persist, automatic resume | Per-execution storage; resume support varies |
+| **Best fit** | Production agent pipelines, reviewable workflows | Business automation across SaaS apps, with optional LLM steps |
+| **License** | MIT | Sustainable Use License (source-available, restrictive) |
+
+## What is n8n?
+
+[n8n](https://n8n.io/) is an open-source-ish workflow automation tool — you build pipelines visually by dragging nodes onto a canvas and connecting them. Triggers (webhook, cron, app events) kick off executions; nodes do work (HTTP request, database query, transform data, call OpenAI, etc.); connections move data between them. n8n has 400+ pre-built integrations for SaaS apps.
+
+n8n's AI nodes let you call OpenAI, build basic LangChain chains, and run an "AI Agent" node, but LLM orchestration is one capability among many, not the framework's center of gravity.
+
+## What is Squadron?
+
+[Squadron](/) is purpose-built for multi-agent AI workflows. Everything in Squadron — agents, commanders, missions, routing, datasets, iteration, budgets, MCP — exists to make LLM workflows describable as config and runnable as a deterministic harness. There are no Stripe or Slack nodes; integrations come from MCP servers and plugins.
+
+## When n8n makes more sense
+
+- Your workflow is **fundamentally business automation** — pulling rows from a database, posting to Slack, syncing CRMs — with maybe one LLM call in the middle.
+- You want a **visual canvas** that non-technical teammates can edit.
+- You need the **breadth of pre-built SaaS integrations** that n8n ships out of the box.
+- You're already on n8n and just need to add some AI.
+
+## When Squadron makes more sense
+
+- Your workflow is **mostly LLM work** — multiple agents collaborating, conditional branches the model decides, structured data flowing between reasoning steps.
+- You want workflows that are **diff-able and reviewable in PRs**, version-controlled alongside your code and infra.
+- You need **multi-agent patterns** — commander/agent split, parallel iteration over a dataset, fan-out, conditional routing — not just chained LLM calls.
+- You want **automatic crash recovery** built into the runtime, not a per-node retry config you have to set up.
+- You want **MCP support in both directions** — pull tools from any MCP server, and expose your missions as MCP tools to Claude Desktop and friends.
+- You want to **mix LLM providers per task** without writing per-provider node configs.
+
+## Extension model: plugins + MCP vs custom nodes
+
+The two products extend in very different ways.
+
+**n8n** extends through **community nodes** — TypeScript packages following n8n's node SDK that you publish to npm and install into an n8n instance. Each node is a Node.js class exposing properties, credentials, and an `execute()` method. Authoring a node is a meaningful project: it's a TypeScript package with a build pipeline, n8n's lifecycle hooks, and visual properties for the canvas. n8n's strength is that they (and the community) have already authored 400+ nodes for popular SaaS apps, so most users never need to author one.
+
+**Squadron** extends through **plugins** — standalone programs in **Go or Python** that the runtime spawns as subprocesses and talks to over gRPC ([hashicorp/go-plugin](https://github.com/hashicorp/go-plugin)).
+
+```hcl
+plugin "shell" {
+  source  = "./plugin_shell"   # local Go or Python source
+  version = "local"            # auto-built on every config load
+}
+
+agent "ops" {
+  tools = [plugins.shell.exec, plugins.shell.tail]
+}
+```
+
+The differences worth flagging if you're comparing the two:
+
+- **Authoring effort.** A Squadron plugin is a single-file Go or Python program implementing a small interface. Auto-built on config load with content-hash caching. No npm publishing step, no TypeScript build pipeline. The barrier to a one-off custom tool is much lower than authoring an n8n node.
+- **Language fit.** Squadron plugins are Go *or* Python — pick whichever fits the tool. n8n nodes are Node.js. If your domain tooling lives in Python or Go, you'd otherwise spawn a subprocess from inside an n8n function node.
+- **Process isolation.** Each Squadron plugin runs in its own subprocess; a crash is a clean gRPC error to the calling agent. n8n nodes run in the n8n process.
+- **Stateful across tasks.** Squadron plugins are long-lived for the lifetime of the runtime — a Playwright plugin opens a browser once and reuses it across every task in every mission. n8n executions are per-trigger; sharing state requires external persistence.
+- **MCP both directions, native.** Squadron consumes any [MCP server](/config/mcp_tools) (npm, GitHub release, HTTP, or local binary) with a two-line block, and Squadron itself can [run as an MCP server](/config/mcp_host) for Claude Desktop / Claude Code / Cursor. n8n has community MCP nodes but it's not a first-class concept.
+
+If you need broad SaaS coverage *right now*, n8n's pre-built node library is hard to beat. If you're building bespoke AI tooling — domain-specific scrapers, internal API wrappers, performance-critical pipelines — Squadron's plugin model gets you there with less ceremony, in the language that fits, and with the option to share the plugin via GitHub releases.
+
+## What if you need both?
+
+It's reasonable to use n8n as the SaaS-integration layer and Squadron as the agent layer. Squadron exposes [webhook triggers](/missions/schedules) on missions, so an n8n flow can hand off to Squadron when it hits the AI step, then read structured outputs back. The reverse also works: Squadron can call out to an n8n webhook from a built-in HTTP tool.
+
+## License differences worth noting
+
+- **Squadron is MIT-licensed.** Use it commercially, embed it, fork it.
+- **n8n uses the Sustainable Use License** (a fair-code-style license). It permits self-hosting and most internal use but restricts hosted-service / multi-tenant offerings without a commercial license.
+
+If license fit matters for your deployment, read both carefully.
+
+## See also
+
+- [What is Squadron?](/)
+- [MCP tools](/config/mcp_tools) — pull any MCP server into Squadron
+- [Schedules & triggers](/missions/schedules) — cron and webhook entry points
+- [Squadron vs LangGraph](/compare/langgraph)
+- [Squadron vs CrewAI](/compare/crewai)

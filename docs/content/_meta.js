@@ -1,8 +1,18 @@
 export default {
+  '__learn': { type: 'separator', title: 'Learn' },
   index: 'Introduction',
+  'declarative-agent-framework': 'Declarative Framework',
   'getting-started': 'Getting Started',
-  cli: 'CLI Commands',
-  config: 'Configuration',
+
+  '__build': { type: 'separator', title: 'Build' },
   missions: 'Missions',
-  advanced: 'Advanced',
+  config: 'Configuration',
+  guides: 'Guides',
+
+  '__reference': { type: 'separator', title: 'Reference' },
+  cli: 'CLI Reference',
+
+  '__evaluate': { type: 'separator', title: 'Evaluate' },
+  compare: 'Compare',
+  faq: 'FAQ',
 }

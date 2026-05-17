@@ -26,7 +26,7 @@ Title + H1 must echo the query verbatim. Answer engines extract the first paragr
 
 ## Tier 3 — Off-site signal
 
-- [x] **11. Polished README + GitHub topics.** README rewritten ([PR #98](https://github.com/mlund01/squadron/pull/98)) with comparison table, plugin treatment, MCP-both-directions story, and links to all Tier 2 pages. 15 topics + tightened description applied to the repo (`ai-agents`, `agentic-workflows`, `agent-framework`, `multi-agent`, `multi-agent-systems`, `llm-orchestration`, `declarative`, `declarative-configuration`, `hcl`, `mcp`, `model-context-protocol`, `ai-framework`, `llm-tools`, `workflow-orchestration`, `golang`). See [`aeo/github-repo-metadata.md`](aeo/github-repo-metadata.md).
+- [x] **11. Polished README + GitHub topics.** README rewritten ([PR #98](https://github.com/mlund01/squadron/pull/98)) with comparison table, plugin treatment, MCP-both-directions story, and links to all Tier 2 pages. 15 topics + tightened description applied to the repo on 2026-05-16.
 - [ ] **12. Awesome-list PRs.** Narrowed to one target after a pulse audit: [`punkpeye/awesome-mcp-clients`](https://github.com/punkpeye/awesome-mcp-clients) (active, accepting community PRs). Two originally-planned lists (`awesome-ai-agents`, `awesome-langchain`) were dropped — the former is effectively abandoned (last push Feb 2025, zero merged PRs); the latter is a closed garden (maintainer-only direct commits, recent community PRs all closed unmerged). User is handling the awesome-mcp-clients submission themselves.
 - [ ] **13. Aggregator submissions**: Show HN, Lobste.rs, r/LocalLLaMA, r/AI_Agents, r/mcp, dev.to, hashnode, Product Hunt.
 - [ ] **14. 3–5 launch blog posts** on dev.to / hashnode / Medium with canonical link back to docs.squadron.sh.

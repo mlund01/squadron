@@ -132,3 +132,10 @@ docker pull ghcr.io/mlund01/squadron:v0.0.45-debian
 
 - **Alpine** (`latest`) — smaller image, static binary with `CGO_ENABLED=0`. Use this unless you have a reason not to.
 - **Debian** (`latest-debian`) — larger image, built with `CGO_ENABLED=1`. Use this if you have plugins that depend on C libraries or glibc.
+
+Both images ship with the toolchains needed to build local plugins at config-load time:
+
+- **Python plugins** (`pyproject.toml` source) — `python3` + `pip` are pre-installed; Squadron creates an isolated venv per plugin under `/config/.squadron/plugins/`.
+- **Go plugins** (`go.mod` source) — `go` + `git` are pre-installed; Squadron runs `go build` per plugin. The Debian image copies Go 1.25 from the builder stage (bookworm's distro Go is too old); the Alpine image uses the distro Go.
+
+Pre-built / released plugins (`source = "github.com/..."` or `source = "npm:..."`) work without these toolchains, so if you only use released plugins you can build your own slim image by removing the relevant packages from the Dockerfile.

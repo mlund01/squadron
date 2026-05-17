@@ -26,11 +26,11 @@ Title + H1 must echo the query verbatim. Answer engines extract the first paragr
 
 ## Tier 3 — Off-site signal
 
-- [ ] **11. GitHub topics + polished README.** Topics: `ai-agents`, `agentic-workflows`, `llm-orchestration`, `mcp`, `hcl`, `multi-agent`. Expand README with comparison table, demo, "Why HCL?" section.
-- [ ] **12. Awesome-list PRs**: `awesome-ai-agents`, `awesome-llm-apps`, `awesome-mcp`, `awesome-langchain-alternatives`.
-- [ ] **13. Aggregator submissions**: Product Hunt, Show HN, Lobste.rs, r/LocalLLaMA, r/AI_Agents, dev.to, hashnode.
+- [x] **11. Polished README + GitHub topics.** README rewritten ([PR #98](https://github.com/mlund01/squadron/pull/98)) with comparison table, plugin treatment, MCP-both-directions story, and links to all Tier 2 pages. 15 topics + tightened description applied to the repo on 2026-05-16.
+- [ ] **12. Awesome-list PRs.** Narrowed to one target after a pulse audit: [`punkpeye/awesome-mcp-clients`](https://github.com/punkpeye/awesome-mcp-clients) (active, accepting community PRs). Two originally-planned lists (`awesome-ai-agents`, `awesome-langchain`) were dropped — the former is effectively abandoned (last push Feb 2025, zero merged PRs); the latter is a closed garden (maintainer-only direct commits, recent community PRs all closed unmerged). User is handling the awesome-mcp-clients submission themselves.
+- [ ] **13. Aggregator submissions**: Show HN, Lobste.rs, r/LocalLLaMA, r/AI_Agents, r/mcp, dev.to, hashnode, Product Hunt.
 - [ ] **14. 3–5 launch blog posts** on dev.to / hashnode / Medium with canonical link back to docs.squadron.sh.
-- [ ] **15. MCP server registry submissions.** Official MCP registry + modelcontextprotocol.io showcase.
+- [x] ~~**15. MCP server registry submissions.**~~ **Dropped.** Squadron is fundamentally an MCP **client**, not a server. The built-in MCP host is a side feature, not high-value to advertise to MCP-server discovery surfaces. Tier 3 weight redistributed to #12 (mcp-clients) and #13/#14.
 - [ ] **16. Wikipedia stub** for "Squadron (AI framework)" — needs 3+ independent press mentions first.
 
 ## Tier 4 — Measurement

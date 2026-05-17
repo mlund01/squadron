@@ -1,0 +1,50 @@
+name: Docker smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Builds both Dockerfile variants and exercises the local-plugin BuildLocal
+# path inside the container for both Python (pyproject.toml) and Go (go.mod)
+# sources. Catches regressions where a base-image change or package rename
+# silently strips python3 / go from the runtime image.
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: alpine
+            dockerfile: Dockerfile
+          - variant: debian
+            dockerfile: Dockerfile.debian
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -f ${{ matrix.dockerfile }} -t squadron-smoke:${{ matrix.variant }} .
+
+      - name: Verify (builds both local plugins inside the container)
+        run: |
+          docker run --rm -v "$PWD/docker/test:/config" \
+            squadron-smoke:${{ matrix.variant }} verify .
+
+      - name: Call Python plugin over gRPC
+        run: |
+          out=$(docker run --rm -v "$PWD/docker/test:/config" \
+            -e SQUADRON_HOME=/config/.squadron \
+            squadron-smoke:${{ matrix.variant }} plugin call dt_py ping '{}')
+          echo "got: $out"
+          [ "$out" = "pong" ] || { echo "expected 'pong'"; exit 1; }
+
+      - name: Call Go plugin over gRPC
+        run: |
+          out=$(docker run --rm -v "$PWD/docker/test:/config" \
+            -e SQUADRON_HOME=/config/.squadron \
+            squadron-smoke:${{ matrix.variant }} plugin call dt_go ping '{}')
+          echo "got: $out"
+          [ "$out" = "pong" ] || { echo "expected 'pong'"; exit 1; }

@@ -7,7 +7,13 @@ COPY . .
 RUN CGO_ENABLED=1 go build -ldflags="-s -w -X squadron/cmd.Version=${VERSION}" -o squadron ./cmd/cli
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv python3-pip && rm -rf /var/lib/apt/lists/*
+# python3+venv+pip — build local Python plugins (pyproject.toml) at config-load time.
+# git — needed for `go mod` to fetch dependencies when building local Go plugins.
+# Bookworm's distro Go is 1.19 (too old), so the Go toolchain is copied from the
+# builder stage instead — guaranteed version parity with the squadron binary.
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates python3 python3-venv python3-pip git && rm -rf /var/lib/apt/lists/*
+COPY --from=builder /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:$PATH
 COPY --from=builder /build/squadron /usr/local/bin/squadron
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENV SQUADRON_CONTAINER=1

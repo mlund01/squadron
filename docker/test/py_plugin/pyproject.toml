@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "dt_py"
+version = "0.0.1"
+requires-python = ">=3.10"
+dependencies = ["squadron-sdk>=0.1.1"]
+
+[project.scripts]
+dt_py = "dt_py.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dt_py"]

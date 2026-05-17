@@ -7,7 +7,9 @@ COPY . .
 RUN CGO_ENABLED=0 go build -ldflags="-s -w -X squadron/cmd.Version=${VERSION}" -o squadron ./cmd/cli
 
 FROM alpine:latest
-RUN apk add --no-cache ca-certificates tzdata python3 py3-pip
+# python3+py3-pip — build local Python plugins (pyproject.toml) at config-load time.
+# go+git — build local Go plugins (go.mod) at config-load time.
+RUN apk add --no-cache ca-certificates tzdata python3 py3-pip go git
 COPY --from=builder /build/squadron /usr/local/bin/squadron
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 ENV SQUADRON_CONTAINER=1

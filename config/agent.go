@@ -101,7 +101,6 @@ type Agent struct {
 	Name        string   `hcl:"name,label"`
 	Model       string   `hcl:"model"`
 	Personality string   `hcl:"personality"`
-	Role        string   `hcl:"role"`
 	Tools       []string `hcl:"tools,optional"`
 	Skills      []string `hcl:"-"`
 

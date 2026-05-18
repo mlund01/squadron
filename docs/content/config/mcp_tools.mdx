@@ -18,7 +18,6 @@ mcp "filesystem" {
 agent "fs_worker" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Careful with files"
-  role        = "File system specialist"
   tools       = [mcp.filesystem.all]
 }
 ```
@@ -123,7 +122,6 @@ Once loaded, MCP tools are reachable through the `mcp` namespace:
 agent "researcher" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Thorough"
-  role        = "Research assistant"
   tools = [
     mcp.filesystem.read_text_file,  # a single tool
     mcp.remote_api.all,              # every tool from that server

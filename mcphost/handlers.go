@@ -392,7 +392,6 @@ func (h *handlers) listAgents(_ context.Context, _ mcp.CallToolRequest) (*mcp.Ca
 	type agentSummary struct {
 		Name  string   `json:"name"`
 		Model string   `json:"model"`
-		Role  string   `json:"role,omitempty"`
 		Tools []string `json:"tools"`
 	}
 
@@ -401,7 +400,6 @@ func (h *handlers) listAgents(_ context.Context, _ mcp.CallToolRequest) (*mcp.Ca
 		agents = append(agents, agentSummary{
 			Name:  a.Name,
 			Model: a.Model,
-			Role:  a.Role,
 			Tools: a.Tools,
 		})
 	}

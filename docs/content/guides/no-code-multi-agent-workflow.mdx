@@ -42,14 +42,12 @@ Create `config/agents.hcl`:
 ```hcl
 agent "news_gatherer" {
   model       = models.anthropic.claude_sonnet_4
-  role        = "Tech news researcher"
   personality = "Skeptical, source-citing, allergic to hype."
   tools       = [builtins.http.get, builtins.web.search]
 }
 
 agent "summarizer" {
   model       = models.anthropic.claude_sonnet_4
-  role        = "Executive briefing writer"
   personality = "Concise. Buries the lede only when there isn't one."
 }
 ```

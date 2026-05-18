@@ -15,7 +15,6 @@ var _ = Describe("Agent", func() {
 agent "helper" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Friendly and precise"
-  role        = "General assistant"
   tools       = [builtins.http.get, builtins.http.post]
 }
 `
@@ -26,7 +25,6 @@ agent "helper" {
 			Expect(cfg.Agents[0].Name).To(Equal("helper"))
 			Expect(cfg.Agents[0].Model).To(Equal("claude_sonnet_4"))
 			Expect(cfg.Agents[0].Personality).To(Equal("Friendly and precise"))
-			Expect(cfg.Agents[0].Role).To(Equal("General assistant"))
 			Expect(cfg.Agents[0].Tools).To(ConsistOf("builtins.http.get", "builtins.http.post"))
 		})
 
@@ -35,7 +33,6 @@ agent "helper" {
 agent "pruned" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Efficient"
-  role        = "Pruning tester"
   tools       = [builtins.http.get]
   pruning {
     prune_on = 20
@@ -56,7 +53,6 @@ agent "pruned" {
 agent "compacted" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Concise"
-  role        = "Compaction tester"
   compaction {
     token_limit    = 5000
     turn_retention = 3
@@ -76,7 +72,6 @@ agent "compacted" {
 agent "toolless" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Thoughtful"
-  role        = "A chat-only agent"
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
@@ -90,7 +85,6 @@ agent "toolless" {
 agent "no_pruning" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Simple"
-  role        = "Basic agent"
   tools       = [builtins.http.get]
 }
 `
@@ -107,7 +101,6 @@ agent "no_pruning" {
 agent "limited" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Careful"
-  role        = "Response limit tester"
   tools       = [builtins.http.get]
   tool_response {
     max_tokens = 8000
@@ -127,7 +120,6 @@ agent "limited" {
 agent "default_limits" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Simple"
-  role        = "Default limits"
   tools       = [builtins.http.get]
 }
 `
@@ -143,7 +135,6 @@ agent "default_limits" {
 agent "huge_limit" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Greedy"
-  role        = "Wants too much"
   tools       = [builtins.http.get]
   tool_response {
     max_tokens = 999999
@@ -163,7 +154,6 @@ agent "huge_limit" {
 agent "valid_tools" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helper"
-  role        = "Tool user"
   tools       = [builtins.http.get, builtins.http.post, builtins.http.put]
 }
 `
@@ -178,7 +168,6 @@ agent "valid_tools" {
 agent "http_all" {
   model       = models.anthropic.claude_sonnet_4
   personality = "API master"
-  role        = "API caller"
   tools       = [builtins.http.get, builtins.http.post, builtins.http.put, builtins.http.patch, builtins.http.delete]
 }
 `
@@ -193,7 +182,6 @@ agent "http_all" {
 agent "all_http" {
   model       = models.anthropic.claude_sonnet_4
   personality = "HTTP master"
-  role        = "API caller"
   tools       = [builtins.http.all]
 }
 `

@@ -233,7 +233,6 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(mode, promptSecrets, promptSkills))
 	systemPrompts = append(systemPrompts,
 		fmt.Sprintf("Personality: %s", agentCfg.Personality),
-		fmt.Sprintf("Role: %s", agentCfg.Role),
 	)
 
 	// Add dataset info if running in mission context

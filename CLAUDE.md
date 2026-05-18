@@ -139,7 +139,6 @@ mcp_host {
 agent "browser_navigator" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Methodical and precise"
-  role        = "Browser automation specialist"
   tools       = [plugins.playwright.all, mcp.filesystem.read_file]
 }
 
@@ -352,7 +351,6 @@ mission "research" {
   agent "specialist" {
     model       = models.anthropic.claude_opus_4
     personality = "Deep domain expert"
-    role        = "Research specialist with access to specialized tools"
     tools       = [plugins.shell.exec]
   }
 

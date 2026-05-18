@@ -40,7 +40,6 @@ skill "s" {
 agent "custom" {
   model       = models.anthropic.claude_sonnet_4
   personality = load("./persona.md")
-  role        = "worker"
   tools       = [builtins.http.get]
 }
 `,
@@ -57,7 +56,6 @@ agent "custom" {
 agent "custom" {
   model       = models.anthropic.claude_sonnet_4
   personality = "helpful"
-  role        = "worker"
 
   skill "helper" {
     description  = "helper"

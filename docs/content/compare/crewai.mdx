@@ -60,13 +60,11 @@ The same in **Squadron**:
 ```hcl
 agent "researcher" {
   model = models.anthropic.claude_sonnet_4
-  role  = "Researcher"
   goal  = "Find the top 5 papers on the given topic"
 }
 
 agent "analyst" {
   model = models.anthropic.claude_sonnet_4
-  role  = "Analyst"
 }
 
 mission "research" {

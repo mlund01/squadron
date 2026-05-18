@@ -43,7 +43,6 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		}
 		ic.Agents = append(ic.Agents, protocol.AgentInfo{
 			Name:   a.Name,
-			Role:   a.Role,
 			Model:  a.Model,
 			Tools:  a.Tools,
 			Skills: skillNames,
@@ -85,7 +84,6 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			}
 			ic.Agents = append(ic.Agents, protocol.AgentInfo{
 				Name:    a.Name,
-				Role:    a.Role,
 				Model:   a.Model,
 				Tools:   a.Tools,
 				Skills:  mSkillNames,

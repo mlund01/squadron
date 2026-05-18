@@ -1,6 +1,7 @@
 package config_test
 
 import (
+	"squadron/aitools"
 	"squadron/config"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -8,6 +9,38 @@ import (
 )
 
 var _ = Describe("Agent", func() {
+
+	Describe("builtin tool wiring", func() {
+		It("registers builtins.utils.current_time and resolves it to CurrentTimeTool", func() {
+			Expect(config.IsBuiltinTool("builtins.utils.current_time")).To(BeTrue())
+			Expect(config.BuiltinTools["utils"]).To(ContainElement("current_time"))
+
+			tool := config.GetBuiltinTool("builtins.utils.current_time", nil, nil)
+			Expect(tool).NotTo(BeNil())
+			Expect(tool).To(BeAssignableToTypeOf(&aitools.CurrentTimeTool{}))
+			Expect(tool.ToolName()).To(Equal("current_time"))
+		})
+
+		It("loads an agent whose tools include builtins.utils.current_time and builds the tools map", func() {
+			hcl := minimalVarsHCL() + minimalModelHCL() + `
+agent "clock" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Concise"
+  role        = "Time teller"
+  tools       = [builtins.utils.current_time]
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Agents).To(HaveLen(1))
+			Expect(cfg.Agents[0].Tools).To(ConsistOf("builtins.utils.current_time"))
+
+			tools := config.BuildToolsMap(cfg.Agents[0].Tools, nil, nil, nil, nil, nil)
+			Expect(tools).To(HaveKey("builtins.utils.current_time"))
+			Expect(tools["builtins.utils.current_time"]).To(BeAssignableToTypeOf(&aitools.CurrentTimeTool{}))
+		})
+	})
 
 	Describe("parsing", func() {
 		It("parses an agent with model reference and internal tools", func() {

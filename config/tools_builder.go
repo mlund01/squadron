@@ -181,6 +181,8 @@ func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore, humanBridge a
 		return &aitools.DatasetCountTool{Store: datasetStore}
 	case "builtins.utils.sleep":
 		return &aitools.SleepTool{}
+	case "builtins.utils.current_time":
+		return &aitools.CurrentTimeTool{}
 	case "builtins.human.ask":
 		return &aitools.HumanInputTool{Bridge: humanBridge}
 	default:

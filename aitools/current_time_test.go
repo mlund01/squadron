@@ -39,12 +39,14 @@ func TestCurrentTimeHonorsTimezone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected RFC3339 output, got %q (err: %v)", got, err)
 	}
-	chicago, _ := time.LoadLocation("America/Chicago")
-	wantOffset, _ := time.Now().In(chicago).Zone()
-	gotName, _ := parsed.Zone()
-	// Both should report the same abbreviation (CST or CDT depending on DST).
-	if gotName != wantOffset {
-		t.Errorf("expected zone %s, got %s", wantOffset, gotName)
+	chicago, err := time.LoadLocation("America/Chicago")
+	if err != nil {
+		t.Skipf("America/Chicago not available on this system: %v", err)
+	}
+	_, wantOffset := time.Now().In(chicago).Zone()
+	_, gotOffset := parsed.Zone()
+	if gotOffset != wantOffset {
+		t.Errorf("expected offset %d, got %d", wantOffset, gotOffset)
 	}
 }
 
@@ -61,6 +63,9 @@ func TestCurrentTimeHonorsFormat(t *testing.T) {
 }
 
 func TestCurrentTimeTimezoneAndFormat(t *testing.T) {
+	if _, err := time.LoadLocation("Asia/Tokyo"); err != nil {
+		t.Skipf("Asia/Tokyo not available on this system: %v", err)
+	}
 	tool := &CurrentTimeTool{}
 	got := tool.Call(context.Background(), `{"timezone":"Asia/Tokyo","format":"2006-01-02 15:04 MST"}`)
 

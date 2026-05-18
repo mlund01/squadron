@@ -28,6 +28,22 @@ agent "helper" {
 			Expect(cfg.Agents[0].Tools).To(ConsistOf("builtins.http.get", "builtins.http.post"))
 		})
 
+		It("silently ignores the deprecated role attribute", func() {
+			hcl := minimalVarsHCL() + minimalModelHCL() + `
+agent "helper" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Friendly"
+  role        = "Legacy role field — should be ignored"
+  tools       = [builtins.http.get]
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Agents).To(HaveLen(1))
+			Expect(cfg.Agents[0].Personality).To(Equal("Friendly"))
+		})
+
 		It("parses an agent with pruning block", func() {
 			hcl := minimalVarsHCL() + minimalModelHCL() + `
 agent "pruned" {

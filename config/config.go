@@ -1629,6 +1629,7 @@ func parseAgentBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Agent, error) {
 		Attributes: []hcl.AttributeSchema{
 			{Name: "model", Required: true},
 			{Name: "personality", Required: true},
+			{Name: "role"}, // deprecated; accepted and ignored for backward compat
 			{Name: "tools"},
 			{Name: "skills"},
 			{Name: "reasoning"},

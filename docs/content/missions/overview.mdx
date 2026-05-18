@@ -38,7 +38,7 @@ mission "data_pipeline" {
 |-----------|------|-------------|
 | `directive` | string | High-level description of the mission's purpose |
 | `commander` | string or block | Model for task commanders (block form: `commander { model = ...; reasoning = "low\|medium\|high" }`; see [Agents → Reasoning](/config/agents#reasoning)) |
-| `agents` | list | Agents available to all tasks |
+| `agents` | list | Agents available to every task in this mission. Tasks inherit this list automatically and only need their own `agents = [...]` to restrict to a different subset. |
 | `agent` | block | Mission-scoped agent definition (repeatable, see [Agents](/config/agents#mission-scoped-agents)) |
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |

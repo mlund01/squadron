@@ -100,12 +100,18 @@ mission "research" {
 
   task "gather" {
     objective = "Research the topic"
-    agents    = [agents.specialist]
+    # No agents attribute — task inherits the mission's list,
+    # so both `global_helper` and `specialist` are available.
+  }
+
+  task "deep_dive" {
+    objective = "Run the specialized analysis"
+    agents    = [agents.specialist]  # Restrict this task to one agent.
   }
 }
 ```
 
-Mission-scoped agents use the same syntax and attributes as global agents. They must be listed in the mission's `agents = [...]` to be available, and can be assigned at the task level.
+Mission-scoped agents use the same syntax and attributes as global agents. They must be listed in the mission's `agents = [...]` to be available — once listed there, every task in the mission can use them automatically. A task only needs its own `agents = [...]` attribute when you want to restrict that task to a different subset.
 
 **Rules:**
 - A scoped agent name must not conflict with any global agent name

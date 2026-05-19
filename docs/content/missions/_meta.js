@@ -5,7 +5,7 @@ export default {
   routing: 'Routing',
   datasets: 'Datasets',
   iteration: 'Iteration',
-  folders: 'Folders',
+  folders: 'Memory',
   'internal-tools': 'Internal Tools',
   budgets: 'Budgets',
   schedules: 'Schedules & Triggers',

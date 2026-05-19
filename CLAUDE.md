@@ -282,39 +282,44 @@ mission "expensive_research" {
 
 The scheduler lives in `scheduler/` but its lifecycle (creation, config updates, shutdown) is managed by `cmd/serve.go`, not wsbridge. The wsbridge client receives a `ConcurrencyTracker` interface for enforcing `max_parallel` on all mission starts. The cron library used is `robfig/cron/v3`.
 
-### Folders
+### Memory (formerly "Folders")
 
-Folders are sandboxed filesystem locations that agents access via the `file_list`,
-`file_read`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools.
-The `folder` parameter is required on every tool call — there is no implicit
-default.
+Memory blocks are sandboxed filesystem locations that agents access via the
+`file_list`, `file_read`, `file_create`, `file_delete`, `file_search`, and
+`file_grep` tools. The `folder` parameter (kept under that name on the tools
+for back-compat) is required on every tool call — there is no implicit default.
 
 Three kinds exist, with strict naming rules:
 
-| Kind | HCL | Registered name | Scope | Persistence |
-|------|-----|-----------------|-------|-------------|
-| Shared | top-level `shared_folder "name" { ... }` | user-chosen name | referenced by any mission via `folders = [shared_folders.name]` | persists |
-| Mission | `folder { ... }` inside a mission | literal `"mission"` | one per mission | persists across runs |
-| Run | `run_folder { ... }` inside a mission | literal `"run"` | one per mission per run | ephemeral; path is `<base>/<missionID>/` |
+| Kind | HCL (preferred) | HCL (back-compat alias) | Registered name | Scope | Persistence |
+|------|-----------------|--------------------------|-----------------|-------|-------------|
+| Shared | `shared_memory "name" { ... }` (top-level) | `shared_folder "name" { ... }` | user-chosen name | referenced by any mission via `memories = [shared_memories.name]` (or `folders = [shared_folders.name]`) | persists |
+| Mission | `memory { ... }` (inside a mission) | `folder { ... }` | literal `"mission"` | one per mission | persists across runs |
+| Run | `run_memory { ... }` (inside a mission) | `run_folder { ... }` | literal `"run"` | one per mission per run | ephemeral; path is `<base>/<missionID>/` |
 
-The names `"mission"` and `"run"` are reserved — `shared_folder` cannot use them
-(enforced in `config/shared_folder.go`).
+The names `"mission"` and `"run"` are reserved — `shared_memory` /
+`shared_folder` cannot use them (enforced in `config/shared_folder.go`).
+
+The old `folders` / `folder` / `run_folder` / `shared_folder` / `shared_folders`
+spellings keep working unchanged. Using *both* spellings for the same slot on
+one mission (e.g. `memory {}` and `folder {}`, or `memories =` and `folders =`)
+is rejected at config-load time.
 
 ```hcl
-shared_folder "reference" {
+shared_memory "reference" {
   path     = "./data/reference"
   editable = false   # default read-only
 }
 
 mission "analyze" {
-  folders = [shared_folders.reference]
+  memories = [shared_memories.reference]
 
-  folder {
+  memory {
     path        = "./analyses"
     description = "Cumulative reports — persists across runs"
   }
 
-  run_folder {
+  run_memory {
     base        = "./runs"            # optional, default ".squadron/runs"
     description = "Per-run scratch"
     cleanup     = 7                   # optional, auto-delete after N days; defaults to 7, set 0 to keep forever
@@ -326,14 +331,18 @@ mission "analyze" {
 
 - `config.SharedFolder`, `config.MissionFolder`, `config.MissionRunFolder` in
   [config/shared_folder.go](config/shared_folder.go) and [config/mission.go](config/mission.go).
-- Shared folders are parsed in Stage 1.5 (with `vars` context). The mission's
-  `folder` and `run_folder` blocks are parsed inside the mission block in Stage 5.
+  Both HCL spellings decode into these same structs — there is no separate
+  "memory" type internally.
+- Shared memory blocks are parsed in Stage 1.5 (with `vars` context). The
+  mission's `memory`/`folder` and `run_memory`/`run_folder` blocks are parsed
+  inside the mission block in Stage 5. The `shared_memories.NAME` /
+  `shared_folders.NAME` HCL namespaces are both registered.
 - [mission/folder_store.go](mission/folder_store.go) is the authoritative
   runtime resolver. `buildFolderStore(mission, sharedFolders, missionID)` must be
   called **after** the mission ID is assigned in `Runner.Run()`, because the run
-  folder path depends on it. There is no implicit default folder — every
-  tool call must name the folder explicitly.
-- Run folders are materialized at `<base>/<missionID>/` and a sidecar
+  memory path depends on it. There is no implicit default memory — every tool
+  call must name the slot explicitly via the `folder` parameter.
+- Run memory blocks are materialized at `<base>/<missionID>/` and a sidecar
   `.squadron-run.json` records `created_at` + `cleanup_days`.
 - `mission.SweepExpiredRunFolders(base)` walks a base directory and deletes any
   subfolder whose sidecar says it is past its cleanup deadline. It runs

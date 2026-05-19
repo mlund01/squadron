@@ -9,6 +9,83 @@ import (
 
 var _ = Describe("Folders", func() {
 
+	Describe("memory spellings (preferred)", func() {
+		It("parses shared_memory + memories + memory + run_memory together", func() {
+			hcl := fullBaseHCL() + `
+shared_memory "research" {
+  path        = "./data"
+  description = "Research docs"
+  editable    = true
+}
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memories  = [shared_memories.research]
+  memory {
+    path        = "./persistent"
+    description = "Persistent"
+  }
+  run_memory {
+    description = "Per-run scratch"
+  }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.SharedFolders).To(HaveLen(1))
+			Expect(cfg.SharedFolders[0].Name).To(Equal("research"))
+			Expect(cfg.Missions[0].Folders).To(ConsistOf("research"))
+			Expect(cfg.Missions[0].Folder).NotTo(BeNil())
+			Expect(cfg.Missions[0].Folder.Path).To(Equal("./persistent"))
+			Expect(cfg.Missions[0].RunFolder).NotTo(BeNil())
+			Expect(cfg.Missions[0].RunFolder.Description).To(Equal("Per-run scratch"))
+		})
+
+		It("allows mixing old and new spellings across the file", func() {
+			// shared_folder + memories + memory mixed with run_folder
+			hcl := fullBaseHCL() + `
+shared_folder "research" {
+  path = "./data"
+}
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memories  = [shared_memories.research]
+  memory    { path = "./persistent" }
+  run_folder { description = "old name" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Folders).To(ConsistOf("research"))
+			Expect(cfg.Missions[0].Folder).NotTo(BeNil())
+			Expect(cfg.Missions[0].RunFolder).NotTo(BeNil())
+		})
+
+		It("rejects setting both 'memories' and 'folders' on the same mission", func() {
+			hcl := fullBaseHCL() + `
+shared_memory "research" {
+  path = "./data"
+}
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memories  = [shared_memories.research]
+  folders   = [shared_folders.research]
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("set either 'memories' or 'folders'"))
+		})
+	})
+
 	Describe("shared_folder", func() {
 		It("parses a shared_folder block", func() {
 			hcl := fullBaseHCL() + `
@@ -89,7 +166,7 @@ mission "m" {
 			_, f := writeFixture("config.hcl", hcl)
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one folder block allowed"))
+			Expect(err.Error()).To(ContainSubstring("only one memory/folder block allowed"))
 		})
 	})
 
@@ -166,7 +243,7 @@ mission "m" {
 			_, f := writeFixture("config.hcl", hcl)
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one run_folder block allowed"))
+			Expect(err.Error()).To(ContainSubstring("only one run_memory/run_folder block allowed"))
 		})
 
 		It("rejects a negative cleanup value", func() {
@@ -187,6 +264,38 @@ mission "m" {
 		It("Validate accepts an unset Cleanup (parser fills the default)", func() {
 			rf := config.MissionRunFolder{}
 			Expect(rf.Validate()).To(Succeed())
+		})
+
+		It("rejects mixing folder and memory blocks on the same mission", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  folder { path = "./a" }
+  memory { path = "./b" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("only one memory/folder block allowed"))
+		})
+
+		It("rejects mixing run_folder and run_memory blocks on the same mission", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  run_folder { base = "./a" }
+  run_memory { base = "./b" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("only one run_memory/run_folder block allowed"))
 		})
 
 		It("allows both folder and run_folder on the same mission", func() {

@@ -180,6 +180,36 @@ func Fork(configPath string, extraFlags []string) (int, error) {
 	return pid, nil
 }
 
+// Reload sends SIGHUP to the running daemon to trigger a config reload.
+func Reload(configPath string) (int, error) {
+	absConfig, err := filepath.Abs(configPath)
+	if err != nil {
+		return 0, fmt.Errorf("could not resolve config path: %w", err)
+	}
+
+	pidPath := PidFilePath(absConfig)
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return 0, fmt.Errorf("no PID file found — squadron may not be running")
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("invalid PID file")
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return 0, fmt.Errorf("process %d not found", pid)
+	}
+
+	if err := process.Signal(syscall.SIGHUP); err != nil {
+		return 0, fmt.Errorf("could not signal process %d: %w", pid, err)
+	}
+
+	return pid, nil
+}
+
 // Stop reads the PID file and gracefully stops the background process.
 func Stop(configPath string) error {
 	absConfig, err := filepath.Abs(configPath)

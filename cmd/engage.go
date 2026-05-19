@@ -40,6 +40,7 @@ var (
 	engageCCPort     int
 	engageAutoInit   bool
 	engageForeground bool
+	engageReload     bool
 )
 
 const (
@@ -82,6 +83,7 @@ func init() {
 	engageCmd.Flags().IntVar(&engageCCPort, "cc-port", 8080, "Port for the command center")
 	engageCmd.Flags().BoolVar(&engageAutoInit, "init", false, "Auto-initialize Squadron if not already initialized")
 	engageCmd.Flags().BoolVar(&engageForeground, "foreground", false, "Run in foreground (default: run as background service)")
+	engageCmd.Flags().BoolVarP(&engageReload, "reload", "r", false, "Reload the config of an already-running squadron (no-op if not running)")
 }
 
 func runEngage(cmd *cobra.Command, args []string) {
@@ -93,6 +95,19 @@ func runEngage(cmd *cobra.Command, args []string) {
 	if err := applyHome(engageConfigPath); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
+	}
+
+	running, pid := daemon.IsRunning(engageConfigPath)
+	switch {
+	case running && engageReload:
+		reloadRunningSquadron(pid)
+		return
+	case running:
+		fmt.Fprintf(os.Stderr, "Error: squadron is already running (PID %d).\n", pid)
+		fmt.Fprintln(os.Stderr, "Use 'squadron engage -r' to reload the config, or 'squadron disengage' to stop it.")
+		os.Exit(1)
+	case engageReload:
+		fmt.Println("Squadron is not running — ignoring -r and starting it now.")
 	}
 
 	if warning, err := validateConfigDir(engageConfigPath); err != nil {
@@ -392,6 +407,22 @@ func runEngage(cmd *cobra.Command, args []string) {
 		client.Close()
 	}()
 
+	reloads := make(chan os.Signal, 1)
+	signal.Notify(reloads, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-shutdown:
+				return
+			case <-reloads:
+				if err := client.ReloadConfig(); err != nil {
+					log.Printf("Config reload failed: %v", err)
+					daemon.SignalFailed(engageConfigPath, err)
+				}
+			}
+		}
+	}()
+
 	// Periodic sweep of expired per-run mission folders. Runs hourly, reads
 	// the live config so new run_folder bases show up after a reload.
 	go runFolderCleanupLoop(shutdown, client.GetConfig)
@@ -501,6 +532,35 @@ func runEngage(cmd *cobra.Command, args []string) {
 // image sets SQUADRON_CONTAINER=1 in its ENV.
 func isContainer() bool {
 	return os.Getenv("SQUADRON_CONTAINER") == "1"
+}
+
+func reloadRunningSquadron(pid int) {
+	absConfigPath, err := filepath.Abs(engageConfigPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error resolving config path: %v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("Squadron is already running (PID %d). Reloading config from %s...\n", pid, absConfigPath)
+
+	daemon.ClearReady(absConfigPath)
+
+	if _, err := daemon.Reload(absConfigPath); err != nil {
+		fmt.Fprintf(os.Stderr, "Error signaling squadron (PID %d): %v\n", pid, err)
+		os.Exit(1)
+	}
+
+	sp := startSpinner("Validating and applying")
+	ready := daemon.WaitReady(absConfigPath, 30*time.Second, 500*time.Millisecond)
+	sp.Stop()
+
+	if !ready.OK {
+		fmt.Fprintf(os.Stderr, "Config reload failed: %s\n", ready.Error)
+		fmt.Fprintf(os.Stderr, "Squadron is still running with the previous config (PID %d). Fix the error above and re-run 'squadron engage'.\n", pid)
+		os.Exit(1)
+	}
+
+	fmt.Println("Config reloaded successfully.")
 }
 
 func hasHCLFiles(configPath string) bool {

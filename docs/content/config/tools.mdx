@@ -43,7 +43,6 @@ Pause an agent mid-task and ask an operator a question:
 ```hcl
 agent "concierge" {
   model = models.anthropic.claude_sonnet_4
-  role  = "Plans the trip by asking the user a few targeted questions."
   tools = [builtins.human.ask]
 }
 ```

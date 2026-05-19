@@ -133,7 +133,6 @@ mission "cycled" {
 agent "bad_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
-  role        = "Test"
   tools       = [builtins.http.get]
 }
 `
@@ -178,7 +177,6 @@ tool "weather" {
 agent "test_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
-  role        = "Test"
   tools       = [builtins.http.get, tools.weather]
 }
 `
@@ -208,7 +206,6 @@ tool "weather" {
 agent "researcher" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Research focused"
-  role        = "Researcher"
   tools       = [builtins.http.get, tools.weather]
 }
 

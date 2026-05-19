@@ -14,7 +14,6 @@ var _ = Describe("Reasoning HCL parsing", func() {
 agent "test_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
-  role        = "Test agent"
   reasoning   = "high"
   tools       = [builtins.http.get]
 }
@@ -31,7 +30,6 @@ agent "test_agent" {
 agent "test_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
-  role        = "Test agent"
   reasoning   = "MEDIUM"
   tools       = [builtins.http.get]
 }
@@ -47,7 +45,6 @@ agent "test_agent" {
 agent "test_agent" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
-  role        = "Test agent"
   reasoning   = "extreme"
   tools       = [builtins.http.get]
 }

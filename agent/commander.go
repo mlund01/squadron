@@ -385,7 +385,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 				agents[agentName] = &opts.MissionLocalAgents[i]
 				agentInfos = append(agentInfos, prompts.AgentInfo{
 					Name:        agentName,
-					Description: opts.MissionLocalAgents[i].Role,
+					Description: opts.MissionLocalAgents[i].Personality,
 				})
 				found = true
 				break
@@ -399,7 +399,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 				agents[agentName] = &opts.Config.Agents[i]
 				agentInfos = append(agentInfos, prompts.AgentInfo{
 					Name:        agentName,
-					Description: opts.Config.Agents[i].Role,
+					Description: opts.Config.Agents[i].Personality,
 				})
 				break
 			}

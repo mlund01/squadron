@@ -37,7 +37,7 @@ That's the whole workflow. Diff it in a PR. Review it like infrastructure code.
 
 Every other agent framework asks you to write code: orchestration logic, retry loops, branching, state serialization, conversation history management. You end up with 500 lines of Python wrapping 50 lines of actual prompt — and six months later nobody can read it, nobody can resume it after a crash, and nobody can tell what changed between two runs.
 
-Squadron flips that. The workflow is declared up front. The runtime is the engine. The only thing you write in any kind of language is the *prompts* themselves, inside `objective`/`role`/`personality` fields.
+Squadron flips that. The workflow is declared up front. The runtime is the engine. The only thing you write in any kind of language is the *prompts* themselves, inside `objective`/`personality` fields.
 
 The result:
 

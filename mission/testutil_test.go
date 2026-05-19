@@ -322,7 +322,6 @@ func testAgent(name string) config.Agent {
 		Name:        name,
 		Model:       "claude_sonnet_4",
 		Personality: "Test agent",
-		Role:        "Test worker for " + name,
 	}
 }
 

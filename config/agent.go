@@ -26,7 +26,7 @@ var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils", "human", "m
 var BuiltinTools = map[string][]string{
 	"http":    {"get", "post", "put", "patch", "delete"},
 	"dataset": {"set", "sample", "count"},
-	"utils":   {"sleep"},
+	"utils":   {"sleep", "current_time"},
 	"human":   {"ask"},
 }
 

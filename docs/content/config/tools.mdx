@@ -27,8 +27,14 @@ tools = [
 Utility tools:
 
 ```hcl
-tools = [builtins.utils.sleep]
+tools = [
+  builtins.utils.sleep,
+  builtins.utils.current_time,
+]
 ```
+
+- `sleep` — pause execution for N seconds (max 300).
+- `current_time` — returns the current time. Optional `timezone` (IANA name, e.g. `"America/Chicago"`; defaults to UTC) and `format` (Go reference-time layout; defaults to RFC 3339).
 
 ### Human Input
 

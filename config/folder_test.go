@@ -7,177 +7,106 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Folders", func() {
+var _ = Describe("Memory", func() {
 
-	Describe("memory spellings (preferred)", func() {
-		It("parses shared_memory + memories + memory + run_memory together", func() {
+	Describe("top-level memory block", func() {
+		It("parses a memory block and exposes it via memories.NAME", func() {
 			hcl := fullBaseHCL() + `
-shared_memory "research" {
-  path        = "./data"
+memory "research" {
   description = "Research docs"
+  label       = "Research"
   editable    = true
 }
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  memories  = [shared_memories.research]
-  memory {
-    path        = "./persistent"
-    description = "Persistent"
-  }
-  run_memory {
-    description = "Per-run scratch"
-  }
+  memories  = [memories.research]
   task "t" { objective = "go" }
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.SharedFolders).To(HaveLen(1))
-			Expect(cfg.SharedFolders[0].Name).To(Equal("research"))
-			Expect(cfg.Missions[0].Folders).To(ConsistOf("research"))
-			Expect(cfg.Missions[0].Folder).NotTo(BeNil())
-			Expect(cfg.Missions[0].Folder.Path).To(Equal("./persistent"))
-			Expect(cfg.Missions[0].RunFolder).NotTo(BeNil())
-			Expect(cfg.Missions[0].RunFolder.Description).To(Equal("Per-run scratch"))
-		})
-
-		It("allows mixing old and new spellings across the file", func() {
-			// shared_folder + memories + memory mixed with run_folder
-			hcl := fullBaseHCL() + `
-shared_folder "research" {
-  path = "./data"
-}
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  memories  = [shared_memories.research]
-  memory    { path = "./persistent" }
-  run_folder { description = "old name" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].Folders).To(ConsistOf("research"))
-			Expect(cfg.Missions[0].Folder).NotTo(BeNil())
-			Expect(cfg.Missions[0].RunFolder).NotTo(BeNil())
-		})
-
-		It("rejects setting both 'memories' and 'folders' on the same mission", func() {
-			hcl := fullBaseHCL() + `
-shared_memory "research" {
-  path = "./data"
-}
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  memories  = [shared_memories.research]
-  folders   = [shared_folders.research]
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("set either 'memories' or 'folders'"))
-		})
-	})
-
-	Describe("shared_folder", func() {
-		It("parses a shared_folder block", func() {
-			hcl := fullBaseHCL() + `
-shared_folder "research" {
-  path        = "./data"
-  description = "Research docs"
-  editable    = true
-}
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  folders   = [shared_folders.research]
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.SharedFolders).To(HaveLen(1))
-			Expect(cfg.SharedFolders[0].Name).To(Equal("research"))
-			Expect(cfg.SharedFolders[0].Editable).To(BeTrue())
-			Expect(cfg.Missions[0].Folders).To(ConsistOf("research"))
+			Expect(cfg.Memories).To(HaveLen(1))
+			Expect(cfg.Memories[0].Name).To(Equal("research"))
+			Expect(cfg.Memories[0].Editable).To(BeTrue())
+			Expect(cfg.Missions[0].Memories).To(ConsistOf("research"))
 		})
 
 		It("rejects the reserved name 'mission'", func() {
-			sf := config.SharedFolder{Name: "mission", Path: "./x"}
-			err := sf.Validate()
+			m := config.Memory{Name: "mission"}
+			err := m.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("reserved"))
 		})
 
 		It("rejects the reserved name 'run'", func() {
-			sf := config.SharedFolder{Name: "run", Path: "./x"}
-			err := sf.Validate()
+			m := config.Memory{Name: "run"}
+			err := m.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("reserved"))
 		})
 
-		It("rejects an empty path", func() {
-			sf := config.SharedFolder{Name: "ok", Path: ""}
-			err := sf.Validate()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("path is required"))
-		})
-	})
-
-	Describe("mission folder block", func() {
-		It("parses a dedicated folder block", func() {
+		It("rejects the old shared_folder block with a pointer at the new syntax", func() {
 			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  folder {
-    path        = "./persistent"
-    description = "Persistent"
-  }
-  task "t" { objective = "go" }
+shared_folder "research" {
+  path = "./data"
 }
-`
-			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].Folder).NotTo(BeNil())
-			Expect(cfg.Missions[0].Folder.Path).To(Equal("./persistent"))
-			Expect(cfg.Missions[0].Folder.Description).To(Equal("Persistent"))
-		})
-
-		It("rejects multiple folder blocks on the same mission", func() {
-			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  folder { path = "./a" }
-  folder { path = "./b" }
   task "t" { objective = "go" }
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one memory/folder block allowed"))
+			Expect(err.Error()).To(ContainSubstring("no longer supported"))
+			Expect(err.Error()).To(ContainSubstring("memory \"research\""))
+		})
+
+		It("rejects the old shared_memory block too", func() {
+			hcl := fullBaseHCL() + `
+shared_memory "research" {
+  path = "./data"
+}
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("no longer supported"))
+		})
+
+		It("rejects the old `path` attribute on a memory block", func() {
+			hcl := fullBaseHCL() + `
+memory "research" {
+  path = "./data"
+}
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
 		})
 	})
 
-	Describe("mission run_folder block", func() {
-		It("parses a run_folder with defaults", func() {
+	Describe("mission memory block", func() {
+		It("parses a persistent memory block (default type)", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  run_folder {
-    description = "Per-run scratch"
+  memory {
+    description = "Long-term notes"
   }
   task "t" { objective = "go" }
 }
@@ -185,22 +114,20 @@ mission "m" {
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].RunFolder).NotTo(BeNil())
-			Expect(cfg.Missions[0].RunFolder.Base).To(Equal(""))
-			Expect(cfg.Missions[0].RunFolder.Description).To(Equal("Per-run scratch"))
-			// Cleanup omitted → Validate() filled in the default
-			Expect(cfg.Missions[0].RunFolder.Cleanup).NotTo(BeNil())
-			Expect(*cfg.Missions[0].RunFolder.Cleanup).To(Equal(config.DefaultRunFolderCleanupDays))
+			Expect(cfg.Missions[0].PersistentMemory).NotTo(BeNil())
+			Expect(cfg.Missions[0].PersistentMemory.Type).To(Equal(config.MemoryTypePersistent))
+			Expect(cfg.Missions[0].PersistentMemory.Description).To(Equal("Long-term notes"))
+			Expect(cfg.Missions[0].EphemeralMemory).To(BeNil())
 		})
 
-		It("parses a run_folder with custom base and cleanup", func() {
+		It("parses an explicit persistent type", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  run_folder {
-    base    = "./custom_runs"
-    cleanup = 14
+  memory {
+    type        = "persistent"
+    description = "x"
   }
   task "t" { objective = "go" }
 }
@@ -208,16 +135,38 @@ mission "m" {
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].RunFolder.Base).To(Equal("./custom_runs"))
-			Expect(*cfg.Missions[0].RunFolder.Cleanup).To(Equal(14))
+			Expect(cfg.Missions[0].PersistentMemory).NotTo(BeNil())
 		})
 
-		It("preserves an explicit cleanup of zero (never delete)", func() {
+		It("parses an ephemeral memory block with default cleanup", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  run_folder {
+  memory {
+    type        = "ephemeral"
+    description = "Scratch"
+  }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].EphemeralMemory).NotTo(BeNil())
+			Expect(cfg.Missions[0].EphemeralMemory.Type).To(Equal(config.MemoryTypeEphemeral))
+			Expect(cfg.Missions[0].EphemeralMemory.Cleanup).NotTo(BeNil())
+			Expect(*cfg.Missions[0].EphemeralMemory.Cleanup).To(Equal(config.DefaultEphemeralCleanupDays))
+			Expect(cfg.Missions[0].PersistentMemory).To(BeNil())
+		})
+
+		It("preserves an explicit cleanup = 0 on ephemeral memory", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memory {
+    type    = "ephemeral"
     cleanup = 0
   }
   task "t" { objective = "go" }
@@ -226,98 +175,161 @@ mission "m" {
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].RunFolder.Cleanup).NotTo(BeNil())
-			Expect(*cfg.Missions[0].RunFolder.Cleanup).To(Equal(0))
+			Expect(cfg.Missions[0].EphemeralMemory.Cleanup).NotTo(BeNil())
+			Expect(*cfg.Missions[0].EphemeralMemory.Cleanup).To(Equal(0))
 		})
 
-		It("rejects multiple run_folder blocks", func() {
+		It("allows one persistent + one ephemeral on the same mission", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  run_folder { base = "./a" }
-  run_folder { base = "./b" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one run_memory/run_folder block allowed"))
-		})
-
-		It("rejects a negative cleanup value", func() {
-			neg := -1
-			rf := config.MissionRunFolder{Cleanup: &neg}
-			err := rf.Validate()
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("cleanup"))
-		})
-
-		It("allows cleanup of zero (never)", func() {
-			zero := 0
-			rf := config.MissionRunFolder{Cleanup: &zero}
-			Expect(rf.Validate()).To(Succeed())
-			Expect(*rf.Cleanup).To(Equal(0))
-		})
-
-		It("Validate accepts an unset Cleanup (parser fills the default)", func() {
-			rf := config.MissionRunFolder{}
-			Expect(rf.Validate()).To(Succeed())
-		})
-
-		It("rejects mixing folder and memory blocks on the same mission", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  folder { path = "./a" }
-  memory { path = "./b" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one memory/folder block allowed"))
-		})
-
-		It("rejects mixing run_folder and run_memory blocks on the same mission", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  run_folder { base = "./a" }
-  run_memory { base = "./b" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one run_memory/run_folder block allowed"))
-		})
-
-		It("allows both folder and run_folder on the same mission", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  folder {
-    path = "./persist"
-  }
-  run_folder {
-    base    = "./runs"
-    cleanup = 7
-  }
+  memory { type = "persistent" }
+  memory { type = "ephemeral" }
   task "t" { objective = "go" }
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].Folder).NotTo(BeNil())
-			Expect(cfg.Missions[0].RunFolder).NotTo(BeNil())
+			Expect(cfg.Missions[0].PersistentMemory).NotTo(BeNil())
+			Expect(cfg.Missions[0].EphemeralMemory).NotTo(BeNil())
+		})
+
+		It("rejects two persistent memory blocks", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memory { type = "persistent" }
+  memory { type = "persistent" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("only one persistent memory"))
+		})
+
+		It("rejects two ephemeral memory blocks", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memory { type = "ephemeral" }
+  memory { type = "ephemeral" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("only one ephemeral memory"))
+		})
+
+		It("rejects an unknown type", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memory { type = "weird" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`type must be "persistent" or "ephemeral"`))
+		})
+
+		It("rejects cleanup on persistent memory", func() {
+			mm := &config.MissionMemory{Type: "persistent", Cleanup: ptrInt(7)}
+			Expect(mm.Validate()).To(MatchError(ContainSubstring("cleanup is only valid on ephemeral memory")))
+		})
+
+		It("rejects negative cleanup", func() {
+			mm := &config.MissionMemory{Type: "ephemeral", Cleanup: ptrInt(-1)}
+			Expect(mm.Validate()).To(MatchError(ContainSubstring("cleanup must be >= 0")))
+		})
+
+		It("rejects the old `path` attribute on a mission memory block", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memory { path = "./x" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("deprecated DSL surfaces", func() {
+		It("rejects the old `folder { ... }` block with a pointer at the new syntax", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  folder { path = "./x" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("`folder { ... }` block is no longer supported"))
+		})
+
+		It("rejects the old `run_folder { ... }` block", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  run_folder { base = "./x" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("`run_folder { ... }` block is no longer supported"))
+		})
+
+		It("rejects the old `run_memory { ... }` block", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  run_memory { description = "x" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("`run_memory { ... }` block is no longer supported"))
+		})
+
+		It("rejects the old `folders = ...` attribute", func() {
+			hcl := fullBaseHCL() + `
+memory "ref" {}
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  folders   = [memories.ref]
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("`folders` attribute is no longer supported"))
 		})
 	})
 })
+
+func ptrInt(v int) *int { return &v }

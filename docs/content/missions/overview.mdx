@@ -43,9 +43,8 @@ mission "data_pipeline" {
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |
 | `dataset` | block | Dataset definitions (optional) |
-| `memories` | list | Shared memory references, e.g. `[shared_memories.data]` (see [Memory](/missions/folders)). Old name: `folders` (still accepted). |
-| `memory` | block | Persistent mission-scoped memory, registered as `"mission"`. Old name: `folder` (still accepted). |
-| `run_memory` | block | Per-run ephemeral memory, registered as `"run"`. Old name: `run_folder` (still accepted). |
+| `memories` | list | Shared memory references, e.g. `[memories.data]` (see [Memory](/missions/folders)) |
+| `memory` | block | Mission-scoped memory; `type = "persistent"` (default) registers as `"mission"`, `type = "ephemeral"` registers as `"run"`. At most one of each per mission. |
 | `schedule` | block | Automatic run schedules (optional, repeatable) |
 | `trigger` | block | Webhook trigger (optional) |
 | `max_parallel` | number | Max concurrent instances (default: 3) |

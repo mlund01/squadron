@@ -74,46 +74,7 @@ type OutputField struct {
 	Properties  []OutputField `json:"properties,omitempty"`
 }
 
-// MissionFolder represents a dedicated folder for a mission.
-// Registered under the reserved name "mission". Persists across runs.
-type MissionFolder struct {
-	Path        string `hcl:"path"`
-	Description string `hcl:"description,optional"`
-}
-
-// Validate checks that the mission folder configuration is valid
-func (mf *MissionFolder) Validate() error {
-	if mf.Path == "" {
-		return fmt.Errorf("path is required")
-	}
-	return nil
-}
-
-// DefaultRunFolderCleanupDays is the auto-delete window applied when a
-// run_folder block does not specify `cleanup`.
-const DefaultRunFolderCleanupDays = 7
-
-// MissionRunFolder represents a per-run ephemeral folder for a mission.
-// Registered under the reserved name "run". A fresh subdirectory is created
-// under Base for each mission run, keyed by mission ID.
-//
-// Cleanup is a pointer so we can distinguish "user didn't set it" (apply
-// default of 7 days) from "user set 0" (keep forever).
-type MissionRunFolder struct {
-	Base        string `hcl:"base,optional"`        // parent directory; defaults to ".squadron/runs"
-	Description string `hcl:"description,optional"`
-	Cleanup     *int   `hcl:"cleanup,optional"`     // days after creation before auto-delete; nil = default (7), 0 = never
-}
-
-// Validate rejects negative cleanup values. Default-filling happens at parse
-// time (see config.go) so callers reading a parsed Mission see a complete
-// struct without needing to validate first.
-func (rf *MissionRunFolder) Validate() error {
-	if rf.Cleanup != nil && *rf.Cleanup < 0 {
-		return fmt.Errorf("cleanup must be >= 0 (days)")
-	}
-	return nil
-}
+// (Memory and MissionMemory live in memory.go.)
 
 // Schedule defines a time-based trigger for a mission.
 // Three modes (mutually exclusive):
@@ -348,9 +309,9 @@ type Mission struct {
 	Tasks       []Task            `hcl:"task,block"`
 	Inputs      []MissionInput    // Parsed from input blocks
 	Datasets    []Dataset         // Parsed from dataset blocks
-	Folders     []string            // Shared folder names referenced by this mission
-	Folder      *MissionFolder      // Optional dedicated mission folder (reserved name "mission")
-	RunFolder   *MissionRunFolder   // Optional per-run ephemeral folder (reserved name "run")
+	Memories         []string       // Shared memory names referenced by this mission
+	PersistentMemory *MissionMemory // Optional dedicated mission memory (reserved slot "mission")
+	EphemeralMemory  *MissionMemory // Optional per-run ephemeral memory (reserved slot "run")
 	Schedules   []Schedule        `json:"schedules,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"`
 	MaxParallel int               `json:"maxParallel,omitempty"` // default 3
@@ -394,7 +355,7 @@ type TaskRoute struct {
 }
 
 // Validate checks that the mission configuration is valid
-func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []SharedFolder, allMissionNames map[string]bool) error {
+func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, allMissionNames map[string]bool) error {
 	if w.Name == "" {
 		return fmt.Errorf("mission name is required")
 	}
@@ -513,28 +474,34 @@ func (w *Mission) Validate(models []Model, agents []Agent, sharedFolders []Share
 		}
 	}
 
-	// Validate folder references
-	folderNames := make(map[string]bool)
-	for _, sf := range sharedFolders {
-		folderNames[sf.Name] = true
+	// Validate shared memory references
+	memoryNames := make(map[string]bool)
+	for _, m := range memories {
+		memoryNames[m.Name] = true
 	}
-	for _, folderRef := range w.Folders {
-		if !folderNames[folderRef] {
-			return fmt.Errorf("shared folder '%s' not found", folderRef)
+	for _, ref := range w.Memories {
+		if !memoryNames[ref] {
+			return fmt.Errorf("shared memory '%s' not found", ref)
 		}
 	}
 
-	// Validate dedicated folder if present
-	if w.Folder != nil {
-		if err := w.Folder.Validate(); err != nil {
-			return fmt.Errorf("folder: %w", err)
+	// Validate persistent mission memory if present
+	if w.PersistentMemory != nil {
+		if err := w.PersistentMemory.Validate(); err != nil {
+			return fmt.Errorf("persistent memory: %w", err)
+		}
+		if w.PersistentMemory.Type != MemoryTypePersistent {
+			return fmt.Errorf("persistent memory: internal error — wrong type %q", w.PersistentMemory.Type)
 		}
 	}
 
-	// Validate run folder if present
-	if w.RunFolder != nil {
-		if err := w.RunFolder.Validate(); err != nil {
-			return fmt.Errorf("run_folder: %w", err)
+	// Validate ephemeral mission memory if present
+	if w.EphemeralMemory != nil {
+		if err := w.EphemeralMemory.Validate(); err != nil {
+			return fmt.Errorf("ephemeral memory: %w", err)
+		}
+		if w.EphemeralMemory.Type != MemoryTypeEphemeral {
+			return fmt.Errorf("ephemeral memory: internal error — wrong type %q", w.EphemeralMemory.Type)
 		}
 	}
 

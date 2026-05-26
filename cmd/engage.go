@@ -901,33 +901,14 @@ func openBrowser(url string) {
 	browser.Open(url)
 }
 
-// runFolderCleanupLoop periodically sweeps expired per-run mission folders
-// for every mission in the current config that declares a run_folder with
-// cleanup > 0. It runs once immediately, then hourly, and exits when
-// shutdown is closed.
-func runFolderCleanupLoop(shutdown <-chan struct{}, getCfg func() *config.Config) {
+// runFolderCleanupLoop periodically sweeps expired per-run ephemeral
+// memory directories. The sweep walks the entire memories tree, so it
+// doesn't need to know which missions are configured. It runs once
+// immediately, then hourly, and exits when shutdown is closed.
+func runFolderCleanupLoop(shutdown <-chan struct{}, _ func() *config.Config) {
 	sweep := func() {
-		cfg := getCfg()
-		if cfg == nil {
-			return
-		}
-		seen := make(map[string]bool)
-		for i := range cfg.Missions {
-			rf := cfg.Missions[i].RunFolder
-			if rf == nil {
-				continue
-			}
-			if rf.Cleanup != nil && *rf.Cleanup == 0 {
-				continue // user explicitly opted out of cleanup
-			}
-			base := mission.ResolvedRunFolderBase(rf)
-			if seen[base] {
-				continue
-			}
-			seen[base] = true
-			if _, err := mission.SweepExpiredRunFolders(base); err != nil {
-				log.Printf("run folder cleanup: sweep %q: %v", base, err)
-			}
+		if _, err := mission.SweepExpiredEphemeralMemories(); err != nil {
+			log.Printf("ephemeral memory cleanup: %v", err)
 		}
 	}
 

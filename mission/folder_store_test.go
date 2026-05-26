@@ -9,27 +9,41 @@ import (
 
 	"squadron/aitools"
 	"squadron/config"
+	"squadron/internal/paths"
 )
 
-func TestBuildFolderStore_NoFolders(t *testing.T) {
+// withTempHome installs a fresh SquadronHome under a t.TempDir and registers
+// cleanup so the next test starts from a clean cache.
+func withTempHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	paths.ResetHome()
+	if err := paths.SetHome(home); err != nil {
+		t.Fatalf("set home: %v", err)
+	}
+	t.Cleanup(paths.ResetHome)
+	return home
+}
+
+func TestBuildFolderStore_NoMemories(t *testing.T) {
+	withTempHome(t)
 	m := &config.Mission{Name: "m"}
 	store, err := buildFolderStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if store != nil {
-		t.Fatalf("expected nil store when no folders configured, got %+v", store)
+		t.Fatalf("expected nil store when no memories configured, got %+v", store)
 	}
 }
 
-func TestBuildFolderStore_MissionFolder(t *testing.T) {
-	dir := t.TempDir()
-	missionDir := filepath.Join(dir, "persistent")
+func TestBuildFolderStore_PersistentMemory(t *testing.T) {
+	home := withTempHome(t)
 
 	m := &config.Mission{
 		Name: "m",
-		Folder: &config.MissionFolder{
-			Path:        missionDir,
+		PersistentMemory: &config.MissionMemory{
+			Type:        "persistent",
 			Description: "persistent",
 		},
 	}
@@ -42,35 +56,34 @@ func TestBuildFolderStore_MissionFolder(t *testing.T) {
 		t.Fatal("expected non-nil store")
 	}
 
-	// Registered under reserved name "mission", not the mission name
 	abs, writable, err := store.ResolvePath(aitools.MissionFolderName, ".")
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
 	}
 	if !writable {
-		t.Fatal("mission folder must be writable")
+		t.Fatal("persistent memory must be writable")
 	}
-	if !filepath.IsAbs(abs) {
-		t.Fatalf("resolved path should be absolute: %s", abs)
+	want := filepath.Join(home, "memories", "mission", "m", "persistent")
+	if abs != want {
+		t.Fatalf("persistent path: want %s, got %s", want, abs)
 	}
-	// Directory was created
 	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
-		t.Fatalf("mission folder not created at %s: %v", abs, err)
+		t.Fatalf("persistent directory not created at %s: %v", abs, err)
 	}
 
-	// The mission name is NOT a valid folder key — prevents regression
+	// The mission name is NOT a valid slot key — prevents regression.
 	if _, _, err := store.ResolvePath(m.Name, "."); err == nil {
 		t.Fatal("expected error when resolving by mission name")
 	}
 }
 
-func TestBuildFolderStore_RunFolder_CreatesSidecar(t *testing.T) {
-	dir := t.TempDir()
+func TestBuildFolderStore_EphemeralMemory_CreatesSidecar(t *testing.T) {
+	home := withTempHome(t)
 	cleanup := 7
 	m := &config.Mission{
 		Name: "m",
-		RunFolder: &config.MissionRunFolder{
-			Base:    filepath.Join(dir, "runs"),
+		EphemeralMemory: &config.MissionMemory{
+			Type:    "ephemeral",
 			Cleanup: &cleanup,
 		},
 	}
@@ -85,13 +98,13 @@ func TestBuildFolderStore_RunFolder_CreatesSidecar(t *testing.T) {
 		t.Fatalf("ResolvePath: %v", err)
 	}
 	if !writable {
-		t.Fatal("run folder must be writable")
+		t.Fatal("ephemeral memory must be writable")
 	}
-	if filepath.Base(abs) != "mid-abc" {
-		t.Fatalf("run folder should be keyed by missionID, got %s", abs)
+	want := filepath.Join(home, "memories", "mission", "m", "run", "mid-abc")
+	if abs != want {
+		t.Fatalf("ephemeral path: want %s, got %s", want, abs)
 	}
 
-	// Sidecar written with CleanupDays preserved
 	metaBytes, err := os.ReadFile(filepath.Join(abs, runMetadataFile))
 	if err != nil {
 		t.Fatalf("sidecar not written: %v", err)
@@ -111,12 +124,12 @@ func TestBuildFolderStore_RunFolder_CreatesSidecar(t *testing.T) {
 	}
 }
 
-func TestBuildFolderStore_RunFolder_SidecarPreservedOnResume(t *testing.T) {
-	dir := t.TempDir()
+func TestBuildFolderStore_EphemeralMemory_SidecarPreservedOnResume(t *testing.T) {
+	home := withTempHome(t)
 	m := &config.Mission{
 		Name: "m",
-		RunFolder: &config.MissionRunFolder{
-			Base: filepath.Join(dir, "runs"),
+		EphemeralMemory: &config.MissionMemory{
+			Type: "ephemeral",
 		},
 	}
 
@@ -124,12 +137,11 @@ func TestBuildFolderStore_RunFolder_SidecarPreservedOnResume(t *testing.T) {
 	if _, err := buildFolderStore(m, nil, "mid-1"); err != nil {
 		t.Fatalf("first build: %v", err)
 	}
-	runDir := filepath.Join(dir, "runs", "mid-1")
+	runDir := filepath.Join(home, "memories", "mission", "m", "run", "mid-1")
 	firstMetaBytes, _ := os.ReadFile(filepath.Join(runDir, runMetadataFile))
 	var first runMetadata
 	_ = json.Unmarshal(firstMetaBytes, &first)
 
-	// Sleep a touch so a re-written timestamp would differ
 	time.Sleep(10 * time.Millisecond)
 
 	// Second build (same missionID = resume): sidecar must NOT be overwritten
@@ -145,11 +157,12 @@ func TestBuildFolderStore_RunFolder_SidecarPreservedOnResume(t *testing.T) {
 	}
 }
 
-func TestBuildFolderStore_RunFolder_RequiresMissionID(t *testing.T) {
+func TestBuildFolderStore_EphemeralMemory_RequiresMissionID(t *testing.T) {
+	withTempHome(t)
 	m := &config.Mission{
 		Name: "m",
-		RunFolder: &config.MissionRunFolder{
-			Base: t.TempDir(),
+		EphemeralMemory: &config.MissionMemory{
+			Type: "ephemeral",
 		},
 	}
 	_, err := buildFolderStore(m, nil, "")
@@ -158,31 +171,32 @@ func TestBuildFolderStore_RunFolder_RequiresMissionID(t *testing.T) {
 	}
 }
 
-func TestBuildFolderStore_RejectsReservedSharedFolderNames(t *testing.T) {
+func TestBuildFolderStore_RejectsReservedSharedMemoryNames(t *testing.T) {
+	withTempHome(t)
 	for _, reserved := range []string{"mission", "run"} {
 		m := &config.Mission{
-			Name:    "m",
-			Folders: []string{reserved},
+			Name:     "m",
+			Memories: []string{reserved},
 		}
-		shared := []config.SharedFolder{
-			{Name: reserved, Path: t.TempDir()},
+		mems := []config.Memory{
+			{Name: reserved},
 		}
-		_, err := buildFolderStore(m, shared, "mid-1")
+		_, err := buildFolderStore(m, mems, "mid-1")
 		if err == nil {
-			t.Fatalf("expected error for reserved shared folder name %q", reserved)
+			t.Fatalf("expected error for reserved shared memory name %q", reserved)
 		}
 	}
 }
 
-func TestBuildFolderStore_BothMissionAndRunFolder(t *testing.T) {
-	dir := t.TempDir()
+func TestBuildFolderStore_BothPersistentAndEphemeral(t *testing.T) {
+	withTempHome(t)
 	m := &config.Mission{
 		Name: "m",
-		Folder: &config.MissionFolder{
-			Path: filepath.Join(dir, "persist"),
+		PersistentMemory: &config.MissionMemory{
+			Type: "persistent",
 		},
-		RunFolder: &config.MissionRunFolder{
-			Base: filepath.Join(dir, "runs"),
+		EphemeralMemory: &config.MissionMemory{
+			Type: "ephemeral",
 		},
 	}
 	store, err := buildFolderStore(m, nil, "mid-1")
@@ -190,18 +204,72 @@ func TestBuildFolderStore_BothMissionAndRunFolder(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if _, _, err := store.ResolvePath(aitools.MissionFolderName, "."); err != nil {
-		t.Fatalf("mission folder should resolve: %v", err)
+		t.Fatalf("persistent should resolve: %v", err)
 	}
 	if _, _, err := store.ResolvePath(aitools.RunFolderName, "."); err != nil {
-		t.Fatalf("run folder should resolve: %v", err)
+		t.Fatalf("ephemeral should resolve: %v", err)
+	}
+}
+
+func TestBuildFolderStore_SharedMemory(t *testing.T) {
+	home := withTempHome(t)
+	m := &config.Mission{
+		Name:     "m",
+		Memories: []string{"research"},
+	}
+	mems := []config.Memory{
+		{Name: "research", Description: "Research notes", Editable: true},
+	}
+
+	store, err := buildFolderStore(m, mems, "mid-1")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	abs, writable, err := store.ResolvePath("research", ".")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !writable {
+		t.Fatal("editable shared memory must resolve as writable")
+	}
+	want := filepath.Join(home, "memories", "shared", "research")
+	if abs != want {
+		t.Fatalf("shared memory path: want %s, got %s", want, abs)
+	}
+	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
+		t.Fatalf("shared memory directory not created: %v", err)
+	}
+}
+
+func TestBuildFolderStore_SharedMemory_ReadOnly(t *testing.T) {
+	withTempHome(t)
+	m := &config.Mission{
+		Name:     "m",
+		Memories: []string{"reference"},
+	}
+	mems := []config.Memory{
+		{Name: "reference"}, // editable defaults to false
+	}
+
+	store, err := buildFolderStore(m, mems, "mid-1")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	_, writable, err := store.ResolvePath("reference", ".")
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if writable {
+		t.Fatal("default shared memory must be read-only")
 	}
 }
 
 func TestResolvePath_EmptyFolderNameRejected(t *testing.T) {
-	dir := t.TempDir()
+	withTempHome(t)
 	m := &config.Mission{
-		Name:   "m",
-		Folder: &config.MissionFolder{Path: dir},
+		Name:             "m",
+		PersistentMemory: &config.MissionMemory{Type: "persistent"},
 	}
 	store, err := buildFolderStore(m, nil, "mid-1")
 	if err != nil {
@@ -213,10 +281,10 @@ func TestResolvePath_EmptyFolderNameRejected(t *testing.T) {
 }
 
 func TestResolvePath_RejectsPathEscape(t *testing.T) {
-	dir := t.TempDir()
+	withTempHome(t)
 	m := &config.Mission{
-		Name:   "m",
-		Folder: &config.MissionFolder{Path: dir},
+		Name:             "m",
+		PersistentMemory: &config.MissionMemory{Type: "persistent"},
 	}
 	store, err := buildFolderStore(m, nil, "mid-1")
 	if err != nil {
@@ -228,10 +296,10 @@ func TestResolvePath_RejectsPathEscape(t *testing.T) {
 }
 
 func TestResolvePath_UnknownFolder(t *testing.T) {
-	dir := t.TempDir()
+	withTempHome(t)
 	m := &config.Mission{
-		Name:   "m",
-		Folder: &config.MissionFolder{Path: dir},
+		Name:             "m",
+		PersistentMemory: &config.MissionMemory{Type: "persistent"},
 	}
 	store, err := buildFolderStore(m, nil, "mid-1")
 	if err != nil {
@@ -242,19 +310,20 @@ func TestResolvePath_UnknownFolder(t *testing.T) {
 	}
 }
 
-// --- SweepExpiredRunFolders ------------------------------------------------
+// --- SweepExpiredEphemeralMemories ----------------------------------------
 
-// writeRun creates a run folder with a sidecar recording the given created_at
-// and cleanup_days. Useful for driving the sweep.
-func writeRun(t *testing.T, base, name string, createdAt time.Time, cleanupDays int) string {
+// writeEphemeral builds a fake per-run ephemeral memory directory under
+// <home>/memories/mission/<missionName>/run/<id>, with a sidecar recording
+// the given created_at and cleanup_days.
+func writeEphemeral(t *testing.T, home, missionName, runID string, createdAt time.Time, cleanupDays int) string {
 	t.Helper()
-	dir := filepath.Join(base, name)
+	dir := filepath.Join(home, "memories", "mission", missionName, "run", runID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
 	meta := runMetadata{
-		Mission:     "m",
-		MissionID:   name,
+		Mission:     missionName,
+		MissionID:   runID,
 		CreatedAt:   createdAt,
 		CleanupDays: cleanupDays,
 	}
@@ -265,11 +334,11 @@ func writeRun(t *testing.T, base, name string, createdAt time.Time, cleanupDays 
 	return dir
 }
 
-func TestSweepExpiredRunFolders_DeletesExpired(t *testing.T) {
-	base := t.TempDir()
-	expired := writeRun(t, base, "old", time.Now().Add(-8*24*time.Hour), 7)
+func TestSweep_DeletesExpired(t *testing.T) {
+	home := withTempHome(t)
+	expired := writeEphemeral(t, home, "m", "old", time.Now().Add(-8*24*time.Hour), 7)
 
-	removed, err := SweepExpiredRunFolders(base)
+	removed, err := SweepExpiredEphemeralMemories()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -277,15 +346,15 @@ func TestSweepExpiredRunFolders_DeletesExpired(t *testing.T) {
 		t.Fatalf("expected 1 removal, got %v", removed)
 	}
 	if _, err := os.Stat(expired); !os.IsNotExist(err) {
-		t.Fatalf("expired folder should be gone: %v", err)
+		t.Fatalf("expired directory should be gone: %v", err)
 	}
 }
 
-func TestSweepExpiredRunFolders_KeepsUnexpired(t *testing.T) {
-	base := t.TempDir()
-	fresh := writeRun(t, base, "new", time.Now().Add(-2*24*time.Hour), 7)
+func TestSweep_KeepsUnexpired(t *testing.T) {
+	home := withTempHome(t)
+	fresh := writeEphemeral(t, home, "m", "new", time.Now().Add(-2*24*time.Hour), 7)
 
-	removed, err := SweepExpiredRunFolders(base)
+	removed, err := SweepExpiredEphemeralMemories()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -293,15 +362,15 @@ func TestSweepExpiredRunFolders_KeepsUnexpired(t *testing.T) {
 		t.Fatalf("expected nothing removed, got %v", removed)
 	}
 	if _, err := os.Stat(fresh); err != nil {
-		t.Fatalf("fresh folder should still exist: %v", err)
+		t.Fatalf("fresh directory should still exist: %v", err)
 	}
 }
 
-func TestSweepExpiredRunFolders_IgnoresZeroCleanup(t *testing.T) {
-	base := t.TempDir()
-	keep := writeRun(t, base, "forever", time.Now().Add(-365*24*time.Hour), 0)
+func TestSweep_IgnoresZeroCleanup(t *testing.T) {
+	home := withTempHome(t)
+	keep := writeEphemeral(t, home, "m", "forever", time.Now().Add(-365*24*time.Hour), 0)
 
-	removed, err := SweepExpiredRunFolders(base)
+	removed, err := SweepExpiredEphemeralMemories()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -309,62 +378,84 @@ func TestSweepExpiredRunFolders_IgnoresZeroCleanup(t *testing.T) {
 		t.Fatalf("expected nothing removed when cleanup=0, got %v", removed)
 	}
 	if _, err := os.Stat(keep); err != nil {
-		t.Fatalf("folder with cleanup=0 should be preserved: %v", err)
+		t.Fatalf("directory with cleanup=0 should be preserved: %v", err)
 	}
 }
 
-func TestSweepExpiredRunFolders_IgnoresFoldersWithoutSidecar(t *testing.T) {
-	base := t.TempDir()
-	manual := filepath.Join(base, "hand_made")
+func TestSweep_IgnoresDirectoriesWithoutSidecar(t *testing.T) {
+	home := withTempHome(t)
+	manual := filepath.Join(home, "memories", "mission", "m", "run", "hand_made")
 	if err := os.MkdirAll(manual, 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	removed, err := SweepExpiredRunFolders(base)
+	removed, err := SweepExpiredEphemeralMemories()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	if len(removed) != 0 {
-		t.Fatalf("sweep must leave un-marked folders alone, got %v", removed)
+		t.Fatalf("sweep must leave un-marked directories alone, got %v", removed)
 	}
 	if _, err := os.Stat(manual); err != nil {
-		t.Fatalf("manually created folder should still exist: %v", err)
+		t.Fatalf("manually created directory should still exist: %v", err)
 	}
 }
 
-func TestSweepExpiredRunFolders_MissingBaseIsNotAnError(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "does", "not", "exist")
-	removed, err := SweepExpiredRunFolders(base)
+func TestSweep_MissingRootIsNotAnError(t *testing.T) {
+	withTempHome(t) // home is set, but memories/ subtree doesn't exist yet
+	removed, err := SweepExpiredEphemeralMemories()
 	if err != nil {
-		t.Fatalf("sweep should tolerate missing base: %v", err)
+		t.Fatalf("sweep should tolerate missing root: %v", err)
 	}
 	if removed != nil {
 		t.Fatalf("expected nil removed, got %v", removed)
 	}
 }
 
-// TestSweepThenRebuildRoundTrip mirrors the real flow: an old run folder
-// exists with a sidecar backdated past its cleanup window, the sweep deletes
-// it, then a new buildFolderStore (different missionID) creates a fresh run
-// folder with a current sidecar — and the old one is gone.
+func TestSweep_WalksAcrossMissions(t *testing.T) {
+	home := withTempHome(t)
+	// Two missions, one expired run each
+	a := writeEphemeral(t, home, "alpha", "run1", time.Now().Add(-10*24*time.Hour), 2)
+	b := writeEphemeral(t, home, "beta", "run1", time.Now().Add(-10*24*time.Hour), 2)
+	keep := writeEphemeral(t, home, "alpha", "run2", time.Now().Add(-1*24*time.Hour), 2)
+
+	removed, err := SweepExpiredEphemeralMemories()
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if len(removed) != 2 {
+		t.Fatalf("expected 2 removals across missions, got %v", removed)
+	}
+	for _, gone := range []string{a, b} {
+		if _, err := os.Stat(gone); !os.IsNotExist(err) {
+			t.Fatalf("expected %s gone: %v", gone, err)
+		}
+	}
+	if _, err := os.Stat(keep); err != nil {
+		t.Fatalf("unexpired directory should remain: %v", err)
+	}
+}
+
+// TestSweepThenRebuildRoundTrip mirrors the real flow: an old ephemeral
+// memory exists with a sidecar backdated past its cleanup window, the sweep
+// deletes it, then a new buildFolderStore (different missionID) creates a
+// fresh ephemeral memory with a current sidecar — and the old one is gone.
 func TestSweepThenRebuildRoundTrip(t *testing.T) {
-	base := filepath.Join(t.TempDir(), "runs")
+	home := withTempHome(t)
+	stale := writeEphemeral(t, home, "demo", "old-run", time.Now().Add(-5*24*time.Hour), 2)
 
-	// Simulate a run from days ago that's past its cleanup deadline.
-	stale := writeRun(t, base, "old-run", time.Now().Add(-5*24*time.Hour), 2)
-
-	if _, err := SweepExpiredRunFolders(base); err != nil {
+	if _, err := SweepExpiredEphemeralMemories(); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("stale run should have been deleted: %v", err)
+		t.Fatalf("stale ephemeral should have been deleted: %v", err)
 	}
 
 	cleanup := 2
 	m := &config.Mission{
-		Name: "folders_demo",
-		RunFolder: &config.MissionRunFolder{
-			Base:    base,
+		Name: "demo",
+		EphemeralMemory: &config.MissionMemory{
+			Type:    "ephemeral",
 			Cleanup: &cleanup,
 		},
 	}
@@ -376,8 +467,9 @@ func TestSweepThenRebuildRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	if filepath.Base(fresh) != "new-run" {
-		t.Fatalf("fresh run should be keyed by new missionID, got %s", fresh)
+	want := filepath.Join(home, "memories", "mission", "demo", "run", "new-run")
+	if fresh != want {
+		t.Fatalf("fresh path: want %s, got %s", want, fresh)
 	}
 
 	metaBytes, err := os.ReadFile(filepath.Join(fresh, runMetadataFile))
@@ -390,35 +482,6 @@ func TestSweepThenRebuildRoundTrip(t *testing.T) {
 	}
 	if time.Since(meta.CreatedAt) > time.Minute {
 		t.Fatalf("fresh sidecar CreatedAt should be ~now, got %v", meta.CreatedAt)
-	}
-}
-
-func TestResolvedRunFolderBase(t *testing.T) {
-	if got := ResolvedRunFolderBase(nil); got != DefaultRunFolderBase {
-		t.Fatalf("nil rf: want %q, got %q", DefaultRunFolderBase, got)
-	}
-	if got := ResolvedRunFolderBase(&config.MissionRunFolder{}); got != DefaultRunFolderBase {
-		t.Fatalf("empty base: want %q, got %q", DefaultRunFolderBase, got)
-	}
-	if got := ResolvedRunFolderBase(&config.MissionRunFolder{Base: "/custom"}); got != "/custom" {
-		t.Fatalf("explicit base: want %q, got %q", "/custom", got)
-	}
-}
-
-func TestBuildFolderStore_CreatesNestedBase(t *testing.T) {
-	// Base directory with nested missing parents — MkdirAll should create them all.
-	base := filepath.Join(t.TempDir(), "a", "b", "c", "runs")
-	m := &config.Mission{
-		Name: "m",
-		RunFolder: &config.MissionRunFolder{
-			Base: base,
-		},
-	}
-	if _, err := buildFolderStore(m, nil, "mid-1"); err != nil {
-		t.Fatalf("build: %v", err)
-	}
-	if info, err := os.Stat(filepath.Join(base, "mid-1")); err != nil || !info.IsDir() {
-		t.Fatalf("nested run folder not created: %v", err)
 	}
 }
 

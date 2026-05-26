@@ -252,43 +252,10 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		})
 	}
 
-	// Build shared folder → missions map
-	sharedMissions := map[string][]string{}
-	for _, m := range cfg.Missions {
-		for _, folderName := range m.Folders {
-			sharedMissions[folderName] = append(sharedMissions[folderName], m.Name)
-		}
-	}
-
-	for _, fb := range cfg.SharedFolders {
-		label := fb.Label
-		if label == "" {
-			label = fb.Name
-		}
-		ic.SharedFolders = append(ic.SharedFolders, protocol.SharedFolderInfo{
-			Name:        fb.Name,
-			Path:        fb.Path,
-			Label:       label,
-			Description: fb.Description,
-			Editable:    fb.Editable,
-			IsShared:    true,
-			Missions:    sharedMissions[fb.Name],
-		})
-	}
-
-	// Add dedicated mission folders
-	for _, m := range cfg.Missions {
-		if m.Folder != nil {
-			ic.SharedFolders = append(ic.SharedFolders, protocol.SharedFolderInfo{
-				Name:        m.Name,
-				Path:        m.Folder.Path,
-				Label:       m.Name,
-				Description: m.Folder.Description,
-				Editable:    true,
-				IsShared:    false,
-				Missions:    []string{m.Name},
-			})
-		}
+	// Collect shared memories + per-mission persistent memories. Paths are
+	// derived from SquadronHome so we don't need user-supplied paths.
+	if mems, err := collectMemoryInfos(cfg); err == nil {
+		ic.SharedFolders = append(ic.SharedFolders, mems...)
 	}
 
 	return ic

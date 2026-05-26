@@ -288,9 +288,10 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		r.secretInfos = secretInfos
 	}
 
-	// Folder store is built later in Run() once missionID is known — the per-run
-	// folder path depends on it. Shared + persistent folders only would let us
-	// build here, but deferring is simpler than branching on mission.RunFolder.
+	// Folder store is built later in Run() once missionID is known — the
+	// ephemeral memory path depends on it. Shared + persistent memory alone
+	// would let us build here, but deferring is simpler than branching on
+	// mission.EphemeralMemory.
 
 	return r, nil
 }
@@ -567,14 +568,14 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		r.resolvedDatasets = nil
 	}
 
-	// Folder store depends on missionID (for run_folder path), so build it
-	// here rather than in NewRunner. Sweep expired run folders async — the
-	// result doesn't affect this run's correctness, only disk usage.
-	if r.mission.RunFolder != nil {
-		base := ResolvedRunFolderBase(r.mission.RunFolder)
-		go func() { _, _ = SweepExpiredRunFolders(base) }()
+	// Folder store depends on missionID (for ephemeral memory path), so build
+	// it here rather than in NewRunner. Sweep expired ephemeral memories
+	// async — the result doesn't affect this run's correctness, only disk
+	// usage.
+	if r.mission.EphemeralMemory != nil {
+		go func() { _, _ = SweepExpiredEphemeralMemories() }()
 	}
-	folderStore, err := buildFolderStore(r.mission, r.cfg.SharedFolders, missionID)
+	folderStore, err := buildFolderStore(r.mission, r.cfg.Memories, missionID)
 	if err != nil {
 		return fmt.Errorf("mission '%s': build folder store: %w", r.mission.Name, err)
 	}

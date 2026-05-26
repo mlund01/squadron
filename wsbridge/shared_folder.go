@@ -13,42 +13,61 @@ import (
 	"github.com/mlund01/squadron-wire/protocol"
 
 	"squadron/config"
+	"squadron/mission"
 )
 
-// resolveSharedFolderPath looks up a folder by name (shared folders + mission folders)
+// resolvedMemory describes one materialized memory slot for the UI: a
+// human-friendly name, the absolute path it lives at, and whether agents are
+// allowed to write to it.
+type resolvedMemory struct {
+	name     string
+	path     string
+	editable bool
+}
+
+// resolveSharedFolderPath looks up a memory slot by name (top-level shared
+// memories first, then per-mission persistent memories keyed by mission name)
 // and safely resolves a relative path within it.
-func (c *Client) resolveSharedFolderPath(folderName, relPath string) (*config.SharedFolder, string, error) {
+func (c *Client) resolveSharedFolderPath(folderName, relPath string) (*resolvedMemory, string, error) {
 	cfg := c.getConfig()
 
-	// Check shared folders first
-	for i := range cfg.SharedFolders {
-		if cfg.SharedFolders[i].Name == folderName {
-			folder := &cfg.SharedFolders[i]
-			path, err := c.resolveSafePath(folder.Path, relPath)
-			return folder, path, err
-		}
-	}
-
-	// Check mission dedicated folders (keyed by mission name)
-	for _, m := range cfg.Missions {
-		if m.Folder != nil && m.Name == folderName {
-			sf := &config.SharedFolder{
-				Name:     m.Name,
-				Path:     m.Folder.Path,
-				Editable: true,
+	// Check shared memories first.
+	for i := range cfg.Memories {
+		if cfg.Memories[i].Name == folderName {
+			absPath, err := mission.SharedMemoryPath(folderName)
+			if err != nil {
+				return nil, "", fmt.Errorf("resolve shared memory %q: %w", folderName, err)
 			}
-			path, err := c.resolveSafePath(m.Folder.Path, relPath)
-			return sf, path, err
+			rm := &resolvedMemory{
+				name:     cfg.Memories[i].Name,
+				path:     absPath,
+				editable: cfg.Memories[i].Editable,
+			}
+			path, err := c.resolveSafePath(absPath, relPath)
+			return rm, path, err
 		}
 	}
 
-	return nil, "", fmt.Errorf("folder %q not found", folderName)
+	// Check mission persistent memory (keyed by mission name).
+	for _, m := range cfg.Missions {
+		if m.PersistentMemory != nil && m.Name == folderName {
+			absPath, err := mission.PersistentMemoryPath(m.Name)
+			if err != nil {
+				return nil, "", fmt.Errorf("resolve persistent memory for %q: %w", m.Name, err)
+			}
+			rm := &resolvedMemory{name: m.Name, path: absPath, editable: true}
+			path, err := c.resolveSafePath(absPath, relPath)
+			return rm, path, err
+		}
+	}
+
+	return nil, "", fmt.Errorf("memory %q not found", folderName)
 }
 
 func (c *Client) resolveSafePath(basePath, relPath string) (string, error) {
 	rootPath, err := filepath.Abs(basePath)
 	if err != nil {
-		return "", fmt.Errorf("invalid folder path: %w", err)
+		return "", fmt.Errorf("invalid memory path: %w", err)
 	}
 
 	if relPath == "" {
@@ -62,7 +81,7 @@ func (c *Client) resolveSafePath(basePath, relPath string) (string, error) {
 
 	fullPath := filepath.Join(rootPath, cleaned)
 	if !strings.HasPrefix(fullPath, rootPath) {
-		return "", fmt.Errorf("path escapes folder root")
+		return "", fmt.Errorf("path escapes memory root")
 	}
 
 	return fullPath, nil
@@ -71,50 +90,70 @@ func (c *Client) resolveSafePath(basePath, relPath string) (string, error) {
 func (c *Client) handleListSharedFolders(env *protocol.Envelope) (*protocol.Envelope, error) {
 	cfg := c.getConfig()
 
-	// Build shared folder → missions map
+	folders, err := collectMemoryInfos(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return protocol.NewResponse(env.RequestID, protocol.TypeListSharedFoldersResult,
+		&protocol.ListSharedFoldersResultPayload{Folders: folders})
+}
+
+// collectMemoryInfos walks the config and turns every memory slot
+// (shared + per-mission persistent) into a protocol.SharedFolderInfo. Used
+// by both the standalone list_shared_folders RPC and the bulk
+// instance-info payload in convert.go.
+func collectMemoryInfos(cfg *config.Config) ([]protocol.SharedFolderInfo, error) {
+	// Build shared memory → missions map
 	sharedMissions := map[string][]string{}
 	for _, m := range cfg.Missions {
-		for _, folderName := range m.Folders {
-			sharedMissions[folderName] = append(sharedMissions[folderName], m.Name)
+		for _, name := range m.Memories {
+			sharedMissions[name] = append(sharedMissions[name], m.Name)
 		}
 	}
 
 	var folders []protocol.SharedFolderInfo
 
-	// Add shared folders
-	for _, fb := range cfg.SharedFolders {
-		label := fb.Label
+	for _, mem := range cfg.Memories {
+		label := mem.Label
 		if label == "" {
-			label = fb.Name
+			label = mem.Name
+		}
+		path, err := mission.SharedMemoryPath(mem.Name)
+		if err != nil {
+			return nil, fmt.Errorf("shared memory %q: %w", mem.Name, err)
 		}
 		folders = append(folders, protocol.SharedFolderInfo{
-			Name:        fb.Name,
-			Path:        fb.Path,
+			Name:        mem.Name,
+			Path:        path,
 			Label:       label,
-			Description: fb.Description,
-			Editable:    fb.Editable,
+			Description: mem.Description,
+			Editable:    mem.Editable,
 			IsShared:    true,
-			Missions:    sharedMissions[fb.Name],
+			Missions:    sharedMissions[mem.Name],
 		})
 	}
 
-	// Add dedicated mission folders
 	for _, m := range cfg.Missions {
-		if m.Folder != nil {
-			folders = append(folders, protocol.SharedFolderInfo{
-				Name:        m.Name,
-				Path:        m.Folder.Path,
-				Label:       m.Name,
-				Description: m.Folder.Description,
-				Editable:    true,
-				IsShared:    false,
-				Missions:    []string{m.Name},
-			})
+		if m.PersistentMemory == nil {
+			continue
 		}
+		path, err := mission.PersistentMemoryPath(m.Name)
+		if err != nil {
+			return nil, fmt.Errorf("persistent memory for %q: %w", m.Name, err)
+		}
+		folders = append(folders, protocol.SharedFolderInfo{
+			Name:        m.Name,
+			Path:        path,
+			Label:       m.Name,
+			Description: m.PersistentMemory.Description,
+			Editable:    true,
+			IsShared:    false,
+			Missions:    []string{m.Name},
+		})
 	}
 
-	return protocol.NewResponse(env.RequestID, protocol.TypeListSharedFoldersResult,
-		&protocol.ListSharedFoldersResultPayload{Folders: folders})
+	return folders, nil
 }
 
 func (c *Client) handleBrowseDirectory(env *protocol.Envelope) (*protocol.Envelope, error) {
@@ -220,15 +259,15 @@ func (c *Client) handleWriteBrowseFile(env *protocol.Envelope) (*protocol.Envelo
 		return nil, fmt.Errorf("decode write_browse_file: %w", err)
 	}
 
-	folder, fullPath, err := c.resolveSharedFolderPath(payload.BrowserName, payload.RelPath)
+	mem, fullPath, err := c.resolveSharedFolderPath(payload.BrowserName, payload.RelPath)
 	if err != nil {
 		return protocol.NewResponse(env.RequestID, protocol.TypeWriteBrowseFileResult,
 			&protocol.WriteBrowseFileResultPayload{Success: false, Error: err.Error()})
 	}
 
-	if !folder.Editable {
+	if !mem.editable {
 		return protocol.NewResponse(env.RequestID, protocol.TypeWriteBrowseFileResult,
-			&protocol.WriteBrowseFileResultPayload{Success: false, Error: "shared folder is read-only"})
+			&protocol.WriteBrowseFileResultPayload{Success: false, Error: "memory is read-only"})
 	}
 
 	if err := os.WriteFile(fullPath, []byte(payload.Content), 0644); err != nil {

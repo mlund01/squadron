@@ -47,8 +47,8 @@ type Config struct {
 	// renamed to `mcp_host { ... }`). nil when the block is absent.
 	MCPHost *MCPHostConfig `hcl:"-"`
 
-	// File browser configurations (optional)
-	SharedFolders []SharedFolder `hcl:"-"`
+	// Top-level shared memory blocks (memory "name" { ... }).
+	Memories []Memory `hcl:"-"`
 
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
@@ -437,9 +437,9 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	for _, fb := range c.SharedFolders {
-		if err := fb.Validate(); err != nil {
-			return fmt.Errorf("shared_folder '%s': %w", fb.Name, err)
+	for _, m := range c.Memories {
+		if err := m.Validate(); err != nil {
+			return fmt.Errorf("memory '%s': %w", m.Name, err)
 		}
 	}
 
@@ -615,7 +615,7 @@ func (c *Config) Validate() error {
 
 	// Validate missions
 	for i := range c.Missions {
-		if err := c.Missions[i].Validate(c.Models, c.Agents, c.SharedFolders, allMissionNames); err != nil {
+		if err := c.Missions[i].Validate(c.Models, c.Agents, c.Memories, allMissionNames); err != nil {
 			return fmt.Errorf("mission '%s': %w", c.Missions[i].Name, err)
 		}
 	}
@@ -684,7 +684,7 @@ type parsedBlocks struct {
 	Missions  []*hcl.Block
 	Storage       []*hcl.Block
 	CommandCenter []*hcl.Block
-	SharedFolders []*hcl.Block
+	Memories      []*hcl.Block
 	MCPHost       []*hcl.Block
 	Skills        []*hcl.Block
 	Gateways      []*hcl.Block
@@ -720,6 +720,9 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "mission", LabelNames: []string{"name"}},
 				{Type: "storage"},
 				{Type: "command_center"},
+				{Type: "memory", LabelNames: []string{"name"}},
+				// Detected for nicer errors only — the parse-pass below
+				// rejects them with a pointer to the new `memory` block.
 				{Type: "shared_folder", LabelNames: []string{"name"}},
 				{Type: "shared_memory", LabelNames: []string{"name"}},
 				{Type: "mcp_host"},
@@ -753,8 +756,12 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.Storage = append(pb.Storage, block)
 			case "command_center":
 				pb.CommandCenter = append(pb.CommandCenter, block)
+			case "memory":
+				pb.Memories = append(pb.Memories, block)
 			case "shared_folder", "shared_memory":
-				pb.SharedFolders = append(pb.SharedFolders, block)
+				// Collected only so we can produce a clear error in the
+				// parse pass below.
+				pb.Memories = append(pb.Memories, block)
 			case "mcp_host":
 				pb.MCPHost = append(pb.MCPHost, block)
 			case "mcp":
@@ -950,20 +957,22 @@ func loadFromFiles(files []string) (*Config, error) {
 		}
 	}
 
-	// Parse shared_folder / shared_memory blocks (optional, with vars context).
-	// Both block types share the same SharedFolder struct — shared_memory is
-	// the preferred spelling; shared_folder is kept as a backwards-compatible
-	// alias.
-	var allSharedFolders []SharedFolder
+	// Parse top-level `memory "name" { ... }` blocks (with vars context).
+	// `shared_folder` and `shared_memory` are no longer supported — if a user
+	// writes one we surface an explicit error pointing at the new syntax.
+	var allMemories []Memory
 	for _, pb := range allParsedBlocks {
-		for _, block := range pb.SharedFolders {
-			var fb SharedFolder
-			fb.Name = block.Labels[0]
-			diags := gohcl.DecodeBody(block.Body, varsCtx, &fb)
-			if diags.HasErrors() {
-				return nil, fmt.Errorf("%s '%s': %w", block.Type, fb.Name, diags)
+		for _, block := range pb.Memories {
+			if block.Type != "memory" {
+				return nil, fmt.Errorf("%s %q at %s: this block type is no longer supported — use `memory %q { ... }` instead (path is now derived automatically; remove the `path` attribute)", block.Type, block.Labels[0], block.DefRange, block.Labels[0])
 			}
-			allSharedFolders = append(allSharedFolders, fb)
+			var m Memory
+			m.Name = block.Labels[0]
+			diags := gohcl.DecodeBody(block.Body, varsCtx, &m)
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("memory '%s': %w", m.Name, diags)
+			}
+			allMemories = append(allMemories, m)
 		}
 	}
 
@@ -1148,20 +1157,17 @@ func loadFromFiles(files []string) (*Config, error) {
 	// Build agents context (add to full context)
 	agentsCtx := buildAgentsContext(skillsCtx, allAgents)
 
-	// Add shared_folders / shared_memories namespaces for mission references.
-	// Both names point at the same map — shared_memories is the preferred
-	// spelling; shared_folders is kept as a backwards-compatible alias.
-	if len(allSharedFolders) > 0 {
-		folderMap := make(map[string]cty.Value)
-		for _, f := range allSharedFolders {
-			folderMap[f.Name] = cty.StringVal(f.Name)
+	// Add `memories` namespace for mission references: `memories.NAME` resolves
+	// to the memory's name as a string.
+	if len(allMemories) > 0 {
+		memMap := make(map[string]cty.Value)
+		for _, m := range allMemories {
+			memMap[m.Name] = cty.StringVal(m.Name)
 		}
-		ns := cty.ObjectVal(folderMap)
-		agentsCtx.Variables["shared_folders"] = ns
-		agentsCtx.Variables["shared_memories"] = ns
+		agentsCtx.Variables["memories"] = cty.ObjectVal(memMap)
 	}
 
-	// Stage 5: Load missions (with vars + models + tools + agents + shared_folders context)
+	// Stage 5: Load missions (with vars + models + tools + agents + memories context)
 	// First pass: collect all mission names so router targets can reference missions.*
 	missionNames := make(map[string]cty.Value)
 	for _, pb := range allParsedBlocks {
@@ -1211,7 +1217,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		Storage:          &storageConfig,
 		CommandCenter:    commandCenterConfig,
 		MCPHost:          mcpHostConfig,
-		SharedFolders:    allSharedFolders,
+		Memories:         allMemories,
 		LoadedPlugins:    loadedPlugins,
 		LoadedMCPClients: loadedMCPClients,
 		LoadedMCPErrors:  loadedMCPErrors,
@@ -1779,10 +1785,11 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Attributes: []hcl.AttributeSchema{
 			{Name: "agents", Required: true},
 			{Name: "directive"},
-			{Name: "folders"},  // deprecated alias for "memories"
-			{Name: "memories"}, // shared memory references
+			{Name: "memories"}, // shared memory references: memories = [memories.foo]
 			{Name: "max_parallel"},
 			{Name: "inputs"}, // shorthand: inputs = { field = string("desc", { default = "val" }) }
+			// Detected so we can produce a nicer error than "unsupported argument".
+			{Name: "folders"},
 		},
 		Blocks: []hcl.BlockHeaderSchema{
 			{Type: "commander"},
@@ -1791,13 +1798,14 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Type: "input", LabelNames: []string{"name"}}, // verbose input blocks still supported
 			{Type: "dataset", LabelNames: []string{"name"}},
 			{Type: "secret", LabelNames: []string{"name"}},
-			{Type: "folder"},     // deprecated alias for "memory"
-			{Type: "memory"},     // dedicated mission memory (reserved name "mission")
-			{Type: "run_folder"}, // deprecated alias for "run_memory"
-			{Type: "run_memory"}, // per-run ephemeral memory (reserved name "run")
+			{Type: "memory"}, // mission-scoped memory: memory { type = "persistent"|"ephemeral" }
 			{Type: "schedule"},
 			{Type: "trigger"},
 			{Type: "budget"},
+			// Detected so we can produce a nicer error than the parser's default.
+			{Type: "folder"},
+			{Type: "run_folder"},
+			{Type: "run_memory"},
 		},
 	})
 	if diags.HasErrors() {
@@ -1945,75 +1953,71 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		directive = val.AsString()
 	}
 
-	// Parse optional memories / folders attribute (list of shared memory names).
-	// "memories" is the preferred spelling; "folders" is kept as a
-	// backwards-compatible alias. Setting both is an error.
-	var missionFolders []string
-	memoriesAttr, hasMemories := missionContent.Attributes["memories"]
-	foldersAttr, hasFolders := missionContent.Attributes["folders"]
-	if hasMemories && hasFolders {
-		return nil, fmt.Errorf("mission '%s': set either 'memories' or 'folders', not both", missionName)
+	// Reject the old `folders = ...` attribute with a clear pointer at the new
+	// syntax — we deliberately broke compatibility here.
+	if _, ok := missionContent.Attributes["folders"]; ok {
+		return nil, fmt.Errorf("mission '%s': the `folders` attribute is no longer supported — use `memories = [memories.NAME, ...]` instead", missionName)
 	}
-	if attr := memoriesAttr; hasMemories {
+
+	// Parse optional memories attribute (list of shared memory names).
+	var missionMemories []string
+	if attr, ok := missionContent.Attributes["memories"]; ok {
 		v, diags := attr.Expr.Value(ctx)
 		if diags.HasErrors() {
 			return nil, fmt.Errorf("mission '%s' memories: %w", missionName, diags)
 		}
 		for it := v.ElementIterator(); it.Next(); {
 			_, e := it.Element()
-			missionFolders = append(missionFolders, e.AsString())
-		}
-	} else if hasFolders {
-		v, diags := foldersAttr.Expr.Value(ctx)
-		if diags.HasErrors() {
-			return nil, fmt.Errorf("mission '%s' folders: %w", missionName, diags)
-		}
-		for it := v.ElementIterator(); it.Next(); {
-			_, e := it.Element()
-			missionFolders = append(missionFolders, e.AsString())
+			missionMemories = append(missionMemories, e.AsString())
 		}
 	}
 
-	// Parse optional memory / folder block (dedicated mission memory, reserved
-	// name "mission"). "memory" is preferred; "folder" is kept as a
-	// backwards-compatible alias. At most one of either may appear.
-	var missionFolder *MissionFolder
-	for _, folderBlock := range missionContent.Blocks {
-		if folderBlock.Type != "folder" && folderBlock.Type != "memory" {
-			continue
+	// Reject the old `folder { ... }` / `run_folder { ... }` / `run_memory { ... }`
+	// blocks with a clear pointer at the new syntax.
+	for _, b := range missionContent.Blocks {
+		switch b.Type {
+		case "folder":
+			return nil, fmt.Errorf("mission '%s': the `folder { ... }` block is no longer supported — use `memory { type = \"persistent\" }` instead (path is now derived automatically)", missionName)
+		case "run_folder":
+			return nil, fmt.Errorf("mission '%s': the `run_folder { ... }` block is no longer supported — use `memory { type = \"ephemeral\" }` instead", missionName)
+		case "run_memory":
+			return nil, fmt.Errorf("mission '%s': the `run_memory { ... }` block is no longer supported — use `memory { type = \"ephemeral\" }` instead", missionName)
 		}
-		if missionFolder != nil {
-			return nil, fmt.Errorf("mission '%s': only one memory/folder block allowed", missionName)
-		}
-		var mf MissionFolder
-		diags := gohcl.DecodeBody(folderBlock.Body, ctx, &mf)
-		if diags.HasErrors() {
-			return nil, fmt.Errorf("mission '%s' %s: %w", missionName, folderBlock.Type, diags)
-		}
-		missionFolder = &mf
 	}
 
-	// Parse optional run_memory / run_folder block (per-run ephemeral memory,
-	// reserved name "run"). "run_memory" is preferred; "run_folder" is kept as
-	// a backwards-compatible alias.
-	var missionRunFolder *MissionRunFolder
-	for _, rfBlock := range missionContent.Blocks {
-		if rfBlock.Type != "run_folder" && rfBlock.Type != "run_memory" {
+	// Parse zero or more `memory { ... }` blocks. A mission may declare at most
+	// one persistent and one ephemeral memory.
+	var persistentMemory, ephemeralMemory *MissionMemory
+	for _, mb := range missionContent.Blocks {
+		if mb.Type != "memory" {
 			continue
 		}
-		if missionRunFolder != nil {
-			return nil, fmt.Errorf("mission '%s': only one run_memory/run_folder block allowed", missionName)
-		}
-		var rf MissionRunFolder
-		diags := gohcl.DecodeBody(rfBlock.Body, ctx, &rf)
+		var mm MissionMemory
+		diags := gohcl.DecodeBody(mb.Body, ctx, &mm)
 		if diags.HasErrors() {
-			return nil, fmt.Errorf("mission '%s' %s: %w", missionName, rfBlock.Type, diags)
+			return nil, fmt.Errorf("mission '%s' memory: %w", missionName, diags)
 		}
-		if rf.Cleanup == nil {
-			v := DefaultRunFolderCleanupDays
-			rf.Cleanup = &v
+		if mm.Type == "" {
+			mm.Type = MemoryTypePersistent
 		}
-		missionRunFolder = &rf
+		switch mm.Type {
+		case MemoryTypePersistent:
+			if persistentMemory != nil {
+				return nil, fmt.Errorf("mission '%s': only one persistent memory block allowed", missionName)
+			}
+			persistentMemory = &mm
+		case MemoryTypeEphemeral:
+			if ephemeralMemory != nil {
+				return nil, fmt.Errorf("mission '%s': only one ephemeral memory block allowed", missionName)
+			}
+			if mm.Cleanup == nil {
+				v := DefaultEphemeralCleanupDays
+				mm.Cleanup = &v
+			}
+			ephemeralMemory = &mm
+		default:
+			return nil, fmt.Errorf("mission '%s' memory: type must be %q or %q (got %q)", missionName, MemoryTypePersistent, MemoryTypeEphemeral, mm.Type)
+		}
 	}
 
 	// Parse schedule blocks (optional, multiple allowed)
@@ -2080,9 +2084,9 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Commander:   missionCommander,
 		Agents:      missionAgents,
 		LocalAgents: localAgents,
-		Folders:     missionFolders,
-		Folder:      missionFolder,
-		RunFolder:   missionRunFolder,
+		Memories:         missionMemories,
+		PersistentMemory: persistentMemory,
+		EphemeralMemory:  ephemeralMemory,
 		Schedules:   schedules,
 		Trigger:     trigger,
 		MaxParallel: maxParallel,

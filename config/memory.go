@@ -3,7 +3,7 @@ package config
 import "fmt"
 
 // Reserved slot names for mission-scoped memory. Tool calls reference these
-// via the `folder` parameter (e.g. `folder: "mission"` or `folder: "run"`).
+// via the `memory` parameter (e.g. `memory: "mission"` or `memory: "run"`).
 const (
 	PersistentSlotName = "mission"
 	EphemeralSlotName  = "run"

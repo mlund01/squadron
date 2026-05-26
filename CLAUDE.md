@@ -286,15 +286,15 @@ The scheduler lives in `scheduler/` but its lifecycle (creation, config updates,
 
 Memory blocks are sandboxed filesystem locations that agents access via the
 `file_list`, `file_read`, `file_create`, `file_delete`, `file_search`, and
-`file_grep` tools. The `folder` parameter (the literal historical name on the
-tools) is required on every tool call — there is no implicit default.
+`file_grep` tools. Each call takes a required `memory` parameter naming the
+slot — there is no implicit default.
 
 Squadron owns the paths: every slot lives under `<squadron_home>/memories/`
 and you do **not** specify `path` anywhere. The three kinds map to three
 fixed location patterns:
 
-| Kind | HCL | Slot name agents use | On-disk path |
-|------|-----|-----------------------|--------------|
+| Kind | HCL | `memory` arg agents pass | On-disk path |
+|------|-----|---------------------------|--------------|
 | Shared | top-level `memory "name" { ... }` | the HCL label | `<squadron_home>/memories/shared/<name>/` |
 | Persistent (mission) | `memory { type = "persistent" }` inside a mission (also the default if `type` is omitted) | literal `"mission"` | `<squadron_home>/memories/mission/<mission_name>/persistent/` |
 | Ephemeral (per-run) | `memory { type = "ephemeral" }` inside a mission | literal `"run"` | `<squadron_home>/memories/mission/<mission_name>/run/<instance_id>/` |

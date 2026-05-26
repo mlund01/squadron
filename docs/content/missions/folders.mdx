@@ -46,7 +46,7 @@ Missions opt in by listing them, then refer to them by name in tool calls:
 ```hcl
 mission "analyze" {
   memories = [memories.research, memories.reference]
-  # agents call e.g. file_read with folder = "research"
+  # agents call e.g. file_read with memory = "research"
 }
 ```
 
@@ -66,7 +66,7 @@ mission "analyze" {
 Agents reach it under the name `mission`:
 
 ```json
-{ "folder": "mission", "path": "2026-04-23/report.md", "content": "..." }
+{ "memory": "mission", "path": "2026-04-23/report.md", "content": "..." }
 ```
 
 | Attribute | Type | Description |
@@ -92,7 +92,7 @@ By default, ephemeral memory is deleted 7 days after the run started. Set `clean
 Agents reach it under the name `run`:
 
 ```json
-{ "folder": "run", "path": "notes.txt", "content": "..." }
+{ "memory": "run", "path": "notes.txt", "content": "..." }
 ```
 
 | Attribute | Type | Description |
@@ -105,7 +105,7 @@ Ephemeral directories stick around after the mission ends — useful for inspect
 
 ## Tool Reference
 
-All six file tools take a required `folder` parameter — that's the slot name (a shared memory name, or the reserved `"mission"` / `"run"`):
+All six file tools take a required `memory` parameter — that's the slot name (a shared memory name, or the reserved `"mission"` / `"run"`):
 
 | Tool | Purpose |
 |------|---------|

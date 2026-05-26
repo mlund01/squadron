@@ -25,10 +25,10 @@ func withTempHome(t *testing.T) string {
 	return home
 }
 
-func TestBuildFolderStore_NoMemories(t *testing.T) {
+func TestBuildMemoryStore_NoMemories(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{Name: "m"}
-	store, err := buildFolderStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestBuildFolderStore_NoMemories(t *testing.T) {
 	}
 }
 
-func TestBuildFolderStore_PersistentMemory(t *testing.T) {
+func TestBuildMemoryStore_PersistentMemory(t *testing.T) {
 	home := withTempHome(t)
 
 	m := &config.Mission{
@@ -48,7 +48,7 @@ func TestBuildFolderStore_PersistentMemory(t *testing.T) {
 		},
 	}
 
-	store, err := buildFolderStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestBuildFolderStore_PersistentMemory(t *testing.T) {
 		t.Fatal("expected non-nil store")
 	}
 
-	abs, writable, err := store.ResolvePath(aitools.MissionFolderName, ".")
+	abs, writable, err := store.ResolvePath(aitools.PersistentMemoryName, ".")
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestBuildFolderStore_PersistentMemory(t *testing.T) {
 	}
 }
 
-func TestBuildFolderStore_EphemeralMemory_CreatesSidecar(t *testing.T) {
+func TestBuildMemoryStore_EphemeralMemory_CreatesSidecar(t *testing.T) {
 	home := withTempHome(t)
 	cleanup := 7
 	m := &config.Mission{
@@ -88,12 +88,12 @@ func TestBuildFolderStore_EphemeralMemory_CreatesSidecar(t *testing.T) {
 		},
 	}
 
-	store, err := buildFolderStore(m, nil, "mid-abc")
+	store, err := buildMemoryStore(m, nil, "mid-abc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	abs, writable, err := store.ResolvePath(aitools.RunFolderName, ".")
+	abs, writable, err := store.ResolvePath(aitools.EphemeralMemoryName, ".")
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestBuildFolderStore_EphemeralMemory_CreatesSidecar(t *testing.T) {
 	}
 }
 
-func TestBuildFolderStore_EphemeralMemory_SidecarPreservedOnResume(t *testing.T) {
+func TestBuildMemoryStore_EphemeralMemory_SidecarPreservedOnResume(t *testing.T) {
 	home := withTempHome(t)
 	m := &config.Mission{
 		Name: "m",
@@ -134,7 +134,7 @@ func TestBuildFolderStore_EphemeralMemory_SidecarPreservedOnResume(t *testing.T)
 	}
 
 	// First build: sidecar written
-	if _, err := buildFolderStore(m, nil, "mid-1"); err != nil {
+	if _, err := buildMemoryStore(m, nil, "mid-1"); err != nil {
 		t.Fatalf("first build: %v", err)
 	}
 	runDir := filepath.Join(home, "memories", "mission", "m", "run", "mid-1")
@@ -145,7 +145,7 @@ func TestBuildFolderStore_EphemeralMemory_SidecarPreservedOnResume(t *testing.T)
 	time.Sleep(10 * time.Millisecond)
 
 	// Second build (same missionID = resume): sidecar must NOT be overwritten
-	if _, err := buildFolderStore(m, nil, "mid-1"); err != nil {
+	if _, err := buildMemoryStore(m, nil, "mid-1"); err != nil {
 		t.Fatalf("second build: %v", err)
 	}
 	secondMetaBytes, _ := os.ReadFile(filepath.Join(runDir, runMetadataFile))
@@ -157,7 +157,7 @@ func TestBuildFolderStore_EphemeralMemory_SidecarPreservedOnResume(t *testing.T)
 	}
 }
 
-func TestBuildFolderStore_EphemeralMemory_RequiresMissionID(t *testing.T) {
+func TestBuildMemoryStore_EphemeralMemory_RequiresMissionID(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name: "m",
@@ -165,13 +165,13 @@ func TestBuildFolderStore_EphemeralMemory_RequiresMissionID(t *testing.T) {
 			Type: "ephemeral",
 		},
 	}
-	_, err := buildFolderStore(m, nil, "")
+	_, err := buildMemoryStore(m, nil, "")
 	if err == nil {
 		t.Fatal("expected error when missionID is empty")
 	}
 }
 
-func TestBuildFolderStore_RejectsReservedSharedMemoryNames(t *testing.T) {
+func TestBuildMemoryStore_RejectsReservedSharedMemoryNames(t *testing.T) {
 	withTempHome(t)
 	for _, reserved := range []string{"mission", "run"} {
 		m := &config.Mission{
@@ -181,14 +181,14 @@ func TestBuildFolderStore_RejectsReservedSharedMemoryNames(t *testing.T) {
 		mems := []config.Memory{
 			{Name: reserved},
 		}
-		_, err := buildFolderStore(m, mems, "mid-1")
+		_, err := buildMemoryStore(m, mems, "mid-1")
 		if err == nil {
 			t.Fatalf("expected error for reserved shared memory name %q", reserved)
 		}
 	}
 }
 
-func TestBuildFolderStore_BothPersistentAndEphemeral(t *testing.T) {
+func TestBuildMemoryStore_BothPersistentAndEphemeral(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name: "m",
@@ -199,19 +199,19 @@ func TestBuildFolderStore_BothPersistentAndEphemeral(t *testing.T) {
 			Type: "ephemeral",
 		},
 	}
-	store, err := buildFolderStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, _, err := store.ResolvePath(aitools.MissionFolderName, "."); err != nil {
+	if _, _, err := store.ResolvePath(aitools.PersistentMemoryName, "."); err != nil {
 		t.Fatalf("persistent should resolve: %v", err)
 	}
-	if _, _, err := store.ResolvePath(aitools.RunFolderName, "."); err != nil {
+	if _, _, err := store.ResolvePath(aitools.EphemeralMemoryName, "."); err != nil {
 		t.Fatalf("ephemeral should resolve: %v", err)
 	}
 }
 
-func TestBuildFolderStore_SharedMemory(t *testing.T) {
+func TestBuildMemoryStore_SharedMemory(t *testing.T) {
 	home := withTempHome(t)
 	m := &config.Mission{
 		Name:     "m",
@@ -221,7 +221,7 @@ func TestBuildFolderStore_SharedMemory(t *testing.T) {
 		{Name: "research", Description: "Research notes", Editable: true},
 	}
 
-	store, err := buildFolderStore(m, mems, "mid-1")
+	store, err := buildMemoryStore(m, mems, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestBuildFolderStore_SharedMemory(t *testing.T) {
 	}
 }
 
-func TestBuildFolderStore_SharedMemory_ReadOnly(t *testing.T) {
+func TestBuildMemoryStore_SharedMemory_ReadOnly(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name:     "m",
@@ -252,7 +252,7 @@ func TestBuildFolderStore_SharedMemory_ReadOnly(t *testing.T) {
 		{Name: "reference"}, // editable defaults to false
 	}
 
-	store, err := buildFolderStore(m, mems, "mid-1")
+	store, err := buildMemoryStore(m, mems, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -265,18 +265,18 @@ func TestBuildFolderStore_SharedMemory_ReadOnly(t *testing.T) {
 	}
 }
 
-func TestResolvePath_EmptyFolderNameRejected(t *testing.T) {
+func TestResolvePath_EmptyMemoryNameRejected(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name:             "m",
 		PersistentMemory: &config.MissionMemory{Type: "persistent"},
 	}
-	store, err := buildFolderStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	if _, _, err := store.ResolvePath("", "."); err == nil {
-		t.Fatal("expected error when folder name is empty")
+		t.Fatal("expected error when memory name is empty")
 	}
 }
 
@@ -286,7 +286,7 @@ func TestResolvePath_RejectsPathEscape(t *testing.T) {
 		Name:             "m",
 		PersistentMemory: &config.MissionMemory{Type: "persistent"},
 	}
-	store, err := buildFolderStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -295,18 +295,18 @@ func TestResolvePath_RejectsPathEscape(t *testing.T) {
 	}
 }
 
-func TestResolvePath_UnknownFolder(t *testing.T) {
+func TestResolvePath_UnknownMemory(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name:             "m",
 		PersistentMemory: &config.MissionMemory{Type: "persistent"},
 	}
-	store, err := buildFolderStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	if _, _, err := store.ResolvePath("does_not_exist", "."); err == nil {
-		t.Fatal("expected error for unknown folder")
+		t.Fatal("expected error for unknown memory")
 	}
 }
 
@@ -438,7 +438,7 @@ func TestSweep_WalksAcrossMissions(t *testing.T) {
 
 // TestSweepThenRebuildRoundTrip mirrors the real flow: an old ephemeral
 // memory exists with a sidecar backdated past its cleanup window, the sweep
-// deletes it, then a new buildFolderStore (different missionID) creates a
+// deletes it, then a new buildMemoryStore (different missionID) creates a
 // fresh ephemeral memory with a current sidecar — and the old one is gone.
 func TestSweepThenRebuildRoundTrip(t *testing.T) {
 	home := withTempHome(t)
@@ -459,11 +459,11 @@ func TestSweepThenRebuildRoundTrip(t *testing.T) {
 			Cleanup: &cleanup,
 		},
 	}
-	store, err := buildFolderStore(m, nil, "new-run")
+	store, err := buildMemoryStore(m, nil, "new-run")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	fresh, _, err := store.ResolvePath(aitools.RunFolderName, ".")
+	fresh, _, err := store.ResolvePath(aitools.EphemeralMemoryName, ".")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

@@ -392,9 +392,9 @@ func runEngage(cmd *cobra.Command, args []string) {
 		client.Close()
 	}()
 
-	// Periodic sweep of expired per-run mission folders. Runs hourly, reads
-	// the live config so new run_folder bases show up after a reload.
-	go runFolderCleanupLoop(shutdown, client.GetConfig)
+	// Periodic sweep of expired per-run ephemeral memory directories.
+	// Runs hourly; walks the filesystem so the live config isn't needed.
+	go runMemoryCleanupLoop(shutdown)
 
 	// Even without valid config we still try to connect — the command center
 	// can show vars and config files so the user can fix things from the UI.
@@ -901,11 +901,11 @@ func openBrowser(url string) {
 	browser.Open(url)
 }
 
-// runFolderCleanupLoop periodically sweeps expired per-run ephemeral
+// runMemoryCleanupLoop periodically sweeps expired per-run ephemeral
 // memory directories. The sweep walks the entire memories tree, so it
 // doesn't need to know which missions are configured. It runs once
 // immediately, then hourly, and exits when shutdown is closed.
-func runFolderCleanupLoop(shutdown <-chan struct{}, _ func() *config.Config) {
+func runMemoryCleanupLoop(shutdown <-chan struct{}) {
 	sweep := func() {
 		if _, err := mission.SweepExpiredEphemeralMemories(); err != nil {
 			log.Printf("ephemeral memory cleanup: %v", err)

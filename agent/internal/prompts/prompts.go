@@ -231,20 +231,20 @@ func formatAgents(agents []AgentInfo) string {
 	return sb.String()
 }
 
-// FormatFolderContext builds a system prompt section describing available folders.
-func FormatFolderContext(store aitools.FolderStore) string {
+// FormatMemoryContext builds a system prompt section describing available memory slots.
+func FormatMemoryContext(store aitools.MemoryStore) string {
 	if store == nil {
 		return ""
 	}
-	infos := store.FolderInfos()
+	infos := store.MemoryInfos()
 	if len(infos) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## Available Folders\n\n")
-	sb.WriteString("You have access to file folders via the file_list, file_read, file_create, file_delete, file_search, and file_grep tools.\n")
-	sb.WriteString("The `folder` parameter is required on every call — pick one of the names below.\n\n")
+	sb.WriteString("## Available Memory\n\n")
+	sb.WriteString("You have access to memory slots via the file_list, file_read, file_create, file_delete, file_search, and file_grep tools.\n")
+	sb.WriteString("The `memory` parameter is required on every call — pick one of the slot names below.\n\n")
 
 	for _, info := range infos {
 		access := "read-only"
@@ -253,10 +253,10 @@ func FormatFolderContext(store aitools.FolderStore) string {
 		}
 		label := ""
 		switch info.Name {
-		case aitools.MissionFolderName:
-			label = " (persistent mission folder — survives across runs)"
-		case aitools.RunFolderName:
-			label = " (per-run folder — fresh directory for this mission run)"
+		case aitools.PersistentMemoryName:
+			label = " (persistent mission memory — survives across runs)"
+		case aitools.EphemeralMemoryName:
+			label = " (ephemeral per-run memory — fresh for this mission run)"
 		}
 		desc := ""
 		if info.Description != "" {

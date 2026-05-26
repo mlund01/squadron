@@ -18,7 +18,7 @@ A framework is declarative when:
 1. **The workflow is data, not code.** You can serialize the whole thing as a config file, send it to someone else, and they can run it without the source repo.
 2. **A runtime — not your code — drives execution.** The runtime decides when to call the model, what to retry, what to checkpoint, when to fan out, when to resume.
 3. **Changes are reviewable as config diffs.** Adding a step, reordering dependencies, swapping a model — all show up as a small, readable patch.
-4. **There is no hidden state.** All state is either declared (variables, datasets, folders) or persisted by the runtime (sessions, route decisions, outputs).
+4. **There is no hidden state.** All state is either declared (variables, datasets, memory) or persisted by the runtime (sessions, route decisions, outputs).
 
 This is the same shift that happened in infrastructure (Terraform replaced Bash + Ansible scripts), in CI (declarative YAML replaced Makefile-driven pipelines), and in deployment (Kubernetes manifests replaced bespoke deploy scripts). The pattern: when the orchestration part of a workflow is gnarlier than the work itself, push the orchestration into a runtime and let humans edit data.
 

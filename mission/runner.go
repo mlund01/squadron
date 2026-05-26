@@ -63,8 +63,8 @@ type Runner struct {
 	resumeMissionID string            // Non-empty when resuming a prior mission
 	rawInputs       map[string]string // Raw input strings for persistence/resume
 
-	// Folder access for mission
-	folderStore aitools.FolderStore
+	// Memory access for mission
+	memoryStore aitools.MemoryStore
 
 	// Conditional routing state
 	routerPending []routerActivation // queue of tasks activated by routers
@@ -288,7 +288,7 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 		r.secretInfos = secretInfos
 	}
 
-	// Folder store is built later in Run() once missionID is known — the
+	// Memory store is built later in Run() once missionID is known — the
 	// ephemeral memory path depends on it. Shared + persistent memory alone
 	// would let us build here, but deferring is simpler than branching on
 	// mission.EphemeralMemory.
@@ -568,18 +568,18 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		r.resolvedDatasets = nil
 	}
 
-	// Folder store depends on missionID (for ephemeral memory path), so build
+	// Memory store depends on missionID (for ephemeral memory path), so build
 	// it here rather than in NewRunner. Sweep expired ephemeral memories
 	// async — the result doesn't affect this run's correctness, only disk
 	// usage.
 	if r.mission.EphemeralMemory != nil {
 		go func() { _, _ = SweepExpiredEphemeralMemories() }()
 	}
-	folderStore, err := buildFolderStore(r.mission, r.cfg.Memories, missionID)
+	memoryStore, err := buildMemoryStore(r.mission, r.cfg.Memories, missionID)
 	if err != nil {
-		return fmt.Errorf("mission '%s': build folder store: %w", r.mission.Name, err)
+		return fmt.Errorf("mission '%s': build memory store: %w", r.mission.Name, err)
 	}
-	r.folderStore = folderStore
+	r.memoryStore = memoryStore
 
 	streamer.MissionStarted(r.mission.Name, missionID, len(r.mission.Tasks))
 
@@ -1002,7 +1002,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			SecretInfos:         r.secretInfos,
 			SecretValues:        r.secretValues,
 			IsIteration:         isIterated,
-			FolderStore:         r.folderStore,
+			MemoryStore:         r.memoryStore,
 			Compaction:          r.commanderCompaction(),
 			PruneOn:             r.commanderPruneOn(),
 			PruneTo:             r.commanderPruneTo(),
@@ -1056,7 +1056,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 				SecretInfos:  r.secretInfos,
 				SecretValues: r.secretValues,
 				DatasetStore: r,
-				FolderStore:  r.folderStore,
+				MemoryStore:  r.memoryStore,
 				HumanBridge:  r.humanBridge,
 			}, agentLLMMsgs)
 			if err != nil {
@@ -1140,7 +1140,7 @@ func (r *Runner) restoreAgentSessions(ctx context.Context, sup *agent.Commander,
 			SecretInfos:  r.secretInfos,
 			SecretValues: r.secretValues,
 			DatasetStore: r,
-			FolderStore:  r.folderStore,
+			MemoryStore:  r.memoryStore,
 			HumanBridge:  r.humanBridge,
 		}, llmMsgs)
 		if err != nil {
@@ -1263,7 +1263,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		SecretValues:        r.secretValues,
 		IsIteration:         false,
 		DebugFile:           debugFile,
-		FolderStore:         r.folderStore,
+		MemoryStore:         r.memoryStore,
 		Compaction:          r.commanderCompaction(),
 		PruneOn:             r.commanderPruneOn(),
 		PruneTo:             r.commanderPruneTo(),
@@ -2045,7 +2045,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		IsParallel:          false,
 		DebugFile:           debugFile,
 		SequentialDataset:   items,
-		FolderStore:         r.folderStore,
+		MemoryStore:         r.memoryStore,
 		Compaction:          r.commanderCompaction(),
 		PruneOn:             r.commanderPruneOn(),
 		PruneTo:             r.commanderPruneTo(),
@@ -2499,7 +2499,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		IsParallel:          false,
 		DebugFile:           debugFile,
 		SequentialDataset:   remainingItems,
-		FolderStore:         r.folderStore,
+		MemoryStore:         r.memoryStore,
 		Compaction:          r.commanderCompaction(),
 		PruneOn:             r.commanderPruneOn(),
 		PruneTo:             r.commanderPruneTo(),
@@ -2742,7 +2742,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		IsIteration:         true,
 		IsParallel:          task.Iterator.Parallel,
 		DebugFile:           debugFile,
-		FolderStore:         r.folderStore,
+		MemoryStore:         r.memoryStore,
 		Compaction:          r.commanderCompaction(),
 		PruneOn:             r.commanderPruneOn(),
 		PruneTo:             r.commanderPruneTo(),

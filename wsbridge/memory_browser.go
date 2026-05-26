@@ -25,18 +25,18 @@ type resolvedMemory struct {
 	editable bool
 }
 
-// resolveSharedFolderPath looks up a memory slot by name (top-level shared
+// resolveMemoryPath looks up a memory slot by name (top-level shared
 // memories first, then per-mission persistent memories keyed by mission name)
 // and safely resolves a relative path within it.
-func (c *Client) resolveSharedFolderPath(folderName, relPath string) (*resolvedMemory, string, error) {
+func (c *Client) resolveMemoryPath(memoryName, relPath string) (*resolvedMemory, string, error) {
 	cfg := c.getConfig()
 
 	// Check shared memories first.
 	for i := range cfg.Memories {
-		if cfg.Memories[i].Name == folderName {
-			absPath, err := mission.SharedMemoryPath(folderName)
+		if cfg.Memories[i].Name == memoryName {
+			absPath, err := mission.SharedMemoryPath(memoryName)
 			if err != nil {
-				return nil, "", fmt.Errorf("resolve shared memory %q: %w", folderName, err)
+				return nil, "", fmt.Errorf("resolve shared memory %q: %w", memoryName, err)
 			}
 			rm := &resolvedMemory{
 				name:     cfg.Memories[i].Name,
@@ -50,7 +50,7 @@ func (c *Client) resolveSharedFolderPath(folderName, relPath string) (*resolvedM
 
 	// Check mission persistent memory (keyed by mission name).
 	for _, m := range cfg.Missions {
-		if m.PersistentMemory != nil && m.Name == folderName {
+		if m.PersistentMemory != nil && m.Name == memoryName {
 			absPath, err := mission.PersistentMemoryPath(m.Name)
 			if err != nil {
 				return nil, "", fmt.Errorf("resolve persistent memory for %q: %w", m.Name, err)
@@ -61,7 +61,7 @@ func (c *Client) resolveSharedFolderPath(folderName, relPath string) (*resolvedM
 		}
 	}
 
-	return nil, "", fmt.Errorf("memory %q not found", folderName)
+	return nil, "", fmt.Errorf("memory %q not found", memoryName)
 }
 
 func (c *Client) resolveSafePath(basePath, relPath string) (string, error) {
@@ -162,7 +162,7 @@ func (c *Client) handleBrowseDirectory(env *protocol.Envelope) (*protocol.Envelo
 		return nil, fmt.Errorf("decode browse_directory: %w", err)
 	}
 
-	_, fullPath, err := c.resolveSharedFolderPath(payload.BrowserName, payload.RelPath)
+	_, fullPath, err := c.resolveMemoryPath(payload.BrowserName, payload.RelPath)
 	if err != nil {
 		return nil, err
 	}
@@ -203,7 +203,7 @@ func (c *Client) handleReadBrowseFile(env *protocol.Envelope) (*protocol.Envelop
 		return nil, fmt.Errorf("decode read_browse_file: %w", err)
 	}
 
-	_, fullPath, err := c.resolveSharedFolderPath(payload.BrowserName, payload.RelPath)
+	_, fullPath, err := c.resolveMemoryPath(payload.BrowserName, payload.RelPath)
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +259,7 @@ func (c *Client) handleWriteBrowseFile(env *protocol.Envelope) (*protocol.Envelo
 		return nil, fmt.Errorf("decode write_browse_file: %w", err)
 	}
 
-	mem, fullPath, err := c.resolveSharedFolderPath(payload.BrowserName, payload.RelPath)
+	mem, fullPath, err := c.resolveMemoryPath(payload.BrowserName, payload.RelPath)
 	if err != nil {
 		return protocol.NewResponse(env.RequestID, protocol.TypeWriteBrowseFileResult,
 			&protocol.WriteBrowseFileResultPayload{Success: false, Error: err.Error()})
@@ -285,7 +285,7 @@ func (c *Client) handleDownloadFile(env *protocol.Envelope) (*protocol.Envelope,
 		return nil, fmt.Errorf("decode download_file: %w", err)
 	}
 
-	_, fullPath, err := c.resolveSharedFolderPath(payload.BrowserName, payload.RelPath)
+	_, fullPath, err := c.resolveMemoryPath(payload.BrowserName, payload.RelPath)
 	if err != nil {
 		return nil, err
 	}
@@ -311,7 +311,7 @@ func (c *Client) handleDownloadDirectory(env *protocol.Envelope) (*protocol.Enve
 		return nil, fmt.Errorf("decode download_directory: %w", err)
 	}
 
-	_, fullPath, err := c.resolveSharedFolderPath(payload.BrowserName, payload.RelPath)
+	_, fullPath, err := c.resolveMemoryPath(payload.BrowserName, payload.RelPath)
 	if err != nil {
 		return nil, err
 	}

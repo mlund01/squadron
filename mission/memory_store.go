@@ -97,23 +97,23 @@ func resolvedEphemeralCleanup(mm *config.MissionMemory) int {
 	return *mm.Cleanup
 }
 
-type missionFolderStore struct {
-	folders map[string]*folderEntry
+type missionMemoryStore struct {
+	slots map[string]*memorySlot
 }
 
-type folderEntry struct {
+type memorySlot struct {
 	absPath     string
 	description string
 	writable    bool
 }
 
-// buildFolderStore creates a FolderStore from the mission config and the
-// declared top-level memories. missionInstanceID scopes the ephemeral memory
-// path; it must be non-empty when mission.EphemeralMemory is set. Returns
-// nil if no memory slots are configured.
-func buildFolderStore(mission *config.Mission, memories []config.Memory, missionInstanceID string) (aitools.FolderStore, error) {
-	store := &missionFolderStore{
-		folders: make(map[string]*folderEntry),
+// buildMemoryStore creates an aitools.MemoryStore from the mission config and
+// the declared top-level memories. missionInstanceID scopes the ephemeral
+// memory path; it must be non-empty when mission.EphemeralMemory is set.
+// Returns nil if no memory slots are configured.
+func buildMemoryStore(mission *config.Mission, memories []config.Memory, missionInstanceID string) (aitools.MemoryStore, error) {
+	store := &missionMemoryStore{
+		slots: make(map[string]*memorySlot),
 	}
 
 	memByName := make(map[string]*config.Memory)
@@ -140,7 +140,7 @@ func buildFolderStore(mission *config.Mission, memories []config.Memory, mission
 		if desc == "" {
 			desc = mem.Label
 		}
-		store.folders[name] = &folderEntry{
+		store.slots[name] = &memorySlot{
 			absPath:     absPath,
 			description: desc,
 			writable:    mem.Editable,
@@ -155,7 +155,7 @@ func buildFolderStore(mission *config.Mission, memories []config.Memory, mission
 		if err := os.MkdirAll(absPath, 0755); err != nil {
 			return nil, fmt.Errorf("persistent memory: create directory: %w", err)
 		}
-		store.folders[config.PersistentSlotName] = &folderEntry{
+		store.slots[config.PersistentSlotName] = &memorySlot{
 			absPath:     absPath,
 			description: mission.PersistentMemory.Description,
 			writable:    true,
@@ -176,14 +176,14 @@ func buildFolderStore(mission *config.Mission, memories []config.Memory, mission
 		if err := writeRunMetadata(absPath, mission.Name, missionInstanceID, resolvedEphemeralCleanup(mission.EphemeralMemory)); err != nil {
 			return nil, fmt.Errorf("ephemeral memory: write metadata: %w", err)
 		}
-		store.folders[config.EphemeralSlotName] = &folderEntry{
+		store.slots[config.EphemeralSlotName] = &memorySlot{
 			absPath:     absPath,
 			description: mission.EphemeralMemory.Description,
 			writable:    true,
 		}
 	}
 
-	if len(store.folders) == 0 {
+	if len(store.slots) == 0 {
 		return nil, nil
 	}
 
@@ -218,14 +218,14 @@ func writeRunMetadata(dir, missionName, missionID string, cleanupDays int) error
 	return err
 }
 
-func (s *missionFolderStore) ResolvePath(folderName string, relPath string) (string, bool, error) {
-	if folderName == "" {
-		return "", false, fmt.Errorf("folder name is required (available: %v)", s.availableNames())
+func (s *missionMemoryStore) ResolvePath(memoryName string, relPath string) (string, bool, error) {
+	if memoryName == "" {
+		return "", false, fmt.Errorf("memory name is required (available: %v)", s.availableNames())
 	}
 
-	entry, ok := s.folders[folderName]
+	entry, ok := s.slots[memoryName]
 	if !ok {
-		return "", false, fmt.Errorf("folder %q not found. Available: %v", folderName, s.availableNames())
+		return "", false, fmt.Errorf("memory %q not found. Available: %v", memoryName, s.availableNames())
 	}
 
 	cleaned := filepath.Clean(relPath)
@@ -235,24 +235,24 @@ func (s *missionFolderStore) ResolvePath(folderName string, relPath string) (str
 
 	fullPath := filepath.Join(entry.absPath, cleaned)
 	if !strings.HasPrefix(fullPath, entry.absPath) {
-		return "", false, fmt.Errorf("path escapes folder root")
+		return "", false, fmt.Errorf("path escapes memory root")
 	}
 
 	return fullPath, entry.writable, nil
 }
 
-func (s *missionFolderStore) availableNames() []string {
-	names := make([]string, 0, len(s.folders))
-	for name := range s.folders {
+func (s *missionMemoryStore) availableNames() []string {
+	names := make([]string, 0, len(s.slots))
+	for name := range s.slots {
 		names = append(names, name)
 	}
 	return names
 }
 
-func (s *missionFolderStore) FolderInfos() []aitools.FolderInfo {
-	var infos []aitools.FolderInfo
-	for name, entry := range s.folders {
-		infos = append(infos, aitools.FolderInfo{
+func (s *missionMemoryStore) MemoryInfos() []aitools.MemoryInfo {
+	var infos []aitools.MemoryInfo
+	for name, entry := range s.slots {
+		infos = append(infos, aitools.MemoryInfo{
 			Name:        name,
 			Description: entry.description,
 			Writable:    entry.writable,

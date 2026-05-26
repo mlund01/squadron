@@ -69,7 +69,7 @@ mission "daily_brief" {
     topic = string("Topic to brief on", { default = "AI agent frameworks" })
   }
 
-  folder { path = "./briefs"; description = "Daily brief output" }
+  memory { description = "Daily brief output (persistent across runs)" }
 
   budget { tokens = 200000; dollars = 5 }
 
@@ -96,12 +96,12 @@ mission "daily_brief" {
 
   task "deep_dive" {
     agents    = [agents.summarizer]
-    objective = "Write a 500-word deep-dive on the most important item. Save to the briefs folder."
+    objective = "Write a 500-word deep-dive on the most important item. Save it into the mission memory."
   }
 
   task "summarize" {
     agents    = [agents.summarizer]
-    objective = "Write a 200-word digest of all items. Save to the briefs folder."
+    objective = "Write a 200-word digest of all items. Save it into the mission memory."
   }
 }
 ```

@@ -1,24 +1,20 @@
 ---
-title: Memory
+title: Memory & Scratchpad
 ---
 
-# Memory
+# Memory & Scratchpad
 
-Memory blocks are filesystem locations that agents can read from and write to. Squadron manages the storage paths for you — you declare what memory you need, and Squadron decides where on disk it lives, under `<squadron_home>/memories/`.
+Squadron gives missions two kinds of mission-scoped file storage, plus shared memory that can be referenced across missions:
 
-Three kinds, each with a fixed location pattern:
+| Kind | What it's for | Lifetime | Slot name agents use |
+|------|---------------|----------|-----------------------|
+| **Shared memory** | Reference or output data many missions touch | Persists | the HCL label |
+| **Mission memory** | A mission's own long-lived state — archives, accumulated output | Persists | `"memory"` |
+| **Mission scratchpad** | Working space for one mission run — intermediate files, drafts | One per run | `"scratchpad"` |
 
-| Kind | HCL | Slot name agents use | On-disk path |
-|------|-----|-----------------------|--------------|
-| **Shared** | top-level `memory "name" { ... }` | the HCL label | `<squadron_home>/memories/shared/<name>/` |
-| **Persistent** (mission) | `memory { type = "persistent" }` inside a mission | `"mission"` | `<squadron_home>/memories/mission/<mission_name>/persistent/` |
-| **Ephemeral** (per-run) | `memory { type = "ephemeral" }` inside a mission | `"run"` | `<squadron_home>/memories/mission/<mission_name>/run/<instance_id>/` |
+Agents reach all three through the same `file_list`, `file_read`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools, naming the slot on each call via the `slot` parameter.
 
-A mission may declare at most one persistent and one ephemeral memory. The names `"mission"` and `"run"` are reserved — a shared `memory "mission"` or `memory "run"` block is rejected.
-
-Agents reach memory through the `file_list`, `file_read`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools, naming the slot on each call.
-
-> **No `path` attribute.** Squadron owns memory locations. You don't write `path = "./somewhere"` anywhere — paths are derived from the mission name (and, for ephemeral, the per-run instance ID).
+> **No `path` attribute.** Squadron owns the on-disk layout — you declare what storage you need and Squadron picks the path. Everything lives under `<squadron_home>/`.
 
 ## Shared Memory
 
@@ -46,66 +42,64 @@ Missions opt in by listing them, then refer to them by name in tool calls:
 ```hcl
 mission "analyze" {
   memories = [memories.research, memories.reference]
-  # agents call e.g. file_read with memory = "research"
+  # agents call e.g. file_read with slot = "research"
 }
 ```
 
-## Persistent Mission Memory
+The names `"memory"` and `"scratchpad"` are reserved — a shared `memory "memory"` or `memory "scratchpad"` block is rejected.
 
-The mission's own dedicated slot. Use it for things you want to keep around: a running log, an archive of finished reports, accumulated state across runs.
+## Mission Memory
+
+The mission's own dedicated long-lived slot. Use it for things you want to keep around: a running log, an archive of finished reports, accumulated state across runs.
 
 ```hcl
 mission "analyze" {
   memory {
-    # type defaults to "persistent" when omitted
     description = "Cumulative analysis output across every run"
   }
 }
 ```
 
-Agents reach it under the name `mission`:
+Agents reach it under the name `memory`:
 
 ```json
-{ "memory": "mission", "path": "2026-04-23/report.md", "content": "..." }
+{ "slot": "memory", "path": "2026-04-23/report.md", "content": "..." }
 ```
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `type` | string | `"persistent"` (default) or `"ephemeral"` |
 | `description` | string | Shown to agents alongside the slot name |
 
-## Ephemeral (Per-Run) Memory
+## Mission Scratchpad
 
 A clean workspace for one mission run. Each invocation gets its own subdirectory, isolated from previous and concurrent runs — perfect for intermediate files, working drafts, or anything you don't want bleeding into the next run.
 
 ```hcl
 mission "analyze" {
-  memory {
-    type        = "ephemeral"
+  scratchpad {
     description = "Scratch space for this run"
   }
 }
 ```
 
-By default, ephemeral memory is deleted 7 days after the run started. Set `cleanup` to override the window, or `cleanup = 0` to keep it forever.
+By default, scratchpads are deleted 7 days after the run started. Set `cleanup` to override the window, or `cleanup = 0` to keep them forever.
 
-Agents reach it under the name `run`:
+Agents reach it under the name `scratchpad`:
 
 ```json
-{ "memory": "run", "path": "notes.txt", "content": "..." }
+{ "slot": "scratchpad", "path": "notes.txt", "content": "..." }
 ```
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `type` | string | Must be `"ephemeral"` |
 | `description` | string | Shown to agents alongside the slot name |
 | `cleanup` | integer | Delete the directory this many days after the run started. Defaults to `7`; set `0` to keep forever |
 
-Ephemeral directories stick around after the mission ends — useful for inspecting what an agent produced, and required for `squadron mission --resume <id>` to find its workspace. `cleanup` is just a max age; nothing is deleted while a run is in flight.
+Scratchpads stick around after the mission ends — useful for inspecting what an agent produced, and required for `squadron mission --resume <id>` to find its workspace. `cleanup` is just a max age; nothing is deleted while a run is in flight.
 
 ## Tool Reference
 
-All six file tools take a required `memory` parameter — that's the slot name (a shared memory name, or the reserved `"mission"` / `"run"`):
+All six file tools take a required `slot` parameter — that's the slot name (`"memory"`, `"scratchpad"`, or a shared memory's label):
 
 | Tool | Purpose |
 |------|---------|
@@ -131,18 +125,16 @@ mission "research" {
   memories  = [memories.reference]
 
   memory {
-    # persistent by default — survives across every run
     description = "Finished reports, one per run"
   }
 
-  memory {
-    type        = "ephemeral"
+  scratchpad {
     description = "Working files for the in-flight run"
     cleanup     = 14    # override the 7-day default
   }
 
   task "gather" {
-    objective = "Gather sources from the reference memory and save notes to the run memory"
+    objective = "Gather sources from the reference memory and save notes to the scratchpad"
   }
 
   task "publish" {

@@ -111,7 +111,7 @@ Honest tradeoffs on each comparison page.
 - **[MCP host](https://docs.squadron.sh/config/mcp_host)** — run Squadron as an MCP server for Claude Desktop, Claude Code, Cursor, and other MCP clients.
 - **[Schedules & triggers](https://docs.squadron.sh/missions/schedules)** — cron-based or HTTP-triggered missions, with per-mission concurrency limits.
 - **[Budgets](https://docs.squadron.sh/missions/budgets)** — token + dollar caps per mission or per task.
-- **[Memory](https://docs.squadron.sh/missions/folders)** — sandboxed filesystem locations agents can read/write. Three kinds: shared (top-level `memory "name"`), persistent mission, and ephemeral per-run (`memory { type = "persistent" | "ephemeral" }`). Squadron owns the paths.
+- **[Memory & Scratchpad](https://docs.squadron.sh/missions/folders)** — sandboxed filesystem locations agents can read/write. Persistent memory (shared with `memory "name"` or per-mission with `memory { }`) plus per-run `scratchpad { }`. Squadron owns the paths.
 - **[Gateways](https://docs.squadron.sh/config/gateways)** — managed subprocesses that bridge Squadron to Slack, Discord, Teams, or any custom system via the Gateway SDK.
 - **Encrypted vault** — secrets stored at rest with AES-256-GCM + Argon2id; passphrase in the OS keychain.
 - **Single binary, no runtime deps.** Docker images on every release.

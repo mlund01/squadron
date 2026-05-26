@@ -394,7 +394,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 
 	// Periodic sweep of expired per-run ephemeral memory directories.
 	// Runs hourly; walks the filesystem so the live config isn't needed.
-	go runMemoryCleanupLoop(shutdown)
+	go runScratchpadCleanupLoop(shutdown)
 
 	// Even without valid config we still try to connect — the command center
 	// can show vars and config files so the user can fix things from the UI.
@@ -901,14 +901,14 @@ func openBrowser(url string) {
 	browser.Open(url)
 }
 
-// runMemoryCleanupLoop periodically sweeps expired per-run ephemeral
-// memory directories. The sweep walks the entire memories tree, so it
-// doesn't need to know which missions are configured. It runs once
-// immediately, then hourly, and exits when shutdown is closed.
-func runMemoryCleanupLoop(shutdown <-chan struct{}) {
+// runScratchpadCleanupLoop periodically sweeps expired per-run scratchpad
+// directories. The sweep walks the entire scratchpads tree, so it doesn't
+// need to know which missions are configured. It runs once immediately,
+// then hourly, and exits when shutdown is closed.
+func runScratchpadCleanupLoop(shutdown <-chan struct{}) {
 	sweep := func() {
-		if _, err := mission.SweepExpiredEphemeralMemories(); err != nil {
-			log.Printf("ephemeral memory cleanup: %v", err)
+		if _, err := mission.SweepExpiredScratchpads(); err != nil {
+			log.Printf("scratchpad cleanup: %v", err)
 		}
 	}
 

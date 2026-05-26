@@ -309,9 +309,9 @@ type Mission struct {
 	Tasks       []Task            `hcl:"task,block"`
 	Inputs      []MissionInput    // Parsed from input blocks
 	Datasets    []Dataset         // Parsed from dataset blocks
-	Memories         []string       // Shared memory names referenced by this mission
-	PersistentMemory *MissionMemory // Optional dedicated mission memory (reserved slot "mission")
-	EphemeralMemory  *MissionMemory // Optional per-run ephemeral memory (reserved slot "run")
+	Memories   []string           // Shared memory names referenced by this mission
+	Memory     *MissionMemory     // Optional persistent mission memory (reserved slot "memory")
+	Scratchpad *MissionScratchpad // Optional per-run ephemeral scratchpad (reserved slot "scratchpad")
 	Schedules   []Schedule        `json:"schedules,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"`
 	MaxParallel int               `json:"maxParallel,omitempty"` // default 3
@@ -485,23 +485,17 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, al
 		}
 	}
 
-	// Validate persistent mission memory if present
-	if w.PersistentMemory != nil {
-		if err := w.PersistentMemory.Validate(); err != nil {
-			return fmt.Errorf("persistent memory: %w", err)
-		}
-		if w.PersistentMemory.Type != MemoryTypePersistent {
-			return fmt.Errorf("persistent memory: internal error — wrong type %q", w.PersistentMemory.Type)
+	// Validate the mission memory block if present.
+	if w.Memory != nil {
+		if err := w.Memory.Validate(); err != nil {
+			return fmt.Errorf("memory: %w", err)
 		}
 	}
 
-	// Validate ephemeral mission memory if present
-	if w.EphemeralMemory != nil {
-		if err := w.EphemeralMemory.Validate(); err != nil {
-			return fmt.Errorf("ephemeral memory: %w", err)
-		}
-		if w.EphemeralMemory.Type != MemoryTypeEphemeral {
-			return fmt.Errorf("ephemeral memory: internal error — wrong type %q", w.EphemeralMemory.Type)
+	// Validate the mission scratchpad block if present.
+	if w.Scratchpad != nil {
+		if err := w.Scratchpad.Validate(); err != nil {
+			return fmt.Errorf("scratchpad: %w", err)
 		}
 	}
 

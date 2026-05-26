@@ -242,9 +242,9 @@ func FormatMemoryContext(store aitools.MemoryStore) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## Available Memory\n\n")
-	sb.WriteString("You have access to memory slots via the file_list, file_read, file_create, file_delete, file_search, and file_grep tools.\n")
-	sb.WriteString("The `memory` parameter is required on every call — pick one of the slot names below.\n\n")
+	sb.WriteString("## Available Slots\n\n")
+	sb.WriteString("You have access to file storage slots via the file_list, file_read, file_create, file_delete, file_search, and file_grep tools.\n")
+	sb.WriteString("The `slot` parameter is required on every call — pick one of the slot names below.\n\n")
 
 	for _, info := range infos {
 		access := "read-only"
@@ -253,10 +253,10 @@ func FormatMemoryContext(store aitools.MemoryStore) string {
 		}
 		label := ""
 		switch info.Name {
-		case aitools.PersistentMemoryName:
+		case aitools.MemorySlotName:
 			label = " (persistent mission memory — survives across runs)"
-		case aitools.EphemeralMemoryName:
-			label = " (ephemeral per-run memory — fresh for this mission run)"
+		case aitools.ScratchpadSlotName:
+			label = " (ephemeral per-run scratchpad — fresh for this mission run)"
 		}
 		desc := ""
 		if info.Description != "" {

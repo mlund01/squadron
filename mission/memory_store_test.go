@@ -25,7 +25,7 @@ func withTempHome(t *testing.T) string {
 	return home
 }
 
-func TestBuildMemoryStore_NoMemories(t *testing.T) {
+func TestBuildMemoryStore_NoSlots(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{Name: "m"}
 	store, err := buildMemoryStore(m, nil, "mid-1")
@@ -33,17 +33,16 @@ func TestBuildMemoryStore_NoMemories(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if store != nil {
-		t.Fatalf("expected nil store when no memories configured, got %+v", store)
+		t.Fatalf("expected nil store when no slots configured, got %+v", store)
 	}
 }
 
-func TestBuildMemoryStore_PersistentMemory(t *testing.T) {
+func TestBuildMemoryStore_MissionMemory(t *testing.T) {
 	home := withTempHome(t)
 
 	m := &config.Mission{
 		Name: "m",
-		PersistentMemory: &config.MissionMemory{
-			Type:        "persistent",
+		Memory: &config.MissionMemory{
 			Description: "persistent",
 		},
 	}
@@ -56,19 +55,19 @@ func TestBuildMemoryStore_PersistentMemory(t *testing.T) {
 		t.Fatal("expected non-nil store")
 	}
 
-	abs, writable, err := store.ResolvePath(aitools.PersistentMemoryName, ".")
+	abs, writable, err := store.ResolvePath(aitools.MemorySlotName, ".")
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
 	}
 	if !writable {
-		t.Fatal("persistent memory must be writable")
+		t.Fatal("mission memory must be writable")
 	}
-	want := filepath.Join(home, "memories", "mission", "m", "persistent")
+	want := filepath.Join(home, "memories", "mission", "m")
 	if abs != want {
-		t.Fatalf("persistent path: want %s, got %s", want, abs)
+		t.Fatalf("mission memory path: want %s, got %s", want, abs)
 	}
 	if info, err := os.Stat(abs); err != nil || !info.IsDir() {
-		t.Fatalf("persistent directory not created at %s: %v", abs, err)
+		t.Fatalf("mission memory directory not created at %s: %v", abs, err)
 	}
 
 	// The mission name is NOT a valid slot key — prevents regression.
@@ -77,13 +76,12 @@ func TestBuildMemoryStore_PersistentMemory(t *testing.T) {
 	}
 }
 
-func TestBuildMemoryStore_EphemeralMemory_CreatesSidecar(t *testing.T) {
+func TestBuildMemoryStore_Scratchpad_CreatesSidecar(t *testing.T) {
 	home := withTempHome(t)
 	cleanup := 7
 	m := &config.Mission{
 		Name: "m",
-		EphemeralMemory: &config.MissionMemory{
-			Type:    "ephemeral",
+		Scratchpad: &config.MissionScratchpad{
 			Cleanup: &cleanup,
 		},
 	}
@@ -93,16 +91,16 @@ func TestBuildMemoryStore_EphemeralMemory_CreatesSidecar(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	abs, writable, err := store.ResolvePath(aitools.EphemeralMemoryName, ".")
+	abs, writable, err := store.ResolvePath(aitools.ScratchpadSlotName, ".")
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
 	}
 	if !writable {
-		t.Fatal("ephemeral memory must be writable")
+		t.Fatal("scratchpad must be writable")
 	}
-	want := filepath.Join(home, "memories", "mission", "m", "run", "mid-abc")
+	want := filepath.Join(home, "scratchpads", "m", "mid-abc")
 	if abs != want {
-		t.Fatalf("ephemeral path: want %s, got %s", want, abs)
+		t.Fatalf("scratchpad path: want %s, got %s", want, abs)
 	}
 
 	metaBytes, err := os.ReadFile(filepath.Join(abs, runMetadataFile))
@@ -124,20 +122,18 @@ func TestBuildMemoryStore_EphemeralMemory_CreatesSidecar(t *testing.T) {
 	}
 }
 
-func TestBuildMemoryStore_EphemeralMemory_SidecarPreservedOnResume(t *testing.T) {
+func TestBuildMemoryStore_Scratchpad_SidecarPreservedOnResume(t *testing.T) {
 	home := withTempHome(t)
 	m := &config.Mission{
-		Name: "m",
-		EphemeralMemory: &config.MissionMemory{
-			Type: "ephemeral",
-		},
+		Name:       "m",
+		Scratchpad: &config.MissionScratchpad{},
 	}
 
 	// First build: sidecar written
 	if _, err := buildMemoryStore(m, nil, "mid-1"); err != nil {
 		t.Fatalf("first build: %v", err)
 	}
-	runDir := filepath.Join(home, "memories", "mission", "m", "run", "mid-1")
+	runDir := filepath.Join(home, "scratchpads", "m", "mid-1")
 	firstMetaBytes, _ := os.ReadFile(filepath.Join(runDir, runMetadataFile))
 	var first runMetadata
 	_ = json.Unmarshal(firstMetaBytes, &first)
@@ -157,13 +153,11 @@ func TestBuildMemoryStore_EphemeralMemory_SidecarPreservedOnResume(t *testing.T)
 	}
 }
 
-func TestBuildMemoryStore_EphemeralMemory_RequiresMissionID(t *testing.T) {
+func TestBuildMemoryStore_Scratchpad_RequiresMissionID(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
-		Name: "m",
-		EphemeralMemory: &config.MissionMemory{
-			Type: "ephemeral",
-		},
+		Name:       "m",
+		Scratchpad: &config.MissionScratchpad{},
 	}
 	_, err := buildMemoryStore(m, nil, "")
 	if err == nil {
@@ -173,14 +167,12 @@ func TestBuildMemoryStore_EphemeralMemory_RequiresMissionID(t *testing.T) {
 
 func TestBuildMemoryStore_RejectsReservedSharedMemoryNames(t *testing.T) {
 	withTempHome(t)
-	for _, reserved := range []string{"mission", "run"} {
+	for _, reserved := range []string{"memory", "scratchpad"} {
 		m := &config.Mission{
 			Name:     "m",
 			Memories: []string{reserved},
 		}
-		mems := []config.Memory{
-			{Name: reserved},
-		}
+		mems := []config.Memory{{Name: reserved}}
 		_, err := buildMemoryStore(m, mems, "mid-1")
 		if err == nil {
 			t.Fatalf("expected error for reserved shared memory name %q", reserved)
@@ -188,26 +180,22 @@ func TestBuildMemoryStore_RejectsReservedSharedMemoryNames(t *testing.T) {
 	}
 }
 
-func TestBuildMemoryStore_BothPersistentAndEphemeral(t *testing.T) {
+func TestBuildMemoryStore_BothMemoryAndScratchpad(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
-		Name: "m",
-		PersistentMemory: &config.MissionMemory{
-			Type: "persistent",
-		},
-		EphemeralMemory: &config.MissionMemory{
-			Type: "ephemeral",
-		},
+		Name:       "m",
+		Memory:     &config.MissionMemory{},
+		Scratchpad: &config.MissionScratchpad{},
 	}
 	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, _, err := store.ResolvePath(aitools.PersistentMemoryName, "."); err != nil {
-		t.Fatalf("persistent should resolve: %v", err)
+	if _, _, err := store.ResolvePath(aitools.MemorySlotName, "."); err != nil {
+		t.Fatalf("memory slot should resolve: %v", err)
 	}
-	if _, _, err := store.ResolvePath(aitools.EphemeralMemoryName, "."); err != nil {
-		t.Fatalf("ephemeral should resolve: %v", err)
+	if _, _, err := store.ResolvePath(aitools.ScratchpadSlotName, "."); err != nil {
+		t.Fatalf("scratchpad slot should resolve: %v", err)
 	}
 }
 
@@ -265,59 +253,59 @@ func TestBuildMemoryStore_SharedMemory_ReadOnly(t *testing.T) {
 	}
 }
 
-func TestResolvePath_EmptyMemoryNameRejected(t *testing.T) {
+func TestResolvePath_EmptySlotNameRejected(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
-		Name:             "m",
-		PersistentMemory: &config.MissionMemory{Type: "persistent"},
+		Name:   "m",
+		Memory: &config.MissionMemory{},
 	}
 	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	if _, _, err := store.ResolvePath("", "."); err == nil {
-		t.Fatal("expected error when memory name is empty")
+		t.Fatal("expected error when slot name is empty")
 	}
 }
 
 func TestResolvePath_RejectsPathEscape(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
-		Name:             "m",
-		PersistentMemory: &config.MissionMemory{Type: "persistent"},
+		Name:   "m",
+		Memory: &config.MissionMemory{},
 	}
 	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if _, _, err := store.ResolvePath("mission", "../outside"); err == nil {
+	if _, _, err := store.ResolvePath("memory", "../outside"); err == nil {
 		t.Fatal("expected path-escape error")
 	}
 }
 
-func TestResolvePath_UnknownMemory(t *testing.T) {
+func TestResolvePath_UnknownSlot(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
-		Name:             "m",
-		PersistentMemory: &config.MissionMemory{Type: "persistent"},
+		Name:   "m",
+		Memory: &config.MissionMemory{},
 	}
 	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
 	if _, _, err := store.ResolvePath("does_not_exist", "."); err == nil {
-		t.Fatal("expected error for unknown memory")
+		t.Fatal("expected error for unknown slot")
 	}
 }
 
-// --- SweepExpiredEphemeralMemories ----------------------------------------
+// --- SweepExpiredScratchpads ----------------------------------------------
 
-// writeEphemeral builds a fake per-run ephemeral memory directory under
-// <home>/memories/mission/<missionName>/run/<id>, with a sidecar recording
-// the given created_at and cleanup_days.
-func writeEphemeral(t *testing.T, home, missionName, runID string, createdAt time.Time, cleanupDays int) string {
+// writeScratchpad builds a fake per-run scratchpad directory under
+// <home>/scratchpads/<mission>/<run-id>, with a sidecar recording the given
+// created_at and cleanup_days.
+func writeScratchpad(t *testing.T, home, missionName, runID string, createdAt time.Time, cleanupDays int) string {
 	t.Helper()
-	dir := filepath.Join(home, "memories", "mission", missionName, "run", runID)
+	dir := filepath.Join(home, "scratchpads", missionName, runID)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
@@ -336,9 +324,9 @@ func writeEphemeral(t *testing.T, home, missionName, runID string, createdAt tim
 
 func TestSweep_DeletesExpired(t *testing.T) {
 	home := withTempHome(t)
-	expired := writeEphemeral(t, home, "m", "old", time.Now().Add(-8*24*time.Hour), 7)
+	expired := writeScratchpad(t, home, "m", "old", time.Now().Add(-8*24*time.Hour), 7)
 
-	removed, err := SweepExpiredEphemeralMemories()
+	removed, err := SweepExpiredScratchpads()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -352,9 +340,9 @@ func TestSweep_DeletesExpired(t *testing.T) {
 
 func TestSweep_KeepsUnexpired(t *testing.T) {
 	home := withTempHome(t)
-	fresh := writeEphemeral(t, home, "m", "new", time.Now().Add(-2*24*time.Hour), 7)
+	fresh := writeScratchpad(t, home, "m", "new", time.Now().Add(-2*24*time.Hour), 7)
 
-	removed, err := SweepExpiredEphemeralMemories()
+	removed, err := SweepExpiredScratchpads()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -368,9 +356,9 @@ func TestSweep_KeepsUnexpired(t *testing.T) {
 
 func TestSweep_IgnoresZeroCleanup(t *testing.T) {
 	home := withTempHome(t)
-	keep := writeEphemeral(t, home, "m", "forever", time.Now().Add(-365*24*time.Hour), 0)
+	keep := writeScratchpad(t, home, "m", "forever", time.Now().Add(-365*24*time.Hour), 0)
 
-	removed, err := SweepExpiredEphemeralMemories()
+	removed, err := SweepExpiredScratchpads()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -384,12 +372,12 @@ func TestSweep_IgnoresZeroCleanup(t *testing.T) {
 
 func TestSweep_IgnoresDirectoriesWithoutSidecar(t *testing.T) {
 	home := withTempHome(t)
-	manual := filepath.Join(home, "memories", "mission", "m", "run", "hand_made")
+	manual := filepath.Join(home, "scratchpads", "m", "hand_made")
 	if err := os.MkdirAll(manual, 0755); err != nil {
 		t.Fatal(err)
 	}
 
-	removed, err := SweepExpiredEphemeralMemories()
+	removed, err := SweepExpiredScratchpads()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -402,8 +390,8 @@ func TestSweep_IgnoresDirectoriesWithoutSidecar(t *testing.T) {
 }
 
 func TestSweep_MissingRootIsNotAnError(t *testing.T) {
-	withTempHome(t) // home is set, but memories/ subtree doesn't exist yet
-	removed, err := SweepExpiredEphemeralMemories()
+	withTempHome(t) // home is set, but scratchpads/ subtree doesn't exist yet
+	removed, err := SweepExpiredScratchpads()
 	if err != nil {
 		t.Fatalf("sweep should tolerate missing root: %v", err)
 	}
@@ -414,12 +402,11 @@ func TestSweep_MissingRootIsNotAnError(t *testing.T) {
 
 func TestSweep_WalksAcrossMissions(t *testing.T) {
 	home := withTempHome(t)
-	// Two missions, one expired run each
-	a := writeEphemeral(t, home, "alpha", "run1", time.Now().Add(-10*24*time.Hour), 2)
-	b := writeEphemeral(t, home, "beta", "run1", time.Now().Add(-10*24*time.Hour), 2)
-	keep := writeEphemeral(t, home, "alpha", "run2", time.Now().Add(-1*24*time.Hour), 2)
+	a := writeScratchpad(t, home, "alpha", "run1", time.Now().Add(-10*24*time.Hour), 2)
+	b := writeScratchpad(t, home, "beta", "run1", time.Now().Add(-10*24*time.Hour), 2)
+	keep := writeScratchpad(t, home, "alpha", "run2", time.Now().Add(-1*24*time.Hour), 2)
 
-	removed, err := SweepExpiredEphemeralMemories()
+	removed, err := SweepExpiredScratchpads()
 	if err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
@@ -436,26 +423,25 @@ func TestSweep_WalksAcrossMissions(t *testing.T) {
 	}
 }
 
-// TestSweepThenRebuildRoundTrip mirrors the real flow: an old ephemeral
-// memory exists with a sidecar backdated past its cleanup window, the sweep
-// deletes it, then a new buildMemoryStore (different missionID) creates a
-// fresh ephemeral memory with a current sidecar — and the old one is gone.
+// TestSweepThenRebuildRoundTrip mirrors the real flow: an old scratchpad
+// exists with a sidecar backdated past its cleanup window, the sweep deletes
+// it, then a new buildMemoryStore (different missionID) creates a fresh
+// scratchpad with a current sidecar — and the old one is gone.
 func TestSweepThenRebuildRoundTrip(t *testing.T) {
 	home := withTempHome(t)
-	stale := writeEphemeral(t, home, "demo", "old-run", time.Now().Add(-5*24*time.Hour), 2)
+	stale := writeScratchpad(t, home, "demo", "old-run", time.Now().Add(-5*24*time.Hour), 2)
 
-	if _, err := SweepExpiredEphemeralMemories(); err != nil {
+	if _, err := SweepExpiredScratchpads(); err != nil {
 		t.Fatalf("sweep: %v", err)
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatalf("stale ephemeral should have been deleted: %v", err)
+		t.Fatalf("stale scratchpad should have been deleted: %v", err)
 	}
 
 	cleanup := 2
 	m := &config.Mission{
 		Name: "demo",
-		EphemeralMemory: &config.MissionMemory{
-			Type:    "ephemeral",
+		Scratchpad: &config.MissionScratchpad{
 			Cleanup: &cleanup,
 		},
 	}
@@ -463,11 +449,11 @@ func TestSweepThenRebuildRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	fresh, _, err := store.ResolvePath(aitools.EphemeralMemoryName, ".")
+	fresh, _, err := store.ResolvePath(aitools.ScratchpadSlotName, ".")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}
-	want := filepath.Join(home, "memories", "mission", "demo", "run", "new-run")
+	want := filepath.Join(home, "scratchpads", "demo", "new-run")
 	if fresh != want {
 		t.Fatalf("fresh path: want %s, got %s", want, fresh)
 	}

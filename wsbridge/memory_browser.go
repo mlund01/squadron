@@ -48,12 +48,12 @@ func (c *Client) resolveMemoryPath(memoryName, relPath string) (*resolvedMemory,
 		}
 	}
 
-	// Check mission persistent memory (keyed by mission name).
+	// Check the mission's persistent memory (keyed by mission name).
 	for _, m := range cfg.Missions {
-		if m.PersistentMemory != nil && m.Name == memoryName {
-			absPath, err := mission.PersistentMemoryPath(m.Name)
+		if m.Memory != nil && m.Name == memoryName {
+			absPath, err := mission.MissionMemoryPath(m.Name)
 			if err != nil {
-				return nil, "", fmt.Errorf("resolve persistent memory for %q: %w", m.Name, err)
+				return nil, "", fmt.Errorf("resolve mission memory for %q: %w", m.Name, err)
 			}
 			rm := &resolvedMemory{name: m.Name, path: absPath, editable: true}
 			path, err := c.resolveSafePath(absPath, relPath)
@@ -135,18 +135,18 @@ func collectMemoryInfos(cfg *config.Config) ([]protocol.SharedFolderInfo, error)
 	}
 
 	for _, m := range cfg.Missions {
-		if m.PersistentMemory == nil {
+		if m.Memory == nil {
 			continue
 		}
-		path, err := mission.PersistentMemoryPath(m.Name)
+		path, err := mission.MissionMemoryPath(m.Name)
 		if err != nil {
-			return nil, fmt.Errorf("persistent memory for %q: %w", m.Name, err)
+			return nil, fmt.Errorf("mission memory for %q: %w", m.Name, err)
 		}
 		folders = append(folders, protocol.SharedFolderInfo{
 			Name:        m.Name,
 			Path:        path,
 			Label:       m.Name,
-			Description: m.PersistentMemory.Description,
+			Description: m.Memory.Description,
 			Editable:    true,
 			IsShared:    false,
 			Missions:    []string{m.Name},

@@ -282,31 +282,40 @@ mission "expensive_research" {
 
 The scheduler lives in `scheduler/` but its lifecycle (creation, config updates, shutdown) is managed by `cmd/serve.go`, not wsbridge. The wsbridge client receives a `ConcurrencyTracker` interface for enforcing `max_parallel` on all mission starts. The cron library used is `robfig/cron/v3`.
 
-### Memory
+### Memory + Scratchpad
 
-Memory blocks are sandboxed filesystem locations that agents access via the
-`file_list`, `file_read`, `file_create`, `file_delete`, `file_search`, and
-`file_grep` tools. Each call takes a required `memory` parameter naming the
-slot — there is no implicit default.
+There are two kinds of mission-scoped file storage, plus a top-level shared
+kind:
 
-Squadron owns the paths: every slot lives under `<squadron_home>/memories/`
-and you do **not** specify `path` anywhere. The three kinds map to three
-fixed location patterns:
+- **Memory** — persistent storage that survives across runs. Declared with
+  a top-level `memory "name" { ... }` (shared, multiple) or a mission-scoped
+  `memory { ... }` (private to the mission, at most one).
+- **Scratchpad** — ephemeral per-run working space. Declared with a
+  mission-scoped `scratchpad { ... }` block (at most one per mission). A
+  fresh directory is created for each mission run and the sweep deletes ones
+  past their `cleanup` window.
 
-| Kind | HCL | `memory` arg agents pass | On-disk path |
-|------|-----|---------------------------|--------------|
-| Shared | top-level `memory "name" { ... }` | the HCL label | `<squadron_home>/memories/shared/<name>/` |
-| Persistent (mission) | `memory { type = "persistent" }` inside a mission (also the default if `type` is omitted) | literal `"mission"` | `<squadron_home>/memories/mission/<mission_name>/persistent/` |
-| Ephemeral (per-run) | `memory { type = "ephemeral" }` inside a mission | literal `"run"` | `<squadron_home>/memories/mission/<mission_name>/run/<instance_id>/` |
+Agents access both kinds via the same `file_list`, `file_read`, `file_create`,
+`file_delete`, `file_search`, `file_grep` tools. Each call takes a required
+`slot` parameter naming which slot to operate in — there is no implicit
+default.
 
-A mission may declare at most one persistent and one ephemeral memory. The
-names `"mission"` and `"run"` are reserved — a top-level `memory "mission"`
-or `memory "run"` block is rejected.
+Squadron owns the on-disk paths; the HCL never accepts a `path` attribute.
+The three slot kinds map to three fixed location patterns:
+
+| Kind | HCL | `slot` agents pass | On-disk path |
+|------|-----|---------------------|--------------|
+| Shared memory | top-level `memory "name" { ... }` | the HCL label | `<squadron_home>/memories/shared/<name>/` |
+| Mission memory | `memory { ... }` inside a mission | literal `"memory"` | `<squadron_home>/memories/mission/<mission_name>/` |
+| Mission scratchpad | `scratchpad { ... }` inside a mission | literal `"scratchpad"` | `<squadron_home>/scratchpads/<mission_name>/<instance_id>/` |
+
+The slot names `"memory"` and `"scratchpad"` are reserved — a top-level
+`memory "memory"` or `memory "scratchpad"` block is rejected.
 
 The old DSL surfaces — `shared_folder` blocks, `folder` / `run_folder`
 blocks, the `folders = ...` attribute — are **not** accepted. The parser
 surfaces a clear error pointing at the new syntax. Path attributes anywhere
-on a memory block are rejected too.
+on a memory/scratchpad block are rejected too.
 
 ```hcl
 memory "reference" {
@@ -318,13 +327,11 @@ mission "analyze" {
   memories = [memories.reference]
 
   memory {
-    # type defaults to "persistent"
     description = "Cumulative reports — persists across runs"
   }
 
-  memory {
-    type        = "ephemeral"
-    description = "Per-run scratch"
+  scratchpad {
+    description = "Per-run working space"
     cleanup     = 7  # optional; defaults to 7, set 0 to keep forever
   }
 }
@@ -332,29 +339,31 @@ mission "analyze" {
 
 **Implementation:**
 
-- `config.Memory` (top-level) and `config.MissionMemory` (mission-scoped, with
-  a `Type` field) in [config/memory.go](config/memory.go); `MissionMemory`
-  fields land on the mission as `PersistentMemory` and `EphemeralMemory`
-  (`config.Mission` in [config/mission.go](config/mission.go)).
+- `config.Memory` (top-level shared), `config.MissionMemory` (mission's
+  persistent), and `config.MissionScratchpad` (mission's ephemeral) all
+  live in [config/memory.go](config/memory.go). On a parsed mission they
+  land as `Memories []string`, `Memory *MissionMemory`, and
+  `Scratchpad *MissionScratchpad` (`config.Mission` in
+  [config/mission.go](config/mission.go)).
 - Top-level `memory "name"` blocks are parsed in Stage 1.5 (with `vars`
-  context); each mission's `memory { ... }` blocks are parsed inside the
-  mission block in Stage 5. The `memories.NAME` HCL namespace exposes the
-  shared-memory labels to mission attributes.
-- [mission/folder_store.go](mission/folder_store.go) is the authoritative
+  context); each mission's `memory { ... }` and `scratchpad { ... }` blocks
+  are parsed inside the mission block in Stage 5. The `memories.NAME` HCL
+  namespace exposes the shared-memory labels to mission attributes.
+- [mission/memory_store.go](mission/memory_store.go) is the authoritative
   runtime resolver. Paths are derived from `paths.SquadronHome()`:
-  `SharedMemoryPath(name)`, `PersistentMemoryPath(missionName)`, and
-  `EphemeralMemoryPath(missionName, missionInstanceID)`.
-  `buildFolderStore(mission, memories, missionInstanceID)` must be called
-  **after** the mission instance ID is assigned in `Runner.Run()` because the
-  ephemeral path depends on it.
-- Each ephemeral directory gets a sidecar `.squadron-run.json` recording
+  `SharedMemoryPath(name)`, `MissionMemoryPath(missionName)`, and
+  `MissionScratchpadPath(missionName, missionInstanceID)`.
+  `buildMemoryStore(mission, memories, missionInstanceID)` must be called
+  **after** the mission instance ID is assigned in `Runner.Run()` because
+  the scratchpad path depends on it.
+- Each scratchpad directory gets a sidecar `.squadron-run.json` recording
   `created_at` + `cleanup_days` so the sweep can find expired ones.
-- `mission.SweepExpiredEphemeralMemories()` walks
-  `<squadron_home>/memories/mission/*/run/*`, deleting any per-run directory
-  whose sidecar is past its cleanup deadline. It runs opportunistically at
-  the start of every `Runner.Run()` (for missions with an ephemeral memory)
-  and on an hourly ticker in `cmd/engage.go`. No config lookup needed — the
-  filesystem layout is self-describing.
+- `mission.SweepExpiredScratchpads()` walks
+  `<squadron_home>/scratchpads/*/*`, deleting any per-run directory whose
+  sidecar is past its cleanup deadline. It runs opportunistically at the
+  start of every `Runner.Run()` (for missions with a scratchpad) and on an
+  hourly ticker in `cmd/engage.go`. No config lookup needed — the filesystem
+  layout is self-describing.
 
 ### Mission-Scoped Agents
 

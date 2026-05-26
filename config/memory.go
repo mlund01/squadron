@@ -2,22 +2,16 @@ package config
 
 import "fmt"
 
-// Reserved slot names for mission-scoped memory. Tool calls reference these
-// via the `memory` parameter (e.g. `memory: "mission"` or `memory: "run"`).
+// Reserved slot names for mission-scoped storage. Tool calls reference these
+// via the `slot` parameter (e.g. `slot: "memory"` or `slot: "scratchpad"`).
 const (
-	PersistentSlotName = "mission"
-	EphemeralSlotName  = "run"
+	MemorySlotName     = "memory"
+	ScratchpadSlotName = "scratchpad"
 )
 
-// Valid values for the `type` attribute on a mission-scoped `memory` block.
-const (
-	MemoryTypePersistent = "persistent"
-	MemoryTypeEphemeral  = "ephemeral"
-)
-
-// DefaultEphemeralCleanupDays is the auto-delete window applied to an
-// ephemeral mission memory when `cleanup` is not set.
-const DefaultEphemeralCleanupDays = 7
+// DefaultScratchpadCleanupDays is the auto-delete window applied to a
+// mission's scratchpad when `cleanup` is not set.
+const DefaultScratchpadCleanupDays = 7
 
 // Memory describes a top-level shared memory block:
 //
@@ -37,44 +31,47 @@ type Memory struct {
 	Editable    bool   `hcl:"editable,optional"`
 }
 
-// Validate enforces naming rules. The literal names "mission" and "run" are
-// reserved for the mission-scoped memory slots and must not be reused by a
-// shared memory.
+// Validate enforces naming rules. The literal names "memory" and "scratchpad"
+// are reserved for mission-scoped slots and must not be reused by a shared
+// memory.
 func (m *Memory) Validate() error {
-	if m.Name == PersistentSlotName || m.Name == EphemeralSlotName {
-		return fmt.Errorf("name %q is reserved for mission-scoped memory", m.Name)
+	if m.Name == MemorySlotName || m.Name == ScratchpadSlotName {
+		return fmt.Errorf("name %q is reserved for mission-scoped slots", m.Name)
 	}
 	return nil
 }
 
-// MissionMemory describes a `memory { ... }` block inside a mission. A
-// mission may declare at most one persistent and one ephemeral memory.
+// MissionMemory describes the `memory { ... }` block inside a mission —
+// persistent storage that survives across runs. At most one per mission.
 //
-// The storage path is derived by the runtime from the mission name and (for
-// ephemeral) the mission instance ID, so no `path` is accepted from HCL.
-//
-// Cleanup is a pointer so we can distinguish "user did not set it" (apply
-// default of 7 days, only meaningful for ephemeral) from "user set 0" (keep
-// forever).
+// Path is derived by the runtime from the mission name, so no `path` is
+// accepted from HCL.
 type MissionMemory struct {
-	Type        string `hcl:"type,optional"`        // "persistent" (default) or "ephemeral"
 	Description string `hcl:"description,optional"`
-	Cleanup     *int   `hcl:"cleanup,optional"` // ephemeral only; days before auto-delete, 0 = never
 }
 
-// Validate normalizes Type (defaulting to persistent), enforces the cleanup
-// rules, and rejects unknown type values.
-func (mm *MissionMemory) Validate() error {
-	if mm.Type == "" {
-		mm.Type = MemoryTypePersistent
-	}
-	if mm.Type != MemoryTypePersistent && mm.Type != MemoryTypeEphemeral {
-		return fmt.Errorf("type must be %q or %q (got %q)", MemoryTypePersistent, MemoryTypeEphemeral, mm.Type)
-	}
-	if mm.Type == MemoryTypePersistent && mm.Cleanup != nil {
-		return fmt.Errorf("cleanup is only valid on ephemeral memory")
-	}
-	if mm.Cleanup != nil && *mm.Cleanup < 0 {
+// Validate is a no-op today; kept so the type satisfies the same surface as
+// MissionScratchpad and so future fields can grow into it.
+func (mm *MissionMemory) Validate() error { return nil }
+
+// MissionScratchpad describes the `scratchpad { ... }` block inside a
+// mission — ephemeral per-run working space. At most one per mission. A
+// fresh directory is materialized for each mission instance and the cleanup
+// sweep deletes ones older than `cleanup` days.
+//
+// Path is derived by the runtime from the mission name and mission instance
+// ID, so no `path` is accepted from HCL.
+//
+// Cleanup is a pointer so we can distinguish "user did not set it" (apply
+// the default) from "user set 0" (keep forever).
+type MissionScratchpad struct {
+	Description string `hcl:"description,optional"`
+	Cleanup     *int   `hcl:"cleanup,optional"` // days before auto-delete; 0 = never
+}
+
+// Validate rejects negative cleanup values.
+func (ms *MissionScratchpad) Validate() error {
+	if ms.Cleanup != nil && *ms.Cleanup < 0 {
 		return fmt.Errorf("cleanup must be >= 0 (days)")
 	}
 	return nil

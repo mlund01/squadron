@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Memory", func() {
+var _ = Describe("Memory + Scratchpad", func() {
 
 	Describe("top-level memory block", func() {
 		It("parses a memory block and exposes it via memories.NAME", func() {
@@ -33,15 +33,15 @@ mission "m" {
 			Expect(cfg.Missions[0].Memories).To(ConsistOf("research"))
 		})
 
-		It("rejects the reserved name 'mission'", func() {
-			m := config.Memory{Name: "mission"}
+		It("rejects the reserved name 'memory'", func() {
+			m := config.Memory{Name: "memory"}
 			err := m.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("reserved"))
 		})
 
-		It("rejects the reserved name 'run'", func() {
-			m := config.Memory{Name: "run"}
+		It("rejects the reserved name 'scratchpad'", func() {
+			m := config.Memory{Name: "scratchpad"}
 			err := m.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("reserved"))
@@ -82,8 +82,8 @@ mission "m" {
 		})
 	})
 
-	Describe("mission memory block", func() {
-		It("parses a persistent memory block (default type)", func() {
+	Describe("mission memory block (persistent)", func() {
+		It("parses a memory block on a mission", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
@@ -97,94 +97,32 @@ mission "m" {
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].PersistentMemory).NotTo(BeNil())
-			Expect(cfg.Missions[0].PersistentMemory.Type).To(Equal(config.MemoryTypePersistent))
-			Expect(cfg.Missions[0].PersistentMemory.Description).To(Equal("Long-term notes"))
-			Expect(cfg.Missions[0].EphemeralMemory).To(BeNil())
+			Expect(cfg.Missions[0].Memory).NotTo(BeNil())
+			Expect(cfg.Missions[0].Memory.Description).To(Equal("Long-term notes"))
+			Expect(cfg.Missions[0].Scratchpad).To(BeNil())
 		})
 
-		It("parses an explicit persistent type", func() {
+		It("rejects two memory blocks on the same mission", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  memory {
-    type        = "persistent"
-    description = "x"
-  }
+  memory { description = "a" }
+  memory { description = "b" }
   task "t" { objective = "go" }
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].PersistentMemory).NotTo(BeNil())
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("only one memory block allowed"))
 		})
 
-		It("parses an ephemeral memory block with default cleanup", func() {
+		It("rejects a `type` attribute (was removed when the block split)", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  memory {
-    type        = "ephemeral"
-    description = "Scratch"
-  }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].EphemeralMemory).NotTo(BeNil())
-			Expect(cfg.Missions[0].EphemeralMemory.Type).To(Equal(config.MemoryTypeEphemeral))
-			Expect(cfg.Missions[0].EphemeralMemory.Cleanup).NotTo(BeNil())
-			Expect(*cfg.Missions[0].EphemeralMemory.Cleanup).To(Equal(config.DefaultEphemeralCleanupDays))
-			Expect(cfg.Missions[0].PersistentMemory).To(BeNil())
-		})
-
-		It("preserves an explicit cleanup = 0 on ephemeral memory", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  memory {
-    type    = "ephemeral"
-    cleanup = 0
-  }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].EphemeralMemory.Cleanup).NotTo(BeNil())
-			Expect(*cfg.Missions[0].EphemeralMemory.Cleanup).To(Equal(0))
-		})
-
-		It("allows one persistent + one ephemeral on the same mission", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  memory { type = "persistent" }
-  memory { type = "ephemeral" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].PersistentMemory).NotTo(BeNil())
-			Expect(cfg.Missions[0].EphemeralMemory).NotTo(BeNil())
-		})
-
-		It("rejects two persistent memory blocks", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  memory { type = "persistent" }
   memory { type = "persistent" }
   task "t" { objective = "go" }
 }
@@ -192,51 +130,9 @@ mission "m" {
 			_, f := writeFixture("config.hcl", hcl)
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one persistent memory"))
 		})
 
-		It("rejects two ephemeral memory blocks", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  memory { type = "ephemeral" }
-  memory { type = "ephemeral" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one ephemeral memory"))
-		})
-
-		It("rejects an unknown type", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  memory { type = "weird" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring(`type must be "persistent" or "ephemeral"`))
-		})
-
-		It("rejects cleanup on persistent memory", func() {
-			mm := &config.MissionMemory{Type: "persistent", Cleanup: ptrInt(7)}
-			Expect(mm.Validate()).To(MatchError(ContainSubstring("cleanup is only valid on ephemeral memory")))
-		})
-
-		It("rejects negative cleanup", func() {
-			mm := &config.MissionMemory{Type: "ephemeral", Cleanup: ptrInt(-1)}
-			Expect(mm.Validate()).To(MatchError(ContainSubstring("cleanup must be >= 0")))
-		})
-
-		It("rejects the old `path` attribute on a mission memory block", func() {
+		It("rejects a `path` attribute on a mission memory block", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
@@ -248,6 +144,100 @@ mission "m" {
 			_, f := writeFixture("config.hcl", hcl)
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("mission scratchpad block (ephemeral)", func() {
+		It("parses a scratchpad block with default cleanup", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  scratchpad {
+    description = "Scratch"
+  }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Scratchpad).NotTo(BeNil())
+			Expect(cfg.Missions[0].Scratchpad.Description).To(Equal("Scratch"))
+			Expect(cfg.Missions[0].Scratchpad.Cleanup).NotTo(BeNil())
+			Expect(*cfg.Missions[0].Scratchpad.Cleanup).To(Equal(config.DefaultScratchpadCleanupDays))
+			Expect(cfg.Missions[0].Memory).To(BeNil())
+		})
+
+		It("preserves an explicit cleanup = 0 (keep forever)", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  scratchpad { cleanup = 0 }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Scratchpad.Cleanup).NotTo(BeNil())
+			Expect(*cfg.Missions[0].Scratchpad.Cleanup).To(Equal(0))
+		})
+
+		It("rejects two scratchpad blocks", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  scratchpad {}
+  scratchpad {}
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("only one scratchpad block allowed"))
+		})
+
+		It("rejects a negative cleanup", func() {
+			neg := -1
+			ms := &config.MissionScratchpad{Cleanup: &neg}
+			Expect(ms.Validate()).To(MatchError(ContainSubstring("cleanup must be >= 0")))
+		})
+
+		It("rejects a `path` attribute", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  scratchpad { path = "./x" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+
+	Describe("memory + scratchpad on the same mission", func() {
+		It("allows both", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memory     { description = "long-term" }
+  scratchpad { description = "per-run" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Memory).NotTo(BeNil())
+			Expect(cfg.Missions[0].Scratchpad).NotTo(BeNil())
 		})
 	})
 
@@ -299,5 +289,3 @@ mission "m" {
 		})
 	})
 })
-
-func ptrInt(v int) *int { return &v }

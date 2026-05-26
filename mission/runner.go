@@ -289,9 +289,9 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 	}
 
 	// Memory store is built later in Run() once missionID is known — the
-	// ephemeral memory path depends on it. Shared + persistent memory alone
-	// would let us build here, but deferring is simpler than branching on
-	// mission.EphemeralMemory.
+	// scratchpad path depends on it. Shared + mission memory alone would let
+	// us build here, but deferring is simpler than branching on
+	// mission.Scratchpad.
 
 	return r, nil
 }
@@ -568,12 +568,11 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		r.resolvedDatasets = nil
 	}
 
-	// Memory store depends on missionID (for ephemeral memory path), so build
-	// it here rather than in NewRunner. Sweep expired ephemeral memories
-	// async — the result doesn't affect this run's correctness, only disk
-	// usage.
-	if r.mission.EphemeralMemory != nil {
-		go func() { _, _ = SweepExpiredEphemeralMemories() }()
+	// Memory store depends on missionID (for the scratchpad path), so build
+	// it here rather than in NewRunner. Sweep expired scratchpads async —
+	// the result doesn't affect this run's correctness, only disk usage.
+	if r.mission.Scratchpad != nil {
+		go func() { _, _ = SweepExpiredScratchpads() }()
 	}
 	memoryStore, err := buildMemoryStore(r.mission, r.cfg.Memories, missionID)
 	if err != nil {

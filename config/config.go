@@ -1797,7 +1797,8 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Type: "input", LabelNames: []string{"name"}}, // verbose input blocks still supported
 			{Type: "dataset", LabelNames: []string{"name"}},
 			{Type: "secret", LabelNames: []string{"name"}},
-			{Type: "memory"}, // mission-scoped memory: memory { type = "persistent"|"ephemeral" }
+			{Type: "memory"},     // mission-scoped persistent memory (slot "memory")
+			{Type: "scratchpad"}, // mission-scoped ephemeral scratchpad (slot "scratchpad")
 			{Type: "schedule"},
 			{Type: "trigger"},
 			{Type: "budget"},
@@ -1981,38 +1982,34 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		}
 	}
 
-	// Parse zero or more `memory { ... }` blocks. A mission may declare at most
-	// one persistent and one ephemeral memory.
-	var persistentMemory, ephemeralMemory *MissionMemory
+	// Parse the optional `memory { ... }` block (persistent, one per mission)
+	// and `scratchpad { ... }` block (ephemeral, one per mission).
+	var missionMemory *MissionMemory
+	var missionScratchpad *MissionScratchpad
 	for _, mb := range missionContent.Blocks {
-		if mb.Type != "memory" {
-			continue
-		}
-		var mm MissionMemory
-		diags := gohcl.DecodeBody(mb.Body, ctx, &mm)
-		if diags.HasErrors() {
-			return nil, fmt.Errorf("mission '%s' memory: %w", missionName, diags)
-		}
-		if mm.Type == "" {
-			mm.Type = MemoryTypePersistent
-		}
-		switch mm.Type {
-		case MemoryTypePersistent:
-			if persistentMemory != nil {
-				return nil, fmt.Errorf("mission '%s': only one persistent memory block allowed", missionName)
+		switch mb.Type {
+		case "memory":
+			if missionMemory != nil {
+				return nil, fmt.Errorf("mission '%s': only one memory block allowed", missionName)
 			}
-			persistentMemory = &mm
-		case MemoryTypeEphemeral:
-			if ephemeralMemory != nil {
-				return nil, fmt.Errorf("mission '%s': only one ephemeral memory block allowed", missionName)
+			var mm MissionMemory
+			if diags := gohcl.DecodeBody(mb.Body, ctx, &mm); diags.HasErrors() {
+				return nil, fmt.Errorf("mission '%s' memory: %w", missionName, diags)
 			}
-			if mm.Cleanup == nil {
-				v := DefaultEphemeralCleanupDays
-				mm.Cleanup = &v
+			missionMemory = &mm
+		case "scratchpad":
+			if missionScratchpad != nil {
+				return nil, fmt.Errorf("mission '%s': only one scratchpad block allowed", missionName)
 			}
-			ephemeralMemory = &mm
-		default:
-			return nil, fmt.Errorf("mission '%s' memory: type must be %q or %q (got %q)", missionName, MemoryTypePersistent, MemoryTypeEphemeral, mm.Type)
+			var ms MissionScratchpad
+			if diags := gohcl.DecodeBody(mb.Body, ctx, &ms); diags.HasErrors() {
+				return nil, fmt.Errorf("mission '%s' scratchpad: %w", missionName, diags)
+			}
+			if ms.Cleanup == nil {
+				v := DefaultScratchpadCleanupDays
+				ms.Cleanup = &v
+			}
+			missionScratchpad = &ms
 		}
 	}
 
@@ -2081,8 +2078,8 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Agents:      missionAgents,
 		LocalAgents: localAgents,
 		Memories:         missionMemories,
-		PersistentMemory: persistentMemory,
-		EphemeralMemory:  ephemeralMemory,
+		Memory:     missionMemory,
+		Scratchpad: missionScratchpad,
 		Schedules:   schedules,
 		Trigger:     trigger,
 		MaxParallel: maxParallel,

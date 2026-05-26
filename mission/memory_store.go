@@ -14,16 +14,18 @@ import (
 	"squadron/internal/paths"
 )
 
-// memoriesSubdir is the directory under SquadronHome that holds every
-// materialized memory slot. Layout:
+// On-disk layout under SquadronHome:
 //
-//	<squadron_home>/memories/shared/<name>/
-//	<squadron_home>/memories/mission/<mission_name>/persistent/
-//	<squadron_home>/memories/mission/<mission_name>/run/<mission_instance_id>/
-const memoriesSubdir = "memories"
+//	<squadron_home>/memories/shared/<name>/                 — shared memory
+//	<squadron_home>/memories/mission/<mission_name>/        — mission memory
+//	<squadron_home>/scratchpads/<mission_name>/<run_id>/    — mission scratchpad
+const (
+	memoriesSubdir   = "memories"
+	scratchpadSubdir = "scratchpads"
+)
 
-// runMetadataFile is the sidecar written inside each materialized ephemeral
-// memory directory so the cleanup sweep can tell when it was created.
+// runMetadataFile is the sidecar written inside each materialized scratchpad
+// directory so the cleanup sweep can tell when it was created.
 const runMetadataFile = ".squadron-run.json"
 
 type runMetadata struct {
@@ -34,14 +36,23 @@ type runMetadata struct {
 }
 
 // MemoriesRoot returns `<squadron_home>/memories`, the parent of every
-// materialized memory slot. Exported so callers like the cleanup loop can
-// pivot off the same base.
+// materialized memory slot (shared + per-mission).
 func MemoriesRoot() (string, error) {
 	home, err := paths.SquadronHome()
 	if err != nil {
 		return "", err
 	}
 	return filepath.Join(home, memoriesSubdir), nil
+}
+
+// ScratchpadsRoot returns `<squadron_home>/scratchpads`, the parent of every
+// materialized per-run scratchpad. Used by the cleanup sweep.
+func ScratchpadsRoot() (string, error) {
+	home, err := paths.SquadronHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, scratchpadSubdir), nil
 }
 
 // SharedMemoryPath returns the on-disk path for a top-level shared memory
@@ -54,47 +65,35 @@ func SharedMemoryPath(name string) (string, error) {
 	return filepath.Join(root, "shared", name), nil
 }
 
-// PersistentMemoryPath returns the on-disk path for a mission's persistent
-// memory slot. Path is stable across runs of the same mission.
-func PersistentMemoryPath(missionName string) (string, error) {
+// MissionMemoryPath returns the on-disk path for a mission's persistent
+// memory slot. Stable across runs of the same mission.
+func MissionMemoryPath(missionName string) (string, error) {
 	root, err := MemoriesRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "mission", missionName, "persistent"), nil
+	return filepath.Join(root, "mission", missionName), nil
 }
 
-// EphemeralMemoryPath returns the on-disk path for one run's ephemeral
-// memory slot. Path is unique per mission run instance.
-func EphemeralMemoryPath(missionName, missionInstanceID string) (string, error) {
-	root, err := MemoriesRoot()
+// MissionScratchpadPath returns the on-disk path for one run's scratchpad.
+// Unique per mission run instance.
+func MissionScratchpadPath(missionName, missionInstanceID string) (string, error) {
+	root, err := ScratchpadsRoot()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(root, "mission", missionName, "run", missionInstanceID), nil
+	return filepath.Join(root, missionName, missionInstanceID), nil
 }
 
-// MissionRunRoot returns `<memories_root>/mission/<name>/run`, the parent
-// dir of every ephemeral memory directory for a given mission. Used by the
-// cleanup sweep.
-func MissionRunRoot(missionName string) (string, error) {
-	root, err := MemoriesRoot()
-	if err != nil {
-		return "", err
+// resolvedScratchpadCleanup returns the cleanup window in days for a
+// mission scratchpad. Reads the parsed pointer when set (the config parser
+// fills in the default at load time); falls back to the default for callers
+// that hand-build a struct and skip parsing (notably tests).
+func resolvedScratchpadCleanup(ms *config.MissionScratchpad) int {
+	if ms == nil || ms.Cleanup == nil {
+		return config.DefaultScratchpadCleanupDays
 	}
-	return filepath.Join(root, "mission", missionName, "run"), nil
-}
-
-// resolvedEphemeralCleanup returns the cleanup window in days for an
-// ephemeral mission memory. Reads the parsed pointer when set (Validate /
-// the config parser fill in the default at config load time); falls back to
-// the default for callers that hand-build a struct and skip Validate
-// (notably tests).
-func resolvedEphemeralCleanup(mm *config.MissionMemory) int {
-	if mm == nil || mm.Cleanup == nil {
-		return config.DefaultEphemeralCleanupDays
-	}
-	return *mm.Cleanup
+	return *ms.Cleanup
 }
 
 type missionMemoryStore struct {
@@ -108,9 +107,9 @@ type memorySlot struct {
 }
 
 // buildMemoryStore creates an aitools.MemoryStore from the mission config and
-// the declared top-level memories. missionInstanceID scopes the ephemeral
-// memory path; it must be non-empty when mission.EphemeralMemory is set.
-// Returns nil if no memory slots are configured.
+// the declared top-level memories. missionInstanceID scopes the scratchpad
+// path; it must be non-empty when mission.Scratchpad is set. Returns nil if
+// no slots are configured.
 func buildMemoryStore(mission *config.Mission, memories []config.Memory, missionInstanceID string) (aitools.MemoryStore, error) {
 	store := &missionMemoryStore{
 		slots: make(map[string]*memorySlot),
@@ -122,8 +121,8 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, mission
 	}
 
 	for _, name := range mission.Memories {
-		if name == config.PersistentSlotName || name == config.EphemeralSlotName {
-			return nil, fmt.Errorf("shared memory %q uses a reserved name", name)
+		if name == config.MemorySlotName || name == config.ScratchpadSlotName {
+			return nil, fmt.Errorf("shared memory %q uses a reserved slot name", name)
 		}
 		mem, ok := memByName[name]
 		if !ok {
@@ -147,38 +146,38 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, mission
 		}
 	}
 
-	if mission.PersistentMemory != nil {
-		absPath, err := PersistentMemoryPath(mission.Name)
+	if mission.Memory != nil {
+		absPath, err := MissionMemoryPath(mission.Name)
 		if err != nil {
-			return nil, fmt.Errorf("persistent memory: resolve path: %w", err)
+			return nil, fmt.Errorf("memory: resolve path: %w", err)
 		}
 		if err := os.MkdirAll(absPath, 0755); err != nil {
-			return nil, fmt.Errorf("persistent memory: create directory: %w", err)
+			return nil, fmt.Errorf("memory: create directory: %w", err)
 		}
-		store.slots[config.PersistentSlotName] = &memorySlot{
+		store.slots[config.MemorySlotName] = &memorySlot{
 			absPath:     absPath,
-			description: mission.PersistentMemory.Description,
+			description: mission.Memory.Description,
 			writable:    true,
 		}
 	}
 
-	if mission.EphemeralMemory != nil {
+	if mission.Scratchpad != nil {
 		if missionInstanceID == "" {
-			return nil, fmt.Errorf("ephemeral memory requires a mission instance ID")
+			return nil, fmt.Errorf("scratchpad requires a mission instance ID")
 		}
-		absPath, err := EphemeralMemoryPath(mission.Name, missionInstanceID)
+		absPath, err := MissionScratchpadPath(mission.Name, missionInstanceID)
 		if err != nil {
-			return nil, fmt.Errorf("ephemeral memory: resolve path: %w", err)
+			return nil, fmt.Errorf("scratchpad: resolve path: %w", err)
 		}
 		if err := os.MkdirAll(absPath, 0755); err != nil {
-			return nil, fmt.Errorf("ephemeral memory: create directory: %w", err)
+			return nil, fmt.Errorf("scratchpad: create directory: %w", err)
 		}
-		if err := writeRunMetadata(absPath, mission.Name, missionInstanceID, resolvedEphemeralCleanup(mission.EphemeralMemory)); err != nil {
-			return nil, fmt.Errorf("ephemeral memory: write metadata: %w", err)
+		if err := writeRunMetadata(absPath, mission.Name, missionInstanceID, resolvedScratchpadCleanup(mission.Scratchpad)); err != nil {
+			return nil, fmt.Errorf("scratchpad: write metadata: %w", err)
 		}
-		store.slots[config.EphemeralSlotName] = &memorySlot{
+		store.slots[config.ScratchpadSlotName] = &memorySlot{
 			absPath:     absPath,
-			description: mission.EphemeralMemory.Description,
+			description: mission.Scratchpad.Description,
 			writable:    true,
 		}
 	}
@@ -190,10 +189,10 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, mission
 	return store, nil
 }
 
-// writeRunMetadata records when the ephemeral memory directory was created
-// so the sweep can decide when to delete it. Uses O_CREATE|O_EXCL so
-// concurrent starts and resumes never clobber the original timestamp —
-// exactly one writer wins, others observe EEXIST and skip.
+// writeRunMetadata records when the scratchpad directory was created so the
+// sweep can decide when to delete it. Uses O_CREATE|O_EXCL so concurrent
+// starts and resumes never clobber the original timestamp — exactly one
+// writer wins, others observe EEXIST and skip.
 func writeRunMetadata(dir, missionName, missionID string, cleanupDays int) error {
 	path := filepath.Join(dir, runMetadataFile)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0644)
@@ -218,14 +217,14 @@ func writeRunMetadata(dir, missionName, missionID string, cleanupDays int) error
 	return err
 }
 
-func (s *missionMemoryStore) ResolvePath(memoryName string, relPath string) (string, bool, error) {
-	if memoryName == "" {
-		return "", false, fmt.Errorf("memory name is required (available: %v)", s.availableNames())
+func (s *missionMemoryStore) ResolvePath(slotName string, relPath string) (string, bool, error) {
+	if slotName == "" {
+		return "", false, fmt.Errorf("slot name is required (available: %v)", s.availableNames())
 	}
 
-	entry, ok := s.slots[memoryName]
+	entry, ok := s.slots[slotName]
 	if !ok {
-		return "", false, fmt.Errorf("memory %q not found. Available: %v", memoryName, s.availableNames())
+		return "", false, fmt.Errorf("slot %q not found. Available: %v", slotName, s.availableNames())
 	}
 
 	cleaned := filepath.Clean(relPath)
@@ -235,7 +234,7 @@ func (s *missionMemoryStore) ResolvePath(memoryName string, relPath string) (str
 
 	fullPath := filepath.Join(entry.absPath, cleaned)
 	if !strings.HasPrefix(fullPath, entry.absPath) {
-		return "", false, fmt.Errorf("path escapes memory root")
+		return "", false, fmt.Errorf("path escapes slot root")
 	}
 
 	return fullPath, entry.writable, nil
@@ -261,21 +260,20 @@ func (s *missionMemoryStore) MemoryInfos() []aitools.MemoryInfo {
 	return infos
 }
 
-// SweepExpiredEphemeralMemories deletes any per-run ephemeral memory
-// directory whose sidecar (.squadron-run.json) records a created_at older
-// than its cleanup_days. Directories without a sidecar, or with
-// cleanup_days == 0, are left alone.
+// SweepExpiredScratchpads deletes any per-run scratchpad directory whose
+// sidecar (.squadron-run.json) records a created_at older than its
+// cleanup_days. Directories without a sidecar, or with cleanup_days == 0,
+// are left alone.
 //
-// It walks `<memories_root>/mission/*/run/*` and considers every
-// per-run directory it finds — there's no per-mission filtering, so callers
-// don't need to know which missions exist.
-func SweepExpiredEphemeralMemories() (removed []string, err error) {
-	root, err := MemoriesRoot()
+// Walks `<squadron_home>/scratchpads/*/*` and considers every per-run
+// directory — no per-mission filtering, so callers don't need to know which
+// missions exist.
+func SweepExpiredScratchpads() (removed []string, err error) {
+	root, err := ScratchpadsRoot()
 	if err != nil {
 		return nil, err
 	}
-	missionsBase := filepath.Join(root, "mission")
-	entries, err := os.ReadDir(missionsBase)
+	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -287,7 +285,7 @@ func SweepExpiredEphemeralMemories() (removed []string, err error) {
 		if !missionEntry.IsDir() {
 			continue
 		}
-		runBase := filepath.Join(missionsBase, missionEntry.Name(), "run")
+		runBase := filepath.Join(root, missionEntry.Name())
 		runEntries, err := os.ReadDir(runBase)
 		if err != nil {
 			if os.IsNotExist(err) {

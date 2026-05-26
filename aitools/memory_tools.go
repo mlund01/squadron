@@ -12,32 +12,33 @@ import (
 	"strings"
 )
 
-// Reserved slot names for mission-scoped memory. Callers addressing the
-// persistent mission memory and the per-run ephemeral memory must use these
-// names as the `memory` parameter.
+// Reserved slot names for the mission-scoped storage slots. Agents address
+// them via the `slot` parameter on the file tools (alongside any shared
+// memory names declared at the top level).
 const (
-	PersistentMemoryName = "mission"
-	EphemeralMemoryName  = "run"
+	MemorySlotName     = "memory"
+	ScratchpadSlotName = "scratchpad"
 )
 
-// MemoryStore provides memory access for missions. Implementations resolve a
-// memory slot name to an absolute path and enforce read/write semantics.
+// MemoryStore provides slot access for missions. Implementations resolve a
+// slot name (the mission's "memory" / "scratchpad", or a shared memory's
+// label) to an absolute path and enforce read/write semantics.
 type MemoryStore interface {
-	// ResolvePath resolves a memory slot name + relative path to an absolute
-	// path. Returns: absolute path, writable flag, error.
-	ResolvePath(memoryName string, relPath string) (string, bool, error)
-	// MemoryInfos returns info about all available memory slots.
+	// ResolvePath resolves a slot name + relative path to an absolute path.
+	// Returns: absolute path, writable flag, error.
+	ResolvePath(slotName string, relPath string) (string, bool, error)
+	// MemoryInfos returns info about all available slots.
 	MemoryInfos() []MemoryInfo
 }
 
-// MemoryInfo describes an available memory slot.
+// MemoryInfo describes an available slot.
 type MemoryInfo struct {
 	Name        string
 	Description string
 	Writable    bool
 }
 
-// validateRelPath ensures a path is relative and doesn't escape the memory root.
+// validateRelPath ensures a path is relative and doesn't escape the slot root.
 func validateRelPath(relPath string) error {
 	if relPath == "" {
 		return fmt.Errorf("path is required")
@@ -45,23 +46,23 @@ func validateRelPath(relPath string) error {
 	cleaned := filepath.Clean(relPath)
 	if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") ||
 		strings.Contains(cleaned, string(filepath.Separator)+"..") {
-		return fmt.Errorf("invalid path: must be relative and within the memory root")
+		return fmt.Errorf("invalid path: must be relative and within the slot root")
 	}
 	return nil
 }
 
-// resolveMemoryPath is a helper that resolves the memory slot and validates
-// the relative path.
-func resolveMemoryPath(store MemoryStore, name, relPath string) (string, bool, error) {
+// resolveSlotPath is a helper that resolves the slot and validates the
+// relative path.
+func resolveSlotPath(store MemoryStore, name, relPath string) (string, bool, error) {
 	if err := validateRelPath(relPath); err != nil {
 		return "", false, err
 	}
 	return store.ResolvePath(name, relPath)
 }
 
-// memoryParamDescription is reused across every file tool's `memory`
-// parameter so the agent sees a consistent description.
-const memoryParamDescription = "Memory slot to operate in. Use \"mission\" for the persistent mission memory, \"run\" for the per-run ephemeral memory, or a shared memory name."
+// slotParamDescription is reused across every file tool's `slot` parameter
+// so the agent sees a consistent description.
+const slotParamDescription = "Slot to operate in. Use \"memory\" for the mission's persistent memory, \"scratchpad\" for its ephemeral per-run scratchpad, or a shared memory name."
 
 // =============================================================================
 // file_list — List files and directories
@@ -74,20 +75,20 @@ type MemoryListTool struct {
 func (t *MemoryListTool) ToolName() string { return "file_list" }
 
 func (t *MemoryListTool) ToolDescription() string {
-	return "List files and directories in a memory slot. Returns names, types (file/dir), and sizes. Results are paginated (default 100 per page). Use 'offset' to get subsequent pages."
+	return "List files and directories in a slot. Returns names, types (file/dir), and sizes. Results are paginated (default 100 per page). Use 'offset' to get subsequent pages."
 }
 
 func (t *MemoryListTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"memory": {
+			"slot": {
 				Type:        TypeString,
-				Description: memoryParamDescription,
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative subdirectory path within the memory slot. Omit to list the root.",
+				Description: "Relative subdirectory path within the slot. Omit to list the root.",
 			},
 			"recursive": {
 				Type:        TypeBoolean,
@@ -102,12 +103,12 @@ func (t *MemoryListTool) ToolPayloadSchema() Schema {
 				Description: "Number of entries to skip (for pagination). Default 0.",
 			},
 		},
-		Required: []string{"memory"},
+		Required: []string{"slot"},
 	}
 }
 
 type memoryListParams struct {
-	Memory    string `json:"memory"`
+	Slot      string `json:"slot"`
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
 	Limit     int    `json:"limit"`
@@ -130,9 +131,9 @@ func (t *MemoryListTool) Call(ctx context.Context, params string) string {
 	var absPath string
 	var err error
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Memory, ".")
+		absPath, _, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveMemoryPath(t.Store, p.Memory, p.Path)
+		absPath, _, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()
@@ -264,20 +265,20 @@ type MemoryReadTool struct {
 func (t *MemoryReadTool) ToolName() string { return "file_read" }
 
 func (t *MemoryReadTool) ToolDescription() string {
-	return "Read the contents of a file in a memory slot. Optionally limit to the first N lines or N bytes."
+	return "Read the contents of a file in a slot. Optionally limit to the first N lines or N bytes."
 }
 
 func (t *MemoryReadTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"memory": {
+			"slot": {
 				Type:        TypeString,
-				Description: memoryParamDescription,
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative file path within the memory slot.",
+				Description: "Relative file path within the slot.",
 			},
 			"max_lines": {
 				Type:        TypeInteger,
@@ -288,12 +289,12 @@ func (t *MemoryReadTool) ToolPayloadSchema() Schema {
 				Description: "Return only the first N bytes. 0 or omit for no limit.",
 			},
 		},
-		Required: []string{"memory", "path"},
+		Required: []string{"slot", "path"},
 	}
 }
 
 type memoryReadParams struct {
-	Memory   string `json:"memory"`
+	Slot     string `json:"slot"`
 	Path     string `json:"path"`
 	MaxLines int    `json:"max_lines"`
 	MaxBytes int    `json:"max_bytes"`
@@ -311,7 +312,7 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, _, err := resolveMemoryPath(t.Store, p.Memory, p.Path)
+	absPath, _, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
 	}
@@ -372,20 +373,20 @@ type MemoryCreateTool struct {
 func (t *MemoryCreateTool) ToolName() string { return "file_create" }
 
 func (t *MemoryCreateTool) ToolDescription() string {
-	return "Create or write to a file in a memory slot. By default, creates a new file (fails if it already exists). Use 'overwrite' to replace an existing file, or 'append' to add to an existing file."
+	return "Create or write to a file in a slot. By default, creates a new file (fails if it already exists). Use 'overwrite' to replace an existing file, or 'append' to add to an existing file."
 }
 
 func (t *MemoryCreateTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"memory": {
+			"slot": {
 				Type:        TypeString,
-				Description: memoryParamDescription,
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative file path within the memory slot.",
+				Description: "Relative file path within the slot.",
 			},
 			"content": {
 				Type:        TypeString,
@@ -400,12 +401,12 @@ func (t *MemoryCreateTool) ToolPayloadSchema() Schema {
 				Description: "If true, overwrite the file if it already exists. Ignored when 'append' is true.",
 			},
 		},
-		Required: []string{"memory", "path", "content"},
+		Required: []string{"slot", "path", "content"},
 	}
 }
 
 type memoryCreateParams struct {
-	Memory    string `json:"memory"`
+	Slot      string `json:"slot"`
 	Path      string `json:"path"`
 	Content   string `json:"content"`
 	Append    bool   `json:"append"`
@@ -422,13 +423,13 @@ func (t *MemoryCreateTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, writable, err := resolveMemoryPath(t.Store, p.Memory, p.Path)
+	absPath, writable, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
 	}
 
 	if !writable {
-		return "Error: memory slot is read-only"
+		return "Error: slot is read-only"
 	}
 
 	if p.Append {
@@ -475,28 +476,28 @@ type MemoryDeleteTool struct {
 func (t *MemoryDeleteTool) ToolName() string { return "file_delete" }
 
 func (t *MemoryDeleteTool) ToolDescription() string {
-	return "Delete a file in a memory slot. Only files can be deleted, not directories."
+	return "Delete a file in a slot. Only files can be deleted, not directories."
 }
 
 func (t *MemoryDeleteTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"memory": {
+			"slot": {
 				Type:        TypeString,
-				Description: memoryParamDescription,
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative file path within the memory slot.",
+				Description: "Relative file path within the slot.",
 			},
 		},
-		Required: []string{"memory", "path"},
+		Required: []string{"slot", "path"},
 	}
 }
 
 type memoryDeleteParams struct {
-	Memory string `json:"memory"`
+	Slot string `json:"slot"`
 	Path   string `json:"path"`
 }
 
@@ -510,13 +511,13 @@ func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, writable, err := resolveMemoryPath(t.Store, p.Memory, p.Path)
+	absPath, writable, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
 	}
 
 	if !writable {
-		return "Error: memory slot is read-only"
+		return "Error: slot is read-only"
 	}
 
 	info, err := os.Stat(absPath)
@@ -545,20 +546,20 @@ type MemorySearchTool struct {
 func (t *MemorySearchTool) ToolName() string { return "file_search" }
 
 func (t *MemorySearchTool) ToolDescription() string {
-	return "Search for files by name within a memory slot using a regex pattern. Returns matching file paths with sizes. Searches recursively by default. Results are paginated (default 50)."
+	return "Search for files by name within a slot using a regex pattern. Returns matching file paths with sizes. Searches recursively by default. Results are paginated (default 50)."
 }
 
 func (t *MemorySearchTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"memory": {
+			"slot": {
 				Type:        TypeString,
-				Description: memoryParamDescription,
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative path to search within. Omit to search the memory root.",
+				Description: "Relative path to search within. Omit to search the slot root.",
 			},
 			"pattern": {
 				Type:        TypeString,
@@ -573,12 +574,12 @@ func (t *MemorySearchTool) ToolPayloadSchema() Schema {
 				Description: "Number of results to skip (for pagination). Default 0.",
 			},
 		},
-		Required: []string{"memory", "pattern"},
+		Required: []string{"slot", "pattern"},
 	}
 }
 
 type memorySearchParams struct {
-	Memory  string `json:"memory"`
+	Slot    string `json:"slot"`
 	Path    string `json:"path"`
 	Pattern string `json:"pattern"`
 	Limit   int    `json:"limit"`
@@ -609,9 +610,9 @@ func (t *MemorySearchTool) Call(ctx context.Context, params string) string {
 	// Resolve search root
 	var absPath string
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Memory, ".")
+		absPath, _, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveMemoryPath(t.Store, p.Memory, p.Path)
+		absPath, _, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()
@@ -694,20 +695,20 @@ type MemoryGrepTool struct {
 func (t *MemoryGrepTool) ToolName() string { return "file_grep" }
 
 func (t *MemoryGrepTool) ToolDescription() string {
-	return "Search file contents within a memory slot using a regex pattern. Returns matching lines with file paths and line numbers. Results are paginated (default 50 matches)."
+	return "Search file contents within a slot using a regex pattern. Returns matching lines with file paths and line numbers. Results are paginated (default 50 matches)."
 }
 
 func (t *MemoryGrepTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"memory": {
+			"slot": {
 				Type:        TypeString,
-				Description: memoryParamDescription,
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative path to search within. Omit to search the memory root.",
+				Description: "Relative path to search within. Omit to search the slot root.",
 			},
 			"pattern": {
 				Type:        TypeString,
@@ -726,12 +727,12 @@ func (t *MemoryGrepTool) ToolPayloadSchema() Schema {
 				Description: "Number of matches to skip (for pagination). Default 0.",
 			},
 		},
-		Required: []string{"memory", "pattern"},
+		Required: []string{"slot", "pattern"},
 	}
 }
 
 type memoryGrepParams struct {
-	Memory    string `json:"memory"`
+	Slot      string `json:"slot"`
 	Path      string `json:"path"`
 	Pattern   string `json:"pattern"`
 	Recursive bool   `json:"recursive"`
@@ -763,9 +764,9 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 	// Resolve search root
 	var absPath string
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Memory, ".")
+		absPath, _, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveMemoryPath(t.Store, p.Memory, p.Path)
+		absPath, _, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()

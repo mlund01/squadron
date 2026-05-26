@@ -65,23 +65,6 @@ mission "m" {
 			Expect(err.Error()).To(ContainSubstring("memory \"research\""))
 		})
 
-		It("rejects the old shared_memory block too", func() {
-			hcl := fullBaseHCL() + `
-shared_memory "research" {
-  path = "./data"
-}
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no longer supported"))
-		})
-
 		It("rejects the old `path` attribute on a memory block", func() {
 			hcl := fullBaseHCL() + `
 memory "research" {
@@ -297,21 +280,6 @@ mission "m" {
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("`run_folder { ... }` block is no longer supported"))
-		})
-
-		It("rejects the old `run_memory { ... }` block", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  run_memory { description = "x" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("`run_memory { ... }` block is no longer supported"))
 		})
 
 		It("rejects the old `folders = ...` attribute", func() {

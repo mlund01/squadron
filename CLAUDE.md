@@ -303,10 +303,10 @@ A mission may declare at most one persistent and one ephemeral memory. The
 names `"mission"` and `"run"` are reserved — a top-level `memory "mission"`
 or `memory "run"` block is rejected.
 
-The old DSL surfaces — `shared_folder`/`shared_memory` blocks, `folder`/
-`run_folder`/`run_memory` blocks, the `folders = ...` attribute — are **not**
-accepted. The parser surfaces a clear error pointing at the new syntax. Path
-attributes anywhere on a memory block are rejected too.
+The old DSL surfaces — `shared_folder` blocks, `folder` / `run_folder`
+blocks, the `folders = ...` attribute — are **not** accepted. The parser
+surfaces a clear error pointing at the new syntax. Path attributes anywhere
+on a memory block are rejected too.
 
 ```hcl
 memory "reference" {

@@ -721,10 +721,9 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "storage"},
 				{Type: "command_center"},
 				{Type: "memory", LabelNames: []string{"name"}},
-				// Detected for nicer errors only — the parse-pass below
-				// rejects them with a pointer to the new `memory` block.
+				// Detected for a nicer error only — the parse-pass below
+				// rejects it with a pointer to the new `memory` block.
 				{Type: "shared_folder", LabelNames: []string{"name"}},
-				{Type: "shared_memory", LabelNames: []string{"name"}},
 				{Type: "mcp_host"},
 				{Type: "mcp", LabelNames: []string{"name"}},
 				{Type: "skill", LabelNames: []string{"name"}},
@@ -758,7 +757,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.CommandCenter = append(pb.CommandCenter, block)
 			case "memory":
 				pb.Memories = append(pb.Memories, block)
-			case "shared_folder", "shared_memory":
+			case "shared_folder":
 				// Collected only so we can produce a clear error in the
 				// parse pass below.
 				pb.Memories = append(pb.Memories, block)
@@ -958,8 +957,8 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 
 	// Parse top-level `memory "name" { ... }` blocks (with vars context).
-	// `shared_folder` and `shared_memory` are no longer supported — if a user
-	// writes one we surface an explicit error pointing at the new syntax.
+	// `shared_folder` is no longer supported — if a user writes one we
+	// surface an explicit error pointing at the new syntax.
 	var allMemories []Memory
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Memories {
@@ -1805,7 +1804,6 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			// Detected so we can produce a nicer error than the parser's default.
 			{Type: "folder"},
 			{Type: "run_folder"},
-			{Type: "run_memory"},
 		},
 	})
 	if diags.HasErrors() {
@@ -1972,16 +1970,14 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		}
 	}
 
-	// Reject the old `folder { ... }` / `run_folder { ... }` / `run_memory { ... }`
-	// blocks with a clear pointer at the new syntax.
+	// Reject the old `folder { ... }` / `run_folder { ... }` blocks with a
+	// clear pointer at the new syntax.
 	for _, b := range missionContent.Blocks {
 		switch b.Type {
 		case "folder":
 			return nil, fmt.Errorf("mission '%s': the `folder { ... }` block is no longer supported — use `memory { type = \"persistent\" }` instead (path is now derived automatically)", missionName)
 		case "run_folder":
 			return nil, fmt.Errorf("mission '%s': the `run_folder { ... }` block is no longer supported — use `memory { type = \"ephemeral\" }` instead", missionName)
-		case "run_memory":
-			return nil, fmt.Errorf("mission '%s': the `run_memory { ... }` block is no longer supported — use `memory { type = \"ephemeral\" }` instead", missionName)
 		}
 	}
 

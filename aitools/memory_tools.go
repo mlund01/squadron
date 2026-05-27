@@ -22,11 +22,11 @@ const (
 
 // MemoryStore provides slot access for missions. Implementations resolve a
 // slot name (the mission's "memory" / "scratchpad", or a shared memory's
-// label) to an absolute path and enforce read/write semantics.
+// label) to an absolute path. Every slot is read+write — there is no
+// read-only mode at this layer.
 type MemoryStore interface {
 	// ResolvePath resolves a slot name + relative path to an absolute path.
-	// Returns: absolute path, writable flag, error.
-	ResolvePath(slotName string, relPath string) (string, bool, error)
+	ResolvePath(slotName string, relPath string) (string, error)
 	// MemoryInfos returns info about all available slots.
 	MemoryInfos() []MemoryInfo
 }
@@ -35,7 +35,6 @@ type MemoryStore interface {
 type MemoryInfo struct {
 	Name        string
 	Description string
-	Writable    bool
 }
 
 // validateRelPath ensures a path is relative and doesn't escape the slot root.
@@ -53,9 +52,9 @@ func validateRelPath(relPath string) error {
 
 // resolveSlotPath is a helper that resolves the slot and validates the
 // relative path.
-func resolveSlotPath(store MemoryStore, name, relPath string) (string, bool, error) {
+func resolveSlotPath(store MemoryStore, name, relPath string) (string, error) {
 	if err := validateRelPath(relPath); err != nil {
-		return "", false, err
+		return "", err
 	}
 	return store.ResolvePath(name, relPath)
 }
@@ -131,9 +130,9 @@ func (t *MemoryListTool) Call(ctx context.Context, params string) string {
 	var absPath string
 	var err error
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Slot, ".")
+		absPath, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveSlotPath(t.Store, p.Slot, p.Path)
+		absPath, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()
@@ -312,7 +311,7 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, _, err := resolveSlotPath(t.Store, p.Slot, p.Path)
+	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
 	}
@@ -423,13 +422,9 @@ func (t *MemoryCreateTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, writable, err := resolveSlotPath(t.Store, p.Slot, p.Path)
+	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
-	}
-
-	if !writable {
-		return "Error: slot is read-only"
 	}
 
 	if p.Append {
@@ -511,13 +506,9 @@ func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, writable, err := resolveSlotPath(t.Store, p.Slot, p.Path)
+	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
-	}
-
-	if !writable {
-		return "Error: slot is read-only"
 	}
 
 	info, err := os.Stat(absPath)
@@ -610,9 +601,9 @@ func (t *MemorySearchTool) Call(ctx context.Context, params string) string {
 	// Resolve search root
 	var absPath string
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Slot, ".")
+		absPath, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveSlotPath(t.Store, p.Slot, p.Path)
+		absPath, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()
@@ -764,9 +755,9 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 	// Resolve search root
 	var absPath string
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Slot, ".")
+		absPath, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveSlotPath(t.Store, p.Slot, p.Path)
+		absPath, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()

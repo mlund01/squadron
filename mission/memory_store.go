@@ -85,17 +85,6 @@ func MissionScratchpadPath(missionName, missionInstanceID string) (string, error
 	return filepath.Join(root, missionName, missionInstanceID), nil
 }
 
-// resolvedScratchpadCleanup returns the cleanup window in days for a
-// mission scratchpad. Reads the parsed pointer when set (the config parser
-// fills in the default at load time); falls back to the default for callers
-// that hand-build a struct and skip parsing (notably tests).
-func resolvedScratchpadCleanup(ms *config.MissionScratchpad) int {
-	if ms == nil || ms.Cleanup == nil {
-		return config.DefaultScratchpadCleanupDays
-	}
-	return *ms.Cleanup
-}
-
 type missionMemoryStore struct {
 	slots map[string]*memorySlot
 }
@@ -103,12 +92,11 @@ type missionMemoryStore struct {
 type memorySlot struct {
 	absPath     string
 	description string
-	writable    bool
 }
 
 // buildMemoryStore creates an aitools.MemoryStore from the mission config and
 // the declared top-level memories. missionInstanceID scopes the scratchpad
-// path; it must be non-empty when mission.Scratchpad is set. Returns nil if
+// path; it must be non-empty when mission.Scratchpad is true. Returns nil if
 // no slots are configured.
 func buildMemoryStore(mission *config.Mission, memories []config.Memory, missionInstanceID string) (aitools.MemoryStore, error) {
 	store := &missionMemoryStore{
@@ -135,14 +123,9 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, mission
 		if err := os.MkdirAll(absPath, 0755); err != nil {
 			return nil, fmt.Errorf("shared memory %q: create directory: %w", name, err)
 		}
-		desc := mem.Description
-		if desc == "" {
-			desc = mem.Label
-		}
 		store.slots[name] = &memorySlot{
 			absPath:     absPath,
-			description: desc,
-			writable:    mem.Editable,
+			description: mem.Description,
 		}
 	}
 
@@ -157,11 +140,10 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, mission
 		store.slots[config.MemorySlotName] = &memorySlot{
 			absPath:     absPath,
 			description: mission.Memory.Description,
-			writable:    true,
 		}
 	}
 
-	if mission.Scratchpad != nil {
+	if mission.Scratchpad {
 		if missionInstanceID == "" {
 			return nil, fmt.Errorf("scratchpad requires a mission instance ID")
 		}
@@ -172,13 +154,13 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, mission
 		if err := os.MkdirAll(absPath, 0755); err != nil {
 			return nil, fmt.Errorf("scratchpad: create directory: %w", err)
 		}
-		if err := writeRunMetadata(absPath, mission.Name, missionInstanceID, resolvedScratchpadCleanup(mission.Scratchpad)); err != nil {
+		if err := writeRunMetadata(absPath, mission.Name, missionInstanceID, config.ScratchpadCleanupDays); err != nil {
 			return nil, fmt.Errorf("scratchpad: write metadata: %w", err)
 		}
 		store.slots[config.ScratchpadSlotName] = &memorySlot{
-			absPath:     absPath,
-			description: mission.Scratchpad.Description,
-			writable:    true,
+			absPath: absPath,
+			// No user-supplied description — the agent prompt explains
+			// what the scratchpad is for.
 		}
 	}
 
@@ -217,27 +199,27 @@ func writeRunMetadata(dir, missionName, missionID string, cleanupDays int) error
 	return err
 }
 
-func (s *missionMemoryStore) ResolvePath(slotName string, relPath string) (string, bool, error) {
+func (s *missionMemoryStore) ResolvePath(slotName string, relPath string) (string, error) {
 	if slotName == "" {
-		return "", false, fmt.Errorf("slot name is required (available: %v)", s.availableNames())
+		return "", fmt.Errorf("slot name is required (available: %v)", s.availableNames())
 	}
 
 	entry, ok := s.slots[slotName]
 	if !ok {
-		return "", false, fmt.Errorf("slot %q not found. Available: %v", slotName, s.availableNames())
+		return "", fmt.Errorf("slot %q not found. Available: %v", slotName, s.availableNames())
 	}
 
 	cleaned := filepath.Clean(relPath)
 	if cleaned == "." {
-		return entry.absPath, entry.writable, nil
+		return entry.absPath, nil
 	}
 
 	fullPath := filepath.Join(entry.absPath, cleaned)
 	if !strings.HasPrefix(fullPath, entry.absPath) {
-		return "", false, fmt.Errorf("path escapes slot root")
+		return "", fmt.Errorf("path escapes slot root")
 	}
 
-	return fullPath, entry.writable, nil
+	return fullPath, nil
 }
 
 func (s *missionMemoryStore) availableNames() []string {
@@ -254,7 +236,6 @@ func (s *missionMemoryStore) MemoryInfos() []aitools.MemoryInfo {
 		infos = append(infos, aitools.MemoryInfo{
 			Name:        name,
 			Description: entry.description,
-			Writable:    entry.writable,
 		})
 	}
 	return infos

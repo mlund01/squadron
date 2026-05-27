@@ -55,12 +55,9 @@ func TestBuildMemoryStore_MissionMemory(t *testing.T) {
 		t.Fatal("expected non-nil store")
 	}
 
-	abs, writable, err := store.ResolvePath(aitools.MemorySlotName, ".")
+	abs, err := store.ResolvePath(aitools.MemorySlotName, ".")
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
-	}
-	if !writable {
-		t.Fatal("mission memory must be writable")
 	}
 	want := filepath.Join(home, "memories", "mission", "m")
 	if abs != want {
@@ -71,19 +68,16 @@ func TestBuildMemoryStore_MissionMemory(t *testing.T) {
 	}
 
 	// The mission name is NOT a valid slot key — prevents regression.
-	if _, _, err := store.ResolvePath(m.Name, "."); err == nil {
+	if _, err := store.ResolvePath(m.Name, "."); err == nil {
 		t.Fatal("expected error when resolving by mission name")
 	}
 }
 
 func TestBuildMemoryStore_Scratchpad_CreatesSidecar(t *testing.T) {
 	home := withTempHome(t)
-	cleanup := 7
 	m := &config.Mission{
-		Name: "m",
-		Scratchpad: &config.MissionScratchpad{
-			Cleanup: &cleanup,
-		},
+		Name:       "m",
+		Scratchpad: true,
 	}
 
 	store, err := buildMemoryStore(m, nil, "mid-abc")
@@ -91,12 +85,9 @@ func TestBuildMemoryStore_Scratchpad_CreatesSidecar(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	abs, writable, err := store.ResolvePath(aitools.ScratchpadSlotName, ".")
+	abs, err := store.ResolvePath(aitools.ScratchpadSlotName, ".")
 	if err != nil {
 		t.Fatalf("ResolvePath: %v", err)
-	}
-	if !writable {
-		t.Fatal("scratchpad must be writable")
 	}
 	want := filepath.Join(home, "scratchpads", "m", "mid-abc")
 	if abs != want {
@@ -111,8 +102,8 @@ func TestBuildMemoryStore_Scratchpad_CreatesSidecar(t *testing.T) {
 	if err := json.Unmarshal(metaBytes, &meta); err != nil {
 		t.Fatalf("sidecar not valid JSON: %v", err)
 	}
-	if meta.CleanupDays != 7 {
-		t.Fatalf("CleanupDays: want 7, got %d", meta.CleanupDays)
+	if meta.CleanupDays != config.ScratchpadCleanupDays {
+		t.Fatalf("CleanupDays: want %d, got %d", config.ScratchpadCleanupDays, meta.CleanupDays)
 	}
 	if meta.MissionID != "mid-abc" {
 		t.Fatalf("MissionID: want mid-abc, got %q", meta.MissionID)
@@ -126,10 +117,9 @@ func TestBuildMemoryStore_Scratchpad_SidecarPreservedOnResume(t *testing.T) {
 	home := withTempHome(t)
 	m := &config.Mission{
 		Name:       "m",
-		Scratchpad: &config.MissionScratchpad{},
+		Scratchpad: true,
 	}
 
-	// First build: sidecar written
 	if _, err := buildMemoryStore(m, nil, "mid-1"); err != nil {
 		t.Fatalf("first build: %v", err)
 	}
@@ -157,7 +147,7 @@ func TestBuildMemoryStore_Scratchpad_RequiresMissionID(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name:       "m",
-		Scratchpad: &config.MissionScratchpad{},
+		Scratchpad: true,
 	}
 	_, err := buildMemoryStore(m, nil, "")
 	if err == nil {
@@ -172,7 +162,7 @@ func TestBuildMemoryStore_RejectsReservedSharedMemoryNames(t *testing.T) {
 			Name:     "m",
 			Memories: []string{reserved},
 		}
-		mems := []config.Memory{{Name: reserved}}
+		mems := []config.Memory{{Name: reserved, Description: "x"}}
 		_, err := buildMemoryStore(m, mems, "mid-1")
 		if err == nil {
 			t.Fatalf("expected error for reserved shared memory name %q", reserved)
@@ -184,17 +174,17 @@ func TestBuildMemoryStore_BothMemoryAndScratchpad(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name:       "m",
-		Memory:     &config.MissionMemory{},
-		Scratchpad: &config.MissionScratchpad{},
+		Memory:     &config.MissionMemory{Description: "x"},
+		Scratchpad: true,
 	}
 	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if _, _, err := store.ResolvePath(aitools.MemorySlotName, "."); err != nil {
+	if _, err := store.ResolvePath(aitools.MemorySlotName, "."); err != nil {
 		t.Fatalf("memory slot should resolve: %v", err)
 	}
-	if _, _, err := store.ResolvePath(aitools.ScratchpadSlotName, "."); err != nil {
+	if _, err := store.ResolvePath(aitools.ScratchpadSlotName, "."); err != nil {
 		t.Fatalf("scratchpad slot should resolve: %v", err)
 	}
 }
@@ -206,7 +196,7 @@ func TestBuildMemoryStore_SharedMemory(t *testing.T) {
 		Memories: []string{"research"},
 	}
 	mems := []config.Memory{
-		{Name: "research", Description: "Research notes", Editable: true},
+		{Name: "research", Description: "Research notes"},
 	}
 
 	store, err := buildMemoryStore(m, mems, "mid-1")
@@ -214,12 +204,9 @@ func TestBuildMemoryStore_SharedMemory(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 
-	abs, writable, err := store.ResolvePath("research", ".")
+	abs, err := store.ResolvePath("research", ".")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
-	}
-	if !writable {
-		t.Fatal("editable shared memory must resolve as writable")
 	}
 	want := filepath.Join(home, "memories", "shared", "research")
 	if abs != want {
@@ -230,40 +217,17 @@ func TestBuildMemoryStore_SharedMemory(t *testing.T) {
 	}
 }
 
-func TestBuildMemoryStore_SharedMemory_ReadOnly(t *testing.T) {
-	withTempHome(t)
-	m := &config.Mission{
-		Name:     "m",
-		Memories: []string{"reference"},
-	}
-	mems := []config.Memory{
-		{Name: "reference"}, // editable defaults to false
-	}
-
-	store, err := buildMemoryStore(m, mems, "mid-1")
-	if err != nil {
-		t.Fatalf("build: %v", err)
-	}
-	_, writable, err := store.ResolvePath("reference", ".")
-	if err != nil {
-		t.Fatalf("resolve: %v", err)
-	}
-	if writable {
-		t.Fatal("default shared memory must be read-only")
-	}
-}
-
 func TestResolvePath_EmptySlotNameRejected(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name:   "m",
-		Memory: &config.MissionMemory{},
+		Memory: &config.MissionMemory{Description: "x"},
 	}
 	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if _, _, err := store.ResolvePath("", "."); err == nil {
+	if _, err := store.ResolvePath("", "."); err == nil {
 		t.Fatal("expected error when slot name is empty")
 	}
 }
@@ -272,13 +236,13 @@ func TestResolvePath_RejectsPathEscape(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name:   "m",
-		Memory: &config.MissionMemory{},
+		Memory: &config.MissionMemory{Description: "x"},
 	}
 	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if _, _, err := store.ResolvePath("memory", "../outside"); err == nil {
+	if _, err := store.ResolvePath("memory", "../outside"); err == nil {
 		t.Fatal("expected path-escape error")
 	}
 }
@@ -287,13 +251,13 @@ func TestResolvePath_UnknownSlot(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
 		Name:   "m",
-		Memory: &config.MissionMemory{},
+		Memory: &config.MissionMemory{Description: "x"},
 	}
 	store, err := buildMemoryStore(m, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	if _, _, err := store.ResolvePath("does_not_exist", "."); err == nil {
+	if _, err := store.ResolvePath("does_not_exist", "."); err == nil {
 		t.Fatal("expected error for unknown slot")
 	}
 }
@@ -324,7 +288,7 @@ func writeScratchpad(t *testing.T, home, missionName, runID string, createdAt ti
 
 func TestSweep_DeletesExpired(t *testing.T) {
 	home := withTempHome(t)
-	expired := writeScratchpad(t, home, "m", "old", time.Now().Add(-8*24*time.Hour), 7)
+	expired := writeScratchpad(t, home, "m", "old", time.Now().Add(-8*24*time.Hour), config.ScratchpadCleanupDays)
 
 	removed, err := SweepExpiredScratchpads()
 	if err != nil {
@@ -340,7 +304,7 @@ func TestSweep_DeletesExpired(t *testing.T) {
 
 func TestSweep_KeepsUnexpired(t *testing.T) {
 	home := withTempHome(t)
-	fresh := writeScratchpad(t, home, "m", "new", time.Now().Add(-2*24*time.Hour), 7)
+	fresh := writeScratchpad(t, home, "m", "new", time.Now().Add(-2*24*time.Hour), config.ScratchpadCleanupDays)
 
 	removed, err := SweepExpiredScratchpads()
 	if err != nil {
@@ -351,22 +315,6 @@ func TestSweep_KeepsUnexpired(t *testing.T) {
 	}
 	if _, err := os.Stat(fresh); err != nil {
 		t.Fatalf("fresh directory should still exist: %v", err)
-	}
-}
-
-func TestSweep_IgnoresZeroCleanup(t *testing.T) {
-	home := withTempHome(t)
-	keep := writeScratchpad(t, home, "m", "forever", time.Now().Add(-365*24*time.Hour), 0)
-
-	removed, err := SweepExpiredScratchpads()
-	if err != nil {
-		t.Fatalf("sweep: %v", err)
-	}
-	if len(removed) != 0 {
-		t.Fatalf("expected nothing removed when cleanup=0, got %v", removed)
-	}
-	if _, err := os.Stat(keep); err != nil {
-		t.Fatalf("directory with cleanup=0 should be preserved: %v", err)
 	}
 }
 
@@ -429,7 +377,7 @@ func TestSweep_WalksAcrossMissions(t *testing.T) {
 // scratchpad with a current sidecar — and the old one is gone.
 func TestSweepThenRebuildRoundTrip(t *testing.T) {
 	home := withTempHome(t)
-	stale := writeScratchpad(t, home, "demo", "old-run", time.Now().Add(-5*24*time.Hour), 2)
+	stale := writeScratchpad(t, home, "demo", "old-run", time.Now().Add(-30*24*time.Hour), config.ScratchpadCleanupDays)
 
 	if _, err := SweepExpiredScratchpads(); err != nil {
 		t.Fatalf("sweep: %v", err)
@@ -438,18 +386,15 @@ func TestSweepThenRebuildRoundTrip(t *testing.T) {
 		t.Fatalf("stale scratchpad should have been deleted: %v", err)
 	}
 
-	cleanup := 2
 	m := &config.Mission{
-		Name: "demo",
-		Scratchpad: &config.MissionScratchpad{
-			Cleanup: &cleanup,
-		},
+		Name:       "demo",
+		Scratchpad: true,
 	}
 	store, err := buildMemoryStore(m, nil, "new-run")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	fresh, _, err := store.ResolvePath(aitools.ScratchpadSlotName, ".")
+	fresh, err := store.ResolvePath(aitools.ScratchpadSlotName, ".")
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
 	}

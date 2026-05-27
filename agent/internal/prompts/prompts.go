@@ -247,10 +247,6 @@ func FormatMemoryContext(store aitools.MemoryStore) string {
 	sb.WriteString("The `slot` parameter is required on every call — pick one of the slot names below.\n\n")
 
 	for _, info := range infos {
-		access := "read-only"
-		if info.Writable {
-			access = "read/write"
-		}
 		label := ""
 		switch info.Name {
 		case aitools.MemorySlotName:
@@ -262,7 +258,7 @@ func FormatMemoryContext(store aitools.MemoryStore) string {
 		if info.Description != "" {
 			desc = " — " + info.Description
 		}
-		sb.WriteString(fmt.Sprintf("- **%s**%s%s (%s)\n", info.Name, label, desc, access))
+		sb.WriteString(fmt.Sprintf("- **%s**%s%s\n", info.Name, label, desc))
 	}
 
 	return sb.String()

@@ -2,77 +2,60 @@ package config
 
 import "fmt"
 
-// Reserved slot names for mission-scoped storage. Tool calls reference these
-// via the `slot` parameter (e.g. `slot: "memory"` or `slot: "scratchpad"`).
+// Reserved slot names for the mission-scoped storage slots. Agents address
+// them via the `slot` parameter on the file tools, alongside any shared
+// memory names declared at the top level.
 const (
 	MemorySlotName     = "memory"
 	ScratchpadSlotName = "scratchpad"
 )
 
-// DefaultScratchpadCleanupDays is the auto-delete window applied to a
-// mission's scratchpad when `cleanup` is not set.
-const DefaultScratchpadCleanupDays = 7
+// ScratchpadCleanupDays is the auto-delete window applied to every
+// mission's scratchpad. Not user-configurable — scratchpads are deliberately
+// short-lived.
+const ScratchpadCleanupDays = 7
 
 // Memory describes a top-level shared memory block:
 //
 //	memory "research" {
 //	  description = "..."
-//	  label       = "..."
-//	  editable    = true
 //	}
 //
 // The storage path is derived by the runtime — it lives at
-// `<squadron_home>/memories/shared/<name>/` — so no `path` is accepted from
-// HCL.
+// `<squadron_home>/memories/shared/<name>/`. Description is required so
+// agents can tell what each shared slot is for. All memories are writable
+// by their agents.
 type Memory struct {
 	Name        string `hcl:"name,label"`
-	Description string `hcl:"description,optional"`
-	Label       string `hcl:"label,optional"`
-	Editable    bool   `hcl:"editable,optional"`
+	Description string `hcl:"description"`
 }
 
-// Validate enforces naming rules. The literal names "memory" and "scratchpad"
-// are reserved for mission-scoped slots and must not be reused by a shared
-// memory.
+// Validate enforces naming rules + the required description.
 func (m *Memory) Validate() error {
 	if m.Name == MemorySlotName || m.Name == ScratchpadSlotName {
 		return fmt.Errorf("name %q is reserved for mission-scoped slots", m.Name)
+	}
+	if m.Description == "" {
+		return fmt.Errorf("description is required")
 	}
 	return nil
 }
 
 // MissionMemory describes the `memory { ... }` block inside a mission —
 // persistent storage that survives across runs. At most one per mission.
+// Same surface as the top-level Memory block minus the label: a required
+// description.
 //
-// Path is derived by the runtime from the mission name, so no `path` is
-// accepted from HCL.
+// The storage path is derived by the runtime from the mission name, so no
+// `path` is accepted from HCL.
 type MissionMemory struct {
-	Description string `hcl:"description,optional"`
+	Description string `hcl:"description"`
 }
 
-// Validate is a no-op today; kept so the type satisfies the same surface as
-// MissionScratchpad and so future fields can grow into it.
-func (mm *MissionMemory) Validate() error { return nil }
-
-// MissionScratchpad describes the `scratchpad { ... }` block inside a
-// mission — ephemeral per-run working space. At most one per mission. A
-// fresh directory is materialized for each mission instance and the cleanup
-// sweep deletes ones older than `cleanup` days.
-//
-// Path is derived by the runtime from the mission name and mission instance
-// ID, so no `path` is accepted from HCL.
-//
-// Cleanup is a pointer so we can distinguish "user did not set it" (apply
-// the default) from "user set 0" (keep forever).
-type MissionScratchpad struct {
-	Description string `hcl:"description,optional"`
-	Cleanup     *int   `hcl:"cleanup,optional"` // days before auto-delete; 0 = never
-}
-
-// Validate rejects negative cleanup values.
-func (ms *MissionScratchpad) Validate() error {
-	if ms.Cleanup != nil && *ms.Cleanup < 0 {
-		return fmt.Errorf("cleanup must be >= 0 (days)")
+// Validate enforces the required description.
+func (mm *MissionMemory) Validate() error {
+	if mm.Description == "" {
+		return fmt.Errorf("description is required")
 	}
 	return nil
 }

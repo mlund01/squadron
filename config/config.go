@@ -1784,7 +1784,8 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Attributes: []hcl.AttributeSchema{
 			{Name: "agents", Required: true},
 			{Name: "directive"},
-			{Name: "memories"}, // shared memory references: memories = [memories.foo]
+			{Name: "memories"},   // shared memory references: memories = [memories.foo]
+			{Name: "scratchpad"}, // bool: opt the mission into a per-run scratchpad slot
 			{Name: "max_parallel"},
 			{Name: "inputs"}, // shorthand: inputs = { field = string("desc", { default = "val" }) }
 			// Detected so we can produce a nicer error than "unsupported argument".
@@ -1797,8 +1798,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Type: "input", LabelNames: []string{"name"}}, // verbose input blocks still supported
 			{Type: "dataset", LabelNames: []string{"name"}},
 			{Type: "secret", LabelNames: []string{"name"}},
-			{Type: "memory"},     // mission-scoped persistent memory (slot "memory")
-			{Type: "scratchpad"}, // mission-scoped ephemeral scratchpad (slot "scratchpad")
+			{Type: "memory"}, // mission-scoped persistent memory (slot "memory")
 			{Type: "schedule"},
 			{Type: "trigger"},
 			{Type: "budget"},
@@ -1982,35 +1982,31 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		}
 	}
 
-	// Parse the optional `memory { ... }` block (persistent, one per mission)
-	// and `scratchpad { ... }` block (ephemeral, one per mission).
+	// Parse the optional `memory { ... }` block (persistent, one per mission).
 	var missionMemory *MissionMemory
-	var missionScratchpad *MissionScratchpad
 	for _, mb := range missionContent.Blocks {
-		switch mb.Type {
-		case "memory":
-			if missionMemory != nil {
-				return nil, fmt.Errorf("mission '%s': only one memory block allowed", missionName)
-			}
-			var mm MissionMemory
-			if diags := gohcl.DecodeBody(mb.Body, ctx, &mm); diags.HasErrors() {
-				return nil, fmt.Errorf("mission '%s' memory: %w", missionName, diags)
-			}
-			missionMemory = &mm
-		case "scratchpad":
-			if missionScratchpad != nil {
-				return nil, fmt.Errorf("mission '%s': only one scratchpad block allowed", missionName)
-			}
-			var ms MissionScratchpad
-			if diags := gohcl.DecodeBody(mb.Body, ctx, &ms); diags.HasErrors() {
-				return nil, fmt.Errorf("mission '%s' scratchpad: %w", missionName, diags)
-			}
-			if ms.Cleanup == nil {
-				v := DefaultScratchpadCleanupDays
-				ms.Cleanup = &v
-			}
-			missionScratchpad = &ms
+		if mb.Type != "memory" {
+			continue
 		}
+		if missionMemory != nil {
+			return nil, fmt.Errorf("mission '%s': only one memory block allowed", missionName)
+		}
+		var mm MissionMemory
+		if diags := gohcl.DecodeBody(mb.Body, ctx, &mm); diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' memory: %w", missionName, diags)
+		}
+		missionMemory = &mm
+	}
+
+	// Parse optional `scratchpad = true` attribute. Default false — agents
+	// only get a scratchpad slot when the mission explicitly opts in.
+	var missionScratchpad bool
+	if attr, ok := missionContent.Attributes["scratchpad"]; ok {
+		v, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' scratchpad: %w", missionName, diags)
+		}
+		missionScratchpad = v.True()
 	}
 
 	// Parse schedule blocks (optional, multiple allowed)

@@ -284,30 +284,30 @@ The scheduler lives in `scheduler/` but its lifecycle (creation, config updates,
 
 ### Memory + Scratchpad
 
-There are two kinds of mission-scoped file storage, plus a top-level shared
-kind:
+Two kinds of file storage:
 
 - **Memory** — persistent storage that survives across runs. Declared with
-  a top-level `memory "name" { ... }` (shared, multiple) or a mission-scoped
-  `memory { ... }` (private to the mission, at most one).
-- **Scratchpad** — ephemeral per-run working space. Declared with a
-  mission-scoped `scratchpad { ... }` block (at most one per mission). A
-  fresh directory is created for each mission run and the sweep deletes ones
-  past their `cleanup` window.
+  a top-level `memory "name" { description = "..." }` (shared, multiple)
+  or a mission-scoped `memory { description = "..." }` (private to the
+  mission, at most one). The two block forms take the same fields. Every
+  memory is writable.
+- **Scratchpad** — ephemeral per-run working space. A mission opts in
+  with `scratchpad = true`; auto-deleted 7 days after the run starts.
+  Nothing to configure.
 
 Agents access both kinds via the same `file_list`, `file_read`, `file_create`,
 `file_delete`, `file_search`, `file_grep` tools. Each call takes a required
 `slot` parameter naming which slot to operate in — there is no implicit
-default.
+default. If a mission declares no `memory { ... }` and no `scratchpad = true`,
+agents only see the shared memories listed in `memories = [...]`.
 
-Squadron owns the on-disk paths; the HCL never accepts a `path` attribute.
-The three slot kinds map to three fixed location patterns:
+Squadron owns the on-disk paths; the HCL never accepts a `path` attribute:
 
 | Kind | HCL | `slot` agents pass | On-disk path |
 |------|-----|---------------------|--------------|
 | Shared memory | top-level `memory "name" { ... }` | the HCL label | `<squadron_home>/memories/shared/<name>/` |
 | Mission memory | `memory { ... }` inside a mission | literal `"memory"` | `<squadron_home>/memories/mission/<mission_name>/` |
-| Mission scratchpad | `scratchpad { ... }` inside a mission | literal `"scratchpad"` | `<squadron_home>/scratchpads/<mission_name>/<instance_id>/` |
+| Mission scratchpad | `scratchpad = true` inside a mission | literal `"scratchpad"` | `<squadron_home>/scratchpads/<mission_name>/<instance_id>/` |
 
 The slot names `"memory"` and `"scratchpad"` are reserved — a top-level
 `memory "memory"` or `memory "scratchpad"` block is rejected.
@@ -315,12 +315,11 @@ The slot names `"memory"` and `"scratchpad"` are reserved — a top-level
 The old DSL surfaces — `shared_folder` blocks, `folder` / `run_folder`
 blocks, the `folders = ...` attribute — are **not** accepted. The parser
 surfaces a clear error pointing at the new syntax. Path attributes anywhere
-on a memory/scratchpad block are rejected too.
+on a memory block are rejected too.
 
 ```hcl
 memory "reference" {
   description = "Shared reference materials"
-  editable    = false  # default read-only
 }
 
 mission "analyze" {
@@ -330,40 +329,39 @@ mission "analyze" {
     description = "Cumulative reports — persists across runs"
   }
 
-  scratchpad {
-    description = "Per-run working space"
-    cleanup     = 7  # optional; defaults to 7, set 0 to keep forever
-  }
+  scratchpad = true
 }
 ```
 
 **Implementation:**
 
-- `config.Memory` (top-level shared), `config.MissionMemory` (mission's
-  persistent), and `config.MissionScratchpad` (mission's ephemeral) all
-  live in [config/memory.go](config/memory.go). On a parsed mission they
-  land as `Memories []string`, `Memory *MissionMemory`, and
-  `Scratchpad *MissionScratchpad` (`config.Mission` in
-  [config/mission.go](config/mission.go)).
+- `config.Memory` (top-level shared) and `config.MissionMemory` (mission's
+  persistent) both live in [config/memory.go](config/memory.go); both have
+  a required `Description` field. On a parsed mission they land as
+  `Memories []string`, `Memory *MissionMemory`, and `Scratchpad bool`
+  (`config.Mission` in [config/mission.go](config/mission.go)).
 - Top-level `memory "name"` blocks are parsed in Stage 1.5 (with `vars`
-  context); each mission's `memory { ... }` and `scratchpad { ... }` blocks
-  are parsed inside the mission block in Stage 5. The `memories.NAME` HCL
-  namespace exposes the shared-memory labels to mission attributes.
+  context); each mission's `memory { ... }` block and `scratchpad = bool`
+  attribute are parsed inside the mission block in Stage 5. The
+  `memories.NAME` HCL namespace exposes the shared-memory labels to
+  mission attributes.
 - [mission/memory_store.go](mission/memory_store.go) is the authoritative
   runtime resolver. Paths are derived from `paths.SquadronHome()`:
   `SharedMemoryPath(name)`, `MissionMemoryPath(missionName)`, and
   `MissionScratchpadPath(missionName, missionInstanceID)`.
   `buildMemoryStore(mission, memories, missionInstanceID)` must be called
   **after** the mission instance ID is assigned in `Runner.Run()` because
-  the scratchpad path depends on it.
+  the scratchpad path depends on it. `MemoryStore.ResolvePath` returns
+  just `(string, error)` — there is no read-only mode at this layer.
 - Each scratchpad directory gets a sidecar `.squadron-run.json` recording
-  `created_at` + `cleanup_days` so the sweep can find expired ones.
+  `created_at` + `cleanup_days` (always `config.ScratchpadCleanupDays = 7`)
+  so the sweep can find expired ones.
 - `mission.SweepExpiredScratchpads()` walks
   `<squadron_home>/scratchpads/*/*`, deleting any per-run directory whose
-  sidecar is past its cleanup deadline. It runs opportunistically at the
-  start of every `Runner.Run()` (for missions with a scratchpad) and on an
-  hourly ticker in `cmd/engage.go`. No config lookup needed — the filesystem
-  layout is self-describing.
+  sidecar is past its 7-day deadline. It runs opportunistically at the
+  start of every `Runner.Run()` (for missions with a scratchpad) and on
+  an hourly ticker in `cmd/engage.go`. No config lookup needed — the
+  filesystem layout is self-describing.
 
 ### Mission-Scoped Agents
 

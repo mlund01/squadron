@@ -17,12 +17,11 @@ import (
 )
 
 // resolvedMemory describes one materialized memory slot for the UI: a
-// human-friendly name, the absolute path it lives at, and whether agents are
-// allowed to write to it.
+// human-friendly name and the absolute path it lives at. Every slot is
+// writable — there is no read-only mode.
 type resolvedMemory struct {
-	name     string
-	path     string
-	editable bool
+	name string
+	path string
 }
 
 // resolveMemoryPath looks up a memory slot by name (top-level shared
@@ -38,11 +37,7 @@ func (c *Client) resolveMemoryPath(memoryName, relPath string) (*resolvedMemory,
 			if err != nil {
 				return nil, "", fmt.Errorf("resolve shared memory %q: %w", memoryName, err)
 			}
-			rm := &resolvedMemory{
-				name:     cfg.Memories[i].Name,
-				path:     absPath,
-				editable: cfg.Memories[i].Editable,
-			}
+			rm := &resolvedMemory{name: cfg.Memories[i].Name, path: absPath}
 			path, err := c.resolveSafePath(absPath, relPath)
 			return rm, path, err
 		}
@@ -55,7 +50,7 @@ func (c *Client) resolveMemoryPath(memoryName, relPath string) (*resolvedMemory,
 			if err != nil {
 				return nil, "", fmt.Errorf("resolve mission memory for %q: %w", m.Name, err)
 			}
-			rm := &resolvedMemory{name: m.Name, path: absPath, editable: true}
+			rm := &resolvedMemory{name: m.Name, path: absPath}
 			path, err := c.resolveSafePath(absPath, relPath)
 			return rm, path, err
 		}
@@ -115,10 +110,6 @@ func collectMemoryInfos(cfg *config.Config) ([]protocol.SharedFolderInfo, error)
 	var folders []protocol.SharedFolderInfo
 
 	for _, mem := range cfg.Memories {
-		label := mem.Label
-		if label == "" {
-			label = mem.Name
-		}
 		path, err := mission.SharedMemoryPath(mem.Name)
 		if err != nil {
 			return nil, fmt.Errorf("shared memory %q: %w", mem.Name, err)
@@ -126,9 +117,9 @@ func collectMemoryInfos(cfg *config.Config) ([]protocol.SharedFolderInfo, error)
 		folders = append(folders, protocol.SharedFolderInfo{
 			Name:        mem.Name,
 			Path:        path,
-			Label:       label,
+			Label:       mem.Name,
 			Description: mem.Description,
-			Editable:    mem.Editable,
+			Editable:    true, // every memory is writable
 			IsShared:    true,
 			Missions:    sharedMissions[mem.Name],
 		})
@@ -259,15 +250,10 @@ func (c *Client) handleWriteBrowseFile(env *protocol.Envelope) (*protocol.Envelo
 		return nil, fmt.Errorf("decode write_browse_file: %w", err)
 	}
 
-	mem, fullPath, err := c.resolveMemoryPath(payload.BrowserName, payload.RelPath)
+	_, fullPath, err := c.resolveMemoryPath(payload.BrowserName, payload.RelPath)
 	if err != nil {
 		return protocol.NewResponse(env.RequestID, protocol.TypeWriteBrowseFileResult,
 			&protocol.WriteBrowseFileResultPayload{Success: false, Error: err.Error()})
-	}
-
-	if !mem.editable {
-		return protocol.NewResponse(env.RequestID, protocol.TypeWriteBrowseFileResult,
-			&protocol.WriteBrowseFileResultPayload{Success: false, Error: "memory is read-only"})
 	}
 
 	if err := os.WriteFile(fullPath, []byte(payload.Content), 0644); err != nil {

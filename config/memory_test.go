@@ -14,8 +14,6 @@ var _ = Describe("Memory + Scratchpad", func() {
 			hcl := fullBaseHCL() + `
 memory "research" {
   description = "Research docs"
-  label       = "Research"
-  editable    = true
 }
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
@@ -29,22 +27,53 @@ mission "m" {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Memories).To(HaveLen(1))
 			Expect(cfg.Memories[0].Name).To(Equal("research"))
-			Expect(cfg.Memories[0].Editable).To(BeTrue())
+			Expect(cfg.Memories[0].Description).To(Equal("Research docs"))
 			Expect(cfg.Missions[0].Memories).To(ConsistOf("research"))
 		})
 
+		It("requires a description", func() {
+			hcl := fullBaseHCL() + `
+memory "research" {}
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+		})
+
 		It("rejects the reserved name 'memory'", func() {
-			m := config.Memory{Name: "memory"}
+			m := config.Memory{Name: "memory", Description: "x"}
 			err := m.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("reserved"))
 		})
 
 		It("rejects the reserved name 'scratchpad'", func() {
-			m := config.Memory{Name: "scratchpad"}
+			m := config.Memory{Name: "scratchpad", Description: "x"}
 			err := m.Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("reserved"))
+		})
+
+		It("rejects an `editable` attribute (all memories are editable now)", func() {
+			hcl := fullBaseHCL() + `
+memory "research" {
+  description = "x"
+  editable    = true
+}
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
 		})
 
 		It("rejects the old shared_folder block with a pointer at the new syntax", func() {
@@ -68,7 +97,8 @@ mission "m" {
 		It("rejects the old `path` attribute on a memory block", func() {
 			hcl := fullBaseHCL() + `
 memory "research" {
-  path = "./data"
+  description = "x"
+  path        = "./data"
 }
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
@@ -83,7 +113,7 @@ mission "m" {
 	})
 
 	Describe("mission memory block (persistent)", func() {
-		It("parses a memory block on a mission", func() {
+		It("parses a memory block with a description", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
@@ -99,7 +129,21 @@ mission "m" {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Missions[0].Memory).NotTo(BeNil())
 			Expect(cfg.Missions[0].Memory.Description).To(Equal("Long-term notes"))
-			Expect(cfg.Missions[0].Scratchpad).To(BeNil())
+			Expect(cfg.Missions[0].Scratchpad).To(BeFalse())
+		})
+
+		It("requires a description", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memory {}
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
 		})
 
 		It("rejects two memory blocks on the same mission", func() {
@@ -118,26 +162,12 @@ mission "m" {
 			Expect(err.Error()).To(ContainSubstring("only one memory block allowed"))
 		})
 
-		It("rejects a `type` attribute (was removed when the block split)", func() {
+		It("rejects a `path` attribute", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  memory { type = "persistent" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-		})
-
-		It("rejects a `path` attribute on a mission memory block", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  memory { path = "./x" }
+  memory { description = "x"; path = "./x" }
   task "t" { objective = "go" }
 }
 `
@@ -147,79 +177,36 @@ mission "m" {
 		})
 	})
 
-	Describe("mission scratchpad block (ephemeral)", func() {
-		It("parses a scratchpad block with default cleanup", func() {
+	Describe("mission scratchpad attribute", func() {
+		It("defaults to false when not set", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  scratchpad {
-    description = "Scratch"
-  }
   task "t" { objective = "go" }
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].Scratchpad).NotTo(BeNil())
-			Expect(cfg.Missions[0].Scratchpad.Description).To(Equal("Scratch"))
-			Expect(cfg.Missions[0].Scratchpad.Cleanup).NotTo(BeNil())
-			Expect(*cfg.Missions[0].Scratchpad.Cleanup).To(Equal(config.DefaultScratchpadCleanupDays))
-			Expect(cfg.Missions[0].Memory).To(BeNil())
+			Expect(cfg.Missions[0].Scratchpad).To(BeFalse())
 		})
 
-		It("preserves an explicit cleanup = 0 (keep forever)", func() {
+		It("accepts scratchpad = true", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
-  scratchpad { cleanup = 0 }
+  scratchpad = true
   task "t" { objective = "go" }
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].Scratchpad.Cleanup).NotTo(BeNil())
-			Expect(*cfg.Missions[0].Scratchpad.Cleanup).To(Equal(0))
+			Expect(cfg.Missions[0].Scratchpad).To(BeTrue())
 		})
 
-		It("rejects two scratchpad blocks", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  scratchpad {}
-  scratchpad {}
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("only one scratchpad block allowed"))
-		})
-
-		It("rejects a negative cleanup", func() {
-			neg := -1
-			ms := &config.MissionScratchpad{Cleanup: &neg}
-			Expect(ms.Validate()).To(MatchError(ContainSubstring("cleanup must be >= 0")))
-		})
-
-		It("rejects a `path` attribute", func() {
-			hcl := fullBaseHCL() + `
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  scratchpad { path = "./x" }
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-		})
 	})
 
 	Describe("memory + scratchpad on the same mission", func() {
@@ -229,7 +216,7 @@ mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]
   memory     { description = "long-term" }
-  scratchpad { description = "per-run" }
+  scratchpad = true
   task "t" { objective = "go" }
 }
 `
@@ -237,7 +224,7 @@ mission "m" {
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Missions[0].Memory).NotTo(BeNil())
-			Expect(cfg.Missions[0].Scratchpad).NotTo(BeNil())
+			Expect(cfg.Missions[0].Scratchpad).To(BeTrue())
 		})
 	})
 
@@ -274,7 +261,7 @@ mission "m" {
 
 		It("rejects the old `folders = ...` attribute", func() {
 			hcl := fullBaseHCL() + `
-memory "ref" {}
+memory "ref" { description = "x" }
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents    = [agents.test_agent]

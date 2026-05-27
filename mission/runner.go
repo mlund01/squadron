@@ -571,7 +571,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	// Memory store depends on missionID (for the scratchpad path), so build
 	// it here rather than in NewRunner. Sweep expired scratchpads async —
 	// the result doesn't affect this run's correctness, only disk usage.
-	if r.mission.Scratchpad != nil {
+	if r.mission.Scratchpad {
 		go func() { _, _ = SweepExpiredScratchpads() }()
 	}
 	memoryStore, err := buildMemoryStore(r.mission, r.cfg.Memories, missionID)

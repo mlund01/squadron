@@ -309,9 +309,9 @@ type Mission struct {
 	Tasks       []Task            `hcl:"task,block"`
 	Inputs      []MissionInput    // Parsed from input blocks
 	Datasets    []Dataset         // Parsed from dataset blocks
-	Memories   []string           // Shared memory names referenced by this mission
-	Memory     *MissionMemory     // Optional persistent mission memory (reserved slot "memory")
-	Scratchpad *MissionScratchpad // Optional per-run ephemeral scratchpad (reserved slot "scratchpad")
+	Memories   []string       // Shared memory names referenced by this mission
+	Memory     *MissionMemory // Optional persistent mission memory (slot "memory")
+	Scratchpad bool           // If true, mission gets an ephemeral per-run scratchpad (slot "scratchpad")
 	Schedules   []Schedule        `json:"schedules,omitempty"`
 	Trigger     *Trigger          `json:"trigger,omitempty"`
 	MaxParallel int               `json:"maxParallel,omitempty"` // default 3
@@ -489,13 +489,6 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, al
 	if w.Memory != nil {
 		if err := w.Memory.Validate(); err != nil {
 			return fmt.Errorf("memory: %w", err)
-		}
-	}
-
-	// Validate the mission scratchpad block if present.
-	if w.Scratchpad != nil {
-		if err := w.Scratchpad.Validate(); err != nil {
-			return fmt.Errorf("scratchpad: %w", err)
 		}
 	}
 

@@ -336,3 +336,26 @@ When running inside a mission, agents automatically get these dataset tools:
 | `result_to_dataset` | Convert a large intercepted result into a dataset for iteration |
 
 See [Datasets](/missions/datasets) for details and examples.
+
+### File Tools
+
+When a mission declares at least one storage slot — a top-level `memory "name"` referenced in `memories = [...]`, a mission-scoped `memory { }`, or `scratchpad = true` — every agent in that mission automatically gets these six file tools:
+
+| Tool | Description |
+|------|-------------|
+| `file_list` | List files and directories in a slot, with optional recursion and pagination |
+| `file_read` | Read a file's contents (optionally capped by lines or bytes) |
+| `file_create` | Create, overwrite, or append to a file |
+| `file_delete` | Delete a file (directories are not allowed) |
+| `file_search` | Recursively search for files by filename regex |
+| `file_grep` | Search file contents by regex |
+
+Every call takes a required `slot` parameter naming which slot to operate in:
+
+- `"memory"` — the mission's persistent memory (only available if the mission declares `memory { }`)
+- `"scratchpad"` — the mission's ephemeral per-run scratchpad (only available if the mission sets `scratchpad = true`; auto-cleaned after 7 days)
+- a shared memory's HCL label — for any memory the mission lists in `memories = [...]`
+
+Paths are always relative to the slot's root. Absolute paths and `..` escapes are rejected.
+
+A mission with no `memories =`, no `memory { }`, and no `scratchpad = true` does NOT get the file tools — they appear only when there's somewhere to put files. See [Memory & Scratchpad](/missions/folders) for the full slot model and the storage paths Squadron picks.

@@ -43,9 +43,9 @@ mission "data_pipeline" {
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |
 | `dataset` | block | Dataset definitions (optional) |
-| `folders` | list | Shared folder references, e.g. `[shared_folders.data]` (see [Folders](/missions/folders)) |
-| `folder` | block | Persistent mission-scoped folder, registered as `"mission"` |
-| `run_folder` | block | Per-run ephemeral folder, registered as `"run"` |
+| `memories` | list | Shared memory references, e.g. `[memories.data]` (see [Memory & Scratchpad](/missions/folders)) |
+| `memory` | block | Mission-scoped persistent memory (slot `"memory"`). Required `description`. At most one per mission. |
+| `scratchpad` | bool | If `true`, the mission gets an ephemeral per-run scratchpad (slot `"scratchpad"`); auto-deleted after 7 days. |
 | `schedule` | block | Automatic run schedules (optional, repeatable) |
 | `trigger` | block | Webhook trigger (optional) |
 | `max_parallel` | number | Max concurrent instances (default: 3) |

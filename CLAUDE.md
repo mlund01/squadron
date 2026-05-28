@@ -281,64 +281,86 @@ mission "expensive_research" {
 
 The scheduler lives in `scheduler/` but its lifecycle (creation, config updates, shutdown) is managed by `cmd/serve.go`, not wsbridge. The wsbridge client receives a `ConcurrencyTracker` interface for enforcing `max_parallel` on all mission starts. The cron library used is `robfig/cron/v3`.
 
-### Folders
+### Memory + Scratchpad
 
-Folders are sandboxed filesystem locations that agents access via the `file_list`,
-`file_read`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools.
-The `folder` parameter is required on every tool call — there is no implicit
-default.
+Two kinds of file storage:
 
-Three kinds exist, with strict naming rules:
+- **Memory** — persistent storage that survives across runs. Declared with
+  a top-level `memory "name" { description = "..." }` (shared, multiple)
+  or a mission-scoped `memory { description = "..." }` (private to the
+  mission, at most one). The two block forms take the same fields. Every
+  memory is writable.
+- **Scratchpad** — ephemeral per-run working space. A mission opts in
+  with `scratchpad = true`; auto-deleted 7 days after the run starts.
+  Nothing to configure.
 
-| Kind | HCL | Registered name | Scope | Persistence |
-|------|-----|-----------------|-------|-------------|
-| Shared | top-level `shared_folder "name" { ... }` | user-chosen name | referenced by any mission via `folders = [shared_folders.name]` | persists |
-| Mission | `folder { ... }` inside a mission | literal `"mission"` | one per mission | persists across runs |
-| Run | `run_folder { ... }` inside a mission | literal `"run"` | one per mission per run | ephemeral; path is `<base>/<missionID>/` |
+Agents access both kinds via the same `file_list`, `file_read`, `file_create`,
+`file_delete`, `file_search`, `file_grep` tools. Each call takes a required
+`slot` parameter naming which slot to operate in — there is no implicit
+default. If a mission declares no `memory { ... }` and no `scratchpad = true`,
+agents only see the shared memories listed in `memories = [...]`.
 
-The names `"mission"` and `"run"` are reserved — `shared_folder` cannot use them
-(enforced in `config/shared_folder.go`).
+Squadron owns the on-disk paths; the HCL never accepts a `path` attribute:
+
+| Kind | HCL | `slot` agents pass | On-disk path |
+|------|-----|---------------------|--------------|
+| Shared memory | top-level `memory "name" { ... }` | the HCL label | `<squadron_home>/memories/shared/<name>/` |
+| Mission memory | `memory { ... }` inside a mission | literal `"memory"` | `<squadron_home>/memories/mission/<mission_name>/` |
+| Mission scratchpad | `scratchpad = true` inside a mission | literal `"scratchpad"` | `<squadron_home>/scratchpads/<mission_name>/<instance_id>/` |
+
+The slot names `"memory"` and `"scratchpad"` are reserved — a top-level
+`memory "memory"` or `memory "scratchpad"` block is rejected.
+
+The old DSL surfaces — `shared_folder` blocks, `folder` / `run_folder`
+blocks, the `folders = ...` attribute — are **not** accepted. The parser
+surfaces a clear error pointing at the new syntax. Path attributes anywhere
+on a memory block are rejected too.
 
 ```hcl
-shared_folder "reference" {
-  path     = "./data/reference"
-  editable = false   # default read-only
+memory "reference" {
+  description = "Shared reference materials"
 }
 
 mission "analyze" {
-  folders = [shared_folders.reference]
+  memories = [memories.reference]
 
-  folder {
-    path        = "./analyses"
+  memory {
     description = "Cumulative reports — persists across runs"
   }
 
-  run_folder {
-    base        = "./runs"            # optional, default ".squadron/runs"
-    description = "Per-run scratch"
-    cleanup     = 7                   # optional, auto-delete after N days; defaults to 7, set 0 to keep forever
-  }
+  scratchpad = true
 }
 ```
 
 **Implementation:**
 
-- `config.SharedFolder`, `config.MissionFolder`, `config.MissionRunFolder` in
-  [config/shared_folder.go](config/shared_folder.go) and [config/mission.go](config/mission.go).
-- Shared folders are parsed in Stage 1.5 (with `vars` context). The mission's
-  `folder` and `run_folder` blocks are parsed inside the mission block in Stage 5.
-- [mission/folder_store.go](mission/folder_store.go) is the authoritative
-  runtime resolver. `buildFolderStore(mission, sharedFolders, missionID)` must be
-  called **after** the mission ID is assigned in `Runner.Run()`, because the run
-  folder path depends on it. There is no implicit default folder — every
-  tool call must name the folder explicitly.
-- Run folders are materialized at `<base>/<missionID>/` and a sidecar
-  `.squadron-run.json` records `created_at` + `cleanup_days`.
-- `mission.SweepExpiredRunFolders(base)` walks a base directory and deletes any
-  subfolder whose sidecar says it is past its cleanup deadline. It runs
-  opportunistically at the start of every `Runner.Run()` (for that mission's
-  base) and on an hourly ticker in `cmd/engage.go` (across every mission in the
-  current config).
+- `config.Memory` (top-level shared) and `config.MissionMemory` (mission's
+  persistent) both live in [config/memory.go](config/memory.go); both have
+  a required `Description` field. On a parsed mission they land as
+  `Memories []string`, `Memory *MissionMemory`, and `Scratchpad bool`
+  (`config.Mission` in [config/mission.go](config/mission.go)).
+- Top-level `memory "name"` blocks are parsed in Stage 1.5 (with `vars`
+  context); each mission's `memory { ... }` block and `scratchpad = bool`
+  attribute are parsed inside the mission block in Stage 5. The
+  `memories.NAME` HCL namespace exposes the shared-memory labels to
+  mission attributes.
+- [mission/memory_store.go](mission/memory_store.go) is the authoritative
+  runtime resolver. Paths are derived from `paths.SquadronHome()`:
+  `SharedMemoryPath(name)`, `MissionMemoryPath(missionName)`, and
+  `MissionScratchpadPath(missionName, missionInstanceID)`.
+  `buildMemoryStore(mission, memories, missionInstanceID)` must be called
+  **after** the mission instance ID is assigned in `Runner.Run()` because
+  the scratchpad path depends on it. `MemoryStore.ResolvePath` returns
+  just `(string, error)` — there is no read-only mode at this layer.
+- Each scratchpad directory gets a sidecar `.squadron-run.json` recording
+  `created_at` + `cleanup_days` (always `config.ScratchpadCleanupDays = 7`)
+  so the sweep can find expired ones.
+- `mission.SweepExpiredScratchpads()` walks
+  `<squadron_home>/scratchpads/*/*`, deleting any per-run directory whose
+  sidecar is past its 7-day deadline. It runs opportunistically at the
+  start of every `Runner.Run()` (for missions with a scratchpad) and on
+  an hourly ticker in `cmd/engage.go`. No config lookup needed — the
+  filesystem layout is self-describing.
 
 ### Mission-Scoped Agents
 

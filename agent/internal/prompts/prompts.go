@@ -231,38 +231,34 @@ func formatAgents(agents []AgentInfo) string {
 	return sb.String()
 }
 
-// FormatFolderContext builds a system prompt section describing available folders.
-func FormatFolderContext(store aitools.FolderStore) string {
+// FormatMemoryContext builds a system prompt section describing available memory slots.
+func FormatMemoryContext(store aitools.MemoryStore) string {
 	if store == nil {
 		return ""
 	}
-	infos := store.FolderInfos()
+	infos := store.MemoryInfos()
 	if len(infos) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	sb.WriteString("## Available Folders\n\n")
-	sb.WriteString("You have access to file folders via the file_list, file_read, file_create, file_delete, file_search, and file_grep tools.\n")
-	sb.WriteString("The `folder` parameter is required on every call — pick one of the names below.\n\n")
+	sb.WriteString("## Available Slots\n\n")
+	sb.WriteString("You have access to file storage slots via the file_list, file_read, file_create, file_delete, file_search, and file_grep tools.\n")
+	sb.WriteString("The `slot` parameter is required on every call — pick one of the slot names below.\n\n")
 
 	for _, info := range infos {
-		access := "read-only"
-		if info.Writable {
-			access = "read/write"
-		}
 		label := ""
 		switch info.Name {
-		case aitools.MissionFolderName:
-			label = " (persistent mission folder — survives across runs)"
-		case aitools.RunFolderName:
-			label = " (per-run folder — fresh directory for this mission run)"
+		case aitools.MemorySlotName:
+			label = " (persistent mission memory — survives across runs)"
+		case aitools.ScratchpadSlotName:
+			label = " (ephemeral per-run scratchpad — fresh for this mission run)"
 		}
 		desc := ""
 		if info.Description != "" {
 			desc = " — " + info.Description
 		}
-		sb.WriteString(fmt.Sprintf("- **%s**%s%s (%s)\n", info.Name, label, desc, access))
+		sb.WriteString(fmt.Sprintf("- **%s**%s%s\n", info.Name, label, desc))
 	}
 
 	return sb.String()

@@ -89,6 +89,28 @@ Agents reach it under the name `scratchpad`:
 { "slot": "scratchpad", "path": "notes.txt", "content": "..." }
 ```
 
+### When to use a scratchpad
+
+Reach for the scratchpad when one run needs working storage that the *next* run shouldn't see:
+
+- **Multi-step or multi-agent pipelines.** Agent A scrapes 50 pages and writes them to `scratchpad/raw/`; agent B reads, filters, and summarizes; agent C writes only the final summary to `memory/`. Each run starts clean — no stale `raw/` files leaking between runs.
+- **Intermediate computation you don't want to ship.** Partial JSON, debug dumps, retry attempts, half-rendered output — anything the LLM produces while figuring out the right answer but that shouldn't accumulate forever.
+- **Per-run isolation under concurrency.** Two simultaneous runs of the same mission can both write to `scratchpad` without colliding; each gets its own `<mission>/<run-id>/` directory.
+- **Resume material.** If a long-running mission crashes mid-flight, its scratchpad stays on disk so `squadron mission --resume <id>` can pick up where it left off.
+
+### Memory vs scratchpad
+
+If you're not sure which to use, this is the rule:
+
+| Question | Use |
+|----------|-----|
+| Should the *next* run of this mission see this file? | `memory { }` |
+| Is this a working draft, intermediate result, or temp file? | `scratchpad = true` |
+| Will multiple missions need to read this? | top-level `memory "name" { ... }` |
+| Does this need to survive across runs *and* be writable by agents? | `memory { }` (every memory is writable) |
+
+A mission can declare both — the persistent `memory { }` for things worth keeping, and `scratchpad = true` for everything else.
+
 ## Tool Reference
 
 All six file tools take a required `slot` parameter — that's the slot name (`"memory"`, `"scratchpad"`, or a shared memory's label):

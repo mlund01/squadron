@@ -170,6 +170,45 @@ func TestBuildMemoryStore_RejectsReservedSharedMemoryNames(t *testing.T) {
 	}
 }
 
+func TestMemoryInfos_IsAlphabeticallySorted(t *testing.T) {
+	// MemoryInfos feeds the agent's system prompt; map-iteration order would
+	// bust prompt caching on every run, so the order must be deterministic.
+	withTempHome(t)
+	m := &config.Mission{
+		Name:       "m",
+		Memories:   []string{"zeta", "alpha", "mu"},
+		Memory:     &config.MissionMemory{Description: "x"},
+		Scratchpad: true,
+	}
+	mems := []config.Memory{
+		{Name: "zeta", Description: "z"},
+		{Name: "alpha", Description: "a"},
+		{Name: "mu", Description: "m"},
+	}
+	store, err := buildMemoryStore(m, mems, "mid-1")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+
+	// Run a few times — random map seed should not change the output order.
+	want := []string{"alpha", "memory", "mu", "scratchpad", "zeta"}
+	for i := 0; i < 5; i++ {
+		infos := store.MemoryInfos()
+		got := make([]string, len(infos))
+		for j, info := range infos {
+			got[j] = info.Name
+		}
+		if len(got) != len(want) {
+			t.Fatalf("iter %d: want %d slots, got %d: %v", i, len(want), len(got), got)
+		}
+		for j := range got {
+			if got[j] != want[j] {
+				t.Fatalf("iter %d: order: want %v, got %v", i, want, got)
+			}
+		}
+	}
+}
+
 func TestBuildMemoryStore_BothMemoryAndScratchpad(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{
@@ -368,6 +407,35 @@ func TestSweep_WalksAcrossMissions(t *testing.T) {
 	}
 	if _, err := os.Stat(keep); err != nil {
 		t.Fatalf("unexpired directory should remain: %v", err)
+	}
+}
+
+func TestSweep_OneBadSubdirDoesNotHaltOthers(t *testing.T) {
+	home := withTempHome(t)
+	expired := writeScratchpad(t, home, "alpha", "old", time.Now().Add(-30*24*time.Hour), config.ScratchpadCleanupDays)
+
+	// Create a sibling mission dir whose run subdir is unreadable. Use chmod
+	// 000 on the parent so os.ReadDir on `<root>/broken/` fails with EACCES.
+	broken := filepath.Join(home, "scratchpads", "broken")
+	if err := os.MkdirAll(broken, 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Put a file under it that ReadDir-on-a-file would error on.
+	if err := os.WriteFile(filepath.Join(broken, "not_a_dir"), []byte{}, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(broken, 0000); err != nil {
+		t.Skipf("can't chmod 0000 in this environment: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(broken, 0755) })
+
+	removed, err := SweepExpiredScratchpads()
+	if err != nil {
+		t.Fatalf("sweep should not error when a sibling mission's dir is unreadable: %v", err)
+	}
+	// The expired alpha dir must still get cleaned up.
+	if _, statErr := os.Stat(expired); !os.IsNotExist(statErr) {
+		t.Fatalf("expired alpha scratchpad should be gone (got stat err %v, removed=%v)", statErr, removed)
 	}
 }
 

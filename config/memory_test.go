@@ -59,6 +59,51 @@ mission "m" {
 			Expect(err.Error()).To(ContainSubstring("reserved"))
 		})
 
+		It("rejects names with path separators or '..' (path-traversal guard)", func() {
+			for _, bad := range []string{"../escape", "foo/bar", "foo\\bar", "..", ".", ".hidden", "a..b"} {
+				m := config.Memory{Name: bad, Description: "x"}
+				err := m.Validate()
+				Expect(err).To(HaveOccurred(), "expected %q to be rejected", bad)
+			}
+		})
+
+		It("rejects a shared memory whose label collides with a mission name", func() {
+			hcl := fullBaseHCL() + `
+memory "analyze" {
+  description = "shared"
+}
+mission "analyze" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			// Cross-name collision is caught by Config.Validate (the wsbridge
+			// browser keys both under the same string).
+			_, err := config.LoadAndValidate(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("conflicts with mission"))
+		})
+
+		It("gives a clear error when a mission references an unknown shared memory", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  memories  = [memories.does_not_exist]
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			// Must reference the missing name — not be a generic 'unknown
+			// variable memories' (which is what happens without the always-
+			// register-empty-namespace fix).
+			Expect(err.Error()).To(ContainSubstring("does_not_exist"))
+		})
+
 		It("rejects an `editable` attribute (all memories are editable now)", func() {
 			hcl := fullBaseHCL() + `
 memory "research" {
@@ -257,6 +302,24 @@ mission "m" {
 			_, err := config.LoadFile(f)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("`run_folder { ... }` block is no longer supported"))
+			// Remediation must point at the actual new DSL, not a defunct
+			// intermediate from earlier in this PR.
+			Expect(err.Error()).To(ContainSubstring("scratchpad = true"))
+		})
+
+		It("points at the new memory DSL when rejecting the old `folder { ... }` block", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents    = [agents.test_agent]
+  folder { path = "./x" }
+  task "t" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring(`memory { description`))
 		})
 
 		It("rejects the old `folders = ...` attribute", func() {

@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // Reserved slot names for the mission-scoped storage slots. Agents address
 // them via the `slot` parameter on the file tools, alongside any shared
@@ -35,8 +38,31 @@ func (m *Memory) Validate() error {
 	if m.Name == MemorySlotName || m.Name == ScratchpadSlotName {
 		return fmt.Errorf("name %q is reserved for mission-scoped slots", m.Name)
 	}
+	if err := validateSlotName(m.Name); err != nil {
+		return err
+	}
 	if m.Description == "" {
 		return fmt.Errorf("description is required")
+	}
+	return nil
+}
+
+// validateSlotName rejects HCL labels that would break filesystem layout:
+// path separators, parent-dir traversal, or leading dot. Used by both shared
+// memory labels and mission names (since both become directory names under
+// <squadron_home>).
+func validateSlotName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("name %q must not contain path separators", name)
+	}
+	if name == "." || name == ".." || strings.HasPrefix(name, ".") {
+		return fmt.Errorf("name %q must not start with '.'", name)
+	}
+	if strings.Contains(name, "..") {
+		return fmt.Errorf("name %q must not contain '..'", name)
 	}
 	return nil
 }

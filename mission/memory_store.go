@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -231,13 +232,18 @@ func (s *missionMemoryStore) availableNames() []string {
 }
 
 func (s *missionMemoryStore) MemoryInfos() []aitools.MemoryInfo {
-	var infos []aitools.MemoryInfo
+	infos := make([]aitools.MemoryInfo, 0, len(s.slots))
 	for name, entry := range s.slots {
 		infos = append(infos, aitools.MemoryInfo{
 			Name:        name,
 			Description: entry.description,
 		})
 	}
+	// Stable order — the result feeds the agent's system prompt
+	// (prompts.FormatMemoryContext). Go map iteration is randomized, so
+	// without this sort the prompt bytes change run-to-run and Anthropic
+	// prompt caching misses on otherwise-identical missions.
+	sort.Slice(infos, func(i, j int) bool { return infos[i].Name < infos[j].Name })
 	return infos
 }
 
@@ -269,10 +275,10 @@ func SweepExpiredScratchpads() (removed []string, err error) {
 		runBase := filepath.Join(root, missionEntry.Name())
 		runEntries, err := os.ReadDir(runBase)
 		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return removed, err
+			// Skip this mission on any IO error (permission denied, transient
+			// stat failure, etc.) so one bad subdir doesn't halt the sweep
+			// for every other mission. NotExist is just the empty case.
+			continue
 		}
 		for _, e := range runEntries {
 			if !e.IsDir() {

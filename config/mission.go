@@ -356,8 +356,8 @@ type TaskRoute struct {
 
 // Validate checks that the mission configuration is valid
 func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, allMissionNames map[string]bool) error {
-	if w.Name == "" {
-		return fmt.Errorf("mission name is required")
+	if err := validateSlotName(w.Name); err != nil {
+		return fmt.Errorf("mission name: %w", err)
 	}
 
 	if w.Commander == nil || w.Commander.Model == "" {

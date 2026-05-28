@@ -443,6 +443,20 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// A shared-memory label sharing a mission name silently masks that
+	// mission's persistent memory in the file-browser UI (resolveMemoryPath
+	// matches shared first by string-equal name). Reject the collision at
+	// load so users can't tie themselves in that knot.
+	missionNamesForMemoryCheck := make(map[string]bool, len(c.Missions))
+	for _, mn := range c.Missions {
+		missionNamesForMemoryCheck[mn.Name] = true
+	}
+	for _, m := range c.Memories {
+		if missionNamesForMemoryCheck[m.Name] {
+			return fmt.Errorf("memory '%s': name conflicts with mission '%s' — both are exposed under the same name in the file browser", m.Name, m.Name)
+		}
+	}
+
 	// Validate plugins
 	for _, p := range c.Plugins {
 		if err := p.Validate(); err != nil {
@@ -1157,13 +1171,19 @@ func loadFromFiles(files []string) (*Config, error) {
 	agentsCtx := buildAgentsContext(skillsCtx, allAgents)
 
 	// Add `memories` namespace for mission references: `memories.NAME` resolves
-	// to the memory's name as a string.
-	if len(allMemories) > 0 {
-		memMap := make(map[string]cty.Value)
-		for _, m := range allMemories {
-			memMap[m.Name] = cty.StringVal(m.Name)
-		}
+	// to the memory's name as a string. Register even when empty so that a
+	// reference to an unknown shared memory produces "object has no attribute
+	// NAME" (pointing at the bad reference) rather than the generic HCL
+	// "unknown variable memories" (which is mystifying when the user simply
+	// forgot to declare the shared memory).
+	memMap := make(map[string]cty.Value, len(allMemories))
+	for _, m := range allMemories {
+		memMap[m.Name] = cty.StringVal(m.Name)
+	}
+	if len(memMap) > 0 {
 		agentsCtx.Variables["memories"] = cty.ObjectVal(memMap)
+	} else {
+		agentsCtx.Variables["memories"] = cty.EmptyObjectVal
 	}
 
 	// Stage 5: Load missions (with vars + models + tools + agents + memories context)
@@ -1976,9 +1996,9 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 	for _, b := range missionContent.Blocks {
 		switch b.Type {
 		case "folder":
-			return nil, fmt.Errorf("mission '%s': the `folder { ... }` block is no longer supported — use `memory { type = \"persistent\" }` instead (path is now derived automatically)", missionName)
+			return nil, fmt.Errorf("mission '%s': the `folder { ... }` block is no longer supported — use `memory { description = \"...\" }` instead (path is now derived automatically)", missionName)
 		case "run_folder":
-			return nil, fmt.Errorf("mission '%s': the `run_folder { ... }` block is no longer supported — use `memory { type = \"ephemeral\" }` instead", missionName)
+			return nil, fmt.Errorf("mission '%s': the `run_folder { ... }` block is no longer supported — use `scratchpad = true` on the mission instead (auto-cleaned after 7 days)", missionName)
 		}
 	}
 

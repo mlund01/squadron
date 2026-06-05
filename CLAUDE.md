@@ -62,7 +62,7 @@ Squadron is a declarative framework for building and running AI agent workflows.
 The config loading uses **staged evaluation** to support HCL expression references:
 
 1. **Stage 1**: Load `variable` blocks (no context needed)
-2. **Stage 1.4**: Load `context` blocks with `vars` context. Done before every downstream stage so the HCL-exclusion filter (drops `.hcl` files inside any context path) runs before vault / storage / command_center / mcp_host iterate `allParsedBlocks`.
+2. **Stage 1.4**: Load `packet` blocks with `vars` context. Done before every downstream stage so the HCL-exclusion filter (drops `.hcl` files inside any packet path) runs before vault / storage / command_center / mcp_host iterate `allParsedBlocks`.
 3. **Stage 1.5**: Load `plugin` blocks and `mcp "name"` blocks with `vars` context. Both happen in the same stage because both expose tools through HCL namespaces that later stages need to resolve against.
 4. **Stage 2**: Load `model` blocks with `vars` + `plugins` + `mcp` context → enables `api_key = vars.anthropic_api_key`
 5. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` + `mcp` context → enables `implements = builtins.http.get`
@@ -363,57 +363,57 @@ mission "analyze" {
   an hourly ticker in `cmd/engage.go`. No config lookup needed — the
   filesystem layout is self-describing.
 
-### Contexts
+### Packets
 
-A `context` block is a read-only reference data bundle attached to
-missions. Unlike memory, contexts point at user-controlled paths inside
+A `packet` block is a read-only reference data bundle attached to
+missions. Unlike memory, packets point at user-controlled paths inside
 the project, are immutable to agents, reject binary content on read, and
 their on-disk tree is excluded from HCL parsing.
 
 ```hcl
-context "kb" {
+packet "kb" {
   path        = "@/reference/kb"   # see "Path resolution" below
   description = "Knowledge base"
 }
 
 mission "answer" {
-  contexts = [contexts.kb]
+  packets = [packets.kb]
   task "draft" {
-    objective = "Use context.kb to draft the answer"
-    contexts  = [contexts.kb]      # task-level also accepted (declared scope)
+    objective = "Use packet.kb to draft the answer"
+    packets  = [packets.kb]      # task-level also accepted (declared scope)
   }
 }
 ```
 
 | HCL surface | Slot name agents pass | Notes |
 |-------------|------------------------|-------|
-| top-level `context "name" { path = "..." }` | `"context.<name>"` | Read-only. Text files only (`file_read` rejects binaries). |
-| Mission `contexts = [contexts.X]` | n/a | Validation: every referenced context must exist. |
-| Task `contexts = [contexts.X]` | n/a | Same. **Task-level is declarative, not isolating** — every task in a mission shares the same `MemoryStore`, so a context referenced anywhere in the mission is accessible to every task. |
+| top-level `packet "name" { path = "..." }` | `"packet.<name>"` | Read-only. Text files only (`file_read` rejects binaries). |
+| Mission `packets = [packets.X]` | n/a | Validation: every referenced packet must exist. |
+| Task `packets = [packets.X]` | n/a | Same. **Task-level is declarative, not isolating** — every task in a mission shares the same `MemoryStore`, so a packet referenced anywhere in the mission is accessible to every task. |
 
 **Implementation:**
 
-- `config.Context` lives in [config/context.go](config/context.go). Parsed
+- `config.Packet` lives in [config/packet.go](config/packet.go). Parsed
   in Stage 1.4 (with `vars` context) — earlier than every other block type
-  except variables. The Stage 1.4 ordering is critical: contexts trigger
+  except variables. The Stage 1.4 ordering is critical: packets trigger
   an HCL-exclusion filter that drops `allParsedBlocks` entries for any
-  `.hcl` files inside a context path, and that filter must run BEFORE
-  vault / storage / command_center / mcp_host so blocks inside a context
+  `.hcl` files inside a packet path, and that filter must run BEFORE
+  vault / storage / command_center / mcp_host so blocks inside a packet
   folder can't leak into those stages.
-- The `contexts.NAME` HCL namespace is registered on `agentsCtx` (alongside
-  `memories`) so missions can do `contexts = [contexts.X]`.
-- [mission/memory_store.go](mission/memory_store.go) registers contexts
-  under the `"context.<name>"` slot key (`aitools.ContextSlotPrefix`).
+- The `packets.NAME` HCL namespace is registered on `agentsCtx` (alongside
+  `memories`) so missions can do `packets = [packets.X]`.
+- [mission/memory_store.go](mission/memory_store.go) registers packets
+  under the `"packet.<name>"` slot key (`aitools.PacketSlotPrefix`).
   Tools enforce the read-only + text-only policy by checking the slot
-  name prefix via `aitools.IsContextSlot`.
-- File-tool policy for context slots:
-  - `file_create`, `file_delete` → error `"slot is read-only (context bundles are immutable)"`
+  name prefix via `aitools.IsPacketSlot`.
+- File-tool policy for packet slots:
+  - `file_create`, `file_delete` → error `"slot is read-only (packet bundles are immutable)"`
   - `file_read` → rejects content with a NUL byte in the first 8 KB (`looksBinary`)
   - `file_grep` → silently skips files that look binary
 
 ### Path resolution for config attributes
 
-`context.path`, `plugin.source` (local sources), and the `load()` HCL
+`packet.path`, `plugin.source` (local sources), and the `load()` HCL
 function all share a single resolver: `paths.ResolveConfigPath(projectRoot,
 hclFileDir, rawPath)` in [internal/paths/paths.go](internal/paths/paths.go).
 

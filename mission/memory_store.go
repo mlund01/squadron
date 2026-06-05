@@ -96,16 +96,16 @@ type memorySlot struct {
 }
 
 // buildMemoryStore creates an aitools.MemoryStore from the mission config and
-// the declared top-level memories + contexts. missionInstanceID scopes the
+// the declared top-level memories + packets. missionInstanceID scopes the
 // scratchpad path; it must be non-empty when mission.Scratchpad is true.
 // Returns nil if no slots are configured.
 //
-// Contexts are registered under "context.<name>" keys (config.ContextSlotPrefix)
+// Packets are registered under "packet.<name>" keys (config.PacketSlotPrefix)
 // so they share the slot namespace without colliding with memory names. The
 // MemoryStore itself doesn't distinguish read-only from read-write; the file
 // tools enforce the read-only / text-only policy based on the slot name
-// prefix via aitools.IsContextSlot.
-func buildMemoryStore(mission *config.Mission, memories []config.Memory, contexts []config.Context, missionInstanceID string) (aitools.MemoryStore, error) {
+// prefix via aitools.IsPacketSlot.
+func buildMemoryStore(mission *config.Mission, memories []config.Memory, packets []config.Packet, missionInstanceID string) (aitools.MemoryStore, error) {
 	store := &missionMemoryStore{
 		slots: make(map[string]*memorySlot),
 	}
@@ -136,38 +136,38 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, context
 		}
 	}
 
-	// Collect context references from the mission level + every task. Tasks
-	// share the mission-wide store, so per-task `contexts = [...]` is a
+	// Collect packet references from the mission level + every task. Tasks
+	// share the mission-wide store, so per-task `packets = [...]` is a
 	// declaration of need (validated above) rather than a runtime access
-	// boundary — every task that runs sees every referenced context.
-	referencedContexts := make(map[string]bool)
-	for _, n := range mission.Contexts {
-		referencedContexts[n] = true
+	// boundary — every task that runs sees every referenced packet.
+	referencedPackets := make(map[string]bool)
+	for _, n := range mission.Packets {
+		referencedPackets[n] = true
 	}
 	for _, t := range mission.Tasks {
-		for _, n := range t.Contexts {
-			referencedContexts[n] = true
+		for _, n := range t.Packets {
+			referencedPackets[n] = true
 		}
 	}
-	if len(referencedContexts) > 0 {
-		ctxByName := make(map[string]*config.Context, len(contexts))
-		for i := range contexts {
-			ctxByName[contexts[i].Name] = &contexts[i]
+	if len(referencedPackets) > 0 {
+		packetByName := make(map[string]*config.Packet, len(packets))
+		for i := range packets {
+			packetByName[packets[i].Name] = &packets[i]
 		}
-		for name := range referencedContexts {
-			c, ok := ctxByName[name]
+		for name := range referencedPackets {
+			c, ok := packetByName[name]
 			if !ok {
-				return nil, fmt.Errorf("context %q not found", name)
+				return nil, fmt.Errorf("packet %q not found", name)
 			}
-			// Context paths are user-controlled. Resolve to absolute (idempotent
+			// Packet paths are user-controlled. Resolve to absolute (idempotent
 			// for paths Validate already absolutized) and register under the
-			// "context.<name>" key so the file tools can apply the read-only /
-			// text-only policy via IsContextSlot.
+			// "packet.<name>" key so the file tools can apply the read-only /
+			// text-only policy via IsPacketSlot.
 			absPath, err := paths.ResolveFolderPath(c.Path)
 			if err != nil {
-				return nil, fmt.Errorf("context %q: invalid path: %w", name, err)
+				return nil, fmt.Errorf("packet %q: invalid path: %w", name, err)
 			}
-			store.slots[config.ContextSlotPrefix+name] = &memorySlot{
+			store.slots[config.PacketSlotPrefix+name] = &memorySlot{
 				absPath:     absPath,
 				description: c.Description,
 			}

@@ -35,14 +35,14 @@ func (s *stubStore) MemoryInfos() []MemoryInfo {
 	return []MemoryInfo{{Name: s.slot}}
 }
 
-func TestMemoryReadTool_RejectsBinaryForContext(t *testing.T) {
+func TestMemoryReadTool_RejectsBinaryForPacket(t *testing.T) {
 	dir := t.TempDir()
 	binPath := filepath.Join(dir, "image.bin")
 	if err := os.WriteFile(binPath, []byte{0x00, 0x01, 0x02, 0x03}, 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	store := &stubStore{root: dir, slot: ContextSlotPrefix + "ref"}
+	store := &stubStore{root: dir, slot: PacketSlotPrefix + "ref"}
 	tool := &MemoryReadTool{Store: store}
 
 	params, _ := json.Marshal(map[string]any{
@@ -55,13 +55,13 @@ func TestMemoryReadTool_RejectsBinaryForContext(t *testing.T) {
 	}
 }
 
-func TestMemoryReadTool_AllowsTextForContext(t *testing.T) {
+func TestMemoryReadTool_AllowsTextForPacket(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "notes.md"), []byte("# title\nbody"), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	store := &stubStore{root: dir, slot: ContextSlotPrefix + "ref"}
+	store := &stubStore{root: dir, slot: PacketSlotPrefix + "ref"}
 	tool := &MemoryReadTool{Store: store}
 
 	params, _ := json.Marshal(map[string]any{
@@ -74,9 +74,9 @@ func TestMemoryReadTool_AllowsTextForContext(t *testing.T) {
 	}
 }
 
-func TestMemoryCreateTool_BlocksContextWrites(t *testing.T) {
+func TestMemoryCreateTool_BlocksPacketWrites(t *testing.T) {
 	dir := t.TempDir()
-	store := &stubStore{root: dir, slot: ContextSlotPrefix + "ref"}
+	store := &stubStore{root: dir, slot: PacketSlotPrefix + "ref"}
 	tool := &MemoryCreateTool{Store: store}
 
 	params, _ := json.Marshal(map[string]any{
@@ -90,9 +90,9 @@ func TestMemoryCreateTool_BlocksContextWrites(t *testing.T) {
 	}
 }
 
-func TestMemoryDeleteTool_BlocksContextDeletes(t *testing.T) {
+func TestMemoryDeleteTool_BlocksPacketDeletes(t *testing.T) {
 	dir := t.TempDir()
-	store := &stubStore{root: dir, slot: ContextSlotPrefix + "ref"}
+	store := &stubStore{root: dir, slot: PacketSlotPrefix + "ref"}
 	tool := &MemoryDeleteTool{Store: store}
 
 	params, _ := json.Marshal(map[string]any{
@@ -105,11 +105,11 @@ func TestMemoryDeleteTool_BlocksContextDeletes(t *testing.T) {
 	}
 }
 
-func TestIsContextSlot(t *testing.T) {
-	if !IsContextSlot("context.foo") {
-		t.Fatal("context.foo should be detected as context")
+func TestIsPacketSlot(t *testing.T) {
+	if !IsPacketSlot("packet.foo") {
+		t.Fatal("packet.foo should be detected as packet")
 	}
-	if IsContextSlot("research") {
-		t.Fatal("plain name should not be detected as context")
+	if IsPacketSlot("research") {
+		t.Fatal("plain name should not be detected as packet")
 	}
 }

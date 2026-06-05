@@ -20,17 +20,17 @@ const (
 	ScratchpadSlotName = "scratchpad"
 )
 
-// ContextSlotPrefix marks a slot as belonging to a read-only context bundle.
+// PacketSlotPrefix marks a slot as belonging to a read-only context bundle.
 // The MemoryStore doesn't distinguish read-only from read-write itself; the
 // file tools below enforce the policy by inspecting the slot name with
-// IsContextSlot. Mirrored in config.ContextSlotPrefix — both must stay in
+// IsPacketSlot. Mirrored in config.PacketSlotPrefix — both must stay in
 // sync.
-const ContextSlotPrefix = "context."
+const PacketSlotPrefix = "packet."
 
-// IsContextSlot reports whether a slot name belongs to a context bundle
+// IsPacketSlot reports whether a slot name belongs to a context bundle
 // (read-only, text-only).
-func IsContextSlot(name string) bool {
-	return strings.HasPrefix(name, ContextSlotPrefix)
+func IsPacketSlot(name string) bool {
+	return strings.HasPrefix(name, PacketSlotPrefix)
 }
 
 // looksBinary returns true if the sample contains a NUL byte in its first
@@ -381,7 +381,7 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 	// Contexts are read-only reference data and may only hold text-readable
 	// files. Reject binary payloads up front so the LLM doesn't see a wall
 	// of garbled bytes.
-	if IsContextSlot(p.Slot) && looksBinary(content) {
+	if IsPacketSlot(p.Slot) && looksBinary(content) {
 		return "Error: file appears to be binary or non-UTF-8 encoded; context slots accept UTF-8 text only"
 	}
 
@@ -459,7 +459,7 @@ func (t *MemoryCreateTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	if IsContextSlot(p.Slot) {
+	if IsPacketSlot(p.Slot) {
 		return "Error: slot is read-only (context bundles are immutable)"
 	}
 
@@ -547,7 +547,7 @@ func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	if IsContextSlot(p.Slot) {
+	if IsPacketSlot(p.Slot) {
 		return "Error: slot is read-only (context bundles are immutable)"
 	}
 
@@ -824,7 +824,7 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 	}
 	var matches []match
 
-	isContext := IsContextSlot(p.Slot)
+	isContext := IsPacketSlot(p.Slot)
 	grepFile := func(filePath string, relPath string) {
 		f, err := os.Open(filePath)
 		if err != nil {

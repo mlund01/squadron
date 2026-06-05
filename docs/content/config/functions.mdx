@@ -38,7 +38,7 @@ After resolution:
 - Any `..` traversal that escapes the project root is rejected (`escapes the project root <path>`).
 - A path that resolves to the project root itself is rejected (`resolves to the project root <path> itself`).
 
-The same rule applies to `context.path` and `plugin.source` — see [Plugins → Path Resolution](./plugins#path-resolution) and [Contexts → Path Resolution](../missions/contexts) for the block-attribute variants (those add per-HCL-file-dir anchoring for the relative forms, since blocks know which file declared them).
+The same rule applies to `packet.path` and `plugin.source` — see [Plugins → Path Resolution](./plugins#path-resolution) and [Packets → Path Resolution](../missions/packets) for the block-attribute variants (those add per-HCL-file-dir anchoring for the relative forms, since blocks know which file declared them).
 
 ### Supported File Types
 

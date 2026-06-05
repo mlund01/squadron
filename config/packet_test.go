@@ -9,8 +9,8 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Context blocks", func() {
-	It("loads a context block and exposes it on Config", func() {
+var _ = Describe("Packet blocks", func() {
+	It("loads a packet block and exposes it on Config", func() {
 		dir := GinkgoT().TempDir()
 		ctxDir := filepath.Join(dir, "kb")
 		Expect(os.MkdirAll(ctxDir, 0755)).To(Succeed())
@@ -19,7 +19,7 @@ var _ = Describe("Context blocks", func() {
 		// Path is relative to the config file (./kb), not the absolute
 		// tempdir. Absolute paths are rejected by ResolveContextPath.
 		hcl := minimalVarsHCL() + `
-context "kb" {
+packet "kb" {
   path        = "./kb"
   description = "knowledge base"
 }
@@ -28,23 +28,23 @@ context "kb" {
 
 		cfg, err := config.LoadDir(dir)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Contexts).To(HaveLen(1))
-		Expect(cfg.Contexts[0].Name).To(Equal("kb"))
-		Expect(cfg.Contexts[0].Path).To(Equal(ctxDir))
+		Expect(cfg.Packets).To(HaveLen(1))
+		Expect(cfg.Packets[0].Name).To(Equal("kb"))
+		Expect(cfg.Packets[0].Path).To(Equal(ctxDir))
 	})
 
-	It("skips HCL files inside a context folder", func() {
+	It("skips HCL files inside a packet folder", func() {
 		dir := GinkgoT().TempDir()
 		ctxDir := filepath.Join(dir, "kb")
 		Expect(os.MkdirAll(ctxDir, 0755)).To(Succeed())
 
-		// A stray invalid .hcl file inside the context folder must be ignored —
+		// A stray invalid .hcl file inside the packet folder must be ignored —
 		// the loader can't even parse this one, and that's fine.
 		bogus := `model "ghost" { provider = "openai" api_key = "x" }`
 		Expect(os.WriteFile(filepath.Join(ctxDir, "stray.hcl"), []byte(bogus), 0644)).To(Succeed())
 
 		hcl := minimalVarsHCL() + `
-context "kb" {
+packet "kb" {
   path = "./kb"
 }
 `
@@ -57,12 +57,12 @@ context "kb" {
 		}
 	})
 
-	It("rejects a mission that references an unknown context", func() {
+	It("rejects a mission that references an unknown packet", func() {
 		hcl := fullBaseHCL() + `
 mission "go" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents   = [agents.test_agent]
-  contexts = ["does_not_exist"]
+  packets = ["does_not_exist"]
 
   task "t" { objective = "do" }
 }
@@ -72,25 +72,25 @@ mission "go" {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("allows mission and task to declare contexts via the contexts namespace", func() {
+	It("allows mission and task to declare contexts via the packets namespace", func() {
 		dir := GinkgoT().TempDir()
 		kbDir := filepath.Join(dir, "kb")
 		Expect(os.MkdirAll(kbDir, 0755)).To(Succeed())
 
 		_ = kbDir // path uses relative form; kbDir is exists-check setup
 		hcl := fullBaseHCL() + `
-context "kb" {
+packet "kb" {
   path = "./kb"
 }
 
 mission "go" {
   commander { model = models.anthropic.claude_sonnet_4 }
   agents   = [agents.test_agent]
-  contexts = [contexts.kb]
+  packets = [packets.kb]
 
   task "t1" {
     objective = "do"
-    contexts  = [contexts.kb]
+    packets  = [packets.kb]
   }
 }
 `
@@ -98,14 +98,14 @@ mission "go" {
 		cfg, err := config.LoadDir(dir)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(cfg.Missions).To(HaveLen(1))
-		Expect(cfg.Missions[0].Contexts).To(ConsistOf("kb"))
+		Expect(cfg.Missions[0].Packets).To(ConsistOf("kb"))
 		Expect(cfg.Missions[0].Tasks).To(HaveLen(1))
-		Expect(cfg.Missions[0].Tasks[0].Contexts).To(ConsistOf("kb"))
+		Expect(cfg.Missions[0].Tasks[0].Packets).To(ConsistOf("kb"))
 	})
 
-	It("rejects a context whose path does not exist", func() {
+	It("rejects a packet whose path does not exist", func() {
 		hcl := minimalVarsHCL() + `
-context "nope" {
+packet "nope" {
   path = "./does-not-exist-xyz"
 }
 `
@@ -114,9 +114,9 @@ context "nope" {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("rejects an absolute (root-anchored) context path", func() {
+	It("rejects an absolute (root-anchored) packet path", func() {
 		hcl := minimalVarsHCL() + `
-context "abs" {
+packet "abs" {
   path = "/tmp/anything"
 }
 `
@@ -132,15 +132,15 @@ context "abs" {
 		Expect(os.MkdirAll(filepath.Join(dir, "side_ctx"), 0755)).To(Succeed())
 
 		hcl := minimalVarsHCL() + `
-context "sib" {
+packet "sib" {
   path = "side_ctx"
 }
 `
 		Expect(os.WriteFile(filepath.Join(dir, "config.hcl"), []byte(hcl), 0644)).To(Succeed())
 		cfg, err := config.LoadDir(dir)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Contexts).To(HaveLen(1))
-		Expect(cfg.Contexts[0].Path).To(Equal(filepath.Join(dir, "side_ctx")))
+		Expect(cfg.Packets).To(HaveLen(1))
+		Expect(cfg.Packets[0].Path).To(Equal(filepath.Join(dir, "side_ctx")))
 	})
 
 	It("supports the @/ project-root marker", func() {
@@ -149,22 +149,22 @@ context "sib" {
 		Expect(os.MkdirAll(filepath.Join(dir, "data", "kb"), 0755)).To(Succeed())
 
 		hcl := minimalVarsHCL() + `
-context "kb" {
+packet "kb" {
   path = "@/data/kb"
 }
 `
 		Expect(os.WriteFile(filepath.Join(dir, "config.hcl"), []byte(hcl), 0644)).To(Succeed())
 		cfg, err := config.LoadDir(dir)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(cfg.Contexts).To(HaveLen(1))
-		Expect(cfg.Contexts[0].Path).To(Equal(filepath.Join(dir, "data", "kb")))
+		Expect(cfg.Packets).To(HaveLen(1))
+		Expect(cfg.Packets[0].Path).To(Equal(filepath.Join(dir, "data", "kb")))
 	})
 
-	It("rejects a context path that resolves to the project root itself", func() {
+	It("rejects a packet path that resolves to the project root itself", func() {
 		dir := GinkgoT().TempDir()
 
 		hcl := minimalVarsHCL() + `
-context "whole_project" {
+packet "whole_project" {
   path = "@/"
 }
 `
@@ -174,7 +174,7 @@ context "whole_project" {
 		Expect(err.Error()).To(ContainSubstring("resolves to the project root"))
 	})
 
-	It("rejects a context path that escapes the project root via ..", func() {
+	It("rejects a packet path that escapes the project root via ..", func() {
 		dir := GinkgoT().TempDir()
 		// The escape target literally exists in the parent of dir, but it's
 		// outside the project — the loader must still reject the load.
@@ -182,7 +182,7 @@ context "whole_project" {
 		Expect(os.MkdirAll(filepath.Join(parent, "outside"), 0755)).To(Succeed())
 
 		hcl := minimalVarsHCL() + `
-context "leak" {
+packet "leak" {
   path = "../outside"
 }
 `

@@ -6,7 +6,7 @@ export default {
   datasets: 'Datasets',
   iteration: 'Iteration',
   folders: 'Memory & Scratchpad',
-  contexts: 'Contexts',
+  packets: 'Packets',
   'internal-tools': 'Internal Tools',
   budgets: 'Budgets',
   schedules: 'Schedules & Triggers',

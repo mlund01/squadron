@@ -253,7 +253,7 @@ func FormatMemoryContext(store aitools.MemoryStore) string {
 			label = " (persistent mission memory — survives across runs)"
 		case info.Name == aitools.ScratchpadSlotName:
 			label = " (ephemeral per-run scratchpad — fresh for this mission run)"
-		case aitools.IsContextSlot(info.Name):
+		case aitools.IsPacketSlot(info.Name):
 			label = " (context bundle — read-only reference data, UTF-8 text files only)"
 		}
 		desc := ""

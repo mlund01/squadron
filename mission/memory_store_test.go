@@ -28,7 +28,7 @@ func withTempHome(t *testing.T) string {
 func TestBuildMemoryStore_NoSlots(t *testing.T) {
 	withTempHome(t)
 	m := &config.Mission{Name: "m"}
-	store, err := buildMemoryStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestBuildMemoryStore_MissionMemory(t *testing.T) {
 		},
 	}
 
-	store, err := buildMemoryStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestBuildMemoryStore_Scratchpad_CreatesSidecar(t *testing.T) {
 		Scratchpad: true,
 	}
 
-	store, err := buildMemoryStore(m, nil, "mid-abc")
+	store, err := buildMemoryStore(m, nil, nil, "mid-abc")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestBuildMemoryStore_Scratchpad_SidecarPreservedOnResume(t *testing.T) {
 		Scratchpad: true,
 	}
 
-	if _, err := buildMemoryStore(m, nil, "mid-1"); err != nil {
+	if _, err := buildMemoryStore(m, nil, nil, "mid-1"); err != nil {
 		t.Fatalf("first build: %v", err)
 	}
 	runDir := filepath.Join(home, "scratchpads", "m", "mid-1")
@@ -131,7 +131,7 @@ func TestBuildMemoryStore_Scratchpad_SidecarPreservedOnResume(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Second build (same missionID = resume): sidecar must NOT be overwritten
-	if _, err := buildMemoryStore(m, nil, "mid-1"); err != nil {
+	if _, err := buildMemoryStore(m, nil, nil, "mid-1"); err != nil {
 		t.Fatalf("second build: %v", err)
 	}
 	secondMetaBytes, _ := os.ReadFile(filepath.Join(runDir, runMetadataFile))
@@ -149,7 +149,7 @@ func TestBuildMemoryStore_Scratchpad_RequiresMissionID(t *testing.T) {
 		Name:       "m",
 		Scratchpad: true,
 	}
-	_, err := buildMemoryStore(m, nil, "")
+	_, err := buildMemoryStore(m, nil, nil, "")
 	if err == nil {
 		t.Fatal("expected error when missionID is empty")
 	}
@@ -163,7 +163,7 @@ func TestBuildMemoryStore_RejectsReservedSharedMemoryNames(t *testing.T) {
 			Memories: []string{reserved},
 		}
 		mems := []config.Memory{{Name: reserved, Description: "x"}}
-		_, err := buildMemoryStore(m, mems, "mid-1")
+		_, err := buildMemoryStore(m, mems, nil, "mid-1")
 		if err == nil {
 			t.Fatalf("expected error for reserved shared memory name %q", reserved)
 		}
@@ -185,7 +185,7 @@ func TestMemoryInfos_IsAlphabeticallySorted(t *testing.T) {
 		{Name: "alpha", Description: "a"},
 		{Name: "mu", Description: "m"},
 	}
-	store, err := buildMemoryStore(m, mems, "mid-1")
+	store, err := buildMemoryStore(m, mems, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -216,7 +216,7 @@ func TestBuildMemoryStore_BothMemoryAndScratchpad(t *testing.T) {
 		Memory:     &config.MissionMemory{Description: "x"},
 		Scratchpad: true,
 	}
-	store, err := buildMemoryStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestBuildMemoryStore_SharedMemory(t *testing.T) {
 		{Name: "research", Description: "Research notes"},
 	}
 
-	store, err := buildMemoryStore(m, mems, "mid-1")
+	store, err := buildMemoryStore(m, mems, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -262,7 +262,7 @@ func TestResolvePath_EmptySlotNameRejected(t *testing.T) {
 		Name:   "m",
 		Memory: &config.MissionMemory{Description: "x"},
 	}
-	store, err := buildMemoryStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -277,7 +277,7 @@ func TestResolvePath_RejectsPathEscape(t *testing.T) {
 		Name:   "m",
 		Memory: &config.MissionMemory{Description: "x"},
 	}
-	store, err := buildMemoryStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestResolvePath_UnknownSlot(t *testing.T) {
 		Name:   "m",
 		Memory: &config.MissionMemory{Description: "x"},
 	}
-	store, err := buildMemoryStore(m, nil, "mid-1")
+	store, err := buildMemoryStore(m, nil, nil, "mid-1")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestSweepThenRebuildRoundTrip(t *testing.T) {
 		Name:       "demo",
 		Scratchpad: true,
 	}
-	store, err := buildMemoryStore(m, nil, "new-run")
+	store, err := buildMemoryStore(m, nil, nil, "new-run")
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}

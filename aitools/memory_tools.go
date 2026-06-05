@@ -20,6 +20,36 @@ const (
 	ScratchpadSlotName = "scratchpad"
 )
 
+// ContextSlotPrefix marks a slot as belonging to a read-only context bundle.
+// The MemoryStore doesn't distinguish read-only from read-write itself; the
+// file tools below enforce the policy by inspecting the slot name with
+// IsContextSlot. Mirrored in config.ContextSlotPrefix — both must stay in
+// sync.
+const ContextSlotPrefix = "context."
+
+// IsContextSlot reports whether a slot name belongs to a context bundle
+// (read-only, text-only).
+func IsContextSlot(name string) bool {
+	return strings.HasPrefix(name, ContextSlotPrefix)
+}
+
+// looksBinary returns true if the sample contains a NUL byte in its first
+// 8 KB — a cheap "this isn't UTF-8 text" proxy. False positives on
+// UTF-16/UTF-32 text are intentional given the file-tools' UTF-8-only
+// surface (callers see a clear error rather than gibberish output).
+func looksBinary(content []byte) bool {
+	limit := len(content)
+	if limit > 8192 {
+		limit = 8192
+	}
+	for i := 0; i < limit; i++ {
+		if content[i] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // MemoryStore provides slot access for missions. Implementations resolve a
 // slot name (the mission's "memory" / "scratchpad", or a shared memory's
 // label) to an absolute path. Every slot is read+write — there is no
@@ -348,6 +378,13 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 		}
 	}
 
+	// Contexts are read-only reference data and may only hold text-readable
+	// files. Reject binary payloads up front so the LLM doesn't see a wall
+	// of garbled bytes.
+	if IsContextSlot(p.Slot) && looksBinary(content) {
+		return "Error: file appears to be binary or non-UTF-8 encoded; context slots accept UTF-8 text only"
+	}
+
 	text := string(content)
 
 	if p.MaxLines > 0 {
@@ -420,6 +457,10 @@ func (t *MemoryCreateTool) Call(ctx context.Context, params string) string {
 
 	if p.Path == "" {
 		return "Error: path is required"
+	}
+
+	if IsContextSlot(p.Slot) {
+		return "Error: slot is read-only (context bundles are immutable)"
 	}
 
 	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
@@ -504,6 +545,10 @@ func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {
 
 	if p.Path == "" {
 		return "Error: path is required"
+	}
+
+	if IsContextSlot(p.Slot) {
+		return "Error: slot is read-only (context bundles are immutable)"
 	}
 
 	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
@@ -779,12 +824,30 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 	}
 	var matches []match
 
+	isContext := IsContextSlot(p.Slot)
 	grepFile := func(filePath string, relPath string) {
 		f, err := os.Open(filePath)
 		if err != nil {
 			return
 		}
 		defer f.Close()
+
+		// Skip binary files in context slots so grep doesn't pollute output
+		// with garbage matches from images/archives/etc. Use io.ReadFull so
+		// short reads on slow FS still get up to 8KB before we judge.
+		if isContext {
+			head := make([]byte, 8192)
+			n, err := io.ReadFull(f, head)
+			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				return
+			}
+			if looksBinary(head[:n]) {
+				return
+			}
+			if _, err := f.Seek(0, 0); err != nil {
+				return
+			}
+		}
 
 		scanner := bufio.NewScanner(f)
 		lineNum := 0

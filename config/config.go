@@ -14,6 +14,7 @@ import (
 
 	schemafunc "squadron/config/functions"
 	vaultpkg "squadron/config/vault"
+	"squadron/internal/paths"
 	squadronmcp "squadron/mcp"
 	"squadron/mcp/oauth"
 	"squadron/plugin"
@@ -49,6 +50,11 @@ type Config struct {
 
 	// Top-level shared memory blocks (memory "name" { ... }).
 	Memories []Memory `hcl:"-"`
+
+	// Top-level read-only reference data bundles (context "name" { ... }).
+	// Tools address them via slot="context.<name>"; their on-disk paths are
+	// user-controlled and their contents are excluded from HCL parsing.
+	Contexts []Context `hcl:"-"`
 
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
@@ -457,6 +463,18 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate contexts and reject duplicate names.
+	contextNames := make(map[string]bool, len(c.Contexts))
+	for i := range c.Contexts {
+		if err := c.Contexts[i].Validate(); err != nil {
+			return fmt.Errorf("context '%s': %w", c.Contexts[i].Name, err)
+		}
+		if contextNames[c.Contexts[i].Name] {
+			return fmt.Errorf("duplicate context name '%s'", c.Contexts[i].Name)
+		}
+		contextNames[c.Contexts[i].Name] = true
+	}
+
 	// Validate plugins
 	for _, p := range c.Plugins {
 		if err := p.Validate(); err != nil {
@@ -629,7 +647,7 @@ func (c *Config) Validate() error {
 
 	// Validate missions
 	for i := range c.Missions {
-		if err := c.Missions[i].Validate(c.Models, c.Agents, c.Memories, allMissionNames); err != nil {
+		if err := c.Missions[i].Validate(c.Models, c.Agents, c.Memories, c.Contexts, allMissionNames); err != nil {
 			return fmt.Errorf("mission '%s': %w", c.Missions[i].Name, err)
 		}
 	}
@@ -699,9 +717,14 @@ type parsedBlocks struct {
 	Storage       []*hcl.Block
 	CommandCenter []*hcl.Block
 	Memories      []*hcl.Block
+	Contexts      []*hcl.Block
 	MCPHost       []*hcl.Block
 	Skills        []*hcl.Block
 	Gateways      []*hcl.Block
+	// File is the source path the blocks were extracted from. Used to drop
+	// blocks (and parse errors) from .hcl files that live inside a context
+	// folder — context folders are treated as opaque reference data.
+	File string
 }
 
 // loadFromFiles implements staged loading: variables → models → agents → tools
@@ -712,14 +735,25 @@ func loadFromFiles(files []string) (*Config, error) {
 	configFuncs = schemafunc.SchemaFunctions()
 	configFuncs["load"] = schemafunc.MakeLoadFunc(configDir)
 
-	// Parse all files and extract all block types in a single pass
+	// Parse all files and extract all block types in a single pass.
+	// Parse errors are deferred per file so .hcl files that happen to live
+	// inside a `context` folder can be silently skipped — the context
+	// folder is opaque reference data, not config. Context paths only
+	// become known after the context blocks are decoded below, so any
+	// per-file parse errors are revisited then.
 	parser := hclparse.NewParser()
 	var allParsedBlocks []parsedBlocks
+	type deferredErr struct {
+		file string
+		err  error
+	}
+	var deferredErrs []deferredErr
 
 	for _, file := range files {
 		hclFile, diags := parser.ParseHCLFile(file)
 		if diags.HasErrors() {
-			return nil, fmt.Errorf("[1] parse %s: %w", file, diags)
+			deferredErrs = append(deferredErrs, deferredErr{file: file, err: fmt.Errorf("[1] parse %s: %w", file, diags)})
+			continue
 		}
 
 		// Extract all known block types in one PartialContent call
@@ -735,6 +769,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "storage"},
 				{Type: "command_center"},
 				{Type: "memory", LabelNames: []string{"name"}},
+				{Type: "context", LabelNames: []string{"name"}},
 				// Detected for a nicer error only — the parse-pass below
 				// rejects it with a pointer to the new `memory` block.
 				{Type: "shared_folder", LabelNames: []string{"name"}},
@@ -745,10 +780,12 @@ func loadFromFiles(files []string) (*Config, error) {
 			},
 		})
 		if diags.HasErrors() {
-			return nil, fmt.Errorf("[2] partial content %s: %w", file, diags)
+			deferredErrs = append(deferredErrs, deferredErr{file: file, err: fmt.Errorf("[2] partial content %s: %w", file, diags)})
+			continue
 		}
 
 		var pb parsedBlocks
+		pb.File = file
 		for _, block := range content.Blocks {
 			switch block.Type {
 			case "vault":
@@ -771,6 +808,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.CommandCenter = append(pb.CommandCenter, block)
 			case "memory":
 				pb.Memories = append(pb.Memories, block)
+			case "context":
+				pb.Contexts = append(pb.Contexts, block)
 			case "shared_folder":
 				// Collected only so we can produce a clear error in the
 				// parse pass below.
@@ -828,6 +867,84 @@ func loadFromFiles(files []string) (*Config, error) {
 
 	// Build vars context
 	varsCtx, resolvedVars := buildVarsContext(allVars)
+
+	// Stage 1.4 (NEW): parse `context "name" { ... }` blocks BEFORE every
+	// downstream stage so the exclusion filter below can drop any other
+	// blocks that happened to live in .hcl files placed inside a context
+	// folder. If we ran this later, stages like storage/command_center/
+	// mcp_host would silently absorb blocks from inside contexts before
+	// the filter applied — defeating the "opaque reference data" promise.
+	var allContexts []Context
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.Contexts {
+			var c Context
+			c.Name = block.Labels[0]
+			diags := gohcl.DecodeBody(block.Body, varsCtx, &c)
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("context '%s': %w", c.Name, diags)
+			}
+			// Resolve `path` via the unified rule:
+			//   - "@/foo"           → project root (configDir)
+			//   - "./foo", "../foo" → directory of the HCL file declaring this block
+			//   - "foo"  (bare)     → directory of the HCL file declaring this block
+			//   - "/foo"            → REJECTED
+			// `..` traversal that escapes the project root is also rejected.
+			hclDir := configDir
+			if block.DefRange.Filename != "" {
+				hclDir = filepath.Dir(block.DefRange.Filename)
+			}
+			abs, err := paths.ResolveConfigPath(configDir, hclDir, c.Path)
+			if err != nil {
+				return nil, fmt.Errorf("context '%s': %w", c.Name, err)
+			}
+			c.Path = abs
+			if err := c.Validate(); err != nil {
+				return nil, fmt.Errorf("context '%s': %w", c.Name, err)
+			}
+			allContexts = append(allContexts, c)
+		}
+	}
+
+	// Build absolute-path set of context roots, then filter both
+	// allParsedBlocks (drop sibling blocks from files inside a context)
+	// and deferredErrs (drop parse errors from files inside a context —
+	// they're opaque reference data and may not be valid HCL at all).
+	contextRoots := make([]string, 0, len(allContexts))
+	for _, c := range allContexts {
+		contextRoots = append(contextRoots, c.Path)
+	}
+	isInsideContext := func(file string) bool {
+		abs, err := filepath.Abs(file)
+		if err != nil {
+			return false
+		}
+		for _, root := range contextRoots {
+			rel, err := filepath.Rel(root, abs)
+			if err != nil {
+				continue
+			}
+			// Inside iff rel is neither "." (the root itself) nor begins
+			// with ".." (which Rel produces for unrelated paths).
+			if rel != "." && !strings.HasPrefix(rel, "..") {
+				return true
+			}
+		}
+		return false
+	}
+	if len(contextRoots) > 0 {
+		filtered := allParsedBlocks[:0]
+		for _, pb := range allParsedBlocks {
+			if !isInsideContext(pb.File) {
+				filtered = append(filtered, pb)
+			}
+		}
+		allParsedBlocks = filtered
+	}
+	for _, de := range deferredErrs {
+		if !isInsideContext(de.file) {
+			return nil, de.err
+		}
+	}
 
 	// Parse storage block (optional — defaults to sqlite if omitted)
 	var storageConfig StorageConfig
@@ -998,6 +1115,22 @@ func loadFromFiles(files []string) (*Config, error) {
 			p, err := parsePluginBlock(block, varsCtx)
 			if err != nil {
 				return nil, err
+			}
+			// Resolve local-source paths via the unified rule before
+			// validation. Same anchoring as context: project root (the -c
+			// argument), HCL file's directory for relative paths, "@/"
+			// for explicit project root, reject absolute paths, reject
+			// ".." escapes. github.com/... sources go through unchanged.
+			if p.IsLocalSource() {
+				hclDir := configDir
+				if block.DefRange.Filename != "" {
+					hclDir = filepath.Dir(block.DefRange.Filename)
+				}
+				abs, err := paths.ResolveConfigPath(configDir, hclDir, p.Source)
+				if err != nil {
+					return nil, fmt.Errorf("plugin %q: %w", p.Name, err)
+				}
+				p.Source = abs
 			}
 			if err := p.Validate(); err != nil {
 				return nil, err
@@ -1186,6 +1319,19 @@ func loadFromFiles(files []string) (*Config, error) {
 		agentsCtx.Variables["memories"] = cty.EmptyObjectVal
 	}
 
+	// Same shape as `memories`: `contexts.NAME` resolves to the bare name;
+	// the MemoryStore registers contexts under `context.<name>` so tools
+	// and prompts can disambiguate them from memory slots.
+	ctxMap := make(map[string]cty.Value, len(allContexts))
+	for _, c := range allContexts {
+		ctxMap[c.Name] = cty.StringVal(c.Name)
+	}
+	if len(ctxMap) > 0 {
+		agentsCtx.Variables["contexts"] = cty.ObjectVal(ctxMap)
+	} else {
+		agentsCtx.Variables["contexts"] = cty.EmptyObjectVal
+	}
+
 	// Stage 5: Load missions (with vars + models + tools + agents + memories context)
 	// First pass: collect all mission names so router targets can reference missions.*
 	missionNames := make(map[string]cty.Value)
@@ -1237,6 +1383,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		CommandCenter:    commandCenterConfig,
 		MCPHost:          mcpHostConfig,
 		Memories:         allMemories,
+		Contexts:         allContexts,
 		LoadedPlugins:    loadedPlugins,
 		LoadedMCPClients: loadedMCPClients,
 		LoadedMCPErrors:  loadedMCPErrors,
@@ -1798,6 +1945,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Name: "agents", Required: true},
 			{Name: "directive"},
 			{Name: "memories"},   // shared memory references: memories = [memories.foo]
+			{Name: "contexts"},   // read-only context bundle references: contexts = [contexts.foo]
 			{Name: "scratchpad"}, // bool: opt the mission into a per-run scratchpad slot
 			{Name: "max_parallel"},
 			{Name: "inputs"}, // shorthand: inputs = { field = string("desc", { default = "val" }) }
@@ -1984,6 +2132,19 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		}
 	}
 
+	// Parse optional contexts attribute (list of context names).
+	var missionContexts []string
+	if attr, ok := missionContent.Attributes["contexts"]; ok {
+		v, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' contexts: %w", missionName, diags)
+		}
+		for it := v.ElementIterator(); it.Next(); {
+			_, e := it.Element()
+			missionContexts = append(missionContexts, e.AsString())
+		}
+	}
+
 	// Reject the old `folder { ... }` / `run_folder { ... }` blocks with a
 	// clear pointer at the new syntax.
 	for _, b := range missionContent.Blocks {
@@ -2086,7 +2247,8 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Commander:   missionCommander,
 		Agents:      missionAgents,
 		LocalAgents: localAgents,
-		Memories:         missionMemories,
+		Memories:   missionMemories,
+		Contexts:   missionContexts,
 		Memory:     missionMemory,
 		Scratchpad: missionScratchpad,
 		Schedules:   schedules,
@@ -2526,6 +2688,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		Attributes: []hcl.AttributeSchema{
 			{Name: "objective", Required: true},
 			{Name: "agents"},    // Optional - uses mission-level agents if not specified
+			{Name: "contexts"},  // Optional - task-scoped declared context references
 			{Name: "depends_on"},
 			{Name: "send_to"},
 			{Name: "output"}, // shorthand: output = { field = string("desc", true) }
@@ -2562,6 +2725,19 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		for it := agentsVal.ElementIterator(); it.Next(); {
 			_, v := it.Element()
 			agents = append(agents, v.AsString())
+		}
+	}
+
+	// Get contexts (optional array of context names)
+	var taskContexts []string
+	if ctxsAttr, ok := taskContent.Attributes["contexts"]; ok {
+		ctxsVal, diags := ctxsAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s': %w", taskName, diags)
+		}
+		for it := ctxsVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			taskContexts = append(taskContexts, v.AsString())
 		}
 	}
 
@@ -2675,6 +2851,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		ObjectiveExpr: objectiveExpr,
 		RawObjective:  rawObjective,
 		Agents:        agents,
+		Contexts:      taskContexts,
 		DependsOn:     dependsOn,
 		SendTo:        sendTo,
 		Iterator:      iterator,

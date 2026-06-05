@@ -96,10 +96,16 @@ type memorySlot struct {
 }
 
 // buildMemoryStore creates an aitools.MemoryStore from the mission config and
-// the declared top-level memories. missionInstanceID scopes the scratchpad
-// path; it must be non-empty when mission.Scratchpad is true. Returns nil if
-// no slots are configured.
-func buildMemoryStore(mission *config.Mission, memories []config.Memory, missionInstanceID string) (aitools.MemoryStore, error) {
+// the declared top-level memories + contexts. missionInstanceID scopes the
+// scratchpad path; it must be non-empty when mission.Scratchpad is true.
+// Returns nil if no slots are configured.
+//
+// Contexts are registered under "context.<name>" keys (config.ContextSlotPrefix)
+// so they share the slot namespace without colliding with memory names. The
+// MemoryStore itself doesn't distinguish read-only from read-write; the file
+// tools enforce the read-only / text-only policy based on the slot name
+// prefix via aitools.IsContextSlot.
+func buildMemoryStore(mission *config.Mission, memories []config.Memory, contexts []config.Context, missionInstanceID string) (aitools.MemoryStore, error) {
 	store := &missionMemoryStore{
 		slots: make(map[string]*memorySlot),
 	}
@@ -127,6 +133,44 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, mission
 		store.slots[name] = &memorySlot{
 			absPath:     absPath,
 			description: mem.Description,
+		}
+	}
+
+	// Collect context references from the mission level + every task. Tasks
+	// share the mission-wide store, so per-task `contexts = [...]` is a
+	// declaration of need (validated above) rather than a runtime access
+	// boundary — every task that runs sees every referenced context.
+	referencedContexts := make(map[string]bool)
+	for _, n := range mission.Contexts {
+		referencedContexts[n] = true
+	}
+	for _, t := range mission.Tasks {
+		for _, n := range t.Contexts {
+			referencedContexts[n] = true
+		}
+	}
+	if len(referencedContexts) > 0 {
+		ctxByName := make(map[string]*config.Context, len(contexts))
+		for i := range contexts {
+			ctxByName[contexts[i].Name] = &contexts[i]
+		}
+		for name := range referencedContexts {
+			c, ok := ctxByName[name]
+			if !ok {
+				return nil, fmt.Errorf("context %q not found", name)
+			}
+			// Context paths are user-controlled. Resolve to absolute (idempotent
+			// for paths Validate already absolutized) and register under the
+			// "context.<name>" key so the file tools can apply the read-only /
+			// text-only policy via IsContextSlot.
+			absPath, err := paths.ResolveFolderPath(c.Path)
+			if err != nil {
+				return nil, fmt.Errorf("context %q: invalid path: %w", name, err)
+			}
+			store.slots[config.ContextSlotPrefix+name] = &memorySlot{
+				absPath:     absPath,
+				description: c.Description,
+			}
 		}
 	}
 

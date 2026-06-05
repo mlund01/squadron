@@ -574,7 +574,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	if r.mission.Scratchpad {
 		go func() { _, _ = SweepExpiredScratchpads() }()
 	}
-	memoryStore, err := buildMemoryStore(r.mission, r.cfg.Memories, missionID)
+	memoryStore, err := buildMemoryStore(r.mission, r.cfg.Memories, r.cfg.Contexts, missionID)
 	if err != nil {
 		return fmt.Errorf("mission '%s': build memory store: %w", r.mission.Name, err)
 	}

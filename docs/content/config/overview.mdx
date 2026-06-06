@@ -62,6 +62,21 @@ agent "assistant" {
 | `commander` | Commander server connection config |
 | `memory` | Shared filesystem locations accessible to missions (paths managed under `<squadron_home>/memories/shared/`) |
 
+## Block Naming
+
+Block labels become HCL reference identifiers (e.g. `models.anthropic`, `agents.researcher`), so they must be valid identifiers. Names may contain **only lowercase letters, digits, and underscores**, and must not start with a digit. This applies to every named block — `variable`, `model`, `agent`, `tool`, `plugin`, `mcp`, `skill`, `memory`, `mission`, and mission-scoped `task`, `dataset`, and `agent` blocks.
+
+```hcl
+agent "browser_navigator" { }   # Good
+agent "agent_2" { }             # Good
+
+agent "BrowserNavigator" { }    # Error — uppercase
+agent "browser-navigator" { }   # Error — hyphen
+agent "2nd_agent" { }           # Error — leading digit
+```
+
+`squadron verify` rejects invalid names with a pointed error.
+
 ## Expressions
 
 HCL supports expressions for dynamic values:
@@ -88,6 +103,7 @@ squadron verify ./my-config
 
 This catches errors like:
 - Invalid HCL syntax
+- Invalid block names (must be lowercase letters, digits, and underscores)
 - Missing variable values
 - Invalid model references
 - Circular mission dependencies

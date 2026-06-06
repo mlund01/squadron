@@ -121,24 +121,6 @@ mission "m" {
 			Expect(err).To(HaveOccurred())
 		})
 
-		It("rejects the old shared_folder block with a pointer at the new syntax", func() {
-			hcl := fullBaseHCL() + `
-shared_folder "research" {
-  path = "./data"
-}
-mission "m" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.test_agent]
-  task "t" { objective = "go" }
-}
-`
-			_, f := writeFixture("config.hcl", hcl)
-			_, err := config.LoadFile(f)
-			Expect(err).To(HaveOccurred())
-			Expect(err.Error()).To(ContainSubstring("no longer supported"))
-			Expect(err.Error()).To(ContainSubstring("memory \"research\""))
-		})
-
 		It("rejects the old `path` attribute on a memory block", func() {
 			hcl := fullBaseHCL() + `
 memory "research" {

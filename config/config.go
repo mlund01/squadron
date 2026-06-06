@@ -388,6 +388,13 @@ func LoadAndValidate(path string) (*Config, error) {
 
 // Validate checks that all config components are valid
 func (c *Config) Validate() error {
+	// Enforce naming rules on every named block label. Labels become HCL
+	// reference identifiers, so only lowercase letters, digits, and
+	// underscores are allowed.
+	if err := c.validateBlockNames(); err != nil {
+		return err
+	}
+
 	for _, m := range c.Models {
 		if err := m.Validate(); err != nil {
 			return fmt.Errorf("model '%s': %w", m.Name, err)
@@ -735,9 +742,6 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "storage"},
 				{Type: "command_center"},
 				{Type: "memory", LabelNames: []string{"name"}},
-				// Detected for a nicer error only — the parse-pass below
-				// rejects it with a pointer to the new `memory` block.
-				{Type: "shared_folder", LabelNames: []string{"name"}},
 				{Type: "mcp_host"},
 				{Type: "mcp", LabelNames: []string{"name"}},
 				{Type: "skill", LabelNames: []string{"name"}},
@@ -770,10 +774,6 @@ func loadFromFiles(files []string) (*Config, error) {
 			case "command_center":
 				pb.CommandCenter = append(pb.CommandCenter, block)
 			case "memory":
-				pb.Memories = append(pb.Memories, block)
-			case "shared_folder":
-				// Collected only so we can produce a clear error in the
-				// parse pass below.
 				pb.Memories = append(pb.Memories, block)
 			case "mcp_host":
 				pb.MCPHost = append(pb.MCPHost, block)
@@ -971,14 +971,9 @@ func loadFromFiles(files []string) (*Config, error) {
 	}
 
 	// Parse top-level `memory "name" { ... }` blocks (with vars context).
-	// `shared_folder` is no longer supported — if a user writes one we
-	// surface an explicit error pointing at the new syntax.
 	var allMemories []Memory
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Memories {
-			if block.Type != "memory" {
-				return nil, fmt.Errorf("%s %q at %s: this block type is no longer supported — use `memory %q { ... }` instead (path is now derived automatically; remove the `path` attribute)", block.Type, block.Labels[0], block.DefRange, block.Labels[0])
-			}
 			var m Memory
 			m.Name = block.Labels[0]
 			diags := gohcl.DecodeBody(block.Body, varsCtx, &m)

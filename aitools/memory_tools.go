@@ -378,7 +378,7 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 		}
 	}
 
-	// Contexts are read-only reference data and may only hold text-readable
+	// Packets are read-only reference data and may only hold text-readable
 	// files. Reject binary payloads up front so the LLM doesn't see a wall
 	// of garbled bytes.
 	if IsPacketSlot(p.Slot) && looksBinary(content) {
@@ -824,7 +824,7 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 	}
 	var matches []match
 
-	isContext := IsPacketSlot(p.Slot)
+	isPacket := IsPacketSlot(p.Slot)
 	grepFile := func(filePath string, relPath string) {
 		f, err := os.Open(filePath)
 		if err != nil {
@@ -835,7 +835,7 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 		// Skip binary files in packet slots so grep doesn't pollute output
 		// with garbage matches from images/archives/etc. Use io.ReadFull so
 		// short reads on slow FS still get up to 8KB before we judge.
-		if isContext {
+		if isPacket {
 			head := make([]byte, 8192)
 			n, err := io.ReadFull(f, head)
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {

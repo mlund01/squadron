@@ -17,7 +17,7 @@ var _ = Describe("Packet blocks", func() {
 		Expect(os.WriteFile(filepath.Join(ctxDir, "doc.md"), []byte("hello"), 0644)).To(Succeed())
 
 		// Path is relative to the config file (./kb), not the absolute
-		// tempdir. Absolute paths are rejected by ResolveContextPath.
+		// tempdir. Absolute paths are rejected by paths.ResolveConfigPath.
 		hcl := minimalVarsHCL() + `
 packet "kb" {
   path        = "./kb"

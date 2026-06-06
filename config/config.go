@@ -678,7 +678,14 @@ func getToolNames(tools map[string]bool) []string {
 }
 
 func LoadFile(filename string) (*Config, error) {
-	return loadFromFiles([]string{filename})
+	// configDir for a single .hcl file is the directory holding that file.
+	// Absolutize so the CWD-independence promise holds even when LoadFile
+	// is called with a relative path from a CLI invoked with -c ./foo.
+	configDir, err := filepath.Abs(filepath.Dir(filename))
+	if err != nil {
+		return nil, err
+	}
+	return loadFromFiles(configDir, []string{filename})
 }
 
 func LoadDir(dir string) (*Config, error) {
@@ -701,7 +708,15 @@ func LoadDir(dir string) (*Config, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no .hcl config files found in %q — add at least one .hcl file with your configuration", dir)
 	}
-	return loadFromFiles(files)
+	// configDir is the explicit -c argument, absolutized. Doing this here
+	// (instead of deriving from files[0]) means CWD doesn't leak into path
+	// resolution AND it works when WalkDir's lexical order surfaces a
+	// subdirectory file first.
+	configDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	return loadFromFiles(configDir, files)
 }
 
 // parsedBlocks holds all blocks extracted from a file in one pass
@@ -727,11 +742,13 @@ type parsedBlocks struct {
 	File string
 }
 
-// loadFromFiles implements staged loading: variables → models → agents → tools
-func loadFromFiles(files []string) (*Config, error) {
+// loadFromFiles implements staged loading: variables → models → agents → tools.
+// configDir must be the absolute -c argument (the project root) so path
+// resolution downstream is CWD-independent and stays correct regardless
+// of which file in `files` happens to come first.
+func loadFromFiles(configDir string, files []string) (*Config, error) {
 	// Build config functions map: schema helpers + load()
 	// Set package-level configFuncs so buildXxxContext helpers can access it
-	configDir := filepath.Dir(files[0])
 	configFuncs = schemafunc.SchemaFunctions()
 	configFuncs["load"] = schemafunc.MakeLoadFunc(configDir)
 
@@ -874,7 +891,16 @@ func loadFromFiles(files []string) (*Config, error) {
 	// folder. If we ran this later, stages like storage/command_center/
 	// mcp_host would silently absorb blocks from inside packets before
 	// the filter applied — defeating the "opaque reference data" promise.
-	var allPackets []Packet
+	// First, decode every packet block we found, tracking the source file.
+	// We need the source file to filter out packets declared INSIDE another
+	// packet's path — `.hcl` files inside a packet folder are supposed to
+	// be opaque reference data, and a packet block sitting there would
+	// otherwise leak through the same way other blocks would.
+	type packetWithSource struct {
+		Packet Packet
+		File   string // absolute path to the source file
+	}
+	var candidates []packetWithSource
 	for _, pb := range allParsedBlocks {
 		for _, block := range pb.Packets {
 			var c Packet
@@ -901,7 +927,32 @@ func loadFromFiles(files []string) (*Config, error) {
 			if err := c.Validate(); err != nil {
 				return nil, fmt.Errorf("packet '%s': %w", c.Name, err)
 			}
-			allPackets = append(allPackets, c)
+			fileAbs := pb.File
+			if a, err := filepath.Abs(pb.File); err == nil {
+				fileAbs = a
+			}
+			candidates = append(candidates, packetWithSource{Packet: c, File: fileAbs})
+		}
+	}
+
+	// Drop packets whose source file is inside ANOTHER packet's path. Without
+	// this filter, a stray `packet "inner"` block sitting in a .hcl file
+	// under another packet's folder would silently register even though
+	// every other block type in that file is filtered out below.
+	var allPackets []Packet
+	for i, cand := range candidates {
+		insideAnother := false
+		for j, other := range candidates {
+			if i == j {
+				continue
+			}
+			if paths.IsInside(other.Packet.Path, cand.File, false) {
+				insideAnother = true
+				break
+			}
+		}
+		if !insideAnother {
+			allPackets = append(allPackets, cand.Packet)
 		}
 	}
 
@@ -919,13 +970,7 @@ func loadFromFiles(files []string) (*Config, error) {
 			return false
 		}
 		for _, root := range packetRoots {
-			rel, err := filepath.Rel(root, abs)
-			if err != nil {
-				continue
-			}
-			// Inside iff rel is neither "." (the root itself) nor begins
-			// with ".." (which Rel produces for unrelated paths).
-			if rel != "." && !strings.HasPrefix(rel, "..") {
+			if paths.IsInside(root, abs, true) {
 				return true
 			}
 		}

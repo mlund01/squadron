@@ -174,6 +174,36 @@ packet "whole_project" {
 		Expect(err.Error()).To(ContainSubstring("resolves to the project root"))
 	})
 
+	It("drops a packet block declared inside another packet's path", func() {
+		// outer.hcl declares packet "outer" at ./outer.
+		// outer/inner.hcl (inside outer's path) declares packet "inner" — that
+		// file is supposed to be opaque reference data, so the inner packet
+		// must NOT end up in cfg.Packets.
+		dir := GinkgoT().TempDir()
+		outerDir := filepath.Join(dir, "outer")
+		Expect(os.MkdirAll(outerDir, 0755)).To(Succeed())
+		// Pre-create the elsewhere dir so inner.hcl could legitimately resolve;
+		// the filter should drop it before that even matters.
+		Expect(os.MkdirAll(filepath.Join(dir, "elsewhere"), 0755)).To(Succeed())
+
+		outerHCL := minimalVarsHCL() + `
+packet "outer" {
+  path = "./outer"
+}
+`
+		Expect(os.WriteFile(filepath.Join(dir, "outer.hcl"), []byte(outerHCL), 0644)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(outerDir, "inner.hcl"), []byte(`
+packet "inner" {
+  path = "@/elsewhere"
+}
+`), 0644)).To(Succeed())
+
+		cfg, err := config.LoadDir(dir)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(cfg.Packets).To(HaveLen(1))
+		Expect(cfg.Packets[0].Name).To(Equal("outer"))
+	})
+
 	It("rejects a packet path that escapes the project root via ..", func() {
 		dir := GinkgoT().TempDir()
 		// The escape target literally exists in the parent of dir, but it's

@@ -363,6 +363,24 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 	}
 	defer f.Close()
 
+	// Packets are read-only reference data and may only hold text-readable
+	// files. For packet slots, peek at the first 8 KB and reject binary
+	// content BEFORE allocating the full file — a 9 MB stray .pdf would
+	// otherwise force a 9 MB read just to discard it.
+	if IsPacketSlot(p.Slot) {
+		head := make([]byte, 8192)
+		n, err := io.ReadFull(f, head)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return "Error: " + err.Error()
+		}
+		if looksBinary(head[:n]) {
+			return "Error: file appears to be binary or non-UTF-8 encoded; packet slots accept UTF-8 text only"
+		}
+		if _, err := f.Seek(0, 0); err != nil {
+			return "Error: " + err.Error()
+		}
+	}
+
 	var content []byte
 	if p.MaxBytes > 0 {
 		content = make([]byte, p.MaxBytes)
@@ -376,13 +394,6 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 		if err != nil {
 			return "Error: " + err.Error()
 		}
-	}
-
-	// Packets are read-only reference data and may only hold text-readable
-	// files. Reject binary payloads up front so the LLM doesn't see a wall
-	// of garbled bytes.
-	if IsPacketSlot(p.Slot) && looksBinary(content) {
-		return "Error: file appears to be binary or non-UTF-8 encoded; packet slots accept UTF-8 text only"
 	}
 
 	text := string(content)

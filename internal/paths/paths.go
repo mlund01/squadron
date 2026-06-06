@@ -125,6 +125,32 @@ func ResolveFolderPath(path string) (string, error) {
 // the file's own directory. Example: `path = "@/data/kb"`.
 const ProjectRootMarker = "@/"
 
+// IsInside reports whether `p` is the same as `root` or lies inside it
+// after cleaning and separator-aware comparison. Both arguments should be
+// absolute (callers that care about CWD-independence are expected to
+// absolutize via filepath.Abs first).
+//
+// The check is separator-aware: a filename like "..foo" inside root is
+// correctly treated as inside, not as an escape. A pure prefix check on
+// `..` would false-positive on that case.
+//
+// Pass requireStrictDescendant=true to additionally reject p == root.
+// Useful when an attribute that names a subpath would silently nuke the
+// whole tree if it pointed at the root itself.
+func IsInside(root, p string, requireStrictDescendant bool) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	if requireStrictDescendant && rel == "." {
+		return false
+	}
+	return true
+}
+
 // ResolveConfigPath resolves a user-supplied path attribute from HCL
 // according to the project's anchoring rules. It is the single source of
 // truth for path resolution on every block attribute that takes a path
@@ -180,24 +206,17 @@ func ResolveConfigPath(projectRoot, hclFileDir, rawPath string) (string, error) 
 		return "", fmt.Errorf("path %q: %w", rawPath, err)
 	}
 
-	// Containment check: the resolved path must be a STRICT descendant of
-	// projectRoot. Two failure modes:
-	//
-	//   - rel == ".." or starts with "../" → escapes the project tree.
-	//   - rel == "."                       → IS the project root itself.
-	//     Pointing a config path attribute at the whole project root is
-	//     almost certainly a mistake; for packet blocks specifically it
-	//     also triggers HCL-exclusion of every config file and silently
-	//     leaves the user with "0 missions found" rather than a clear
-	//     error.
-	//
-	// Both are rejected with a descriptive message.
-	rel, err := filepath.Rel(rootAbs, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// Containment check via IsInside. Strict-descendant mode rejects
+	// p == root, which would otherwise let `path = "@/"` filter every
+	// config file out via the HCL-exclusion pass and leave the user with
+	// "0 missions found" instead of a clear error.
+	if !IsInside(rootAbs, abs, true) {
+		// Distinguish "is the root itself" from "outside the root" so the
+		// error message points users at the right fix.
+		if rel, err := filepath.Rel(rootAbs, abs); err == nil && rel == "." {
+			return "", fmt.Errorf("path %q resolves to the project root %q itself — config path attributes must point at a specific file or subdirectory, not the whole project", rawPath, rootAbs)
+		}
 		return "", fmt.Errorf("path %q escapes the project root %q", rawPath, rootAbs)
-	}
-	if rel == "." {
-		return "", fmt.Errorf("path %q resolves to the project root %q itself — config path attributes must point at a specific file or subdirectory, not the whole project", rawPath, rootAbs)
 	}
 	return abs, nil
 }
@@ -234,8 +253,7 @@ func ResolveProjectPath(path string) (string, error) {
 		abs = filepath.Join(root, cleaned)
 	}
 
-	rel, err := filepath.Rel(root, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !IsInside(root, abs, false) {
 		return "", fmt.Errorf("path %q is outside project root %q", path, root)
 	}
 	return abs, nil

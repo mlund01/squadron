@@ -56,6 +56,17 @@ func (c *Client) resolveMemoryPath(memoryName, relPath string) (*resolvedMemory,
 		}
 	}
 
+	// Check packets — read-only reference data bundles. The browser is
+	// just navigating the filesystem; the read-only / text-only enforcement
+	// lives at the agent-tool layer (aitools), not here.
+	for i := range cfg.Packets {
+		if cfg.Packets[i].Name == memoryName {
+			rm := &resolvedMemory{name: cfg.Packets[i].Name, path: cfg.Packets[i].Path}
+			path, err := c.resolveSafePath(cfg.Packets[i].Path, relPath)
+			return rm, path, err
+		}
+	}
+
 	return nil, "", fmt.Errorf("memory %q not found", memoryName)
 }
 
@@ -144,7 +155,53 @@ func collectMemoryInfos(cfg *config.Config) ([]protocol.SharedFolderInfo, error)
 		})
 	}
 
+	// Packets — read-only reference data bundles. We surface them in the
+	// browser so users can see what their agents are reading from, but mark
+	// them non-editable so any future UI write affordance stays disabled.
+	packetMissions := map[string][]string{}
+	for _, m := range cfg.Missions {
+		for _, name := range m.Packets {
+			packetMissions[name] = append(packetMissions[name], m.Name)
+		}
+		for _, t := range m.Tasks {
+			for _, name := range t.Packets {
+				packetMissions[name] = append(packetMissions[name], m.Name)
+			}
+		}
+	}
+	for _, pkt := range cfg.Packets {
+		folders = append(folders, protocol.SharedFolderInfo{
+			Name:        pkt.Name,
+			Path:        pkt.Path,
+			Label:       pkt.Name,
+			Description: pkt.Description,
+			Editable:    false,
+			IsShared:    true,
+			Missions:    dedupStrings(packetMissions[pkt.Name]),
+		})
+	}
+
 	return folders, nil
+}
+
+// dedupStrings removes adjacent and non-adjacent duplicates while
+// preserving first-seen order. Used to clean up packetMissions, which
+// can list the same mission twice when both the mission and a task
+// reference the same packet.
+func dedupStrings(in []string) []string {
+	if len(in) <= 1 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	return out
 }
 
 func (c *Client) handleBrowseDirectory(env *protocol.Envelope) (*protocol.Envelope, error) {

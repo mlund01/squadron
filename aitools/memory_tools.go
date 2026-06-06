@@ -20,14 +20,14 @@ const (
 	ScratchpadSlotName = "scratchpad"
 )
 
-// PacketSlotPrefix marks a slot as belonging to a read-only context bundle.
+// PacketSlotPrefix marks a slot as belonging to a read-only packet bundle.
 // The MemoryStore doesn't distinguish read-only from read-write itself; the
 // file tools below enforce the policy by inspecting the slot name with
 // IsPacketSlot. Mirrored in config.PacketSlotPrefix — both must stay in
 // sync.
 const PacketSlotPrefix = "packet."
 
-// IsPacketSlot reports whether a slot name belongs to a context bundle
+// IsPacketSlot reports whether a slot name belongs to a packet bundle
 // (read-only, text-only).
 func IsPacketSlot(name string) bool {
 	return strings.HasPrefix(name, PacketSlotPrefix)
@@ -382,7 +382,7 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 	// files. Reject binary payloads up front so the LLM doesn't see a wall
 	// of garbled bytes.
 	if IsPacketSlot(p.Slot) && looksBinary(content) {
-		return "Error: file appears to be binary or non-UTF-8 encoded; context slots accept UTF-8 text only"
+		return "Error: file appears to be binary or non-UTF-8 encoded; packet slots accept UTF-8 text only"
 	}
 
 	text := string(content)
@@ -460,7 +460,7 @@ func (t *MemoryCreateTool) Call(ctx context.Context, params string) string {
 	}
 
 	if IsPacketSlot(p.Slot) {
-		return "Error: slot is read-only (context bundles are immutable)"
+		return "Error: slot is read-only (packet bundles are immutable)"
 	}
 
 	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
@@ -548,7 +548,7 @@ func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {
 	}
 
 	if IsPacketSlot(p.Slot) {
-		return "Error: slot is read-only (context bundles are immutable)"
+		return "Error: slot is read-only (packet bundles are immutable)"
 	}
 
 	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
@@ -832,7 +832,7 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 		}
 		defer f.Close()
 
-		// Skip binary files in context slots so grep doesn't pollute output
+		// Skip binary files in packet slots so grep doesn't pollute output
 		// with garbage matches from images/archives/etc. Use io.ReadFull so
 		// short reads on slow FS still get up to 8KB before we judge.
 		if isContext {

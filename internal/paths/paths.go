@@ -128,7 +128,7 @@ const ProjectRootMarker = "@/"
 // ResolveConfigPath resolves a user-supplied path attribute from HCL
 // according to the project's anchoring rules. It is the single source of
 // truth for path resolution on every block attribute that takes a path
-// (context.path, load(), and future block path attributes).
+// (packet.path, load(), and future block path attributes).
 //
 // projectRoot is the directory passed to `squadron -c <dir>` (also the
 // configDir). hclFileDir is the directory containing the HCL file that
@@ -186,7 +186,7 @@ func ResolveConfigPath(projectRoot, hclFileDir, rawPath string) (string, error) 
 	//   - rel == ".." or starts with "../" → escapes the project tree.
 	//   - rel == "."                       → IS the project root itself.
 	//     Pointing a config path attribute at the whole project root is
-	//     almost certainly a mistake; for context blocks specifically it
+	//     almost certainly a mistake; for packet blocks specifically it
 	//     also triggers HCL-exclusion of every config file and silently
 	//     leaves the user with "0 missions found" rather than a clear
 	//     error.

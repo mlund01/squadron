@@ -34,7 +34,7 @@ func TestBuildMemoryStore_Packets_MissionLevel(t *testing.T) {
 		t.Fatalf("expected %s, got %s", dir, abs)
 	}
 
-	// The bare name without prefix must NOT resolve — contexts live in a
+	// The bare name without prefix must NOT resolve — packets live in a
 	// distinct slot namespace.
 	if _, err := store.ResolvePath("research", "."); err == nil {
 		t.Fatal("expected error when resolving packet by bare name")

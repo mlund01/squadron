@@ -72,7 +72,7 @@ mission "go" {
 		Expect(err).To(HaveOccurred())
 	})
 
-	It("allows mission and task to declare contexts via the packets namespace", func() {
+	It("allows mission and task to declare packets via the packets namespace", func() {
 		dir := GinkgoT().TempDir()
 		kbDir := filepath.Join(dir, "kb")
 		Expect(os.MkdirAll(kbDir, 0755)).To(Succeed())

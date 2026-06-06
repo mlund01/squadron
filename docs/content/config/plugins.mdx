@@ -51,9 +51,11 @@ plugin "shell" {
 Rules:
 
 - `version` must be `"local"` when `source` is a local path.
-- The path is resolved against the current working directory and must
-  stay inside the project root — `../../somewhere/else` is rejected at
-  config-load time.
+- The path is resolved by [Squadron's project-root path
+  rule](#path-resolution): `./foo` and bare `foo` anchor to the HCL
+  file's own directory, `@/foo` anchors to the project root, absolute
+  paths and `..` traversals that escape the project root are rejected
+  at config-load time.
 - The source directory must contain a `go.mod` (Go plugin) or a
   `pyproject.toml` (Python plugin); Squadron auto-detects which.
 - For Go: `go` must be on `PATH`. For Python: `python3` must be on
@@ -61,6 +63,22 @@ Rules:
   build tool's output attached.
 - The compiled binary or installed venv lands at the same cache
   location as a downloaded release: `.squadron/plugins/<platform>/<name>/local/`.
+
+### Path Resolution
+
+Local-`source` paths follow the same rule as every other path attribute in Squadron (currently `packet.path` too):
+
+| Form | Resolves to |
+|------|-------------|
+| `./foo`, `../foo`, bare `foo` | The directory of the HCL file declaring this block |
+| `@/foo` | The **project root** — the directory passed to `squadron -c <dir>` |
+| `/foo`, absolute | **Rejected** with `absolute paths are not allowed — use a path relative to the HCL file or prefix with "@/" for the project root` |
+
+After resolution the path must remain inside the project root. Any `..` traversal that escapes the project tree is rejected with `escapes the project root <path>`, and any path that resolves to the project root itself (e.g. `@/`) is rejected with `resolves to the project root <path> itself`.
+
+Crucially: **resolution never reads the process working directory.** You can run `squadron -c /path/to/project mission foo` from anywhere on your machine and `source = "./plugin_shell"` always means "the `plugin_shell` directory next to the HCL file declaring it" — never "next to wherever I happened to `cd` before running squadron."
+
+For remote sources (`github.com/owner/repo`) none of this applies — those are downloaded into the plugin cache and the GitHub path is opaque.
 
 ### Build caching
 

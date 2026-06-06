@@ -1,6 +1,8 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
 	"squadron/config"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -149,6 +151,23 @@ memory "Bad-Memory" {
 			err := loadInline(hcl)
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring("memory name \"Bad-Memory\" is invalid"))
+		})
+
+		It("rejects an invalid packet name", func() {
+			// Pre-create a directory the packet path can validate against,
+			// so the failure is on the name (not the missing dir).
+			dir := GinkgoT().TempDir()
+			Expect(os.MkdirAll(filepath.Join(dir, "kb"), 0755)).To(Succeed())
+			hcl := minimalVarsHCL() + `
+packet "Bad-Packet" {
+  path        = "./kb"
+  description = "notes"
+}
+`
+			Expect(os.WriteFile(filepath.Join(dir, "config.hcl"), []byte(hcl), 0644)).To(Succeed())
+			_, err := config.LoadAndValidate(dir)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(MatchRegexp(`packet (name )?"Bad-Packet"`))
 		})
 	})
 

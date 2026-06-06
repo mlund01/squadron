@@ -14,6 +14,7 @@ import (
 
 	schemafunc "squadron/config/functions"
 	vaultpkg "squadron/config/vault"
+	"squadron/internal/paths"
 	squadronmcp "squadron/mcp"
 	"squadron/mcp/oauth"
 	"squadron/plugin"
@@ -49,6 +50,11 @@ type Config struct {
 
 	// Top-level shared memory blocks (memory "name" { ... }).
 	Memories []Memory `hcl:"-"`
+
+	// Top-level read-only reference data bundles (packet "name" { ... }).
+	// Tools address them via slot="packet.<name>"; their on-disk paths are
+	// user-controlled and their contents are excluded from HCL parsing.
+	Packets []Packet `hcl:"-"`
 
 	// LoadedPlugins holds the loaded plugin clients, keyed by plugin name
 	LoadedPlugins map[string]*plugin.PluginClient `hcl:"-"`
@@ -464,6 +470,18 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate packets and reject duplicate names.
+	packetNames := make(map[string]bool, len(c.Packets))
+	for i := range c.Packets {
+		if err := c.Packets[i].Validate(); err != nil {
+			return fmt.Errorf("packet '%s': %w", c.Packets[i].Name, err)
+		}
+		if packetNames[c.Packets[i].Name] {
+			return fmt.Errorf("duplicate packet name '%s'", c.Packets[i].Name)
+		}
+		packetNames[c.Packets[i].Name] = true
+	}
+
 	// Validate plugins
 	for _, p := range c.Plugins {
 		if err := p.Validate(); err != nil {
@@ -636,7 +654,7 @@ func (c *Config) Validate() error {
 
 	// Validate missions
 	for i := range c.Missions {
-		if err := c.Missions[i].Validate(c.Models, c.Agents, c.Memories, allMissionNames); err != nil {
+		if err := c.Missions[i].Validate(c.Models, c.Agents, c.Memories, c.Packets, allMissionNames); err != nil {
 			return fmt.Errorf("mission '%s': %w", c.Missions[i].Name, err)
 		}
 	}
@@ -667,7 +685,14 @@ func getToolNames(tools map[string]bool) []string {
 }
 
 func LoadFile(filename string) (*Config, error) {
-	return loadFromFiles([]string{filename})
+	// configDir for a single .hcl file is the directory holding that file.
+	// Absolutize so the CWD-independence promise holds even when LoadFile
+	// is called with a relative path from a CLI invoked with -c ./foo.
+	configDir, err := filepath.Abs(filepath.Dir(filename))
+	if err != nil {
+		return nil, err
+	}
+	return loadFromFiles(configDir, []string{filename})
 }
 
 func LoadDir(dir string) (*Config, error) {
@@ -690,7 +715,15 @@ func LoadDir(dir string) (*Config, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("no .hcl config files found in %q — add at least one .hcl file with your configuration", dir)
 	}
-	return loadFromFiles(files)
+	// configDir is the explicit -c argument, absolutized. Doing this here
+	// (instead of deriving from files[0]) means CWD doesn't leak into path
+	// resolution AND it works when WalkDir's lexical order surfaces a
+	// subdirectory file first.
+	configDir, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, err
+	}
+	return loadFromFiles(configDir, files)
 }
 
 // parsedBlocks holds all blocks extracted from a file in one pass
@@ -706,27 +739,45 @@ type parsedBlocks struct {
 	Storage       []*hcl.Block
 	CommandCenter []*hcl.Block
 	Memories      []*hcl.Block
+	Packets      []*hcl.Block
 	MCPHost       []*hcl.Block
 	Skills        []*hcl.Block
 	Gateways      []*hcl.Block
+	// File is the source path the blocks were extracted from. Used to drop
+	// blocks (and parse errors) from .hcl files that live inside a packet
+	// folder — packet folders are treated as opaque reference data.
+	File string
 }
 
-// loadFromFiles implements staged loading: variables → models → agents → tools
-func loadFromFiles(files []string) (*Config, error) {
+// loadFromFiles implements staged loading: variables → models → agents → tools.
+// configDir must be the absolute -c argument (the project root) so path
+// resolution downstream is CWD-independent and stays correct regardless
+// of which file in `files` happens to come first.
+func loadFromFiles(configDir string, files []string) (*Config, error) {
 	// Build config functions map: schema helpers + load()
 	// Set package-level configFuncs so buildXxxContext helpers can access it
-	configDir := filepath.Dir(files[0])
 	configFuncs = schemafunc.SchemaFunctions()
 	configFuncs["load"] = schemafunc.MakeLoadFunc(configDir)
 
-	// Parse all files and extract all block types in a single pass
+	// Parse all files and extract all block types in a single pass.
+	// Parse errors are deferred per file so .hcl files that happen to live
+	// inside a `packet` folder can be silently skipped — the packet
+	// folder is opaque reference data, not config. Packet paths only
+	// become known after the packet blocks are decoded below, so any
+	// per-file parse errors are revisited then.
 	parser := hclparse.NewParser()
 	var allParsedBlocks []parsedBlocks
+	type deferredErr struct {
+		file string
+		err  error
+	}
+	var deferredErrs []deferredErr
 
 	for _, file := range files {
 		hclFile, diags := parser.ParseHCLFile(file)
 		if diags.HasErrors() {
-			return nil, fmt.Errorf("[1] parse %s: %w", file, diags)
+			deferredErrs = append(deferredErrs, deferredErr{file: file, err: fmt.Errorf("[1] parse %s: %w", file, diags)})
+			continue
 		}
 
 		// Extract all known block types in one PartialContent call
@@ -742,6 +793,7 @@ func loadFromFiles(files []string) (*Config, error) {
 				{Type: "storage"},
 				{Type: "command_center"},
 				{Type: "memory", LabelNames: []string{"name"}},
+				{Type: "packet", LabelNames: []string{"name"}},
 				{Type: "mcp_host"},
 				{Type: "mcp", LabelNames: []string{"name"}},
 				{Type: "skill", LabelNames: []string{"name"}},
@@ -749,10 +801,12 @@ func loadFromFiles(files []string) (*Config, error) {
 			},
 		})
 		if diags.HasErrors() {
-			return nil, fmt.Errorf("[2] partial content %s: %w", file, diags)
+			deferredErrs = append(deferredErrs, deferredErr{file: file, err: fmt.Errorf("[2] partial content %s: %w", file, diags)})
+			continue
 		}
 
 		var pb parsedBlocks
+		pb.File = file
 		for _, block := range content.Blocks {
 			switch block.Type {
 			case "vault":
@@ -775,6 +829,8 @@ func loadFromFiles(files []string) (*Config, error) {
 				pb.CommandCenter = append(pb.CommandCenter, block)
 			case "memory":
 				pb.Memories = append(pb.Memories, block)
+			case "packet":
+				pb.Packets = append(pb.Packets, block)
 			case "mcp_host":
 				pb.MCPHost = append(pb.MCPHost, block)
 			case "mcp":
@@ -828,6 +884,112 @@ func loadFromFiles(files []string) (*Config, error) {
 
 	// Build vars context
 	varsCtx, resolvedVars := buildVarsContext(allVars)
+
+	// Stage 1.4 (NEW): parse `packet "name" { ... }` blocks BEFORE every
+	// downstream stage so the exclusion filter below can drop any other
+	// blocks that happened to live in .hcl files placed inside a packet
+	// folder. If we ran this later, stages like storage/command_center/
+	// mcp_host would silently absorb blocks from inside packets before
+	// the filter applied — defeating the "opaque reference data" promise.
+	// First, decode every packet block we found, tracking the source file.
+	// We need the source file to filter out packets declared INSIDE another
+	// packet's path — `.hcl` files inside a packet folder are supposed to
+	// be opaque reference data, and a packet block sitting there would
+	// otherwise leak through the same way other blocks would.
+	type packetWithSource struct {
+		Packet Packet
+		File   string // absolute path to the source file
+	}
+	var candidates []packetWithSource
+	for _, pb := range allParsedBlocks {
+		for _, block := range pb.Packets {
+			var c Packet
+			c.Name = block.Labels[0]
+			diags := gohcl.DecodeBody(block.Body, varsCtx, &c)
+			if diags.HasErrors() {
+				return nil, fmt.Errorf("packet '%s': %w", c.Name, diags)
+			}
+			// Resolve `path` via the unified rule:
+			//   - "@/foo"           → project root (configDir)
+			//   - "./foo", "../foo" → directory of the HCL file declaring this block
+			//   - "foo"  (bare)     → directory of the HCL file declaring this block
+			//   - "/foo"            → REJECTED
+			// `..` traversal that escapes the project root is also rejected.
+			hclDir := configDir
+			if block.DefRange.Filename != "" {
+				hclDir = filepath.Dir(block.DefRange.Filename)
+			}
+			abs, err := paths.ResolveConfigPath(configDir, hclDir, c.Path)
+			if err != nil {
+				return nil, fmt.Errorf("packet '%s': %w", c.Name, err)
+			}
+			c.Path = abs
+			if err := c.Validate(); err != nil {
+				return nil, fmt.Errorf("packet '%s': %w", c.Name, err)
+			}
+			fileAbs := pb.File
+			if a, err := filepath.Abs(pb.File); err == nil {
+				fileAbs = a
+			}
+			candidates = append(candidates, packetWithSource{Packet: c, File: fileAbs})
+		}
+	}
+
+	// Drop packets whose source file is inside ANOTHER packet's path. Without
+	// this filter, a stray `packet "inner"` block sitting in a .hcl file
+	// under another packet's folder would silently register even though
+	// every other block type in that file is filtered out below.
+	var allPackets []Packet
+	for i, cand := range candidates {
+		insideAnother := false
+		for j, other := range candidates {
+			if i == j {
+				continue
+			}
+			if paths.IsInside(other.Packet.Path, cand.File, false) {
+				insideAnother = true
+				break
+			}
+		}
+		if !insideAnother {
+			allPackets = append(allPackets, cand.Packet)
+		}
+	}
+
+	// Build absolute-path set of packet roots, then filter both
+	// allParsedBlocks (drop sibling blocks from files inside a packet)
+	// and deferredErrs (drop parse errors from files inside a packet —
+	// they're opaque reference data and may not be valid HCL at all).
+	packetRoots := make([]string, 0, len(allPackets))
+	for _, c := range allPackets {
+		packetRoots = append(packetRoots, c.Path)
+	}
+	isInsidePacket := func(file string) bool {
+		abs, err := filepath.Abs(file)
+		if err != nil {
+			return false
+		}
+		for _, root := range packetRoots {
+			if paths.IsInside(root, abs, true) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(packetRoots) > 0 {
+		filtered := allParsedBlocks[:0]
+		for _, pb := range allParsedBlocks {
+			if !isInsidePacket(pb.File) {
+				filtered = append(filtered, pb)
+			}
+		}
+		allParsedBlocks = filtered
+	}
+	for _, de := range deferredErrs {
+		if !isInsidePacket(de.file) {
+			return nil, de.err
+		}
+	}
 
 	// Parse storage block (optional — defaults to sqlite if omitted)
 	var storageConfig StorageConfig
@@ -993,6 +1155,22 @@ func loadFromFiles(files []string) (*Config, error) {
 			p, err := parsePluginBlock(block, varsCtx)
 			if err != nil {
 				return nil, err
+			}
+			// Resolve local-source paths via the unified rule before
+			// validation. Same anchoring as packet: project root (the -c
+			// argument), HCL file's directory for relative paths, "@/"
+			// for explicit project root, reject absolute paths, reject
+			// ".." escapes. github.com/... sources go through unchanged.
+			if p.IsLocalSource() {
+				hclDir := configDir
+				if block.DefRange.Filename != "" {
+					hclDir = filepath.Dir(block.DefRange.Filename)
+				}
+				abs, err := paths.ResolveConfigPath(configDir, hclDir, p.Source)
+				if err != nil {
+					return nil, fmt.Errorf("plugin %q: %w", p.Name, err)
+				}
+				p.Source = abs
 			}
 			if err := p.Validate(); err != nil {
 				return nil, err
@@ -1181,6 +1359,19 @@ func loadFromFiles(files []string) (*Config, error) {
 		agentsCtx.Variables["memories"] = cty.EmptyObjectVal
 	}
 
+	// Same shape as `memories`: `packets.NAME` resolves to the bare name;
+	// the MemoryStore registers packets under `packet.<name>` so tools
+	// and prompts can disambiguate them from memory slots.
+	packetMap := make(map[string]cty.Value, len(allPackets))
+	for _, c := range allPackets {
+		packetMap[c.Name] = cty.StringVal(c.Name)
+	}
+	if len(packetMap) > 0 {
+		agentsCtx.Variables["packets"] = cty.ObjectVal(packetMap)
+	} else {
+		agentsCtx.Variables["packets"] = cty.EmptyObjectVal
+	}
+
 	// Stage 5: Load missions (with vars + models + tools + agents + memories context)
 	// First pass: collect all mission names so router targets can reference missions.*
 	missionNames := make(map[string]cty.Value)
@@ -1232,6 +1423,7 @@ func loadFromFiles(files []string) (*Config, error) {
 		CommandCenter:    commandCenterConfig,
 		MCPHost:          mcpHostConfig,
 		Memories:         allMemories,
+		Packets:         allPackets,
 		LoadedPlugins:    loadedPlugins,
 		LoadedMCPClients: loadedMCPClients,
 		LoadedMCPErrors:  loadedMCPErrors,
@@ -1793,6 +1985,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Name: "agents", Required: true},
 			{Name: "directive"},
 			{Name: "memories"},   // shared memory references: memories = [memories.foo]
+			{Name: "packets"},    // read-only packet references: packets = [packets.foo]
 			{Name: "scratchpad"}, // bool: opt the mission into a per-run scratchpad slot
 			{Name: "max_parallel"},
 			{Name: "inputs"}, // shorthand: inputs = { field = string("desc", { default = "val" }) }
@@ -1979,6 +2172,19 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		}
 	}
 
+	// Parse optional packets attribute (list of packet names).
+	var missionPackets []string
+	if attr, ok := missionContent.Attributes["packets"]; ok {
+		v, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' packets: %w", missionName, diags)
+		}
+		for it := v.ElementIterator(); it.Next(); {
+			_, e := it.Element()
+			missionPackets = append(missionPackets, e.AsString())
+		}
+	}
+
 	// Reject the old `folder { ... }` / `run_folder { ... }` blocks with a
 	// clear pointer at the new syntax.
 	for _, b := range missionContent.Blocks {
@@ -2081,7 +2287,8 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Commander:   missionCommander,
 		Agents:      missionAgents,
 		LocalAgents: localAgents,
-		Memories:         missionMemories,
+		Memories:   missionMemories,
+		Packets:   missionPackets,
 		Memory:     missionMemory,
 		Scratchpad: missionScratchpad,
 		Schedules:   schedules,
@@ -2521,6 +2728,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		Attributes: []hcl.AttributeSchema{
 			{Name: "objective", Required: true},
 			{Name: "agents"},    // Optional - uses mission-level agents if not specified
+			{Name: "packets"},   // Optional - task-scoped declared packet references
 			{Name: "depends_on"},
 			{Name: "send_to"},
 			{Name: "output"}, // shorthand: output = { field = string("desc", true) }
@@ -2557,6 +2765,19 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		for it := agentsVal.ElementIterator(); it.Next(); {
 			_, v := it.Element()
 			agents = append(agents, v.AsString())
+		}
+	}
+
+	// Get packets (optional array of packet names)
+	var taskPackets []string
+	if pktAttr, ok := taskContent.Attributes["packets"]; ok {
+		pktVal, diags := pktAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s': %w", taskName, diags)
+		}
+		for it := pktVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			taskPackets = append(taskPackets, v.AsString())
 		}
 	}
 
@@ -2670,6 +2891,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		ObjectiveExpr: objectiveExpr,
 		RawObjective:  rawObjective,
 		Agents:        agents,
+		Packets:      taskPackets,
 		DependsOn:     dependsOn,
 		SendTo:        sendTo,
 		Iterator:      iterator,

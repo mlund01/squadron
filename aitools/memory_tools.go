@@ -20,6 +20,36 @@ const (
 	ScratchpadSlotName = "scratchpad"
 )
 
+// PacketSlotPrefix marks a slot as belonging to a read-only packet bundle.
+// The MemoryStore doesn't distinguish read-only from read-write itself; the
+// file tools below enforce the policy by inspecting the slot name with
+// IsPacketSlot. Mirrored in config.PacketSlotPrefix — both must stay in
+// sync.
+const PacketSlotPrefix = "packet."
+
+// IsPacketSlot reports whether a slot name belongs to a packet bundle
+// (read-only, text-only).
+func IsPacketSlot(name string) bool {
+	return strings.HasPrefix(name, PacketSlotPrefix)
+}
+
+// looksBinary returns true if the sample contains a NUL byte in its first
+// 8 KB — a cheap "this isn't UTF-8 text" proxy. False positives on
+// UTF-16/UTF-32 text are intentional given the file-tools' UTF-8-only
+// surface (callers see a clear error rather than gibberish output).
+func looksBinary(content []byte) bool {
+	limit := len(content)
+	if limit > 8192 {
+		limit = 8192
+	}
+	for i := 0; i < limit; i++ {
+		if content[i] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // MemoryStore provides slot access for missions. Implementations resolve a
 // slot name (the mission's "memory" / "scratchpad", or a shared memory's
 // label) to an absolute path. Every slot is read+write — there is no
@@ -333,6 +363,24 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 	}
 	defer f.Close()
 
+	// Packets are read-only reference data and may only hold text-readable
+	// files. For packet slots, peek at the first 8 KB and reject binary
+	// content BEFORE allocating the full file — a 9 MB stray .pdf would
+	// otherwise force a 9 MB read just to discard it.
+	if IsPacketSlot(p.Slot) {
+		head := make([]byte, 8192)
+		n, err := io.ReadFull(f, head)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return "Error: " + err.Error()
+		}
+		if looksBinary(head[:n]) {
+			return "Error: file appears to be binary or non-UTF-8 encoded; packet slots accept UTF-8 text only"
+		}
+		if _, err := f.Seek(0, 0); err != nil {
+			return "Error: " + err.Error()
+		}
+	}
+
 	var content []byte
 	if p.MaxBytes > 0 {
 		content = make([]byte, p.MaxBytes)
@@ -422,6 +470,10 @@ func (t *MemoryCreateTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
+	if IsPacketSlot(p.Slot) {
+		return "Error: slot is read-only (packet bundles are immutable)"
+	}
+
 	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
@@ -504,6 +556,10 @@ func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {
 
 	if p.Path == "" {
 		return "Error: path is required"
+	}
+
+	if IsPacketSlot(p.Slot) {
+		return "Error: slot is read-only (packet bundles are immutable)"
 	}
 
 	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
@@ -779,12 +835,30 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 	}
 	var matches []match
 
+	isPacket := IsPacketSlot(p.Slot)
 	grepFile := func(filePath string, relPath string) {
 		f, err := os.Open(filePath)
 		if err != nil {
 			return
 		}
 		defer f.Close()
+
+		// Skip binary files in packet slots so grep doesn't pollute output
+		// with garbage matches from images/archives/etc. Use io.ReadFull so
+		// short reads on slow FS still get up to 8KB before we judge.
+		if isPacket {
+			head := make([]byte, 8192)
+			n, err := io.ReadFull(f, head)
+			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				return
+			}
+			if looksBinary(head[:n]) {
+				return
+			}
+			if _, err := f.Seek(0, 0); err != nil {
+				return
+			}
+		}
 
 		scanner := bufio.NewScanner(f)
 		lineNum := 0

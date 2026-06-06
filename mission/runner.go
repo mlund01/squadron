@@ -574,7 +574,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 	if r.mission.Scratchpad {
 		go func() { _, _ = SweepExpiredScratchpads() }()
 	}
-	memoryStore, err := buildMemoryStore(r.mission, r.cfg.Memories, missionID)
+	memoryStore, err := buildMemoryStore(r.mission, r.cfg.Memories, r.cfg.Packets, missionID)
 	if err != nil {
 		return fmt.Errorf("mission '%s': build memory store: %w", r.mission.Name, err)
 	}
@@ -1714,6 +1714,21 @@ func (r *Runner) missionSnapshot() map[string]any {
 		snap["datasets"] = datasets
 	}
 
+	// Slot references — visible to UIs/audit views so they can show
+	// "this mission had access to these data bundles" without re-parsing HCL.
+	if len(r.mission.Memories) > 0 {
+		snap["memories"] = r.mission.Memories
+	}
+	if len(r.mission.Packets) > 0 {
+		snap["packets"] = r.mission.Packets
+	}
+	if r.mission.Memory != nil {
+		snap["memory"] = map[string]any{"description": r.mission.Memory.Description}
+	}
+	if r.mission.Scratchpad {
+		snap["scratchpad"] = true
+	}
+
 	var tasks []map[string]any
 	for _, task := range r.mission.Tasks {
 		objective, err := task.ResolvedObjective(r.varsValues, r.inputValues)
@@ -1750,6 +1765,9 @@ func taskSnapshot(task config.Task, resolvedObjective string) map[string]any {
 	}
 	if len(task.SendTo) > 0 {
 		snap["sendTo"] = task.SendTo
+	}
+	if len(task.Packets) > 0 {
+		snap["packets"] = task.Packets
 	}
 	return snap
 }

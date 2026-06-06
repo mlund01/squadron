@@ -2,10 +2,9 @@ package config
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
-
-	"squadron/internal/paths"
 )
 
 // Plugin represents a plugin configuration
@@ -28,9 +27,10 @@ func (p *Plugin) IsLocalSource() bool {
 }
 
 // Validate checks that the plugin configuration is valid. For local
-// sources this also resolves the path against the project root and
-// rewrites Source to its absolute form so downstream code (auto-build,
-// LoadPlugin) doesn't have to repeat the work.
+// sources it also enforces the version=="local" coupling and confirms
+// that Source has been resolved to an absolute path. Path resolution
+// itself happens in the loader (paths.ResolveConfigPath) so this method
+// can stay idempotent and free of CWD dependence.
 func (p *Plugin) Validate() error {
 	if p.Name == "" {
 		return fmt.Errorf("plugin name is required")
@@ -57,11 +57,12 @@ func (p *Plugin) Validate() error {
 		if p.Version != "local" {
 			return fmt.Errorf("plugin %q: local source requires version = \"local\", got %q", p.Name, p.Version)
 		}
-		abs, err := paths.ResolveProjectPath(p.Source)
-		if err != nil {
-			return fmt.Errorf("plugin %q: %w", p.Name, err)
+		// Loader is responsible for resolving Source via
+		// paths.ResolveConfigPath before Validate runs — surface a
+		// loader-bug error rather than silently falling back to CWD.
+		if !filepath.IsAbs(p.Source) {
+			return fmt.Errorf("plugin %q: source %q must be resolved to absolute before Validate (loader bug)", p.Name, p.Source)
 		}
-		p.Source = abs
 	}
 
 	return nil

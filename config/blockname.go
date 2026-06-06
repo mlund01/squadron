@@ -72,6 +72,11 @@ func (c *Config) validateBlockNames() error {
 			return err
 		}
 	}
+	for _, p := range c.Packets {
+		if err := validateBlockName("packet", p.Name); err != nil {
+			return err
+		}
+	}
 	for _, m := range c.Missions {
 		if err := validateBlockName("mission", m.Name); err != nil {
 			return err

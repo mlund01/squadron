@@ -1,7 +1,6 @@
 package config_test
 
 import (
-	"os"
 	"path/filepath"
 
 	"squadron/config"
@@ -127,22 +126,48 @@ plugin "configured" {
 			})
 
 			It("rejects local source that escapes the project root", func() {
-				p := config.Plugin{Name: "p", Source: "../../../etc/passwd", Version: "local"}
-				err := p.Validate()
+				// Path resolution now happens in the loader; route through
+				// the loader to exercise the containment check.
+				hcl := minimalVarsHCL() + `
+plugin "p" {
+  source  = "../../../etc/passwd"
+  version = "local"
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadFile(f)
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("outside project root"))
+				Expect(err.Error()).To(ContainSubstring("escapes the project root"))
 			})
 
-			It("resolves a local source to an absolute path", func() {
-				dir, _ := writeFixture("plugin_main.go", "package main\nfunc main(){}\n")
-				origWd, err := os.Getwd()
-				Expect(err).NotTo(HaveOccurred())
-				Expect(os.Chdir(dir)).To(Succeed())
-				defer os.Chdir(origWd)
+			It("rejects an absolute local source path", func() {
+				hcl := minimalVarsHCL() + `
+plugin "p" {
+  source  = "/tmp/anything"
+  version = "local"
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadFile(f)
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("absolute paths are not allowed"))
+			})
 
-				p := config.Plugin{Name: "p", Source: ".", Version: "local"}
+			It("Validate refuses a non-absolute source (caller must resolve first)", func() {
+				// Direct Validate calls (outside the loader) get a loader-bug
+				// error rather than silently falling back to CWD resolution.
+				p := config.Plugin{Name: "p", Source: "./plugin_src", Version: "local"}
+				err := p.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("must be resolved to absolute"))
+			})
+
+			It("Validate accepts an already-absolute local source", func() {
+				dir, _ := writeFixture("plugin_main.go", "package main\nfunc main(){}\n")
+				abs, err := filepath.Abs(dir)
+				Expect(err).NotTo(HaveOccurred())
+				p := config.Plugin{Name: "p", Source: abs, Version: "local"}
 				Expect(p.Validate()).To(Succeed())
-				Expect(filepath.IsAbs(p.Source)).To(BeTrue())
 			})
 		})
 	})

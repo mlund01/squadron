@@ -348,7 +348,7 @@ mission "no_commander" {
 				m := config.Mission{Name: "empty", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Agents: []string{"a"}}
 				models := []config.Model{{Provider: "anthropic", APIKey: "k"}}
 				agents := []config.Agent{{Name: "a"}}
-				err := m.Validate(models, agents, nil, nil)
+				err := m.Validate(models, agents, nil, nil, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("at least one task"))
 			})

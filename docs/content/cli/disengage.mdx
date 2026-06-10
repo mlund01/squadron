@@ -37,10 +37,6 @@ Each Squadron project tracks its own daemon via `<project>/.squadron/engage.pid`
 squadron disengage -c /path/to/other-project
 ```
 
-## When you just want to apply a config change
-
-You don't need to disengage to pick up edits to your HCL files. Run `squadron engage -r` from the project directory and the running daemon re-reads and validates the config in place. The old config stays active if validation fails. See [Reloading configuration](/cli/engage#reloading-configuration).
-
 ## See Also
 
-- [engage](/cli/engage) — Start the daemon, or reload it with `-r`
+- [engage](/cli/engage) — Start the daemon, or reload its config with `-r`

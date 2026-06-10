@@ -92,49 +92,13 @@ squadron engage --cc-port 9090
 
 ## Reloading configuration
 
-After editing HCL files, reload the running daemon without restarting it:
+After editing your HCL files, reload the running daemon in place:
 
 ```bash
 squadron engage -r
 ```
 
-The reload is **safe**: Squadron validates the new config first. If validation fails (HCL syntax error, missing variable, agent referencing a tool that no longer exists, etc.), the running daemon **keeps its current config** and the command prints the validation error.
-
-```
-$ squadron engage -r
-Squadron is already running (PID 12345). Reloading config from /path/to/project...
-Config reload failed: agent 'researcher' tools: unknown attribute "web_search"
-Squadron is still running with the previous config (PID 12345). Fix the error above and re-run 'squadron engage'.
-```
-
-Successful reload prints:
-
-```
-$ squadron engage -r
-Squadron is already running (PID 12345). Reloading config from /path/to/project...
-Config reloaded successfully.
-```
-
-### Behavior matrix
-
-| Squadron running? | `-r` passed? | Result |
-|---|---|---|
-| no  | no  | Normal startup |
-| no  | yes | Prints "Squadron is not running — ignoring -r", then normal startup |
-| yes | no  | Errors out with "squadron is already running" and a hint to use `-r` or `disengage` |
-| yes | yes | Reloads the config (or keeps the old one if validation fails) |
-
-### What happens on reload
-
-A successful reload:
-
-- Re-reads every `.hcl` file in the config directory
-- Re-evaluates `variable`/`vars` references against the vault
-- Closes plugin subprocesses removed in the new config
-- Pushes the updated scheduler config (any added/removed `schedule` blocks take effect immediately)
-- Notifies the command center of the new instance config
-
-In-flight missions and chat sessions are unaffected — they continue to run with the config snapshot they were started with.
+The new config is validated first; if it's bad, the running daemon keeps its previous config and the command prints the error. In-flight missions and chat sessions keep running on the config they started with.
 
 ## Stopping
 

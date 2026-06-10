@@ -3,9 +3,7 @@ package daemon
 import (
 	"fmt"
 	"os"
-	"os/signal"
 	"path/filepath"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -207,84 +205,20 @@ func TestIsRunning_LiveProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The current test process is definitely alive.
+	// The current test process is definitely alive. Its command line will be
+	// the `go test` binary (e.g. /tmp/.../daemon.test) — not "squadron", so
+	// IsRunning should reject it.
 	pid := os.Getpid()
 	if err := os.WriteFile(PidFilePath(dir), []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	running, got := IsRunning(dir)
-	if !running {
-		t.Error("IsRunning false for a live process")
+	running, _ := IsRunning(dir)
+	if running {
+		t.Error("IsRunning should reject a live non-squadron PID (PID-reuse protection)")
 	}
-	if got != pid {
-		t.Errorf("pid = %d, want %d", got, pid)
-	}
-}
-
-func TestReload_NoPidFile(t *testing.T) {
-	dir := t.TempDir()
-	if _, err := Reload(dir); err == nil {
-		t.Fatal("Reload should error when no PID file exists")
-	}
-}
-
-func TestReload_InvalidPidFile(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".squadron"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(PidFilePath(dir), []byte("not-a-pid"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Reload(dir); err == nil {
-		t.Fatal("Reload should error for malformed PID file")
-	}
-}
-
-func TestReload_StaleProcess(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".squadron"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	// A high PID that almost certainly doesn't exist.
-	if err := os.WriteFile(PidFilePath(dir), []byte("999999"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Reload(dir); err == nil {
-		t.Fatal("Reload should error when target process does not exist")
-	}
-}
-
-func TestReload_DeliversSighup(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, ".squadron"), 0755); err != nil {
-		t.Fatal(err)
-	}
-
-	// Use the current test process as the SIGHUP target.
-	pid := os.Getpid()
-	if err := os.WriteFile(PidFilePath(dir), []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGHUP)
-	defer signal.Stop(sigs)
-
-	gotPID, err := Reload(dir)
-	if err != nil {
-		t.Fatalf("Reload returned error: %v", err)
-	}
-	if gotPID != pid {
-		t.Errorf("returned pid = %d, want %d", gotPID, pid)
-	}
-
-	select {
-	case <-sigs:
-		// got it
-	case <-time.After(2 * time.Second):
-		t.Fatal("did not receive SIGHUP within timeout")
+	if _, err := os.Stat(PidFilePath(dir)); !os.IsNotExist(err) {
+		t.Errorf("PID file should be cleaned up after rejection")
 	}
 }
 

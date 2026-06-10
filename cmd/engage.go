@@ -97,17 +97,22 @@ func runEngage(cmd *cobra.Command, args []string) {
 		os.Exit(1)
 	}
 
-	running, pid := daemon.IsRunning(engageConfigPath)
-	switch {
-	case running && engageReload:
-		reloadRunningSquadron(pid)
-		return
-	case running:
-		fmt.Fprintf(os.Stderr, "Error: squadron is already running (PID %d).\n", pid)
-		fmt.Fprintln(os.Stderr, "Use 'squadron engage -r' to reload the config, or 'squadron disengage' to stop it.")
-		os.Exit(1)
-	case engageReload:
-		fmt.Println("Squadron is not running — ignoring -r and starting it now.")
+	// Only the user-invoked parent process should check IsRunning. The forked
+	// child runs with --foreground and would otherwise see the PID file the
+	// parent just wrote for it and bail out as "already running".
+	if !engageForeground {
+		running, pid := daemon.IsRunning(engageConfigPath)
+		switch {
+		case running && engageReload:
+			reloadRunningSquadron(pid)
+			return
+		case running:
+			fmt.Fprintf(os.Stderr, "Error: squadron is already running (PID %d).\n", pid)
+			fmt.Fprintln(os.Stderr, "Use 'squadron engage -r' to reload the config, or 'squadron disengage' to stop it.")
+			os.Exit(1)
+		case engageReload:
+			fmt.Println("Squadron is not running — ignoring -r and starting it now.")
+		}
 	}
 
 	if warning, err := validateConfigDir(engageConfigPath); err != nil {
@@ -205,6 +210,13 @@ func runEngage(cmd *cobra.Command, args []string) {
 	// --- Foreground mode ---
 
 	daemon.ClearReady(engageConfigPath)
+
+	// Forked daemons need to clean up the PID file when they exit so the next
+	// `engage` doesn't see a stale PID. (`disengage` removes it on its own
+	// path, but a crash or signal-driven shutdown would otherwise leave it.)
+	if os.Getenv("SQUADRON_FORKED") == "1" {
+		defer daemon.ClearPid(engageConfigPath)
+	}
 
 	// Resolve the vault passphrase once at startup and keep it in memory for
 	// all later var operations on this process.
@@ -415,10 +427,15 @@ func runEngage(cmd *cobra.Command, args []string) {
 			case <-shutdown:
 				return
 			case <-reloads:
-				if err := client.ReloadConfig(); err != nil {
+				log.Println("SIGHUP received — reloading config")
+				err := client.ReloadConfig()
+				if err != nil {
 					log.Printf("Config reload failed: %v", err)
 					daemon.SignalFailed(engageConfigPath, err)
+				} else {
+					log.Println("Config reload succeeded")
 				}
+				client.NotifyConfigReloaded(err)
 			}
 		}
 	}()

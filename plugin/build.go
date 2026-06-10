@@ -19,8 +19,9 @@ import (
 // First-time installs and any source edit force a rebuild.
 //
 // The source path must already be absolute and project-root-contained —
-// path containment is the caller's responsibility (config-load and the
-// CLI both go through paths.ResolveProjectPath).
+// path containment is the caller's responsibility (config-load goes
+// through paths.ResolveConfigPath; the `squadron plugin build` CLI goes
+// through paths.ResolveProjectPath since it takes a shell-typed path).
 func BuildLocal(name, version, absSourcePath string) error {
 	pluginDir, err := GetPluginDir(name, version)
 	if err != nil {

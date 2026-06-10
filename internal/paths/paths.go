@@ -120,6 +120,107 @@ func ResolveFolderPath(path string) (string, error) {
 	return filepath.Abs(path)
 }
 
+// ProjectRootMarker is the prefix that anchors a path attribute to the
+// project root (the directory passed to `squadron -c <dir>`) instead of
+// the file's own directory. Example: `path = "@/data/kb"`.
+const ProjectRootMarker = "@/"
+
+// IsInside reports whether `p` is the same as `root` or lies inside it
+// after cleaning and separator-aware comparison. Both arguments should be
+// absolute (callers that care about CWD-independence are expected to
+// absolutize via filepath.Abs first).
+//
+// The check is separator-aware: a filename like "..foo" inside root is
+// correctly treated as inside, not as an escape. A pure prefix check on
+// `..` would false-positive on that case.
+//
+// Pass requireStrictDescendant=true to additionally reject p == root.
+// Useful when an attribute that names a subpath would silently nuke the
+// whole tree if it pointed at the root itself.
+func IsInside(root, p string, requireStrictDescendant bool) bool {
+	rel, err := filepath.Rel(root, p)
+	if err != nil {
+		return false
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	if requireStrictDescendant && rel == "." {
+		return false
+	}
+	return true
+}
+
+// ResolveConfigPath resolves a user-supplied path attribute from HCL
+// according to the project's anchoring rules. It is the single source of
+// truth for path resolution on every block attribute that takes a path
+// (packet.path, load(), and future block path attributes).
+//
+// projectRoot is the directory passed to `squadron -c <dir>` (also the
+// configDir). hclFileDir is the directory containing the HCL file that
+// declared this path attribute (used for relative paths so a sub-file
+// inside the project can refer to its siblings). If hclFileDir is empty,
+// projectRoot is used as the relative anchor.
+//
+// Rules:
+//
+//   - "@/foo"               → projectRoot + "foo"   (explicit project root)
+//   - "/foo", absolute      → REJECTED              (no filesystem-root access)
+//   - "./foo", "../foo"     → hclFileDir + path     (HCL-file-relative)
+//   - "foo" (bare)          → hclFileDir + "foo"    (HCL-file-relative)
+//
+// After resolution, the path MUST be inside projectRoot. A `../../etc/...`
+// style escape is rejected at parse time so an agent's read tool can't be
+// tricked into wandering off the project tree.
+//
+// Returns the absolute, cleaned, contained path on success.
+func ResolveConfigPath(projectRoot, hclFileDir, rawPath string) (string, error) {
+	if rawPath == "" {
+		return "", fmt.Errorf("path is empty")
+	}
+	if projectRoot == "" {
+		return "", fmt.Errorf("project root is empty (internal error)")
+	}
+	rootAbs, err := filepath.Abs(projectRoot)
+	if err != nil {
+		return "", fmt.Errorf("project root %q: %w", projectRoot, err)
+	}
+
+	var resolved string
+	switch {
+	case strings.HasPrefix(rawPath, ProjectRootMarker):
+		// "@/sub/dir" — strip the marker and anchor to project root.
+		resolved = filepath.Join(rootAbs, strings.TrimPrefix(rawPath, ProjectRootMarker))
+	case filepath.IsAbs(rawPath):
+		return "", fmt.Errorf("path %q: absolute paths are not allowed — use a path relative to the HCL file or prefix with %q for the project root", rawPath, ProjectRootMarker)
+	default:
+		anchor := hclFileDir
+		if anchor == "" {
+			anchor = rootAbs
+		}
+		resolved = filepath.Join(anchor, rawPath)
+	}
+
+	abs, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("path %q: %w", rawPath, err)
+	}
+
+	// Containment check via IsInside. Strict-descendant mode rejects
+	// p == root, which would otherwise let `path = "@/"` filter every
+	// config file out via the HCL-exclusion pass and leave the user with
+	// "0 missions found" instead of a clear error.
+	if !IsInside(rootAbs, abs, true) {
+		// Distinguish "is the root itself" from "outside the root" so the
+		// error message points users at the right fix.
+		if rel, err := filepath.Rel(rootAbs, abs); err == nil && rel == "." {
+			return "", fmt.Errorf("path %q resolves to the project root %q itself — config path attributes must point at a specific file or subdirectory, not the whole project", rawPath, rootAbs)
+		}
+		return "", fmt.Errorf("path %q escapes the project root %q", rawPath, rootAbs)
+	}
+	return abs, nil
+}
+
 // ResolveProjectPath resolves a path to absolute and verifies that it
 // stays within the project root (the process CWD). It rejects any path
 // that — after cleaning and joining — falls outside the root, so
@@ -127,6 +228,10 @@ func ResolveFolderPath(path string) (string, error) {
 //
 // Absolute paths are accepted only if they happen to land inside the
 // root.
+//
+// Deprecated: prefer ResolveConfigPath, which takes the project root and
+// the HCL file's directory explicitly instead of relying on the process
+// working directory.
 func ResolveProjectPath(path string) (string, error) {
 	if path == "" {
 		return "", fmt.Errorf("path is empty")
@@ -148,8 +253,7 @@ func ResolveProjectPath(path string) (string, error) {
 		abs = filepath.Join(root, cleaned)
 	}
 
-	rel, err := filepath.Rel(root, abs)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	if !IsInside(root, abs, false) {
 		return "", fmt.Errorf("path %q is outside project root %q", path, root)
 	}
 	return abs, nil

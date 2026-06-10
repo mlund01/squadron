@@ -310,6 +310,7 @@ type Mission struct {
 	Inputs      []MissionInput    // Parsed from input blocks
 	Datasets    []Dataset         // Parsed from dataset blocks
 	Memories   []string       // Shared memory names referenced by this mission
+	Packets   []string       // Packet names referenced by this mission (read-only reference data bundles)
 	Memory     *MissionMemory // Optional persistent mission memory (slot "memory")
 	Scratchpad bool           // If true, mission gets an ephemeral per-run scratchpad (slot "scratchpad")
 	Schedules   []Schedule        `json:"schedules,omitempty"`
@@ -334,6 +335,7 @@ type Task struct {
 	ObjectiveExpr hcl.Expression `json:"-"`
 	RawObjective  string         `json:"rawObjective,omitempty"` // Raw objective text from HCL source (with ${...} placeholders intact)
 	Agents        []string       `hcl:"agents,optional" json:"agents,omitempty"`
+	Packets      []string       `json:"packets,omitempty"` // task-scoped declared packet references (parsed manually)
 	DependsOn     []string       `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
 	Iterator      *TaskIterator  `json:"iterator,omitempty"`
 	Output        *OutputSchema  `json:"output,omitempty"`
@@ -355,7 +357,7 @@ type TaskRoute struct {
 }
 
 // Validate checks that the mission configuration is valid
-func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, allMissionNames map[string]bool) error {
+func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, packets []Packet, allMissionNames map[string]bool) error {
 	if err := validateSlotName(w.Name); err != nil {
 		return fmt.Errorf("mission name: %w", err)
 	}
@@ -482,6 +484,24 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, al
 	for _, ref := range w.Memories {
 		if !memoryNames[ref] {
 			return fmt.Errorf("shared memory '%s' not found", ref)
+		}
+	}
+
+	// Validate packet references (mission-level + per-task).
+	packetNames := make(map[string]bool)
+	for _, p := range packets {
+		packetNames[p.Name] = true
+	}
+	for _, ref := range w.Packets {
+		if !packetNames[ref] {
+			return fmt.Errorf("packet '%s' not found", ref)
+		}
+	}
+	for _, t := range w.Tasks {
+		for _, ref := range t.Packets {
+			if !packetNames[ref] {
+				return fmt.Errorf("task '%s': packet '%s' not found", t.Name, ref)
+			}
 		}
 	}
 

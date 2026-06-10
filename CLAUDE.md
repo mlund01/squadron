@@ -62,11 +62,12 @@ Squadron is a declarative framework for building and running AI agent workflows.
 The config loading uses **staged evaluation** to support HCL expression references:
 
 1. **Stage 1**: Load `variable` blocks (no context needed)
-2. **Stage 1.5**: Load `plugin` blocks and `mcp "name"` blocks with `vars` context. Both happen in the same stage because both expose tools through HCL namespaces that later stages need to resolve against.
-3. **Stage 2**: Load `model` blocks with `vars` + `plugins` + `mcp` context → enables `api_key = vars.anthropic_api_key`
-4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` + `mcp` context → enables `implements = builtins.http.get`
-5. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` + `mcp` context → enables `tools = [plugins.playwright.all, mcp.filesystem.read_file, tools.weather]`
-6. **Stage 5**: Load `mission` blocks with full context
+2. **Stage 1.4**: Load `packet` blocks with `vars` context. Done before every downstream stage so the HCL-exclusion filter (drops `.hcl` files inside any packet path) runs before vault / storage / command_center / mcp_host iterate `allParsedBlocks`.
+3. **Stage 1.5**: Load `plugin` blocks and `mcp "name"` blocks with `vars` context. Both happen in the same stage because both expose tools through HCL namespaces that later stages need to resolve against.
+4. **Stage 2**: Load `model` blocks with `vars` + `plugins` + `mcp` context → enables `api_key = vars.anthropic_api_key`
+5. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` + `mcp` context → enables `implements = builtins.http.get`
+6. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` + `mcp` context → enables `tools = [plugins.playwright.all, mcp.filesystem.read_file, tools.weather]`
+7. **Stage 5**: Load `mission` blocks with full context
 
 Each stage uses partial structs with `hcl:",remain"` to ignore unknown block types during that pass.
 
@@ -361,6 +362,79 @@ mission "analyze" {
   start of every `Runner.Run()` (for missions with a scratchpad) and on
   an hourly ticker in `cmd/engage.go`. No config lookup needed — the
   filesystem layout is self-describing.
+
+### Packets
+
+A `packet` block is a read-only reference data bundle attached to
+missions. Unlike memory, packets point at user-controlled paths inside
+the project, are immutable to agents, reject binary content on read, and
+their on-disk tree is excluded from HCL parsing.
+
+```hcl
+packet "kb" {
+  path        = "@/reference/kb"   # see "Path resolution" below
+  description = "Knowledge base"
+}
+
+mission "answer" {
+  packets = [packets.kb]
+  task "draft" {
+    objective = "Use packet.kb to draft the answer"
+    packets  = [packets.kb]      # task-level also accepted (declared scope)
+  }
+}
+```
+
+| HCL surface | Slot name agents pass | Notes |
+|-------------|------------------------|-------|
+| top-level `packet "name" { path = "..." }` | `"packet.<name>"` | Read-only. Text files only (`file_read` rejects binaries). |
+| Mission `packets = [packets.X]` | n/a | Validation: every referenced packet must exist. |
+| Task `packets = [packets.X]` | n/a | Same. **Task-level is declarative, not isolating** — every task in a mission shares the same `MemoryStore`, so a packet referenced anywhere in the mission is accessible to every task. |
+
+**Implementation:**
+
+- `config.Packet` lives in [config/packet.go](config/packet.go). Parsed
+  in Stage 1.4 (with `vars` context) — earlier than every other block type
+  except variables. The Stage 1.4 ordering is critical: packets trigger
+  an HCL-exclusion filter that drops `allParsedBlocks` entries for any
+  `.hcl` files inside a packet path, and that filter must run BEFORE
+  vault / storage / command_center / mcp_host so blocks inside a packet
+  folder can't leak into those stages.
+- The `packets.NAME` HCL namespace is registered on `agentsCtx` (alongside
+  `memories`) so missions can do `packets = [packets.X]`.
+- [mission/memory_store.go](mission/memory_store.go) registers packets
+  under the `"packet.<name>"` slot key (`aitools.PacketSlotPrefix`).
+  Tools enforce the read-only + text-only policy by checking the slot
+  name prefix via `aitools.IsPacketSlot`.
+- File-tool policy for packet slots:
+  - `file_create`, `file_delete` → error `"slot is read-only (packet bundles are immutable)"`
+  - `file_read` → rejects content with a NUL byte in the first 8 KB (`looksBinary`)
+  - `file_grep` → silently skips files that look binary
+
+### Path resolution for config attributes
+
+`packet.path`, `plugin.source` (local sources), and the `load()` HCL
+function all share a single resolver: `paths.ResolveConfigPath(projectRoot,
+hclFileDir, rawPath)` in [internal/paths/paths.go](internal/paths/paths.go).
+
+| Form | Resolves to |
+|------|-------------|
+| `./foo`, `../foo`, bare `foo` | The directory of the HCL file declaring the block |
+| `@/foo` | The **project root** — the `-c` argument |
+| `/foo`, any absolute | **Rejected** |
+| `..` traversal escaping the project root | **Rejected** (post-Clean containment check) |
+| Path resolving to the project root itself (e.g. `@/`) | **Rejected** (avoids silent HCL-exclusion of the entire config) |
+
+The process working directory is **never** consulted — squadron can be
+invoked from any CWD and paths resolve identically. `load()` is the
+exception that proves the rule: it has no per-callsite "HCL file dir"
+(cty functions don't get caller context), so relative forms anchor to
+`projectRoot` for it specifically.
+
+The `squadron plugin build <name> <source-path>` CLI subcommand still
+uses `paths.ResolveProjectPath` (CWD-based), which is correct for a
+shell-typed path. `ResolveProjectPath` is marked `Deprecated` for any
+new HCL-attribute use.
 
 ### Mission-Scoped Agents
 

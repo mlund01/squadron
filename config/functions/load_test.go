@@ -36,61 +36,79 @@ func TestLoad_RelativePath(t *testing.T) {
 	}
 }
 
-func TestLoad_ParentRelativePath(t *testing.T) {
-	root := t.TempDir()
-	sub := filepath.Join(root, "workflows")
-	if err := os.Mkdir(sub, 0755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "shared.md"), []byte("shared content"), 0644); err != nil {
-		t.Fatalf("write fixture: %v", err)
-	}
-
-	got, err := call(t, sub, "../shared.md")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if got != "shared content" {
-		t.Errorf("got %q, want %q", got, "shared content")
-	}
-}
-
-// TestLoad_BarePathFromCWD exercises the branch where paths without a ./ or ../
-// prefix resolve against the process working directory. Kept as an integration
-// test because os.Getwd() is a process-global call we can't inject around.
-func TestLoad_BarePathFromCWD(t *testing.T) {
+// TestLoad_BarePathFromConfigDir verifies that paths without a `./` prefix
+// resolve against configDir (the project root) rather than the process
+// working directory. This is the post-CWD-removal contract: CWD must never
+// affect file resolution.
+func TestLoad_BarePathFromConfigDir(t *testing.T) {
+	// Chdir to a completely different tempdir to prove CWD doesn't matter.
 	origCWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
-	cwd := t.TempDir()
-	if err := os.Chdir(cwd); err != nil {
+	otherCWD := t.TempDir()
+	if err := os.Chdir(otherCWD); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(origCWD) })
 
-	if err := os.WriteFile(filepath.Join(cwd, "guide.md"), []byte("from cwd"), 0644); err != nil {
+	configDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(configDir, "guide.md"), []byte("from configDir"), 0644); err != nil {
 		t.Fatalf("write fixture: %v", err)
 	}
 
-	// configDir is a different temp dir to prove the bare path doesn't
-	// resolve against it.
-	configDir := t.TempDir()
 	got, err := call(t, configDir, "guide.md")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got != "from cwd" {
-		t.Errorf("got %q, want %q", got, "from cwd")
+	if got != "from configDir" {
+		t.Errorf("got %q, want %q", got, "from configDir")
+	}
+}
+
+// TestLoad_ProjectRootMarker exercises the "@/foo" syntax that explicitly
+// anchors a path to the project root (configDir).
+func TestLoad_ProjectRootMarker(t *testing.T) {
+	configDir := t.TempDir()
+	sub := filepath.Join(configDir, "nested")
+	if err := os.MkdirAll(sub, 0755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "deep.md"), []byte("deep"), 0644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	got, err := call(t, configDir, "@/nested/deep.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != "deep" {
+		t.Errorf("got %q, want %q", got, "deep")
 	}
 }
 
 func TestLoad_RejectsAbsolutePath(t *testing.T) {
-	_, err := call(t, t.TempDir(), "/etc/hosts")
+	// Use a .md path so this exercises the absolute-path rejection rather
+	// than tripping over the extension check first.
+	_, err := call(t, t.TempDir(), "/etc/hosts.md")
 	if err == nil {
 		t.Fatal("expected error for absolute path")
 	}
-	if !strings.Contains(err.Error(), "absolute paths starting with '/' are not allowed") {
+	if !strings.Contains(err.Error(), "absolute paths are not allowed") {
+		t.Errorf("error %q missing expected message", err)
+	}
+}
+
+// TestLoad_RejectsDotDotEscape ensures `..` traversal can't reach outside
+// the project root even via a sub-config that uses ../ to reference its
+// own parent.
+func TestLoad_RejectsDotDotEscape(t *testing.T) {
+	// configDir is the project root. A `..` from it should land outside.
+	_, err := call(t, t.TempDir(), "../escaped.md")
+	if err == nil {
+		t.Fatal("expected error for path that escapes project root")
+	}
+	if !strings.Contains(err.Error(), "escapes the project root") {
 		t.Errorf("error %q missing expected message", err)
 	}
 }

@@ -96,10 +96,16 @@ type memorySlot struct {
 }
 
 // buildMemoryStore creates an aitools.MemoryStore from the mission config and
-// the declared top-level memories. missionInstanceID scopes the scratchpad
-// path; it must be non-empty when mission.Scratchpad is true. Returns nil if
-// no slots are configured.
-func buildMemoryStore(mission *config.Mission, memories []config.Memory, missionInstanceID string) (aitools.MemoryStore, error) {
+// the declared top-level memories + packets. missionInstanceID scopes the
+// scratchpad path; it must be non-empty when mission.Scratchpad is true.
+// Returns nil if no slots are configured.
+//
+// Packets are registered under "packet.<name>" keys (config.PacketSlotPrefix)
+// so they share the slot namespace without colliding with memory names. The
+// MemoryStore itself doesn't distinguish read-only from read-write; the file
+// tools enforce the read-only / text-only policy based on the slot name
+// prefix via aitools.IsPacketSlot.
+func buildMemoryStore(mission *config.Mission, memories []config.Memory, packets []config.Packet, missionInstanceID string) (aitools.MemoryStore, error) {
 	store := &missionMemoryStore{
 		slots: make(map[string]*memorySlot),
 	}
@@ -127,6 +133,44 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, mission
 		store.slots[name] = &memorySlot{
 			absPath:     absPath,
 			description: mem.Description,
+		}
+	}
+
+	// Collect packet references from the mission level + every task. Tasks
+	// share the mission-wide store, so per-task `packets = [...]` is a
+	// declaration of need (validated above) rather than a runtime access
+	// boundary — every task that runs sees every referenced packet.
+	referencedPackets := make(map[string]bool)
+	for _, n := range mission.Packets {
+		referencedPackets[n] = true
+	}
+	for _, t := range mission.Tasks {
+		for _, n := range t.Packets {
+			referencedPackets[n] = true
+		}
+	}
+	if len(referencedPackets) > 0 {
+		packetByName := make(map[string]*config.Packet, len(packets))
+		for i := range packets {
+			packetByName[packets[i].Name] = &packets[i]
+		}
+		for name := range referencedPackets {
+			c, ok := packetByName[name]
+			if !ok {
+				return nil, fmt.Errorf("packet %q not found", name)
+			}
+			// Packet paths are user-controlled. Resolve to absolute (idempotent
+			// for paths Validate already absolutized) and register under the
+			// "packet.<name>" key so the file tools can apply the read-only /
+			// text-only policy via IsPacketSlot.
+			absPath, err := paths.ResolveFolderPath(c.Path)
+			if err != nil {
+				return nil, fmt.Errorf("packet %q: invalid path: %w", name, err)
+			}
+			store.slots[config.PacketSlotPrefix+name] = &memorySlot{
+				absPath:     absPath,
+				description: c.Description,
+			}
 		}
 	}
 

@@ -122,7 +122,7 @@ Why plugins matter relative to LangGraph's "tools are Python functions in the sa
 
 - **Two languages, picked per problem.** Go for performance-critical or systems-level tools (a browser controller, a network scanner, anything CPU-heavy or needing static binary distribution). Python for things that lean on the existing PyPI ecosystem (a pandas pipeline, a model adapter, a domain SDK).
 - **Process isolation.** A misbehaving plugin can't crash the runtime — gRPC failure mode is a clean error returned to the agent, not a Python exception unwinding through your orchestrator.
-- **Auto-build from source.** Edit `./plugin_scraper/main.go`, restart Squadron, and the plugin rebuilds. Content-hash caching skips the rebuild when nothing changed. No `pip install -e .` cycle, no Docker layer to rebuild.
+- **Auto-build from source.** Edit `./plugin_scraper/main.go`, reload Squadron with `squadron engage -r`, and the plugin rebuilds. Content-hash caching skips the rebuild when nothing changed. No `pip install -e .` cycle, no Docker layer to rebuild.
 - **Stateful across tasks.** Plugins are cached globally for the lifetime of the process. A Playwright plugin can open a browser in task 1 and reuse it in task 5 — the runtime tracks the plugin connection, not the per-task call.
 - **Typed schemas.** Each plugin declares tool input/output schemas; Squadron uses those for native LLM function-calling and for output validation.
 - **Distributable.** Plugins compile to a single binary (Go) or a venv (Python) and are publishable as GitHub releases. Other Squadron configs reference them via `source = "github.com/owner/repo"` and Squadron auto-installs.

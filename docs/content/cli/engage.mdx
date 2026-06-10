@@ -39,6 +39,7 @@ Multiple projects can run simultaneously on the same host — each gets its own 
 | Flag | Description |
 |------|-------------|
 | `-c, --config` | Path to config directory (default: `.`) |
+| `-r, --reload` | Reload the config of an already-running Squadron (see [Reloading configuration](#reloading-configuration)) |
 | `--headless` | Skip launching the local command center UI |
 | `--cc-port` | Port for the local command center (default: `8080`) |
 | `--foreground` | Run in the terminal instead of forking to background |
@@ -88,6 +89,16 @@ Keeps the process attached to the terminal. Useful for debugging or when running
 ```bash
 squadron engage --cc-port 9090
 ```
+
+## Reloading configuration
+
+After editing your HCL files, reload the running daemon in place:
+
+```bash
+squadron engage -r
+```
+
+The new config is validated first; if it's bad, the running daemon keeps its previous config and the command prints the error. In-flight missions and chat sessions keep running on the config they started with.
 
 ## Stopping
 

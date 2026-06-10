@@ -205,18 +205,20 @@ func TestIsRunning_LiveProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The current test process is definitely alive.
+	// The current test process is definitely alive. Its command line will be
+	// the `go test` binary (e.g. /tmp/.../daemon.test) — not "squadron", so
+	// IsRunning should reject it.
 	pid := os.Getpid()
 	if err := os.WriteFile(PidFilePath(dir), []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	running, got := IsRunning(dir)
-	if !running {
-		t.Error("IsRunning false for a live process")
+	running, _ := IsRunning(dir)
+	if running {
+		t.Error("IsRunning should reject a live non-squadron PID (PID-reuse protection)")
 	}
-	if got != pid {
-		t.Errorf("pid = %d, want %d", got, pid)
+	if _, err := os.Stat(PidFilePath(dir)); !os.IsNotExist(err) {
+		t.Errorf("PID file should be cleaned up after rejection")
 	}
 }
 

@@ -275,6 +275,32 @@ func (c *Client) SetConfig(cfg *config.Config) {
 	c.cfgMu.Unlock()
 }
 
+// NotifyConfigReloaded pushes the result of a squadron-initiated reload to
+// the command center as an unsolicited TypeReloadConfigResult event so the CC
+// view stays in sync without polling. No-op if not connected. Skip this from
+// CC-initiated reloads — they already receive the result as a response.
+func (c *Client) NotifyConfigReloaded(reloadErr error) {
+	if !c.IsConnected() {
+		return
+	}
+	payload := &protocol.ReloadConfigResultPayload{}
+	if reloadErr != nil {
+		payload.Success = false
+		payload.Error = reloadErr.Error()
+	} else {
+		payload.Success = true
+		payload.Config = ConfigToInstanceConfig(c.getConfig())
+	}
+	env, err := protocol.NewEvent(protocol.TypeReloadConfigResult, payload)
+	if err != nil {
+		log.Printf("build reload notification: %v", err)
+		return
+	}
+	if err := c.SendEvent(env); err != nil {
+		log.Printf("notify command center of config reload: %v", err)
+	}
+}
+
 // ReloadConfig re-reads the config from disk, validates it, and swaps it in.
 // On failure the old config stays active. The caller (commander) updates its
 // registry from the returned config — no re-register needed.

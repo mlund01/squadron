@@ -51,6 +51,12 @@ func ClearReady(configPath string) {
 	os.Remove(ReadyFilePath(configPath))
 }
 
+// ClearPid removes the PID file. Called by the forked daemon on graceful
+// shutdown so the next `engage` doesn't see a stale PID.
+func ClearPid(configPath string) {
+	os.Remove(PidFilePath(configPath))
+}
+
 // CleanupFailedFork removes the PID and ready files for a fork where the child
 // signaled failure (and has already exited on its own).
 func CleanupFailedFork(configPath string) {
@@ -180,6 +186,36 @@ func Fork(configPath string, extraFlags []string) (int, error) {
 	return pid, nil
 }
 
+// Reload sends SIGHUP to the running daemon to trigger a config reload.
+func Reload(configPath string) (int, error) {
+	absConfig, err := filepath.Abs(configPath)
+	if err != nil {
+		return 0, fmt.Errorf("could not resolve config path: %w", err)
+	}
+
+	pidPath := PidFilePath(absConfig)
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		return 0, fmt.Errorf("no PID file found — squadron may not be running")
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		return 0, fmt.Errorf("invalid PID file")
+	}
+
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return 0, fmt.Errorf("process %d not found", pid)
+	}
+
+	if err := process.Signal(syscall.SIGHUP); err != nil {
+		return 0, fmt.Errorf("could not signal process %d: %w", pid, err)
+	}
+
+	return pid, nil
+}
+
 // Stop reads the PID file and gracefully stops the background process.
 func Stop(configPath string) error {
 	absConfig, err := filepath.Abs(configPath)
@@ -230,6 +266,8 @@ func Stop(configPath string) error {
 }
 
 // IsRunning checks if a Squadron process is running for the given config path.
+// Verifies via ps that the PID belongs to a squadron-ish binary, so a recycled
+// PID from an unrelated process isn't mistaken for a live daemon.
 func IsRunning(configPath string) (bool, int) {
 	absConfig, _ := filepath.Abs(configPath)
 	pidPath := PidFilePath(absConfig)
@@ -249,14 +287,34 @@ func IsRunning(configPath string) (bool, int) {
 		return false, 0
 	}
 
-	// Check if process is actually alive
 	if err := process.Signal(syscall.Signal(0)); err != nil {
-		// Stale PID file — clean up
+		os.Remove(pidPath)
+		return false, 0
+	}
+
+	if !isSquadronProcess(pid) {
 		os.Remove(pidPath)
 		return false, 0
 	}
 
 	return true, pid
+}
+
+// isSquadronProcess returns true if the given PID belongs to a squadron-like
+// binary (matches "squadron" or "squadtest" in its command line). Falls back
+// to permissive true if ps is unavailable.
+func isSquadronProcess(pid int) bool {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	if err != nil {
+		// ps not available (unusual on macOS/Linux) — skip the check rather
+		// than refuse to reload.
+		return true
+	}
+	cmd := strings.ToLower(strings.TrimSpace(string(out)))
+	if cmd == "" {
+		return false
+	}
+	return strings.Contains(cmd, "squadron") || strings.Contains(cmd, "squadtest")
 }
 
 // resolveConfigDir returns the directory component of a config path.

@@ -91,24 +91,45 @@ func Load(path string) (*Config, error) {
 }
 
 // LoadMCPHost extracts only the mcp_host block from the config files at the
-// given path without evaluating any expressions or loading consumer MCP
-// servers. This is used by the serve command so the MCP host can start
-// before the full config load runs (which may include consumer mcp "name"
-// blocks that target the host's own URL — without this two-phase approach
-// the consumer would try to dial localhost:<port>/mcp before the host is
-// listening, deadlocking on itself).
+// given path without loading plugins, dialing consumer MCP servers, or doing
+// any other Stage 1.5+ work. This is used by the engage command so the MCP
+// host can start before the full config load runs (which may include
+// consumer mcp "name" blocks that target the host's own URL — without this
+// two-phase approach the consumer would try to dial localhost:<port>/mcp
+// before the host is listening, deadlocking on itself).
 //
-// Returns nil (with no error) if the config files can't be found, can't be
-// parsed, or simply don't declare an mcp_host block. The caller is expected
-// to follow this up with a full Load — any real config errors will surface
-// there with a complete diagnostic.
-func LoadMCPHost(path string) *MCPHostConfig {
+// Expressions inside the block are resolved the same way LoadMCPSpecs does
+// it: against a minimal vars context built from the config's variable
+// blocks, backed by the vault, with load() bound to the config dir. This is
+// what makes the documented `secret = vars.mcp_host_secret` form work.
+//
+// Returns (nil, nil) if the config files can't be found, can't be parsed,
+// or simply don't declare an mcp_host block — the caller is expected to
+// follow this up with a full Load, where any real config errors surface
+// with a complete diagnostic. A non-nil error means an mcp_host block WAS
+// found but could not be decoded; callers should surface it, because the
+// follow-up load may be best-effort (LoadPartial) and never report it.
+func LoadMCPHost(path string) (*MCPHostConfig, error) {
 	files, err := resolveConfigFiles(path)
-	if err != nil {
-		return nil
+	if err != nil || len(files) == 0 {
+		return nil, nil
 	}
 
+	// buildVarsContext reads the package-global configFuncs. Save and
+	// restore it around our own load so we don't leave a stale load()
+	// bound to this call's directory for a later call from a different
+	// CWD (same dance as LoadMCPSpecs).
+	prevFuncs := configFuncs
+	defer func() { configFuncs = prevFuncs }()
+	configDir := filepath.Dir(files[0])
+	configFuncs = schemafunc.SchemaFunctions()
+	configFuncs["load"] = schemafunc.MakeLoadFunc(configDir)
+
+	// First pass: collect variable and mcp_host blocks from every file,
+	// tolerating broken files — the follow-up full load reports those.
 	parser := hclparse.NewParser()
+	var allVars []Variable
+	var hostBlocks []*hcl.Block
 	for _, file := range files {
 		hclFile, diags := parser.ParseHCLFile(file)
 		if diags.HasErrors() {
@@ -116,6 +137,7 @@ func LoadMCPHost(path string) *MCPHostConfig {
 		}
 		content, _, diags := hclFile.Body.PartialContent(&hcl.BodySchema{
 			Blocks: []hcl.BlockHeaderSchema{
+				{Type: "variable", LabelNames: []string{"name"}},
 				{Type: "mcp_host"},
 			},
 		})
@@ -123,18 +145,36 @@ func LoadMCPHost(path string) *MCPHostConfig {
 			continue
 		}
 		for _, block := range content.Blocks {
-			if block.Type != "mcp_host" {
-				continue
+			switch block.Type {
+			case "variable":
+				var v Variable
+				v.Name = block.Labels[0]
+				if diags := gohcl.DecodeBody(block.Body, nil, &v); diags.HasErrors() {
+					continue
+				}
+				allVars = append(allVars, v)
+			case "mcp_host":
+				hostBlocks = append(hostBlocks, block)
 			}
-			var mc MCPHostConfig
-			if diags := gohcl.DecodeBody(block.Body, nil, &mc); diags.HasErrors() {
-				continue
-			}
-			mc.Defaults()
-			return &mc
 		}
 	}
-	return nil
+	if len(hostBlocks) == 0 {
+		return nil, nil
+	}
+
+	varsCtx, _ := buildVarsContext(allVars)
+
+	// Last block wins, matching the full loader's singleton handling.
+	var hostCfg *MCPHostConfig
+	for _, block := range hostBlocks {
+		var mc MCPHostConfig
+		if diags := gohcl.DecodeBody(block.Body, varsCtx, &mc); diags.HasErrors() {
+			return nil, fmt.Errorf("mcp_host: %w", diags)
+		}
+		mc.Defaults()
+		hostCfg = &mc
+	}
+	return hostCfg, nil
 }
 
 // LoadMCPSpecs does a lightweight HCL walk of the config and returns every

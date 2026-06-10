@@ -1,6 +1,9 @@
 package config_test
 
 import (
+	"os"
+	"path/filepath"
+
 	"squadron/config"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -332,6 +335,101 @@ var _ = Describe("MCP", func() {
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("between 1024 and 65535"))
 			})
+		})
+	})
+
+	Describe("LoadMCPHost", func() {
+		It("returns nil for a config with no mcp_host block", func() {
+			dir, _ := writeFixture("config.hcl", minimalVarsHCL())
+			hostCfg, err := config.LoadMCPHost(dir)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostCfg).To(BeNil())
+		})
+
+		It("parses a literal-only block", func() {
+			dir, _ := writeFixture("config.hcl", `
+mcp_host {
+  enabled = true
+  port    = 9000
+  secret  = "literal-secret"
+}
+`)
+			hostCfg, err := config.LoadMCPHost(dir)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostCfg).NotTo(BeNil())
+			Expect(hostCfg.Enabled).To(BeTrue())
+			Expect(hostCfg.Port).To(Equal(9000))
+			Expect(hostCfg.Secret).To(Equal("literal-secret"))
+		})
+
+		It("resolves vars references, including across files", func() {
+			dir := writeFixtures(map[string]string{
+				"variables.hcl": `
+variable "host_secret" {
+  default = "s3cret"
+}
+variable "host_port" {
+  default = "9100"
+}
+`,
+				"mcp_host.hcl": `
+mcp_host {
+  enabled = true
+  port    = vars.host_port
+  secret  = vars.host_secret
+}
+`,
+			})
+			hostCfg, err := config.LoadMCPHost(dir)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostCfg).NotTo(BeNil())
+			Expect(hostCfg.Enabled).To(BeTrue())
+			Expect(hostCfg.Port).To(Equal(9100))
+			Expect(hostCfg.Secret).To(Equal("s3cret"))
+		})
+
+		It("resolves template interpolation", func() {
+			dir, _ := writeFixture("config.hcl", `
+variable "host_secret" {
+  default = "abc"
+}
+mcp_host {
+  enabled = true
+  secret  = "${vars.host_secret}-suffix"
+}
+`)
+			hostCfg, err := config.LoadMCPHost(dir)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostCfg).NotTo(BeNil())
+			Expect(hostCfg.Secret).To(Equal("abc-suffix"))
+			Expect(hostCfg.Port).To(Equal(8090)) // default applied
+		})
+
+		It("resolves the load() function relative to the config dir", func() {
+			dir, _ := writeFixture("config.hcl", `
+mcp_host {
+  enabled = true
+  secret  = load("secret.txt")
+}
+`)
+			Expect(os.WriteFile(filepath.Join(dir, "secret.txt"), []byte("from-file"), 0644)).To(Succeed())
+			hostCfg, err := config.LoadMCPHost(dir)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostCfg).NotTo(BeNil())
+			Expect(hostCfg.Secret).To(Equal("from-file"))
+		})
+
+		It("surfaces an error instead of silently dropping an undecodable block", func() {
+			dir, _ := writeFixture("config.hcl", `
+mcp_host {
+  enabled = true
+  secret  = vars.never_declared
+}
+`)
+			hostCfg, err := config.LoadMCPHost(dir)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("mcp_host"))
+			Expect(hostCfg).To(BeNil())
 		})
 	})
 

@@ -12,7 +12,6 @@ Agents are AI assistants that can chat with users and execute tools.
 agent "assistant" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Friendly, helpful, and concise"
-  role        = "General purpose assistant"
   tools       = [
     builtins.http.get,
     tools.weather
@@ -25,8 +24,7 @@ agent "assistant" {
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `model` | reference | Model reference (e.g., `models.anthropic.claude_sonnet_4`) |
-| `personality` | string | Personality traits for the agent |
-| `role` | string | Description of the agent's purpose |
+| `personality` | string | Personality traits for the agent — also serves as the agent's description when commanders pick which agent to delegate to |
 | `tools` | list | Tools available to the agent (optional) |
 | `reasoning` | string | Native reasoning level: `"low"`, `"medium"`, or `"high"` (optional) |
 
@@ -92,7 +90,6 @@ mission "research" {
   agent "specialist" {
     model       = models.anthropic.claude_opus_4
     personality = "Deep domain expert"
-    role        = "Research specialist with access to specialized tools"
     tools       = [plugins.shell.exec]
   }
 
@@ -100,12 +97,18 @@ mission "research" {
 
   task "gather" {
     objective = "Research the topic"
-    agents    = [agents.specialist]
+    # No agents attribute — task inherits the mission's list,
+    # so both `global_helper` and `specialist` are available.
+  }
+
+  task "deep_dive" {
+    objective = "Run the specialized analysis"
+    agents    = [agents.specialist]  # Restrict this task to one agent.
   }
 }
 ```
 
-Mission-scoped agents use the same syntax and attributes as global agents. They must be listed in the mission's `agents = [...]` to be available, and can be assigned at the task level.
+Mission-scoped agents use the same syntax and attributes as global agents. They must be listed in the mission's `agents = [...]` to be available — once listed there, every task in the mission can use them automatically. A task only needs its own `agents = [...]` attribute when you want to restrict that task to a different subset.
 
 **Rules:**
 - A scoped agent name must not conflict with any global agent name
@@ -118,21 +121,18 @@ Mission-scoped agents use the same syntax and attributes as global agents. They 
 agent "coder" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Precise and methodical"
-  role        = "Software development assistant"
   tools       = [builtins.http.get]
 }
 
 agent "researcher" {
   model       = models.openai.gpt_4o
   personality = "Curious and thorough"
-  role        = "Research and information gathering"
   tools       = [builtins.http.get]
 }
 
 agent "writer" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Creative and articulate"
-  role        = "Content writing and editing"
   tools       = []  # No tools, just conversation
 }
 ```
@@ -160,7 +160,6 @@ You can configure the maximum token count for tool call responses before they're
 ```hcl
 agent "data_processor" {
   model = models.anthropic.claude_sonnet_4
-  role  = "Processes large datasets"
   tools = [builtins.http.get]
 
   tool_response {
@@ -196,7 +195,6 @@ Use the optional `reasoning` attribute to enable native provider reasoning ("ext
 agent "researcher" {
   model       = models.anthropic.claude_opus_4_7
   personality = "Methodical analyst"
-  role        = "Deep-research agent for hard problems"
   reasoning   = "high"
   tools       = [builtins.http.get]
 }

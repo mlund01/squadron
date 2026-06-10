@@ -38,14 +38,14 @@ mission "data_pipeline" {
 |-----------|------|-------------|
 | `directive` | string | High-level description of the mission's purpose |
 | `commander` | string or block | Model for task commanders (block form: `commander { model = ...; reasoning = "low\|medium\|high" }`; see [Agents → Reasoning](/config/agents#reasoning)) |
-| `agents` | list | Agents available to all tasks |
+| `agents` | list | Agents available to every task in this mission. Tasks inherit this list automatically and only need their own `agents = [...]` to restrict to a different subset. |
 | `agent` | block | Mission-scoped agent definition (repeatable, see [Agents](/config/agents#mission-scoped-agents)) |
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |
 | `dataset` | block | Dataset definitions (optional) |
-| `folders` | list | Shared folder references, e.g. `[shared_folders.data]` (see [Folders](/missions/folders)) |
-| `folder` | block | Persistent mission-scoped folder, registered as `"mission"` |
-| `run_folder` | block | Per-run ephemeral folder, registered as `"run"` |
+| `memories` | list | Shared memory references, e.g. `[memories.data]` (see [Memory & Scratchpad](/missions/folders)) |
+| `memory` | block | Mission-scoped persistent memory (slot `"memory"`). Required `description`. At most one per mission. |
+| `scratchpad` | bool | If `true`, the mission gets an ephemeral per-run scratchpad (slot `"scratchpad"`); auto-deleted after 7 days. |
 | `schedule` | block | Automatic run schedules (optional, repeatable) |
 | `trigger` | block | Webhook trigger (optional) |
 | `max_parallel` | number | Max concurrent instances (default: 3) |

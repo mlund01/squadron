@@ -134,7 +134,6 @@ model "test" {
 agent "a" {
   model       = models.anthropic.claude_sonnet_4
   personality = "x"
-  role        = "y"
 }
 `
 			_, f := writeFixture("config.hcl", hcl)

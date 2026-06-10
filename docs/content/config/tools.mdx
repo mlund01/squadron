@@ -27,8 +27,14 @@ tools = [
 Utility tools:
 
 ```hcl
-tools = [builtins.utils.sleep]
+tools = [
+  builtins.utils.sleep,
+  builtins.utils.current_time,
+]
 ```
+
+- `sleep` — pause execution for N seconds (max 300).
+- `current_time` — returns the current time. Optional `timezone` (IANA name, e.g. `"America/Chicago"`; defaults to UTC) and `format` (Go reference-time layout; defaults to RFC 3339).
 
 ### Human Input
 
@@ -37,7 +43,6 @@ Pause an agent mid-task and ask an operator a question:
 ```hcl
 agent "concierge" {
   model = models.anthropic.claude_sonnet_4
-  role  = "Plans the trip by asking the user a few targeted questions."
   tools = [builtins.human.ask]
 }
 ```

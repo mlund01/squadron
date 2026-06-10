@@ -29,7 +29,7 @@ task "summarize" {
 |-----------|------|-------------|
 | `objective` | string | What the task should accomplish |
 | `depends_on` | list | Tasks that must complete first |
-| `agents` | list | Override mission-level agents (optional) |
+| `agents` | list | Agents available to this task's commander. Optional — when omitted, the task inherits the mission's `agents` list. When set, it fully replaces the mission list for this task. |
 | `output` | block | Structured output schema (optional) |
 | `router` | block | Conditional routing — LLM picks a branch after task completes (optional) |
 | `send_to` | list | Unconditional routing — activate target tasks on completion (optional) |
@@ -49,18 +49,27 @@ Dependencies are specified using `tasks.<task_name>`.
 
 ## Task-Level Agents
 
-Override the mission's agents for specific tasks:
+Every agent listed on the mission's `agents = [...]` is automatically available to every task in that mission — you do **not** need to repeat them on each `task` block.
+
+Only set `agents` on a task when you want to **restrict** that task to a subset of the mission's agents (for example, to keep a code-review task away from the general-purpose agent):
 
 ```hcl
 mission "pipeline" {
-  agents = [agents.general]
+  agents = [agents.general, agents.coder]
+
+  task "draft" {
+    objective = "Draft the change description"
+    # No agents attribute — task can use both `general` and `coder`.
+  }
 
   task "code_review" {
     objective = "Review the code changes"
-    agents    = [agents.coder]  # Use specialized agent
+    agents    = [agents.coder]  # Restrict this task to the coder agent only.
   }
 }
 ```
+
+A task-level `agents` list fully replaces the mission's list for that task — pick exactly the agents you want available to the task's commander.
 
 ## Dynamic Objectives
 

@@ -243,13 +243,11 @@ mission "bound" {
 agent "agent_a" {
   model       = models.anthropic.claude_sonnet_4
   personality = "A"
-  role        = "Agent A"
   tools       = [builtins.http.get]
 }
 agent "agent_b" {
   model       = models.anthropic.claude_sonnet_4
   personality = "B"
-  role        = "Agent B"
   tools       = [builtins.http.get]
 }
 mission "multi_agent" {
@@ -350,7 +348,7 @@ mission "no_commander" {
 				m := config.Mission{Name: "empty", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Agents: []string{"a"}}
 				models := []config.Model{{Provider: "anthropic", APIKey: "k"}}
 				agents := []config.Agent{{Name: "a"}}
-				err := m.Validate(models, agents, nil, nil)
+				err := m.Validate(models, agents, nil, nil, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("at least one task"))
 			})
@@ -1193,7 +1191,6 @@ mission "scoped" {
   agent "specialist" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Expert"
-    role        = "A specialist"
     tools       = [builtins.http.get]
   }
 
@@ -1207,7 +1204,7 @@ mission "scoped" {
 				Expect(cfg.Missions).To(HaveLen(1))
 				Expect(cfg.Missions[0].LocalAgents).To(HaveLen(1))
 				Expect(cfg.Missions[0].LocalAgents[0].Name).To(Equal("specialist"))
-				Expect(cfg.Missions[0].LocalAgents[0].Role).To(Equal("A specialist"))
+				Expect(cfg.Missions[0].LocalAgents[0].Personality).To(Equal("Expert"))
 				Expect(cfg.Missions[0].LocalAgents[0].Model).To(Equal("claude_sonnet_4"))
 				Expect(cfg.Missions[0].LocalAgents[0].Tools).To(ConsistOf("builtins.http.get"))
 			})
@@ -1222,7 +1219,6 @@ mission "mixed" {
   agent "local_helper" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Helpful"
-    role        = "Local helper"
   }
 
   agents = [agents.test_agent, agents.local_helper]
@@ -1247,7 +1243,6 @@ mission "task_scoped" {
   agent "specialist" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Expert"
-    role        = "Specialist"
   }
 
   agents = [agents.test_agent, agents.specialist]
@@ -1270,7 +1265,6 @@ mission "alpha" {
   agent "helper" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Alpha helper"
-    role        = "Helper for alpha"
   }
   agents = [agents.helper]
   task "work" { objective = "Do work" }
@@ -1281,7 +1275,6 @@ mission "beta" {
   agent "helper" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Beta helper"
-    role        = "Helper for beta"
   }
   agents = [agents.helper]
   task "work" { objective = "Do work" }
@@ -1291,8 +1284,8 @@ mission "beta" {
 				cfg, err := config.LoadFile(f)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(cfg.Missions).To(HaveLen(2))
-				Expect(cfg.Missions[0].LocalAgents[0].Role).To(Equal("Helper for alpha"))
-				Expect(cfg.Missions[1].LocalAgents[0].Role).To(Equal("Helper for beta"))
+				Expect(cfg.Missions[0].LocalAgents[0].Personality).To(Equal("Alpha helper"))
+				Expect(cfg.Missions[1].LocalAgents[0].Personality).To(Equal("Beta helper"))
 			})
 		})
 
@@ -1307,7 +1300,6 @@ mission "conflict" {
   agent "test_agent" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Conflict"
-    role        = "Conflicts with global"
   }
 
   agents = [agents.test_agent]
@@ -1332,7 +1324,6 @@ mission "bad_tools" {
   agent "bad" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Bad"
-    role        = "Has bad tools"
     tools       = [plugins.nonexistent.tool]
   }
 
@@ -1355,7 +1346,6 @@ mission "valid_tools" {
   agent "good" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Good"
-    role        = "Has valid tools"
     tools       = [builtins.http.get]
   }
 
@@ -1373,12 +1363,12 @@ mission "valid_tools" {
 			It("returns the agent when it exists", func() {
 				m := config.Mission{
 					LocalAgents: []config.Agent{
-						{Name: "specialist", Role: "Expert"},
+						{Name: "specialist", Personality: "Expert"},
 					},
 				}
 				a := m.GetLocalAgent("specialist")
 				Expect(a).NotTo(BeNil())
-				Expect(a.Role).To(Equal("Expert"))
+				Expect(a.Personality).To(Equal("Expert"))
 			})
 
 			It("returns nil when the agent does not exist", func() {

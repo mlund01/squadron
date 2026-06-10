@@ -62,11 +62,12 @@ Squadron is a declarative framework for building and running AI agent workflows.
 The config loading uses **staged evaluation** to support HCL expression references:
 
 1. **Stage 1**: Load `variable` blocks (no context needed)
-2. **Stage 1.5**: Load `plugin` blocks and `mcp "name"` blocks with `vars` context. Both happen in the same stage because both expose tools through HCL namespaces that later stages need to resolve against.
-3. **Stage 2**: Load `model` blocks with `vars` + `plugins` + `mcp` context → enables `api_key = vars.anthropic_api_key`
-4. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` + `mcp` context → enables `implements = builtins.http.get`
-5. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` + `mcp` context → enables `tools = [plugins.playwright.all, mcp.filesystem.read_file, tools.weather]`
-6. **Stage 5**: Load `mission` blocks with full context
+2. **Stage 1.4**: Load `packet` blocks with `vars` context. Done before every downstream stage so the HCL-exclusion filter (drops `.hcl` files inside any packet path) runs before vault / storage / command_center / mcp_host iterate `allParsedBlocks`.
+3. **Stage 1.5**: Load `plugin` blocks and `mcp "name"` blocks with `vars` context. Both happen in the same stage because both expose tools through HCL namespaces that later stages need to resolve against.
+4. **Stage 2**: Load `model` blocks with `vars` + `plugins` + `mcp` context → enables `api_key = vars.anthropic_api_key`
+5. **Stage 3**: Load custom `tool` blocks with `vars` + `models` + `builtins` + `plugins` + `mcp` context → enables `implements = builtins.http.get`
+6. **Stage 4**: Load `agent` blocks with `vars` + `models` + `tools` + `plugins` + `mcp` context → enables `tools = [plugins.playwright.all, mcp.filesystem.read_file, tools.weather]`
+7. **Stage 5**: Load `mission` blocks with full context
 
 Each stage uses partial structs with `hcl:",remain"` to ignore unknown block types during that pass.
 
@@ -139,7 +140,6 @@ mcp_host {
 agent "browser_navigator" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Methodical and precise"
-  role        = "Browser automation specialist"
   tools       = [plugins.playwright.all, mcp.filesystem.read_file]
 }
 
@@ -282,64 +282,159 @@ mission "expensive_research" {
 
 The scheduler lives in `scheduler/` but its lifecycle (creation, config updates, shutdown) is managed by `cmd/serve.go`, not wsbridge. The wsbridge client receives a `ConcurrencyTracker` interface for enforcing `max_parallel` on all mission starts. The cron library used is `robfig/cron/v3`.
 
-### Folders
+### Memory + Scratchpad
 
-Folders are sandboxed filesystem locations that agents access via the `file_list`,
-`file_read`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools.
-The `folder` parameter is required on every tool call — there is no implicit
-default.
+Two kinds of file storage:
 
-Three kinds exist, with strict naming rules:
+- **Memory** — persistent storage that survives across runs. Declared with
+  a top-level `memory "name" { description = "..." }` (shared, multiple)
+  or a mission-scoped `memory { description = "..." }` (private to the
+  mission, at most one). The two block forms take the same fields. Every
+  memory is writable.
+- **Scratchpad** — ephemeral per-run working space. A mission opts in
+  with `scratchpad = true`; auto-deleted 7 days after the run starts.
+  Nothing to configure.
 
-| Kind | HCL | Registered name | Scope | Persistence |
-|------|-----|-----------------|-------|-------------|
-| Shared | top-level `shared_folder "name" { ... }` | user-chosen name | referenced by any mission via `folders = [shared_folders.name]` | persists |
-| Mission | `folder { ... }` inside a mission | literal `"mission"` | one per mission | persists across runs |
-| Run | `run_folder { ... }` inside a mission | literal `"run"` | one per mission per run | ephemeral; path is `<base>/<missionID>/` |
+Agents access both kinds via the same `file_list`, `file_read`, `file_create`,
+`file_delete`, `file_search`, `file_grep` tools. Each call takes a required
+`slot` parameter naming which slot to operate in — there is no implicit
+default. If a mission declares no `memory { ... }` and no `scratchpad = true`,
+agents only see the shared memories listed in `memories = [...]`.
 
-The names `"mission"` and `"run"` are reserved — `shared_folder` cannot use them
-(enforced in `config/shared_folder.go`).
+Squadron owns the on-disk paths; the HCL never accepts a `path` attribute:
+
+| Kind | HCL | `slot` agents pass | On-disk path |
+|------|-----|---------------------|--------------|
+| Shared memory | top-level `memory "name" { ... }` | the HCL label | `<squadron_home>/memories/shared/<name>/` |
+| Mission memory | `memory { ... }` inside a mission | literal `"memory"` | `<squadron_home>/memories/mission/<mission_name>/` |
+| Mission scratchpad | `scratchpad = true` inside a mission | literal `"scratchpad"` | `<squadron_home>/scratchpads/<mission_name>/<instance_id>/` |
+
+The slot names `"memory"` and `"scratchpad"` are reserved — a top-level
+`memory "memory"` or `memory "scratchpad"` block is rejected.
+
+The old DSL surfaces — `shared_folder` blocks, `folder` / `run_folder`
+blocks, the `folders = ...` attribute — are **not** accepted. The parser
+surfaces a clear error pointing at the new syntax. Path attributes anywhere
+on a memory block are rejected too.
 
 ```hcl
-shared_folder "reference" {
-  path     = "./data/reference"
-  editable = false   # default read-only
+memory "reference" {
+  description = "Shared reference materials"
 }
 
 mission "analyze" {
-  folders = [shared_folders.reference]
+  memories = [memories.reference]
 
-  folder {
-    path        = "./analyses"
+  memory {
     description = "Cumulative reports — persists across runs"
   }
 
-  run_folder {
-    base        = "./runs"            # optional, default ".squadron/runs"
-    description = "Per-run scratch"
-    cleanup     = 7                   # optional, auto-delete after N days; defaults to 7, set 0 to keep forever
-  }
+  scratchpad = true
 }
 ```
 
 **Implementation:**
 
-- `config.SharedFolder`, `config.MissionFolder`, `config.MissionRunFolder` in
-  [config/shared_folder.go](config/shared_folder.go) and [config/mission.go](config/mission.go).
-- Shared folders are parsed in Stage 1.5 (with `vars` context). The mission's
-  `folder` and `run_folder` blocks are parsed inside the mission block in Stage 5.
-- [mission/folder_store.go](mission/folder_store.go) is the authoritative
-  runtime resolver. `buildFolderStore(mission, sharedFolders, missionID)` must be
-  called **after** the mission ID is assigned in `Runner.Run()`, because the run
-  folder path depends on it. There is no implicit default folder — every
-  tool call must name the folder explicitly.
-- Run folders are materialized at `<base>/<missionID>/` and a sidecar
-  `.squadron-run.json` records `created_at` + `cleanup_days`.
-- `mission.SweepExpiredRunFolders(base)` walks a base directory and deletes any
-  subfolder whose sidecar says it is past its cleanup deadline. It runs
-  opportunistically at the start of every `Runner.Run()` (for that mission's
-  base) and on an hourly ticker in `cmd/engage.go` (across every mission in the
-  current config).
+- `config.Memory` (top-level shared) and `config.MissionMemory` (mission's
+  persistent) both live in [config/memory.go](config/memory.go); both have
+  a required `Description` field. On a parsed mission they land as
+  `Memories []string`, `Memory *MissionMemory`, and `Scratchpad bool`
+  (`config.Mission` in [config/mission.go](config/mission.go)).
+- Top-level `memory "name"` blocks are parsed in Stage 1.5 (with `vars`
+  context); each mission's `memory { ... }` block and `scratchpad = bool`
+  attribute are parsed inside the mission block in Stage 5. The
+  `memories.NAME` HCL namespace exposes the shared-memory labels to
+  mission attributes.
+- [mission/memory_store.go](mission/memory_store.go) is the authoritative
+  runtime resolver. Paths are derived from `paths.SquadronHome()`:
+  `SharedMemoryPath(name)`, `MissionMemoryPath(missionName)`, and
+  `MissionScratchpadPath(missionName, missionInstanceID)`.
+  `buildMemoryStore(mission, memories, missionInstanceID)` must be called
+  **after** the mission instance ID is assigned in `Runner.Run()` because
+  the scratchpad path depends on it. `MemoryStore.ResolvePath` returns
+  just `(string, error)` — there is no read-only mode at this layer.
+- Each scratchpad directory gets a sidecar `.squadron-run.json` recording
+  `created_at` + `cleanup_days` (always `config.ScratchpadCleanupDays = 7`)
+  so the sweep can find expired ones.
+- `mission.SweepExpiredScratchpads()` walks
+  `<squadron_home>/scratchpads/*/*`, deleting any per-run directory whose
+  sidecar is past its 7-day deadline. It runs opportunistically at the
+  start of every `Runner.Run()` (for missions with a scratchpad) and on
+  an hourly ticker in `cmd/engage.go`. No config lookup needed — the
+  filesystem layout is self-describing.
+
+### Packets
+
+A `packet` block is a read-only reference data bundle attached to
+missions. Unlike memory, packets point at user-controlled paths inside
+the project, are immutable to agents, reject binary content on read, and
+their on-disk tree is excluded from HCL parsing.
+
+```hcl
+packet "kb" {
+  path        = "@/reference/kb"   # see "Path resolution" below
+  description = "Knowledge base"
+}
+
+mission "answer" {
+  packets = [packets.kb]
+  task "draft" {
+    objective = "Use packet.kb to draft the answer"
+    packets  = [packets.kb]      # task-level also accepted (declared scope)
+  }
+}
+```
+
+| HCL surface | Slot name agents pass | Notes |
+|-------------|------------------------|-------|
+| top-level `packet "name" { path = "..." }` | `"packet.<name>"` | Read-only. Text files only (`file_read` rejects binaries). |
+| Mission `packets = [packets.X]` | n/a | Validation: every referenced packet must exist. |
+| Task `packets = [packets.X]` | n/a | Same. **Task-level is declarative, not isolating** — every task in a mission shares the same `MemoryStore`, so a packet referenced anywhere in the mission is accessible to every task. |
+
+**Implementation:**
+
+- `config.Packet` lives in [config/packet.go](config/packet.go). Parsed
+  in Stage 1.4 (with `vars` context) — earlier than every other block type
+  except variables. The Stage 1.4 ordering is critical: packets trigger
+  an HCL-exclusion filter that drops `allParsedBlocks` entries for any
+  `.hcl` files inside a packet path, and that filter must run BEFORE
+  vault / storage / command_center / mcp_host so blocks inside a packet
+  folder can't leak into those stages.
+- The `packets.NAME` HCL namespace is registered on `agentsCtx` (alongside
+  `memories`) so missions can do `packets = [packets.X]`.
+- [mission/memory_store.go](mission/memory_store.go) registers packets
+  under the `"packet.<name>"` slot key (`aitools.PacketSlotPrefix`).
+  Tools enforce the read-only + text-only policy by checking the slot
+  name prefix via `aitools.IsPacketSlot`.
+- File-tool policy for packet slots:
+  - `file_create`, `file_delete` → error `"slot is read-only (packet bundles are immutable)"`
+  - `file_read` → rejects content with a NUL byte in the first 8 KB (`looksBinary`)
+  - `file_grep` → silently skips files that look binary
+
+### Path resolution for config attributes
+
+`packet.path`, `plugin.source` (local sources), and the `load()` HCL
+function all share a single resolver: `paths.ResolveConfigPath(projectRoot,
+hclFileDir, rawPath)` in [internal/paths/paths.go](internal/paths/paths.go).
+
+| Form | Resolves to |
+|------|-------------|
+| `./foo`, `../foo`, bare `foo` | The directory of the HCL file declaring the block |
+| `@/foo` | The **project root** — the `-c` argument |
+| `/foo`, any absolute | **Rejected** |
+| `..` traversal escaping the project root | **Rejected** (post-Clean containment check) |
+| Path resolving to the project root itself (e.g. `@/`) | **Rejected** (avoids silent HCL-exclusion of the entire config) |
+
+The process working directory is **never** consulted — squadron can be
+invoked from any CWD and paths resolve identically. `load()` is the
+exception that proves the rule: it has no per-callsite "HCL file dir"
+(cty functions don't get caller context), so relative forms anchor to
+`projectRoot` for it specifically.
+
+The `squadron plugin build <name> <source-path>` CLI subcommand still
+uses `paths.ResolveProjectPath` (CWD-based), which is correct for a
+shell-typed path. `ResolveProjectPath` is marked `Deprecated` for any
+new HCL-attribute use.
 
 ### Mission-Scoped Agents
 
@@ -352,7 +447,6 @@ mission "research" {
   agent "specialist" {
     model       = models.anthropic.claude_opus_4
     personality = "Deep domain expert"
-    role        = "Research specialist with access to specialized tools"
     tools       = [plugins.shell.exec]
   }
 

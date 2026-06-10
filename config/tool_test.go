@@ -182,7 +182,6 @@ tool "weather" {
 agent "tooluser" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Test"
-  role        = "Tester"
   tools       = [builtins.http.get, tools.weather]
 }
 `

@@ -26,7 +26,7 @@ var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils", "human", "m
 var BuiltinTools = map[string][]string{
 	"http":    {"get", "post", "put", "patch", "delete"},
 	"dataset": {"set", "sample", "count"},
-	"utils":   {"sleep"},
+	"utils":   {"sleep", "current_time"},
 	"human":   {"ask"},
 }
 
@@ -101,7 +101,6 @@ type Agent struct {
 	Name        string   `hcl:"name,label"`
 	Model       string   `hcl:"model"`
 	Personality string   `hcl:"personality"`
-	Role        string   `hcl:"role"`
 	Tools       []string `hcl:"tools,optional"`
 	Skills      []string `hcl:"-"`
 

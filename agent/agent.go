@@ -77,8 +77,8 @@ type Options struct {
 	SecretInfos []SecretInfo
 	// SecretValues contains actual secret values for tool call injection
 	SecretValues map[string]string
-	// FolderStore provides file folder access for the mission (optional)
-	FolderStore aitools.FolderStore
+	// MemoryStore provides file memory access for the mission (optional)
+	MemoryStore aitools.MemoryStore
 	// OnCompaction is called when context compaction occurs (optional, mission context only)
 	OnCompaction func(inputTokens int, tokenLimit int, messagesCompacted int, turnRetention int)
 	// OnSessionTurn is called after each LLM turn with telemetry data (optional)
@@ -178,14 +178,14 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		}
 	}
 
-	// Add folder tools if FolderStore is available
-	if opts.FolderStore != nil {
-		tools["file_list"] = &aitools.FolderListTool{Store: opts.FolderStore}
-		tools["file_read"] = &aitools.FolderReadTool{Store: opts.FolderStore}
-		tools["file_create"] = &aitools.FolderCreateTool{Store: opts.FolderStore}
-		tools["file_delete"] = &aitools.FolderDeleteTool{Store: opts.FolderStore}
-		tools["file_search"] = &aitools.FolderSearchTool{Store: opts.FolderStore}
-		tools["file_grep"] = &aitools.FolderGrepTool{Store: opts.FolderStore}
+	// Add memory tools if MemoryStore is available
+	if opts.MemoryStore != nil {
+		tools["file_list"] = &aitools.MemoryListTool{Store: opts.MemoryStore}
+		tools["file_read"] = &aitools.MemoryReadTool{Store: opts.MemoryStore}
+		tools["file_create"] = &aitools.MemoryCreateTool{Store: opts.MemoryStore}
+		tools["file_delete"] = &aitools.MemoryDeleteTool{Store: opts.MemoryStore}
+		tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}
+		tools["file_grep"] = &aitools.MemoryGrepTool{Store: opts.MemoryStore}
 	}
 
 	// Resolve skills and add load_skill tool
@@ -233,7 +233,6 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	systemPrompts = append(systemPrompts, prompts.GetAgentPrompt(mode, promptSecrets, promptSkills))
 	systemPrompts = append(systemPrompts,
 		fmt.Sprintf("Personality: %s", agentCfg.Personality),
-		fmt.Sprintf("Role: %s", agentCfg.Role),
 	)
 
 	// Add dataset info if running in mission context
@@ -243,10 +242,10 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		}
 	}
 
-	// Add folder context if FolderStore is available
-	if opts.FolderStore != nil {
-		if folderPrompt := prompts.FormatFolderContext(opts.FolderStore); folderPrompt != "" {
-			systemPrompts = append(systemPrompts, folderPrompt)
+	// Add memory context if MemoryStore is available
+	if opts.MemoryStore != nil {
+		if memoryPrompt := prompts.FormatMemoryContext(opts.MemoryStore); memoryPrompt != "" {
+			systemPrompts = append(systemPrompts, memoryPrompt)
 		}
 	}
 

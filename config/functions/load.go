@@ -8,14 +8,23 @@ import (
 
 	"github.com/zclconf/go-cty/cty"
 	"github.com/zclconf/go-cty/cty/function"
+
+	"squadron/internal/paths"
 )
 
-// MakeLoadFunc creates a load() HCL function that reads file contents as a string.
+// MakeLoadFunc creates a load() HCL function that reads file contents as a
+// string. Paths follow the project-wide resolution rule (see
+// paths.ResolveConfigPath):
 //
-//   - load("./foo.md")  — resolves relative to configDir (the HCL file's directory)
-//   - load("foo.md")    — resolves relative to the process working directory
-//   - Paths starting with "/" are rejected (no filesystem root access)
-//   - Only .md and .txt files are allowed
+//   - "@/foo.md"       — resolves relative to the project root (configDir)
+//   - "./foo.md"       — resolves relative to the project root (configDir);
+//     load() has no per-callsite "HCL file" context, so `.` collapses to
+//     the project root
+//   - "foo.md"  (bare) — same as "./foo.md"
+//   - "/foo.md"        — REJECTED (no filesystem-root access)
+//   - ".." traversal that escapes the project root is also rejected
+//
+// Only .md and .txt files are allowed.
 func MakeLoadFunc(configDir string) function.Function {
 	return function.New(&function.Spec{
 		Params: []function.Parameter{
@@ -25,24 +34,18 @@ func MakeLoadFunc(configDir string) function.Function {
 		Impl: func(args []cty.Value, _ cty.Type) (cty.Value, error) {
 			rawPath := args[0].AsString()
 
-			if strings.HasPrefix(rawPath, "/") {
-				return cty.NilVal, fmt.Errorf("load(%q): absolute paths starting with '/' are not allowed", rawPath)
-			}
-
 			ext := strings.ToLower(filepath.Ext(rawPath))
 			if ext != ".md" && ext != ".txt" {
 				return cty.NilVal, fmt.Errorf("load(%q): only .md and .txt files are supported", rawPath)
 			}
 
-			var resolved string
-			if strings.HasPrefix(rawPath, "./") || strings.HasPrefix(rawPath, "../") {
-				resolved = filepath.Join(configDir, rawPath)
-			} else {
-				cwd, err := os.Getwd()
-				if err != nil {
-					return cty.NilVal, fmt.Errorf("load(%q): failed to get working directory: %w", rawPath, err)
-				}
-				resolved = filepath.Join(cwd, rawPath)
+			// load() doesn't have a per-callsite "this HCL file" — every
+			// call resolves against the project root. Pass configDir as
+			// both projectRoot and hclFileDir so bare/`./` names anchor
+			// there too. Absolute paths and `..` escapes are rejected.
+			resolved, err := paths.ResolveConfigPath(configDir, configDir, rawPath)
+			if err != nil {
+				return cty.NilVal, fmt.Errorf("load(%q): %w", rawPath, err)
 			}
 
 			data, err := os.ReadFile(resolved)

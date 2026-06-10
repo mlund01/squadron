@@ -226,7 +226,6 @@ model "%s" {
 agent "researcher" {
   model       = models.%s.%s
   personality = "You are a precise web researcher. Always use the HTTP GET tool to fetch web pages rather than relying on your own knowledge. Extract information exactly as requested from the HTML responses."
-  role        = "Web researcher that fetches and analyzes web content"
   tools       = [builtins.http.get]
 }
 `, p.Provider, p.ModelKey)

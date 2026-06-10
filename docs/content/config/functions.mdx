@@ -25,9 +25,20 @@ task "complex" {
 
 ### Path Resolution
 
-- `load("./foo.md")` — relative to the config file's directory
-- `load("skills/foo.md")` — relative to the working directory where Squadron was started
-- Paths starting with `/` are not allowed
+`load()` uses Squadron's project-root-anchored path rule. The process working directory is **never** consulted — you can run squadron from any CWD and `load("skills/foo.md")` resolves to the same file on disk.
+
+| Form | Resolves to |
+|------|-------------|
+| `./foo.md`, `../foo.md`, bare `foo.md` | The **project root** — the directory passed to `squadron -c <dir>` (load doesn't have a per-callsite "HCL file dir", so all relative forms anchor to the project root) |
+| `@/foo.md` | Explicitly the project root (same as bare for load(); useful for self-documenting calls) |
+| `/foo.md`, absolute | **Rejected** with `absolute paths are not allowed` |
+
+After resolution:
+
+- Any `..` traversal that escapes the project root is rejected (`escapes the project root <path>`).
+- A path that resolves to the project root itself is rejected (`resolves to the project root <path> itself`).
+
+The same rule applies to `packet.path` and `plugin.source` — see [Plugins → Path Resolution](./plugins#path-resolution) and [Packets → Path Resolution](../missions/packets) for the block-attribute variants (those add per-HCL-file-dir anchoring for the relative forms, since blocks know which file declared them).
 
 ### Supported File Types
 

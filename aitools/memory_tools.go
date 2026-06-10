@@ -1,8 +1,8 @@
 package aitools
 
 import (
-	"context"
 	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,31 +12,62 @@ import (
 	"strings"
 )
 
-// Reserved folder names for mission-scoped folders. Callers addressing the
-// persistent mission folder and the per-run folder must use these names.
+// Reserved slot names for the mission-scoped storage slots. Agents address
+// them via the `slot` parameter on the file tools (alongside any shared
+// memory names declared at the top level).
 const (
-	MissionFolderName = "mission"
-	RunFolderName     = "run"
+	MemorySlotName     = "memory"
+	ScratchpadSlotName = "scratchpad"
 )
 
-// FolderStore provides folder access for missions.
-// Implementations resolve folder names to paths and enforce security.
-type FolderStore interface {
-	// ResolvePath resolves a folder name + relative path to an absolute path.
-	// Returns: absolute path, writable flag, error.
-	ResolvePath(folderName string, relPath string) (string, bool, error)
-	// FolderInfos returns info about all available folders.
-	FolderInfos() []FolderInfo
+// PacketSlotPrefix marks a slot as belonging to a read-only packet bundle.
+// The MemoryStore doesn't distinguish read-only from read-write itself; the
+// file tools below enforce the policy by inspecting the slot name with
+// IsPacketSlot. Mirrored in config.PacketSlotPrefix — both must stay in
+// sync.
+const PacketSlotPrefix = "packet."
+
+// IsPacketSlot reports whether a slot name belongs to a packet bundle
+// (read-only, text-only).
+func IsPacketSlot(name string) bool {
+	return strings.HasPrefix(name, PacketSlotPrefix)
 }
 
-// FolderInfo describes an available folder.
-type FolderInfo struct {
+// looksBinary returns true if the sample contains a NUL byte in its first
+// 8 KB — a cheap "this isn't UTF-8 text" proxy. False positives on
+// UTF-16/UTF-32 text are intentional given the file-tools' UTF-8-only
+// surface (callers see a clear error rather than gibberish output).
+func looksBinary(content []byte) bool {
+	limit := len(content)
+	if limit > 8192 {
+		limit = 8192
+	}
+	for i := 0; i < limit; i++ {
+		if content[i] == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// MemoryStore provides slot access for missions. Implementations resolve a
+// slot name (the mission's "memory" / "scratchpad", or a shared memory's
+// label) to an absolute path. Every slot is read+write — there is no
+// read-only mode at this layer.
+type MemoryStore interface {
+	// ResolvePath resolves a slot name + relative path to an absolute path.
+	ResolvePath(slotName string, relPath string) (string, error)
+	// MemoryInfos returns info about all available slots.
+	MemoryInfos() []MemoryInfo
+}
+
+// MemoryInfo describes an available slot.
+type MemoryInfo struct {
 	Name        string
 	Description string
-	Writable    bool
 }
 
-// validateRelPath ensures a path is relative and doesn't escape the folder root.
+// validateRelPath ensures a path is relative and doesn't escape the slot root.
 func validateRelPath(relPath string) error {
 	if relPath == "" {
 		return fmt.Errorf("path is required")
@@ -44,44 +75,49 @@ func validateRelPath(relPath string) error {
 	cleaned := filepath.Clean(relPath)
 	if filepath.IsAbs(cleaned) || strings.HasPrefix(cleaned, "..") ||
 		strings.Contains(cleaned, string(filepath.Separator)+"..") {
-		return fmt.Errorf("invalid path: must be relative and within folder")
+		return fmt.Errorf("invalid path: must be relative and within the slot root")
 	}
 	return nil
 }
 
-// resolveFolderPath is a helper that resolves the folder and validates the path.
-func resolveFolderPath(store FolderStore, folderName, relPath string) (string, bool, error) {
+// resolveSlotPath is a helper that resolves the slot and validates the
+// relative path.
+func resolveSlotPath(store MemoryStore, name, relPath string) (string, error) {
 	if err := validateRelPath(relPath); err != nil {
-		return "", false, err
+		return "", err
 	}
-	return store.ResolvePath(folderName, relPath)
+	return store.ResolvePath(name, relPath)
 }
+
+// slotParamDescription is reused across every file tool's `slot` parameter
+// so the agent sees a consistent description.
+const slotParamDescription = "Slot to operate in. Use \"memory\" for the mission's persistent memory, \"scratchpad\" for its ephemeral per-run scratchpad, or a shared memory name."
 
 // =============================================================================
-// folder_list — List files and directories
+// file_list — List files and directories
 // =============================================================================
 
-type FolderListTool struct {
-	Store FolderStore
+type MemoryListTool struct {
+	Store MemoryStore
 }
 
-func (t *FolderListTool) ToolName() string { return "file_list" }
+func (t *MemoryListTool) ToolName() string { return "file_list" }
 
-func (t *FolderListTool) ToolDescription() string {
-	return "List files and directories in a folder. Returns names, types (file/dir), and sizes. Results are paginated (default 100 per page). Use 'offset' to get subsequent pages."
+func (t *MemoryListTool) ToolDescription() string {
+	return "List files and directories in a slot. Returns names, types (file/dir), and sizes. Results are paginated (default 100 per page). Use 'offset' to get subsequent pages."
 }
 
-func (t *FolderListTool) ToolPayloadSchema() Schema {
+func (t *MemoryListTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"folder": {
+			"slot": {
 				Type:        TypeString,
-				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative subdirectory path within the folder. Omit to list the root.",
+				Description: "Relative subdirectory path within the slot. Omit to list the root.",
 			},
 			"recursive": {
 				Type:        TypeBoolean,
@@ -96,12 +132,12 @@ func (t *FolderListTool) ToolPayloadSchema() Schema {
 				Description: "Number of entries to skip (for pagination). Default 0.",
 			},
 		},
-		Required: []string{"folder"},
+		Required: []string{"slot"},
 	}
 }
 
-type folderListParams struct {
-	Folder    string `json:"folder"`
+type memoryListParams struct {
+	Slot      string `json:"slot"`
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive"`
 	Limit     int    `json:"limit"`
@@ -110,8 +146,8 @@ type folderListParams struct {
 
 const defaultListLimit = 100
 
-func (t *FolderListTool) Call(ctx context.Context, params string) string {
-	var p folderListParams
+func (t *MemoryListTool) Call(ctx context.Context, params string) string {
+	var p memoryListParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
 	}
@@ -124,9 +160,9 @@ func (t *FolderListTool) Call(ctx context.Context, params string) string {
 	var absPath string
 	var err error
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Folder, ".")
+		absPath, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveFolderPath(t.Store, p.Folder, p.Path)
+		absPath, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()
@@ -248,30 +284,30 @@ func formatSize(bytes int64) string {
 }
 
 // =============================================================================
-// folder_read — Read file content
+// file_read — Read file content
 // =============================================================================
 
-type FolderReadTool struct {
-	Store FolderStore
+type MemoryReadTool struct {
+	Store MemoryStore
 }
 
-func (t *FolderReadTool) ToolName() string { return "file_read" }
+func (t *MemoryReadTool) ToolName() string { return "file_read" }
 
-func (t *FolderReadTool) ToolDescription() string {
-	return "Read the contents of a file in a folder. Optionally limit to the first N lines or N bytes."
+func (t *MemoryReadTool) ToolDescription() string {
+	return "Read the contents of a file in a slot. Optionally limit to the first N lines or N bytes."
 }
 
-func (t *FolderReadTool) ToolPayloadSchema() Schema {
+func (t *MemoryReadTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"folder": {
+			"slot": {
 				Type:        TypeString,
-				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative file path within the folder.",
+				Description: "Relative file path within the slot.",
 			},
 			"max_lines": {
 				Type:        TypeInteger,
@@ -282,12 +318,12 @@ func (t *FolderReadTool) ToolPayloadSchema() Schema {
 				Description: "Return only the first N bytes. 0 or omit for no limit.",
 			},
 		},
-		Required: []string{"folder", "path"},
+		Required: []string{"slot", "path"},
 	}
 }
 
-type folderReadParams struct {
-	Folder   string `json:"folder"`
+type memoryReadParams struct {
+	Slot     string `json:"slot"`
 	Path     string `json:"path"`
 	MaxLines int    `json:"max_lines"`
 	MaxBytes int    `json:"max_bytes"`
@@ -295,8 +331,8 @@ type folderReadParams struct {
 
 const maxReadSize = 10 * 1024 * 1024 // 10MB
 
-func (t *FolderReadTool) Call(ctx context.Context, params string) string {
-	var p folderReadParams
+func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
+	var p memoryReadParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
 	}
@@ -305,7 +341,7 @@ func (t *FolderReadTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, _, err := resolveFolderPath(t.Store, p.Folder, p.Path)
+	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
 	}
@@ -326,6 +362,24 @@ func (t *FolderReadTool) Call(ctx context.Context, params string) string {
 		return "Error: " + err.Error()
 	}
 	defer f.Close()
+
+	// Packets are read-only reference data and may only hold text-readable
+	// files. For packet slots, peek at the first 8 KB and reject binary
+	// content BEFORE allocating the full file — a 9 MB stray .pdf would
+	// otherwise force a 9 MB read just to discard it.
+	if IsPacketSlot(p.Slot) {
+		head := make([]byte, 8192)
+		n, err := io.ReadFull(f, head)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return "Error: " + err.Error()
+		}
+		if looksBinary(head[:n]) {
+			return "Error: file appears to be binary or non-UTF-8 encoded; packet slots accept UTF-8 text only"
+		}
+		if _, err := f.Seek(0, 0); err != nil {
+			return "Error: " + err.Error()
+		}
+	}
 
 	var content []byte
 	if p.MaxBytes > 0 {
@@ -356,30 +410,30 @@ func (t *FolderReadTool) Call(ctx context.Context, params string) string {
 }
 
 // =============================================================================
-// folder_create — Create or write to a file
+// file_create — Create or write to a file
 // =============================================================================
 
-type FolderCreateTool struct {
-	Store FolderStore
+type MemoryCreateTool struct {
+	Store MemoryStore
 }
 
-func (t *FolderCreateTool) ToolName() string { return "file_create" }
+func (t *MemoryCreateTool) ToolName() string { return "file_create" }
 
-func (t *FolderCreateTool) ToolDescription() string {
-	return "Create or write to a file in a folder. By default, creates a new file (fails if it already exists). Use 'overwrite' to replace an existing file, or 'append' to add to an existing file."
+func (t *MemoryCreateTool) ToolDescription() string {
+	return "Create or write to a file in a slot. By default, creates a new file (fails if it already exists). Use 'overwrite' to replace an existing file, or 'append' to add to an existing file."
 }
 
-func (t *FolderCreateTool) ToolPayloadSchema() Schema {
+func (t *MemoryCreateTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"folder": {
+			"slot": {
 				Type:        TypeString,
-				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative file path within the folder.",
+				Description: "Relative file path within the slot.",
 			},
 			"content": {
 				Type:        TypeString,
@@ -394,20 +448,20 @@ func (t *FolderCreateTool) ToolPayloadSchema() Schema {
 				Description: "If true, overwrite the file if it already exists. Ignored when 'append' is true.",
 			},
 		},
-		Required: []string{"folder", "path", "content"},
+		Required: []string{"slot", "path", "content"},
 	}
 }
 
-type folderCreateParams struct {
-	Folder    string `json:"folder"`
+type memoryCreateParams struct {
+	Slot      string `json:"slot"`
 	Path      string `json:"path"`
 	Content   string `json:"content"`
 	Append    bool   `json:"append"`
 	Overwrite bool   `json:"overwrite"`
 }
 
-func (t *FolderCreateTool) Call(ctx context.Context, params string) string {
-	var p folderCreateParams
+func (t *MemoryCreateTool) Call(ctx context.Context, params string) string {
+	var p memoryCreateParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
 	}
@@ -416,13 +470,13 @@ func (t *FolderCreateTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, writable, err := resolveFolderPath(t.Store, p.Folder, p.Path)
-	if err != nil {
-		return "Error: " + err.Error()
+	if IsPacketSlot(p.Slot) {
+		return "Error: slot is read-only (packet bundles are immutable)"
 	}
 
-	if !writable {
-		return "Error: folder is read-only"
+	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
+	if err != nil {
+		return "Error: " + err.Error()
 	}
 
 	if p.Append {
@@ -459,43 +513,43 @@ func (t *FolderCreateTool) Call(ctx context.Context, params string) string {
 }
 
 // =============================================================================
-// folder_delete — Delete a file
+// file_delete — Delete a file
 // =============================================================================
 
-type FolderDeleteTool struct {
-	Store FolderStore
+type MemoryDeleteTool struct {
+	Store MemoryStore
 }
 
-func (t *FolderDeleteTool) ToolName() string { return "file_delete" }
+func (t *MemoryDeleteTool) ToolName() string { return "file_delete" }
 
-func (t *FolderDeleteTool) ToolDescription() string {
-	return "Delete a file in a folder. Only files can be deleted, not directories."
+func (t *MemoryDeleteTool) ToolDescription() string {
+	return "Delete a file in a slot. Only files can be deleted, not directories."
 }
 
-func (t *FolderDeleteTool) ToolPayloadSchema() Schema {
+func (t *MemoryDeleteTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"folder": {
+			"slot": {
 				Type:        TypeString,
-				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative file path within the folder.",
+				Description: "Relative file path within the slot.",
 			},
 		},
-		Required: []string{"folder", "path"},
+		Required: []string{"slot", "path"},
 	}
 }
 
-type folderDeleteParams struct {
-	Folder string `json:"folder"`
+type memoryDeleteParams struct {
+	Slot string `json:"slot"`
 	Path   string `json:"path"`
 }
 
-func (t *FolderDeleteTool) Call(ctx context.Context, params string) string {
-	var p folderDeleteParams
+func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {
+	var p memoryDeleteParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
 	}
@@ -504,13 +558,13 @@ func (t *FolderDeleteTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, writable, err := resolveFolderPath(t.Store, p.Folder, p.Path)
-	if err != nil {
-		return "Error: " + err.Error()
+	if IsPacketSlot(p.Slot) {
+		return "Error: slot is read-only (packet bundles are immutable)"
 	}
 
-	if !writable {
-		return "Error: folder is read-only"
+	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
+	if err != nil {
+		return "Error: " + err.Error()
 	}
 
 	info, err := os.Stat(absPath)
@@ -532,27 +586,27 @@ func (t *FolderDeleteTool) Call(ctx context.Context, params string) string {
 // file_search — Search for files by name pattern
 // =============================================================================
 
-type FolderSearchTool struct {
-	Store FolderStore
+type MemorySearchTool struct {
+	Store MemoryStore
 }
 
-func (t *FolderSearchTool) ToolName() string { return "file_search" }
+func (t *MemorySearchTool) ToolName() string { return "file_search" }
 
-func (t *FolderSearchTool) ToolDescription() string {
-	return "Search for files by name using a regex pattern. Returns matching file paths with sizes. Searches recursively by default. Results are paginated (default 50)."
+func (t *MemorySearchTool) ToolDescription() string {
+	return "Search for files by name within a slot using a regex pattern. Returns matching file paths with sizes. Searches recursively by default. Results are paginated (default 50)."
 }
 
-func (t *FolderSearchTool) ToolPayloadSchema() Schema {
+func (t *MemorySearchTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"folder": {
+			"slot": {
 				Type:        TypeString,
-				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative path to search within. Omit to search the folder root.",
+				Description: "Relative path to search within. Omit to search the slot root.",
 			},
 			"pattern": {
 				Type:        TypeString,
@@ -567,12 +621,12 @@ func (t *FolderSearchTool) ToolPayloadSchema() Schema {
 				Description: "Number of results to skip (for pagination). Default 0.",
 			},
 		},
-		Required: []string{"folder", "pattern"},
+		Required: []string{"slot", "pattern"},
 	}
 }
 
-type folderSearchParams struct {
-	Folder  string `json:"folder"`
+type memorySearchParams struct {
+	Slot    string `json:"slot"`
 	Path    string `json:"path"`
 	Pattern string `json:"pattern"`
 	Limit   int    `json:"limit"`
@@ -581,8 +635,8 @@ type folderSearchParams struct {
 
 const defaultSearchLimit = 50
 
-func (t *FolderSearchTool) Call(ctx context.Context, params string) string {
-	var p folderSearchParams
+func (t *MemorySearchTool) Call(ctx context.Context, params string) string {
+	var p memorySearchParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
 	}
@@ -603,9 +657,9 @@ func (t *FolderSearchTool) Call(ctx context.Context, params string) string {
 	// Resolve search root
 	var absPath string
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Folder, ".")
+		absPath, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveFolderPath(t.Store, p.Folder, p.Path)
+		absPath, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()
@@ -681,27 +735,27 @@ func (t *FolderSearchTool) Call(ctx context.Context, params string) string {
 // file_grep — Search file contents with regex
 // =============================================================================
 
-type FolderGrepTool struct {
-	Store FolderStore
+type MemoryGrepTool struct {
+	Store MemoryStore
 }
 
-func (t *FolderGrepTool) ToolName() string { return "file_grep" }
+func (t *MemoryGrepTool) ToolName() string { return "file_grep" }
 
-func (t *FolderGrepTool) ToolDescription() string {
-	return "Search file contents using a regex pattern. Returns matching lines with file paths and line numbers. Results are paginated (default 50 matches)."
+func (t *MemoryGrepTool) ToolDescription() string {
+	return "Search file contents within a slot using a regex pattern. Returns matching lines with file paths and line numbers. Results are paginated (default 50 matches)."
 }
 
-func (t *FolderGrepTool) ToolPayloadSchema() Schema {
+func (t *MemoryGrepTool) ToolPayloadSchema() Schema {
 	return Schema{
 		Type: TypeObject,
 		Properties: PropertyMap{
-			"folder": {
+			"slot": {
 				Type:        TypeString,
-				Description: "Folder name. Use \"mission\" for the persistent mission folder, \"run\" for the per-run ephemeral folder, or a shared folder name.",
+				Description: slotParamDescription,
 			},
 			"path": {
 				Type:        TypeString,
-				Description: "Relative path to search within. Omit to search the folder root.",
+				Description: "Relative path to search within. Omit to search the slot root.",
 			},
 			"pattern": {
 				Type:        TypeString,
@@ -720,12 +774,12 @@ func (t *FolderGrepTool) ToolPayloadSchema() Schema {
 				Description: "Number of matches to skip (for pagination). Default 0.",
 			},
 		},
-		Required: []string{"folder", "pattern"},
+		Required: []string{"slot", "pattern"},
 	}
 }
 
-type folderGrepParams struct {
-	Folder    string `json:"folder"`
+type memoryGrepParams struct {
+	Slot      string `json:"slot"`
 	Path      string `json:"path"`
 	Pattern   string `json:"pattern"`
 	Recursive bool   `json:"recursive"`
@@ -735,8 +789,8 @@ type folderGrepParams struct {
 
 const defaultGrepLimit = 50
 
-func (t *FolderGrepTool) Call(ctx context.Context, params string) string {
-	var p folderGrepParams
+func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
+	var p memoryGrepParams
 	if err := json.Unmarshal([]byte(params), &p); err != nil {
 		return "Error: invalid parameters - " + err.Error()
 	}
@@ -757,9 +811,9 @@ func (t *FolderGrepTool) Call(ctx context.Context, params string) string {
 	// Resolve search root
 	var absPath string
 	if p.Path == "" {
-		absPath, _, err = t.Store.ResolvePath(p.Folder, ".")
+		absPath, err = t.Store.ResolvePath(p.Slot, ".")
 	} else {
-		absPath, _, err = resolveFolderPath(t.Store, p.Folder, p.Path)
+		absPath, err = resolveSlotPath(t.Store, p.Slot, p.Path)
 	}
 	if err != nil {
 		return "Error: " + err.Error()
@@ -781,12 +835,30 @@ func (t *FolderGrepTool) Call(ctx context.Context, params string) string {
 	}
 	var matches []match
 
+	isPacket := IsPacketSlot(p.Slot)
 	grepFile := func(filePath string, relPath string) {
 		f, err := os.Open(filePath)
 		if err != nil {
 			return
 		}
 		defer f.Close()
+
+		// Skip binary files in packet slots so grep doesn't pollute output
+		// with garbage matches from images/archives/etc. Use io.ReadFull so
+		// short reads on slow FS still get up to 8KB before we judge.
+		if isPacket {
+			head := make([]byte, 8192)
+			n, err := io.ReadFull(f, head)
+			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+				return
+			}
+			if looksBinary(head[:n]) {
+				return
+			}
+			if _, err := f.Seek(0, 0); err != nil {
+				return
+			}
+		}
 
 		scanner := bufio.NewScanner(f)
 		lineNum := 0

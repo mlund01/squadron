@@ -24,7 +24,6 @@ An agent invocation is scoped to the specific task the commander gave it. It rea
 ```hcl
 agent "browser" {
   model = models.anthropic.claude_sonnet_4
-  role  = "Browser automation specialist"
   tools = [plugins.playwright.all]
 }
 

@@ -34,7 +34,7 @@ type AgentManager struct {
 	cfg            *config.Config
 	secretInfos    []SecretInfo
 	secretValues   map[string]string
-	folderStore    aitools.FolderStore
+	memoryStore    aitools.MemoryStore
 	sessionLogger  SessionLogger
 	taskID         string
 	missionID      string
@@ -55,7 +55,7 @@ type AgentManagerConfig struct {
 	Config         *config.Config
 	SecretInfos    []SecretInfo
 	SecretValues   map[string]string
-	FolderStore    aitools.FolderStore
+	MemoryStore    aitools.MemoryStore
 	SessionLogger  SessionLogger
 	TaskID         string
 	MissionID      string
@@ -83,7 +83,7 @@ func NewAgentManager(cfg AgentManagerConfig) *AgentManager {
 		cfg:            cfg.Config,
 		secretInfos:    cfg.SecretInfos,
 		secretValues:   cfg.SecretValues,
-		folderStore:    cfg.FolderStore,
+		memoryStore:    cfg.MemoryStore,
 		sessionLogger:  cfg.SessionLogger,
 		taskID:         cfg.TaskID,
 		missionID:      cfg.MissionID,
@@ -278,7 +278,7 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 		DatasetStore:     datasetStore,
 		SecretInfos:      m.secretInfos,
 		SecretValues:     m.secretValues,
-		FolderStore:      m.folderStore,
+		MemoryStore:      m.memoryStore,
 		OnCompaction:     onCompaction,
 		OnSessionTurn:    onSessionTurn,
 		PricingOverrides: m.pricingOverrides,

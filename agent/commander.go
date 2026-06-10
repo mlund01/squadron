@@ -75,8 +75,8 @@ type CommanderOptions struct {
 	// SequentialDataset contains all items for sequential iteration processing
 	// When set, the commander handles all items in a single session using dataset_next/submit_output tools
 	SequentialDataset []cty.Value
-	// FolderStore provides file folder access for the mission (optional)
-	FolderStore aitools.FolderStore
+	// MemoryStore provides file memory access for the mission (optional)
+	MemoryStore aitools.MemoryStore
 	// Compaction settings for the commander session (nil if disabled)
 	Compaction *CompactionConfig
 	// PruneOn triggers pruning when conversation reaches this many turns (0 = disabled)
@@ -342,7 +342,7 @@ type Commander struct {
 	agentMgr           *AgentManager          // Manages agent lifecycle (creation, session, resume)
 	pricingOverrides   map[string]*llm.ModelPricing
 	subtasksSet        bool                   // Whether set_subtasks has been called
-	folderStore        aitools.FolderStore    // Folder access for missions (nil if not configured)
+	memoryStore        aitools.MemoryStore    // Memory access for missions (nil if not configured)
 	compaction         *CompactionConfig      // Compaction settings (nil if disabled)
 	pruneOn            int                    // Trigger pruning at this many turns (0 = disabled)
 	pruneTo            int                    // Prune down to this many turns
@@ -385,7 +385,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 				agents[agentName] = &opts.MissionLocalAgents[i]
 				agentInfos = append(agentInfos, prompts.AgentInfo{
 					Name:        agentName,
-					Description: opts.MissionLocalAgents[i].Role,
+					Description: opts.MissionLocalAgents[i].Personality,
 				})
 				found = true
 				break
@@ -399,7 +399,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 				agents[agentName] = &opts.Config.Agents[i]
 				agentInfos = append(agentInfos, prompts.AgentInfo{
 					Name:        agentName,
-					Description: opts.Config.Agents[i].Role,
+					Description: opts.Config.Agents[i].Personality,
 				})
 				break
 			}
@@ -482,17 +482,17 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 	sup.tools["result_keys"] = &aitools.ResultKeysTool{Store: resultStore}
 	sup.tools["result_chunk"] = &aitools.ResultChunkTool{Store: resultStore}
 
-	// Add folder tools if FolderStore is available
-	if opts.FolderStore != nil {
-		sup.folderStore = opts.FolderStore
-		sup.tools["file_list"] = &aitools.FolderListTool{Store: opts.FolderStore}
-		sup.tools["file_read"] = &aitools.FolderReadTool{Store: opts.FolderStore}
-		sup.tools["file_create"] = &aitools.FolderCreateTool{Store: opts.FolderStore}
-		sup.tools["file_delete"] = &aitools.FolderDeleteTool{Store: opts.FolderStore}
-		sup.tools["file_search"] = &aitools.FolderSearchTool{Store: opts.FolderStore}
-		sup.tools["file_grep"] = &aitools.FolderGrepTool{Store: opts.FolderStore}
-		if folderPrompt := prompts.FormatFolderContext(opts.FolderStore); folderPrompt != "" {
-			session.AddSystemPrompt(folderPrompt)
+	// Add memory tools if MemoryStore is available
+	if opts.MemoryStore != nil {
+		sup.memoryStore = opts.MemoryStore
+		sup.tools["file_list"] = &aitools.MemoryListTool{Store: opts.MemoryStore}
+		sup.tools["file_read"] = &aitools.MemoryReadTool{Store: opts.MemoryStore}
+		sup.tools["file_create"] = &aitools.MemoryCreateTool{Store: opts.MemoryStore}
+		sup.tools["file_delete"] = &aitools.MemoryDeleteTool{Store: opts.MemoryStore}
+		sup.tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}
+		sup.tools["file_grep"] = &aitools.MemoryGrepTool{Store: opts.MemoryStore}
+		if memoryPrompt := prompts.FormatMemoryContext(opts.MemoryStore); memoryPrompt != "" {
+			session.AddSystemPrompt(memoryPrompt)
 		}
 	}
 
@@ -725,7 +725,7 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		Config:           s.cfg,
 		SecretInfos:      s.secretInfos,
 		SecretValues:     s.secretValues,
-		FolderStore:      s.folderStore,
+		MemoryStore:      s.memoryStore,
 		SessionLogger:    s.sessionLogger,
 		TaskID:           s.callbacksTaskID,
 		MissionID:        s.callbacksMissionID,

@@ -37,7 +37,6 @@ Agents reference global skills via the `skills` attribute:
 agent "researcher" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Thorough"
-  role        = "Research specialist"
   tools       = [builtins.http.get]
   skills      = [skills.web_scraping, skills.data_analysis]
 }
@@ -53,7 +52,6 @@ Skills can be defined inside an agent block, making them available only to that 
 agent "assistant" {
   model       = models.anthropic.claude_sonnet_4
   personality = "Helpful"
-  role        = "General assistant"
 
   skill "summarizer" {
     description  = "Load when asked to summarize content"
@@ -77,7 +75,6 @@ mission "research" {
   agent "worker" {
     model       = models.anthropic.claude_sonnet_4
     personality = "Efficient"
-    role        = "Worker"
     skills      = [skills.web_scraping]
 
     skill "mission_helper" {

@@ -95,11 +95,11 @@ variable "log_level" {
 }
 ```
 
-### Naming Convention
+### Naming
 
-Use snake_case for variable names:
+Variable names — like all [block names](/config/overview#block-naming) — must use only lowercase letters, digits, and underscores, and must not start with a digit. `squadron verify` rejects anything else:
 
 ```hcl
 variable "anthropic_api_key" { }  # Good
-variable "anthropicApiKey" { }    # Avoid
+variable "anthropicApiKey" { }    # Error — uppercase
 ```

@@ -253,15 +253,20 @@ func runEngage(cmd *cobra.Command, args []string) {
 
 	// Start the MCP host BEFORE the full config load so consumer-side
 	// `mcp` blocks can self-reference http://localhost:<port>/mcp without
-	// deadlocking. We parse only the mcp_host block here (no expression
-	// evaluation), bring up the listening socket, and wire its tool
-	// handlers via closures over variables assigned later in startup.
+	// deadlocking. We parse only the variable + mcp_host blocks here
+	// (expressions resolve against the vault-backed vars context), bring
+	// up the listening socket, and wire its tool handlers via closures
+	// over variables assigned later in startup.
 	var (
 		sharedClient *wsbridge.Client
 		sharedStores *store.Bundle
 		mcpServer    *mcphost.Server
 	)
-	if hostCfg := config.LoadMCPHost(engageConfigPath); hostCfg != nil && hostCfg.Enabled {
+	hostCfg, hostErr := config.LoadMCPHost(engageConfigPath)
+	if hostErr != nil {
+		log.Printf("Warning: MCP host not started: %v", hostErr)
+	}
+	if hostCfg != nil && hostCfg.Enabled {
 		mcpDeps := mcphost.Deps{
 			Config: func() *config.Config {
 				if sharedClient == nil {

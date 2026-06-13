@@ -407,9 +407,45 @@ mission "answer" {
   Tools enforce the read-only + text-only policy by checking the slot
   name prefix via `aitools.IsPacketSlot`.
 - File-tool policy for packet slots:
-  - `file_create`, `file_delete` → error `"slot is read-only (packet bundles are immutable)"`
+  - `file_create`, `file_delete` → error `"slot is read-only (packet bundles and file inputs are immutable)"`
   - `file_read` → rejects content with a NUL byte in the first 8 KB (`looksBinary`)
   - `file_grep` → silently skips files that look binary
+
+### File Inputs
+
+A mission input declared with the `file(...)` schema helper (type
+`file`) is a runtime-supplied, read-only, single-file analog of a
+packet. The caller supplies the file as either a **path** inside the
+project root (CLI / schedule) or a **base64 envelope**
+`{"filename": "...", "content_base64": "..."}` (command center,
+webhooks, MCP `run_mission`) — both flow through the existing
+`map[string]string` input plumbing.
+
+- File inputs are always required and reject `default` / `protected`
+  (`config.MissionInput.Validate`). They interpolate into objectives as
+  their slot name string `input.<name>` (`inputTypeToCtyType` →
+  `cty.String`), not their contents.
+- At run time the runner **materializes** each into an isolated dir
+  `<squadron_home>/inputs/<mission>/<run_id>/<name>/<file>` — path forms
+  are copied (containment-checked against the project root), base64
+  forms are decoded (filename sanitized to a basename, 10 MB cap). See
+  [mission/file_input.go](mission/file_input.go). Because each dir holds
+  exactly one file, the slot has no sibling leak without any pinned-file
+  machinery.
+- `buildMemoryStoreWithFiles` registers each under the `"input.<name>"`
+  slot key (`aitools.InputFileSlotPrefix` / `config.InputFileSlotPrefix`).
+  The file tools apply the same read-only + text-only policy as packets,
+  generalized via `aitools.isReadOnlySlot` / `isTextOnlySlot` (packet OR
+  input slot).
+- Staging dirs reuse the scratchpad sidecar + sweep model:
+  `mission.SweepExpiredInputs()` (shared `sweepExpiredRuns` core), run
+  opportunistically in `Runner.Run` and hourly in `cmd/engage.go`.
+- Resume: raw input values (including base64 payloads) are persisted in
+  the mission record, and an already-staged dir is reused as-is, so
+  resume works without re-reading the original source path.
+- The MCP host's `run_mission` JSON-encodes structured input values
+  (objects/arrays) instead of `fmt.Sprintf("%v", …)` so a base64
+  envelope (and any list/object/map input) round-trips intact.
 
 ### Path resolution for config attributes
 

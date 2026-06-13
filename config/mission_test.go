@@ -424,6 +424,7 @@ mission "valid" {
 				Entry("bool", "bool"),
 				Entry("list", "list"),
 				Entry("object", "object"),
+				Entry("file", "file"),
 			)
 
 			It("rejects invalid input type", func() {
@@ -452,6 +453,49 @@ mission "valid" {
 				strVal := cty.StringVal("my-secret")
 				input := config.MissionInput{Name: "test", Type: "string", Protected: true, Value: &strVal}
 				Expect(input.Validate()).To(Succeed())
+			})
+
+			It("rejects file input with a default", func() {
+				def := cty.StringVal("x")
+				input := config.MissionInput{Name: "doc", Type: "file", Default: &def}
+				err := input.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("file inputs cannot have a default"))
+			})
+
+			It("rejects protected file input", func() {
+				strVal := cty.StringVal("x")
+				input := config.MissionInput{Name: "doc", Type: "file", Protected: true, Value: &strVal}
+				err := input.Validate()
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("file inputs cannot be protected"))
+			})
+
+			It("accepts a plain file input", func() {
+				input := config.MissionInput{Name: "doc", Type: "file", Description: "the doc"}
+				Expect(input.Validate()).To(Succeed())
+			})
+		})
+
+		Context("file input resolution", func() {
+			It("resolves a provided file input to its slot name", func() {
+				m := &config.Mission{
+					Name:   "m",
+					Inputs: []config.MissionInput{{Name: "doc", Type: config.InputTypeFile}},
+				}
+				vals, err := m.ResolveInputValues(map[string]string{"doc": "report.md"})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(vals["doc"].AsString()).To(Equal(config.InputFileSlotPrefix + "doc"))
+			})
+
+			It("errors when a required file input is missing", func() {
+				m := &config.Mission{
+					Name:   "m",
+					Inputs: []config.MissionInput{{Name: "doc", Type: config.InputTypeFile}},
+				}
+				_, err := m.ResolveInputValues(map[string]string{})
+				Expect(err).To(HaveOccurred())
+				Expect(err.Error()).To(ContainSubstring("required input 'doc' not provided"))
 			})
 		})
 

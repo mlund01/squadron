@@ -42,12 +42,20 @@ import (
 // Type references: string, number, integer, bool, any, any_primitive
 //
 //	items = list(object({ id = integer("Item ID", true) }), "Order items", true)
+//
+// Files — file(description, required?) — mission inputs only. The caller
+// supplies a path or a base64 upload at run time; agents read it through a
+// read-only "input.<name>" slot. File inputs cannot have a default or be
+// protected.
+//
+//	document = file("The document to analyze", true)
 func SchemaFunctions() map[string]function.Function {
 	return map[string]function.Function{
 		"string":  makePrimitiveFunc("string"),
 		"number":  makePrimitiveFunc("number"),
 		"integer": makePrimitiveFunc("integer"),
 		"bool":    makePrimitiveFunc("bool"),
+		"file":    makePrimitiveFunc("file"),
 		"list":    makeListFunc(),
 		"map":     makeMapFunc(),
 		"object":  makeObjectFunc(),

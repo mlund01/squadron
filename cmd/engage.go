@@ -983,14 +983,17 @@ func openBrowser(url string) {
 	browser.Open(url)
 }
 
-// runScratchpadCleanupLoop periodically sweeps expired per-run scratchpad
-// directories. The sweep walks the entire scratchpads tree, so it doesn't
-// need to know which missions are configured. It runs once immediately,
-// then hourly, and exits when shutdown is closed.
+// runScratchpadCleanupLoop periodically sweeps expired per-run scratchpad and
+// file-input directories. The sweeps walk the entire scratchpads / inputs
+// trees, so they don't need to know which missions are configured. It runs
+// once immediately, then hourly, and exits when shutdown is closed.
 func runScratchpadCleanupLoop(shutdown <-chan struct{}) {
 	sweep := func() {
 		if _, err := mission.SweepExpiredScratchpads(); err != nil {
 			log.Printf("scratchpad cleanup: %v", err)
+		}
+		if _, err := mission.SweepExpiredInputs(); err != nil {
+			log.Printf("file-input cleanup: %v", err)
 		}
 	}
 

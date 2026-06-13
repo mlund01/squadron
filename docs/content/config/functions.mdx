@@ -138,6 +138,24 @@ line_items = list(object({
 }), "Line items", true)
 ```
 
+### file
+
+Defines a file handed to a mission at run time. **Mission inputs only.** The
+caller supplies a path or a base64 upload; agents read the file through a
+read-only `input.<name>` slot rather than via objective interpolation. File
+inputs cannot have a `default` or be `protected`.
+
+**Signature:** `file(description, required?)`
+
+```hcl
+inputs = {
+  document = file("The document to analyze", true)
+}
+```
+
+See [File Inputs](/missions/overview#file-inputs) for the supply forms and
+runtime behavior.
+
 ## Type References
 
 Type references are bare identifiers used as the first argument to `list` and `map` to specify the element/value type.

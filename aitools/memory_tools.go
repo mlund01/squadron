@@ -27,10 +27,34 @@ const (
 // sync.
 const PacketSlotPrefix = "packet."
 
+// InputFileSlotPrefix marks a slot as belonging to a file-typed mission input.
+// Like packets, these slots are read-only and text-only. Mirrored in
+// config.InputFileSlotPrefix — both must stay in sync.
+const InputFileSlotPrefix = "input."
+
 // IsPacketSlot reports whether a slot name belongs to a packet bundle
 // (read-only, text-only).
 func IsPacketSlot(name string) bool {
 	return strings.HasPrefix(name, PacketSlotPrefix)
+}
+
+// IsInputFileSlot reports whether a slot name belongs to a file-typed mission
+// input (read-only, text-only).
+func IsInputFileSlot(name string) bool {
+	return strings.HasPrefix(name, InputFileSlotPrefix)
+}
+
+// isReadOnlySlot reports whether a slot rejects writes (file_create /
+// file_delete). Packets and file inputs are both immutable to agents.
+func isReadOnlySlot(name string) bool {
+	return IsPacketSlot(name) || IsInputFileSlot(name)
+}
+
+// isTextOnlySlot reports whether a slot's files must be UTF-8 text — binary
+// content is rejected on read and skipped by grep. Packets and file inputs
+// both carry this restriction.
+func isTextOnlySlot(name string) bool {
+	return IsPacketSlot(name) || IsInputFileSlot(name)
 }
 
 // looksBinary returns true if the sample contains a NUL byte in its first
@@ -363,18 +387,18 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 	}
 	defer f.Close()
 
-	// Packets are read-only reference data and may only hold text-readable
-	// files. For packet slots, peek at the first 8 KB and reject binary
-	// content BEFORE allocating the full file — a 9 MB stray .pdf would
-	// otherwise force a 9 MB read just to discard it.
-	if IsPacketSlot(p.Slot) {
+	// Packets and file inputs are text-only reference data. For those slots,
+	// peek at the first 8 KB and reject binary content BEFORE allocating the
+	// full file — a 9 MB stray .pdf would otherwise force a 9 MB read just to
+	// discard it.
+	if isTextOnlySlot(p.Slot) {
 		head := make([]byte, 8192)
 		n, err := io.ReadFull(f, head)
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			return "Error: " + err.Error()
 		}
 		if looksBinary(head[:n]) {
-			return "Error: file appears to be binary or non-UTF-8 encoded; packet slots accept UTF-8 text only"
+			return "Error: file appears to be binary or non-UTF-8 encoded; this slot accepts UTF-8 text only"
 		}
 		if _, err := f.Seek(0, 0); err != nil {
 			return "Error: " + err.Error()
@@ -470,8 +494,8 @@ func (t *MemoryCreateTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	if IsPacketSlot(p.Slot) {
-		return "Error: slot is read-only (packet bundles are immutable)"
+	if isReadOnlySlot(p.Slot) {
+		return "Error: slot is read-only (packet bundles and file inputs are immutable)"
 	}
 
 	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
@@ -558,8 +582,8 @@ func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	if IsPacketSlot(p.Slot) {
-		return "Error: slot is read-only (packet bundles are immutable)"
+	if isReadOnlySlot(p.Slot) {
+		return "Error: slot is read-only (packet bundles and file inputs are immutable)"
 	}
 
 	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
@@ -835,7 +859,7 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 	}
 	var matches []match
 
-	isPacket := IsPacketSlot(p.Slot)
+	textOnly := isTextOnlySlot(p.Slot)
 	grepFile := func(filePath string, relPath string) {
 		f, err := os.Open(filePath)
 		if err != nil {
@@ -843,10 +867,11 @@ func (t *MemoryGrepTool) Call(ctx context.Context, params string) string {
 		}
 		defer f.Close()
 
-		// Skip binary files in packet slots so grep doesn't pollute output
-		// with garbage matches from images/archives/etc. Use io.ReadFull so
-		// short reads on slow FS still get up to 8KB before we judge.
-		if isPacket {
+		// Skip binary files in text-only slots (packets / file inputs) so grep
+		// doesn't pollute output with garbage matches from images/archives/etc.
+		// Use io.ReadFull so short reads on slow FS still get up to 8KB before
+		// we judge.
+		if textOnly {
 			head := make([]byte, 8192)
 			n, err := io.ReadFull(f, head)
 			if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {

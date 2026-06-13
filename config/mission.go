@@ -23,7 +23,14 @@ const (
 	InputTypeList    = "list"
 	InputTypeObject  = "object"
 	InputTypeMap     = "map"
+	InputTypeFile    = "file"
 )
+
+// InputFileSlotPrefix is the namespace prefix under which file-typed mission
+// inputs are registered in the MemoryStore. Agents address them as
+// "input.<name>" via the `slot` parameter on every file tool. Mirrored in
+// aitools.InputFileSlotPrefix; both must stay in sync.
+const InputFileSlotPrefix = "input."
 
 // MissionInput represents an input parameter for a mission
 type MissionInput struct {
@@ -603,9 +610,10 @@ func (i *MissionInput) Validate() error {
 		InputTypeList:    true,
 		InputTypeObject:  true,
 		InputTypeMap:     true,
+		InputTypeFile:    true,
 	}
 	if !validTypes[i.Type] {
-		return fmt.Errorf("invalid type '%s': must be string, number, integer, bool, list, or object", i.Type)
+		return fmt.Errorf("invalid type '%s': must be string, number, integer, bool, list, map, object, or file", i.Type)
 	}
 
 	// Integer defaults must be whole numbers
@@ -613,6 +621,18 @@ func (i *MissionInput) Validate() error {
 		bf := i.Default.AsBigFloat()
 		if !bf.IsInt() {
 			return fmt.Errorf("input %q: default value must be a whole number for integer type", i.Name)
+		}
+	}
+
+	// File inputs carry their bytes at run time (a path or a base64 upload),
+	// so a compile-time default makes no sense, and they're never secrets —
+	// the agent reads the file through a read-only slot, never an objective.
+	if i.Type == InputTypeFile {
+		if i.Default != nil {
+			return fmt.Errorf("input %q: file inputs cannot have a default", i.Name)
+		}
+		if i.Protected {
+			return fmt.Errorf("input %q: file inputs cannot be protected", i.Name)
 		}
 	}
 
@@ -714,6 +734,10 @@ func inputTypeToCtyType(inputType string) cty.Type {
 		return cty.Number
 	case InputTypeBool:
 		return cty.Bool
+	case InputTypeFile:
+		// A file input interpolates into objectives as its slot name string
+		// (e.g. "input.document"); the bytes live in the read-only slot.
+		return cty.String
 	case InputTypeList:
 		return cty.List(cty.DynamicPseudoType)
 	case InputTypeObject, InputTypeMap:
@@ -732,6 +756,18 @@ func (w *Mission) ResolveInputValues(provided map[string]string) (map[string]cty
 	for _, input := range w.Inputs {
 		// Skip protected inputs - they are handled separately and not interpolatable
 		if input.Protected {
+			continue
+		}
+
+		// File inputs surface to objectives as their slot name; the bytes are
+		// materialized into the input.<name> slot by the mission runner. The
+		// value must be provided (a path or a base64 upload) — file inputs
+		// have no default.
+		if input.Type == InputTypeFile {
+			if _, ok := provided[input.Name]; !ok {
+				return nil, fmt.Errorf("required input '%s' not provided", input.Name)
+			}
+			result[input.Name] = cty.StringVal(InputFileSlotPrefix + input.Name)
 			continue
 		}
 

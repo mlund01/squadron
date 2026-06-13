@@ -75,7 +75,7 @@ mission "report" {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `type` | string | Input type (`string`, `number`, `integer`, `boolean`, `list`, `map`, `object`) |
+| `type` | string | Input type (`string`, `number`, `integer`, `boolean`, `list`, `map`, `object`, `file`) |
 | `description` | string | Human-readable description |
 | `default` | any | Default value (makes the input optional) |
 | `protected` | bool | Mark the input as sensitive (masked in logs/UI) |
@@ -131,6 +131,48 @@ See [Functions](/config/functions) for the complete reference on all helper func
 ```bash
 squadron mission report -c ./config --input topic="AI safety" --input format=html
 ```
+
+### File Inputs
+
+A `file` input hands the mission a document to work on. Unlike other inputs,
+the contents are **not** interpolated into objectives — instead the file is
+exposed to agents as a **read-only, text-only slot** named `input.<name>`,
+which they read with the `file_read` / `file_grep` / `file_search` tools (the
+same tools used for [memory](/missions/folders) and [packets](/missions/packets)).
+
+```hcl
+mission "analyze" {
+  inputs = {
+    document = file("The document to analyze", true)
+  }
+
+  task "summarize" {
+    objective = "Summarize the contents of the document input (slot input.document)"
+  }
+}
+```
+
+File inputs are always required and cannot declare a `default` or be
+`protected`. There are two ways to supply the file at run time:
+
+- **Path** — a path inside the project root. Used from the CLI and schedules:
+
+  ```bash
+  squadron mission analyze -c ./config --input document=./report.md
+  ```
+
+- **Base64 upload** — a JSON envelope carrying the filename and content,
+  for callers that have no path on the Squadron host (the command center,
+  webhooks, and MCP clients calling `run_mission`):
+
+  ```json
+  {"filename": "report.md", "content_base64": "IyBSZXBvcnQK..."}
+  ```
+
+Either way the file is staged into an isolated per-run slot. v1 accepts UTF-8
+text files only (binary content is rejected on read), and a single file is
+capped at 10 MB. Files outside the project root must be supplied via the
+base64 form.
 
 ## How Missions Execute
 

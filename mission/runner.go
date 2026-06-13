@@ -444,6 +444,10 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		if err := json.Unmarshal([]byte(record.InputValuesJSON), &rawInputs); err != nil {
 			return fmt.Errorf("resume: parsing stored inputs: %w", err)
 		}
+		// Keep the resumed raw inputs on the runner so file-input
+		// materialization (below) sees them — the persisted record carries
+		// any base64 upload payloads.
+		r.rawInputs = rawInputs
 		inputValues, err := r.mission.ResolveInputValues(rawInputs)
 		if err != nil {
 			return fmt.Errorf("resume: resolving inputs: %w", err)
@@ -568,13 +572,25 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		r.resolvedDatasets = nil
 	}
 
-	// Memory store depends on missionID (for the scratchpad path), so build
-	// it here rather than in NewRunner. Sweep expired scratchpads async —
-	// the result doesn't affect this run's correctness, only disk usage.
+	// Memory store depends on missionID (for the scratchpad + file-input
+	// paths), so build it here rather than in NewRunner. Sweep expired
+	// scratchpads async — the result doesn't affect this run's correctness,
+	// only disk usage.
 	if r.mission.Scratchpad {
 		go func() { _, _ = SweepExpiredScratchpads() }()
 	}
-	memoryStore, err := buildMemoryStore(r.mission, r.cfg.Memories, r.cfg.Packets, missionID)
+
+	// Materialize file-typed inputs (path or base64 upload) into isolated,
+	// read-only slots before building the memory store.
+	fileInputDirs, err := r.materializeFileInputs(missionID)
+	if err != nil {
+		return fmt.Errorf("mission '%s': %w", r.mission.Name, err)
+	}
+	if len(fileInputDirs) > 0 {
+		go func() { _, _ = SweepExpiredInputs() }()
+	}
+
+	memoryStore, err := buildMemoryStoreWithFiles(r.mission, r.cfg.Memories, r.cfg.Packets, fileInputDirs, missionID)
 	if err != nil {
 		return fmt.Errorf("mission '%s': build memory store: %w", r.mission.Name, err)
 	}

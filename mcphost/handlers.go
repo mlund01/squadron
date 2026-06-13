@@ -137,12 +137,29 @@ func (h *handlers) runMission(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("name is required"), nil
 	}
 
-	// Parse optional inputs
+	// Parse optional inputs. Scalars pass through as their natural string form;
+	// structured values (objects/arrays — including a file input's base64
+	// {filename, content_base64} envelope) are JSON-encoded so they survive
+	// into ResolveInputValues intact. fmt.Sprintf("%v", ...) would render a
+	// nested object as Go's map[...] syntax, which is not valid JSON.
 	inputs := make(map[string]string)
 	if rawInputs, ok := req.GetArguments()["inputs"]; ok && rawInputs != nil {
 		if inputMap, ok := rawInputs.(map[string]any); ok {
 			for k, v := range inputMap {
-				inputs[k] = fmt.Sprintf("%v", v)
+				switch vv := v.(type) {
+				case string:
+					inputs[k] = vv
+				case nil:
+					inputs[k] = ""
+				case map[string]any, []any:
+					b, err := json.Marshal(vv)
+					if err != nil {
+						return mcp.NewToolResultError(fmt.Sprintf("input %q: %v", k, err)), nil
+					}
+					inputs[k] = string(b)
+				default:
+					inputs[k] = fmt.Sprintf("%v", vv)
+				}
 			}
 		}
 	}

@@ -397,6 +397,28 @@ mission "m" {
 			Expect(apiKey.Value).To(BeNil())
 		})
 
+		It("parses a file-typed mission input via shorthand", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents = [agents.test_agent]
+  inputs = {
+    document = file("The document to analyze", true)
+  }
+  task "t" { objective = "Summarize document" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+
+			doc := missionInputByName(cfg.Missions[0].Inputs, "document")
+			Expect(doc.Type).To(Equal(config.InputTypeFile))
+			Expect(doc.Description).To(Equal("The document to analyze"))
+			Expect(doc.Protected).To(BeFalse())
+			Expect(doc.Default).To(BeNil())
+		})
+
 		It("shorthand inputs and verbose input blocks produce equivalent results", func() {
 			shorthand := fullBaseHCL() + `
 mission "m" {

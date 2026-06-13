@@ -29,6 +29,7 @@ import (
 	squadronmcp "squadron/mcp"
 	"squadron/mcphost"
 	"squadron/mission"
+	"squadron/notification"
 	"squadron/scheduler"
 	"squadron/store"
 	"squadron/wsbridge"
@@ -389,6 +390,15 @@ func runEngage(cmd *cobra.Command, args []string) {
 			gatewayMgr.Stop()
 		}
 	}()
+
+	// Mission-lifecycle notification dispatcher. The gateway channel is
+	// wired only when a gateway is configured; the command-center channel
+	// no-ops when no command center is connected.
+	var gatewaySink notification.Sink
+	if gatewayMgr != nil {
+		gatewaySink = gateway.NewNotifySink(gatewayMgr)
+	}
+	client.SetNotifier(notification.NewDispatcher(gatewaySink, wsbridge.NewNotifySink(client)))
 
 	sched := scheduler.New(client.RunScheduledMission)
 	client.SetConcurrencyTracker(sched)

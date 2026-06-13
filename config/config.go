@@ -699,6 +699,15 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Cross-block: a mission routing notifications to the gateway requires a
+	// configured top-level gateway block. (The command_center channel has no
+	// such check — it no-ops when no command center is present at runtime.)
+	for _, m := range c.Missions {
+		if m.Notification != nil && m.Notification.Gateway != nil && c.Gateway == nil {
+			return fmt.Errorf("mission '%s': notification routes to gateway but no gateway block is configured", m.Name)
+		}
+	}
+
 	// Validate webhook path uniqueness across all missions
 	webhookPaths := make(map[string]string) // path → mission name
 	for _, m := range c.Missions {
@@ -2043,6 +2052,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 			{Type: "schedule"},
 			{Type: "trigger"},
 			{Type: "budget"},
+			{Type: "notification"},
 			// Detected so we can produce a nicer error than the parser's default.
 			{Type: "folder"},
 			{Type: "run_folder"},
@@ -2309,6 +2319,22 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		missionBudget = b
 	}
 
+	// Parse notification block (optional, singleton)
+	var missionNotification *NotificationConfig
+	for _, notifBlock := range missionContent.Blocks {
+		if notifBlock.Type != "notification" {
+			continue
+		}
+		if missionNotification != nil {
+			return nil, fmt.Errorf("mission '%s': only one notification block allowed", missionName)
+		}
+		n, err := parseNotificationBlock(notifBlock, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("mission '%s' notification: %w", missionName, err)
+		}
+		missionNotification = n
+	}
+
 	// Parse max_parallel attribute (optional, default 3)
 	maxParallel := 3
 	if attr, ok := missionContent.Attributes["max_parallel"]; ok {
@@ -2335,6 +2361,7 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Trigger:     trigger,
 		MaxParallel: maxParallel,
 		Budget:      missionBudget,
+		Notification: missionNotification,
 	}
 
 	// Parse inputs — accept either shorthand attribute or verbose labeled block form.
@@ -2939,6 +2966,86 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		Router:        router,
 		Budget:        taskBudget,
 	}, nil
+}
+
+// parseNotificationBlock parses a mission `notification { gateway { ... }
+// command_center { ... } }` block. Each channel sub-block is a singleton.
+func parseNotificationBlock(block *hcl.Block, ctx *hcl.EvalContext) (*NotificationConfig, error) {
+	content, _, diags := block.Body.PartialContent(&hcl.BodySchema{
+		Blocks: []hcl.BlockHeaderSchema{
+			{Type: "gateway"},
+			{Type: "command_center"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	n := &NotificationConfig{}
+	for _, sub := range content.Blocks {
+		ch, err := parseNotificationChannel(sub.Body, ctx)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", sub.Type, err)
+		}
+		switch sub.Type {
+		case "gateway":
+			if n.Gateway != nil {
+				return nil, fmt.Errorf("only one gateway channel allowed")
+			}
+			n.Gateway = ch
+		case "command_center":
+			if n.CommandCenter != nil {
+				return nil, fmt.Errorf("only one command_center channel allowed")
+			}
+			n.CommandCenter = ch
+		}
+	}
+
+	if err := n.Validate(); err != nil {
+		return nil, err
+	}
+	return n, nil
+}
+
+// parseNotificationChannel decodes a single channel sub-block. `enabled`
+// defaults to true when the block is present.
+func parseNotificationChannel(body hcl.Body, ctx *hcl.EvalContext) (*NotificationChannel, error) {
+	content, _, diags := body.PartialContent(&hcl.BodySchema{
+		Attributes: []hcl.AttributeSchema{
+			{Name: "enabled"},
+			{Name: "events"},
+			{Name: "channel"},
+		},
+	})
+	if diags.HasErrors() {
+		return nil, diags
+	}
+
+	ch := &NotificationChannel{Enabled: true}
+	if attr, ok := content.Attributes["enabled"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("enabled: %w", diags)
+		}
+		ch.Enabled = val.True()
+	}
+	if attr, ok := content.Attributes["events"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("events: %w", diags)
+		}
+		for _, ev := range val.AsValueSlice() {
+			ch.Events = append(ch.Events, ev.AsString())
+		}
+	}
+	if attr, ok := content.Attributes["channel"]; ok {
+		val, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("channel: %w", diags)
+		}
+		ch.Channel = val.AsString()
+	}
+	return ch, nil
 }
 
 // parseBudgetBlock parses a `budget { tokens = N, dollars = M }` block.

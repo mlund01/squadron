@@ -373,6 +373,55 @@ func (r *Runner) DrainCh() <-chan struct{} {
 	return r.drainCh
 }
 
+// MissionName returns the name of the mission this runner executes.
+func (r *Runner) MissionName() string {
+	return r.mission.Name
+}
+
+// NotificationConfig returns the mission's notification config, or nil when
+// the mission did not declare a `notification` block.
+func (r *Runner) NotificationConfig() *config.NotificationConfig {
+	return r.mission.Notification
+}
+
+// CollectOutputs aggregates each completed task's structured output into a map
+// keyed by task name, for inclusion in a mission_completed notification. Tasks
+// with no structured output are omitted. Iterated tasks contribute the slice
+// of their iteration outputs.
+func (r *Runner) CollectOutputs() map[string]any {
+	if r.knowledgeStore == nil {
+		return nil
+	}
+	out := make(map[string]any)
+	for i := range r.mission.Tasks {
+		name := r.mission.Tasks[i].Name
+		to, ok := r.knowledgeStore.GetTaskOutput(name)
+		if !ok || to == nil {
+			continue
+		}
+		if to.IsIterated {
+			if len(to.Iterations) == 0 {
+				continue
+			}
+			iters := make([]map[string]any, 0, len(to.Iterations))
+			for _, it := range to.Iterations {
+				if len(it.Output) > 0 {
+					iters = append(iters, it.Output)
+				}
+			}
+			if len(iters) > 0 {
+				out[name] = iters
+			}
+		} else if len(to.Output) > 0 {
+			out[name] = to.Output
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // NextMission returns the mission name to launch as a result of cross-mission routing, or "".
 func (r *Runner) NextMission() string {
 	return r.nextMission

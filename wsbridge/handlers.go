@@ -16,6 +16,7 @@ import (
 	"squadron/agent"
 	"squadron/config"
 	"squadron/mission"
+	"squadron/notification"
 	"squadron/store"
 	"squadron/streamers"
 )
@@ -1258,6 +1259,18 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 				Error:     err.Error(),
 			})
 			c.SendEvent(completeEnv)
+			event := config.NotifyMissionFailed
+			if status == "stopped" {
+				event = config.NotifyMissionStopped
+			}
+			c.dispatchNotification(runner.NotificationConfig(), notification.Record{
+				MissionID:   mid,
+				MissionName: missionName,
+				Event:       event,
+				Title:       "Mission \"" + missionName + "\" " + status,
+				OccurredAt:  time.Now(),
+				Error:       err.Error(),
+			})
 			runner.CloseStores()
 			return
 		}
@@ -1268,6 +1281,14 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 			Status:    "completed",
 		})
 		c.SendEvent(completeEnv)
+		c.dispatchNotification(runner.NotificationConfig(), notification.Record{
+			MissionID:   mid,
+			MissionName: missionName,
+			Event:       config.NotifyMissionCompleted,
+			Title:       "Mission \"" + missionName + "\" completed",
+			OccurredAt:  time.Now(),
+			Outputs:     runner.CollectOutputs(),
+		})
 
 		// Check for cross-mission routing
 		nextMission := runner.NextMission()

@@ -15,6 +15,7 @@ import (
 	"squadron/agent"
 	"squadron/config"
 	"squadron/humaninput"
+	"squadron/notification"
 	"squadron/store"
 )
 
@@ -72,6 +73,9 @@ type Client struct {
 
 	// In-process notifier for human-input events; nil = no-op.
 	humanInputNotifier *humaninput.Notifier
+
+	// Dispatcher for mission-lifecycle notifications; nil = no-op.
+	notifier *notification.Dispatcher
 
 	// Lifecycle
 	done chan struct{}
@@ -520,6 +524,21 @@ func (c *Client) sendEnvelope(env *protocol.Envelope) error {
 // SendEvent sends a one-way event to commander (no response expected).
 func (c *Client) SendEvent(env *protocol.Envelope) error {
 	return c.sendEnvelope(env)
+}
+
+// SetNotifier attaches the mission-lifecycle notification dispatcher.
+func (c *Client) SetNotifier(n *notification.Dispatcher) {
+	c.notifier = n
+}
+
+// dispatchNotification fans a mission-lifecycle notification out to the
+// channels the mission opted into. No-op when no dispatcher is attached or the
+// mission declared no notification config.
+func (c *Client) dispatchNotification(cfg *config.NotificationConfig, rec notification.Record) {
+	if c.notifier == nil {
+		return
+	}
+	c.notifier.Dispatch(context.Background(), cfg, rec)
 }
 
 func (c *Client) sendRequest(env *protocol.Envelope) (*protocol.Envelope, error) {

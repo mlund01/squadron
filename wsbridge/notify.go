@@ -2,7 +2,6 @@ package wsbridge
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/mlund01/squadron-wire/protocol"
@@ -38,11 +37,6 @@ func (s *NotifySink) Notify(ctx context.Context, _ *config.NotificationChannel, 
 		Message:     rec.Message,
 		OccurredAt:  rec.OccurredAt.UTC().Format(time.RFC3339Nano),
 		Error:       rec.Error,
-	}
-	if len(rec.Outputs) > 0 {
-		if b, err := json.Marshal(rec.Outputs); err == nil {
-			payload.Outputs = b
-		}
 	}
 
 	env, err := protocol.NewEvent(protocol.TypeNotification, &payload)

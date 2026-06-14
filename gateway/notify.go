@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"context"
-	"encoding/json"
 
 	gwsdk "github.com/mlund01/squadron-gateway-sdk"
 
@@ -32,7 +31,7 @@ func (s *NotifySink) Notify(ctx context.Context, ch *config.NotificationChannel,
 	if ch != nil {
 		channel = ch.Channel
 	}
-	out := gwsdk.NotificationRecord{
+	return s.mgr.Notify(ctx, gwsdk.NotificationRecord{
 		MissionID:   rec.MissionID,
 		MissionName: rec.MissionName,
 		Event:       rec.Event,
@@ -41,11 +40,5 @@ func (s *NotifySink) Notify(ctx context.Context, ch *config.NotificationChannel,
 		OccurredAt:  rec.OccurredAt,
 		Error:       rec.Error,
 		Channel:     channel,
-	}
-	if len(rec.Outputs) > 0 {
-		if b, err := json.Marshal(rec.Outputs); err == nil {
-			out.OutputsJSON = string(b)
-		}
-	}
-	return s.mgr.Notify(ctx, out)
+	})
 }

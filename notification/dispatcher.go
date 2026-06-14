@@ -20,15 +20,13 @@ import (
 type Record struct {
 	MissionID   string
 	MissionName string
-	// Event is one of config.NotifyMission{Completed,Failed,Stopped}.
+	// Event is one of config.NotifyMission{Completed,Failed}.
 	Event      string
 	Title      string
 	Message    string
 	OccurredAt time.Time
 	// Error is set for mission_failed.
 	Error string
-	// Outputs is the aggregated task-output map, set for mission_completed.
-	Outputs map[string]any
 }
 
 // Sink delivers a Record to one external surface. The per-channel

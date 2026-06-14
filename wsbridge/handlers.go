@@ -1287,7 +1287,6 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 			Event:       config.NotifyMissionCompleted,
 			Title:       "Mission \"" + missionName + "\" completed",
 			OccurredAt:  time.Now(),
-			Outputs:     runner.CollectOutputs(),
 		})
 
 		// Check for cross-mission routing

@@ -42,11 +42,12 @@ var _ = Describe("Dispatcher", func() {
 		Expect(cc.events).To(BeEmpty())
 	})
 
+	allCh := func() *config.NotificationChannel {
+		return &config.NotificationChannel{Enabled: true, Events: []string{config.NotifyAllEvents}}
+	}
+
 	It("fans out to both enabled channels when the event matches", func() {
-		cfg := &config.NotificationConfig{
-			Gateway:       &config.NotificationChannel{Enabled: true},
-			CommandCenter: &config.NotificationChannel{Enabled: true},
-		}
+		cfg := &config.NotificationConfig{Gateway: allCh(), CommandCenter: allCh()}
 		d.Dispatch(context.Background(), cfg, rec(config.NotifyMissionCompleted))
 		Expect(gw.events).To(ConsistOf(config.NotifyMissionCompleted))
 		Expect(cc.events).To(ConsistOf(config.NotifyMissionCompleted))
@@ -55,7 +56,7 @@ var _ = Describe("Dispatcher", func() {
 	It("respects a per-channel event filter", func() {
 		cfg := &config.NotificationConfig{
 			Gateway:       &config.NotificationChannel{Enabled: true, Events: []string{config.NotifyMissionFailed}},
-			CommandCenter: &config.NotificationChannel{Enabled: true},
+			CommandCenter: allCh(),
 		}
 		d.Dispatch(context.Background(), cfg, rec(config.NotifyMissionCompleted))
 		Expect(gw.events).To(BeEmpty()) // filtered out
@@ -67,19 +68,24 @@ var _ = Describe("Dispatcher", func() {
 
 	It("skips a disabled channel", func() {
 		cfg := &config.NotificationConfig{
-			Gateway: &config.NotificationChannel{Enabled: false},
+			Gateway: &config.NotificationChannel{Enabled: false, Events: []string{config.NotifyAllEvents}},
 		}
 		d.Dispatch(context.Background(), cfg, rec(config.NotifyMissionCompleted))
 		Expect(gw.events).To(BeEmpty())
 	})
 
+	It("skips an omitted channel", func() {
+		// Only the gateway channel is present; command_center is omitted.
+		cfg := &config.NotificationConfig{Gateway: allCh()}
+		d.Dispatch(context.Background(), cfg, rec(config.NotifyMissionCompleted))
+		Expect(gw.events).To(ConsistOf(config.NotifyMissionCompleted))
+		Expect(cc.events).To(BeEmpty())
+	})
+
 	It("skips a channel with no sink wired", func() {
 		// Only a command-center sink is wired; gateway sink is nil.
 		d = notification.NewDispatcher(nil, cc)
-		cfg := &config.NotificationConfig{
-			Gateway:       &config.NotificationChannel{Enabled: true},
-			CommandCenter: &config.NotificationChannel{Enabled: true},
-		}
+		cfg := &config.NotificationConfig{Gateway: allCh(), CommandCenter: allCh()}
 		Expect(func() {
 			d.Dispatch(context.Background(), cfg, rec(config.NotifyMissionStopped))
 		}).NotTo(Panic())

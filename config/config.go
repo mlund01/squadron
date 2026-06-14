@@ -3021,6 +3021,7 @@ func parseNotificationChannel(body hcl.Body, ctx *hcl.EvalContext) (*Notificatio
 		return nil, diags
 	}
 
+	// Enabled defaults to true when the block is present.
 	ch := &NotificationChannel{Enabled: true}
 	if attr, ok := content.Attributes["enabled"]; ok {
 		val, diags := attr.Expr.Value(ctx)

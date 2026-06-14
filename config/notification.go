@@ -10,10 +10,12 @@ const (
 	NotifyMissionCompleted = "mission_completed"
 	NotifyMissionFailed    = "mission_failed"
 	NotifyMissionStopped   = "mission_stopped"
+	// NotifyAllEvents is a convenience value usable in a channel's `events`
+	// list that expands to every terminal event.
+	NotifyAllEvents = "all"
 )
 
-// allNotifyEvents is the default event set for a channel that does not
-// specify an explicit `events` filter.
+// allNotifyEvents is what "all" expands to.
 var allNotifyEvents = []string{
 	NotifyMissionCompleted,
 	NotifyMissionFailed,
@@ -22,7 +24,7 @@ var allNotifyEvents = []string{
 
 func validNotifyEvent(e string) bool {
 	switch e {
-	case NotifyMissionCompleted, NotifyMissionFailed, NotifyMissionStopped:
+	case NotifyMissionCompleted, NotifyMissionFailed, NotifyMissionStopped, NotifyAllEvents:
 		return true
 	}
 	return false
@@ -39,27 +41,35 @@ type NotificationConfig struct {
 // NotificationChannel configures one delivery channel within a mission's
 // notification block.
 type NotificationChannel struct {
-	Enabled bool     `hcl:"enabled,optional" json:"enabled"`
-	Events  []string `hcl:"events,optional" json:"events,omitempty"`
+	// Enabled toggles delivery. It defaults to true when the block is
+	// present (set during parsing); set `enabled = false` to keep the
+	// channel configured but turn delivery off.
+	Enabled bool `hcl:"enabled,optional" json:"enabled"`
+	// Events is the explicit list of terminal events that fire on this
+	// channel. Required and non-empty. Valid values are mission_completed,
+	// mission_failed, mission_stopped, or "all" (every terminal event).
+	Events []string `hcl:"events,optional" json:"events,omitempty"`
 	// Channel is a gateway-only per-mission destination override. Empty
 	// means "use the gateway's globally configured default channel". It is
 	// rejected on the command_center channel.
 	Channel string `hcl:"channel,optional" json:"channel,omitempty"`
 }
 
-// EffectiveEvents returns the resolved event set for the channel: the
-// explicit `events` filter when set, otherwise all terminal events.
+// EffectiveEvents returns the resolved event set, expanding "all".
 func (ch *NotificationChannel) EffectiveEvents() []string {
 	if ch == nil {
 		return nil
 	}
-	if len(ch.Events) == 0 {
-		return allNotifyEvents
+	for _, e := range ch.Events {
+		if e == NotifyAllEvents {
+			return allNotifyEvents
+		}
 	}
 	return ch.Events
 }
 
-// WantsEvent reports whether the channel should fire for the given event.
+// WantsEvent reports whether the channel should fire for the given event. A
+// nil or disabled channel never fires.
 func (ch *NotificationChannel) WantsEvent(event string) bool {
 	if ch == nil || !ch.Enabled {
 		return false
@@ -95,10 +105,14 @@ func (ch *NotificationChannel) validate(name string, allowChannel bool) error {
 	if ch == nil {
 		return nil
 	}
+	if len(ch.Events) == 0 {
+		return fmt.Errorf("notification %s: 'events' is required (list one or more of %s, %s, %s, or %q)",
+			name, NotifyMissionCompleted, NotifyMissionFailed, NotifyMissionStopped, NotifyAllEvents)
+	}
 	for _, e := range ch.Events {
 		if !validNotifyEvent(e) {
-			return fmt.Errorf("notification %s: invalid event %q (valid: %s, %s, %s)",
-				name, e, NotifyMissionCompleted, NotifyMissionFailed, NotifyMissionStopped)
+			return fmt.Errorf("notification %s: invalid event %q (valid: %s, %s, %s, %q)",
+				name, e, NotifyMissionCompleted, NotifyMissionFailed, NotifyMissionStopped, NotifyAllEvents)
 		}
 	}
 	if !allowChannel && ch.Channel != "" {

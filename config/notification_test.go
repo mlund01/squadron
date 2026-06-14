@@ -27,44 +27,48 @@ mission "m" {
 			Expect(cfg.Missions[0].Notification).To(BeNil())
 		})
 
-		It("parses both channels and defaults enabled to true", func() {
+		It("parses both channels with enabled defaulting to true", func() {
 			block := `
   notification {
     gateway {
       events  = ["mission_failed"]
       channel = "#ops"
     }
-    command_center { }
+    command_center { events = ["all"] }
   }`
 			_, f := writeFixture("config.hcl", missionWith(block, gatewayBlockHCL()))
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			n := cfg.Missions[0].Notification
 			Expect(n).NotTo(BeNil())
-			Expect(n.Gateway).NotTo(BeNil())
 			Expect(n.Gateway.Enabled).To(BeTrue())
 			Expect(n.Gateway.Events).To(ConsistOf("mission_failed"))
 			Expect(n.Gateway.Channel).To(Equal("#ops"))
-			Expect(n.CommandCenter).NotTo(BeNil())
 			Expect(n.CommandCenter.Enabled).To(BeTrue())
+			Expect(n.CommandCenter.Events).To(ConsistOf("all"))
 		})
 
-		It("defaults events to all three terminal events", func() {
+		It("expands \"all\" to the three terminal events", func() {
 			block := `
   notification {
-    command_center { }
+    command_center { events = ["all"] }
   }`
 			_, f := writeFixture("config.hcl", missionWith(block, ""))
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
-			Expect(cfg.Missions[0].Notification.CommandCenter.EffectiveEvents()).To(ConsistOf(
+			ch := cfg.Missions[0].Notification.CommandCenter
+			Expect(ch.EffectiveEvents()).To(ConsistOf(
 				config.NotifyMissionCompleted, config.NotifyMissionFailed, config.NotifyMissionStopped))
+			Expect(ch.WantsEvent(config.NotifyMissionStopped)).To(BeTrue())
 		})
 
 		It("honors enabled = false", func() {
 			block := `
   notification {
-    command_center { enabled = false }
+    command_center {
+      enabled = false
+      events  = ["all"]
+    }
   }`
 			_, f := writeFixture("config.hcl", missionWith(block, ""))
 			cfg, err := config.LoadFile(f)
@@ -76,6 +80,17 @@ mission "m" {
 	})
 
 	Describe("validation", func() {
+		It("requires an explicit events list", func() {
+			block := `
+  notification {
+    command_center { }
+  }`
+			_, f := writeFixture("config.hcl", missionWith(block, ""))
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("'events' is required"))
+		})
+
 		It("rejects an unknown event name", func() {
 			block := `
   notification {
@@ -90,7 +105,10 @@ mission "m" {
 		It("rejects 'channel' on the command_center channel", func() {
 			block := `
   notification {
-    command_center { channel = "#nope" }
+    command_center {
+      events  = ["all"]
+      channel = "#nope"
+    }
   }`
 			_, f := writeFixture("config.hcl", missionWith(block, ""))
 			_, err := config.LoadFile(f)
@@ -111,7 +129,7 @@ mission "m" {
 		It("rejects a gateway channel when no gateway block is configured", func() {
 			block := `
   notification {
-    gateway { }
+    gateway { events = ["all"] }
   }`
 			_, f := writeFixture("config.hcl", missionWith(block, ""))
 			cfg, err := config.LoadFile(f)
@@ -124,7 +142,7 @@ mission "m" {
 		It("accepts a gateway channel when a gateway block exists", func() {
 			block := `
   notification {
-    gateway { }
+    gateway { events = ["all"] }
   }`
 			_, f := writeFixture("config.hcl", missionWith(block, gatewayBlockHCL()))
 			cfg, err := config.LoadFile(f)

@@ -8,6 +8,8 @@ Declare a `command_center` block to connect Squadron outbound to a remote comman
 
 When a `command_center` block is present, `squadron engage` skips the local UI and opens a persistent websocket to the remote command center instead. Without the block, `squadron engage` launches the local UI by default (pass `--headless` to opt out entirely).
 
+Beyond live execution, the command center can also receive per-mission [notifications](/missions/notifications) — a bell feed of `mission_completed` / `mission_failed` / `mission_stopped` events for missions that opt in.
+
 ## Minimal Example
 
 ```hcl

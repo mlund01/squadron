@@ -8,6 +8,8 @@ A `gateway` block runs a managed subprocess that bridges Squadron to an external
 
 The gateway subscribes to live `human_input_requested` / `human_input_resolved` events from Squadron and surfaces them in its target system; user actions in that system flow back to Squadron through the same record store. From the agent's perspective, an answer in Discord is indistinguishable from one typed into the Command Center Inbox.
 
+A gateway can also receive **mission-lifecycle notifications** (`mission_completed` / `mission_failed` / `mission_stopped`) when a mission opts in via a [`notification`](/missions/notifications) block — a one-way post, separate from the interactive human-input flow.
+
 Squadron supports at most one `gateway` block per instance.
 
 ## Minimal Example — Discord

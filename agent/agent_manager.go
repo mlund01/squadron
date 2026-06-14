@@ -46,6 +46,7 @@ type AgentManager struct {
 	provider         llm.Provider // optional injected provider for agents
 	budget           BudgetChecker
 	humanBridge      aitools.HumanInputBridge // bridge for builtins.human.ask on spawned agents
+	gatewayBridge    aitools.GatewayBridge    // bridge for builtins.gateway.post on spawned agents
 }
 
 // AgentManagerConfig holds the dependencies needed to create an AgentManager.
@@ -70,6 +71,8 @@ type AgentManagerConfig struct {
 	Budget BudgetChecker
 	// HumanBridge — nil disables builtins.human.ask on spawned agents.
 	HumanBridge aitools.HumanInputBridge
+	// GatewayBridge — nil disables builtins.gateway.post on spawned agents.
+	GatewayBridge aitools.GatewayBridge
 }
 
 // NewAgentManager creates a new AgentManager.
@@ -95,6 +98,7 @@ func NewAgentManager(cfg AgentManagerConfig) *AgentManager {
 		provider:         cfg.Provider,
 		budget:           cfg.Budget,
 		humanBridge:      cfg.HumanBridge,
+		gatewayBridge:    cfg.GatewayBridge,
 	}
 }
 
@@ -284,6 +288,7 @@ func (m *AgentManager) createAgent(ctx context.Context, agentCfg *config.Agent) 
 		PricingOverrides: m.pricingOverrides,
 		Budget:           m.budget,
 		HumanBridge:      m.humanBridge,
+		GatewayBridge:    m.gatewayBridge,
 	})
 }
 

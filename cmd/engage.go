@@ -397,6 +397,9 @@ func runEngage(cmd *cobra.Command, args []string) {
 	var gatewaySink notification.Sink
 	if gatewayMgr != nil {
 		gatewaySink = gateway.NewNotifySink(gatewayMgr)
+		// The Manager satisfies aitools.GatewayBridge directly; only wire it
+		// when a gateway exists so the tool sees a nil bridge otherwise.
+		client.SetGatewayBridge(gatewayMgr)
 	}
 	client.SetNotifier(notification.NewDispatcher(gatewaySink, wsbridge.NewNotifySink(client)))
 

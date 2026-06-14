@@ -69,6 +69,7 @@ type fakeGateway struct {
 	requested      []string
 	resolved       []string
 	notified       []string
+	posted         []string
 	shutdowns      int
 }
 
@@ -97,6 +98,13 @@ func (g *fakeGateway) OnHumanInputResolved(ctx context.Context, rec gwsdk.HumanI
 func (g *fakeGateway) OnNotification(ctx context.Context, rec gwsdk.NotificationRecord) error {
 	g.mu.Lock()
 	g.notified = append(g.notified, rec.Event)
+	g.mu.Unlock()
+	return nil
+}
+
+func (g *fakeGateway) PostMessage(ctx context.Context, req gwsdk.PostMessageRequest) error {
+	g.mu.Lock()
+	g.posted = append(g.posted, req.Text)
 	g.mu.Unlock()
 	return nil
 }
@@ -194,6 +202,27 @@ var _ = Describe("Manager.Notify", func() {
 	It("no-ops when no gateway is running", func() {
 		m := newTestManager((&scriptedLauncher{}).launcher())
 		Expect(m.Notify(context.Background(), gwsdk.NotificationRecord{Event: "mission_failed"})).To(Succeed())
+	})
+})
+
+var _ = Describe("Manager.PostMessage", func() {
+	It("forwards a message to the running gateway", func() {
+		gw := &fakeGateway{}
+		s := &scriptedLauncher{results: []launchResult{{gw, &fakeSubprocess{}}}}
+		m := newTestManager(s.launcher())
+		Expect(m.Start(context.Background(), Config{Name: "discord", Version: "local"})).To(Succeed())
+		DeferCleanup(m.Stop)
+
+		Expect(m.PostMessage(context.Background(), "#ops", "deploy done")).To(Succeed())
+		gw.mu.Lock()
+		posted := append([]string(nil), gw.posted...)
+		gw.mu.Unlock()
+		Expect(posted).To(ConsistOf("deploy done"))
+	})
+
+	It("errors when no gateway is running", func() {
+		m := newTestManager((&scriptedLauncher{}).launcher())
+		Expect(m.PostMessage(context.Background(), "", "hi")).To(MatchError(ContainSubstring("no gateway")))
 	})
 })
 

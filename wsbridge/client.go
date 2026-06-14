@@ -13,6 +13,7 @@ import (
 	"github.com/mlund01/squadron-wire/protocol"
 
 	"squadron/agent"
+	"squadron/aitools"
 	"squadron/config"
 	"squadron/humaninput"
 	"squadron/notification"
@@ -84,6 +85,10 @@ type Client struct {
 
 	// Dispatcher for mission-lifecycle notifications; nil = no-op.
 	notifier *notification.Dispatcher
+
+	// Gateway bridge powering builtins.gateway.post on mission agents; nil
+	// when no gateway is configured.
+	gatewayBridge aitools.GatewayBridge
 
 	// Lifecycle
 	done chan struct{}
@@ -566,6 +571,12 @@ func (c *Client) SendEvent(env *protocol.Envelope) error {
 // SetNotifier attaches the mission-lifecycle notification dispatcher.
 func (c *Client) SetNotifier(n *notification.Dispatcher) {
 	c.notifier = n
+}
+
+// SetGatewayBridge attaches the gateway bridge that powers
+// builtins.gateway.post on mission agents.
+func (c *Client) SetGatewayBridge(b aitools.GatewayBridge) {
+	c.gatewayBridge = b
 }
 
 // dispatchNotification fans a mission-lifecycle notification out to the

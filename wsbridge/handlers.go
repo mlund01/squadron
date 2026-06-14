@@ -121,7 +121,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 
 	// Create mission runner with no-op debug logger
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c))
+	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
 	if err != nil {
 		c.concurrency.NotifyMissionDone(payload.MissionName)
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
@@ -233,7 +233,7 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 		mission.WithDebugLogger(debugLogger),
 		mission.WithResume(payload.MissionID),
 		mission.WithHumanBridge(c),
-	)
+		mission.WithGatewayBridge(c.gatewayBridge))
 	if err != nil {
 		return protocol.NewResponse(env.RequestID, protocol.TypeResumeMissionAck, &protocol.ResumeMissionAckPayload{
 			Accepted: false,
@@ -1307,7 +1307,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		cfg := c.getConfig()
 		debugLogger, _ := mission.NewDebugLogger("")
 		var newErr error
-		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c))
+		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
 		if newErr != nil {
 			log.Printf("Failed to create runner for chained mission %q: %v", nextMission, newErr)
 			return
@@ -1374,7 +1374,7 @@ func (c *Client) ResumeOrphanedMissions() {
 			mission.WithDebugLogger(debugLogger),
 			mission.WithResume(r.ID),
 			mission.WithHumanBridge(c),
-		)
+			mission.WithGatewayBridge(c.gatewayBridge))
 		if err != nil {
 			log.Printf("auto-resume: failed to create runner for %q: %v", r.MissionName, err)
 			continue
@@ -1423,7 +1423,7 @@ func (c *Client) RunScheduledMission(missionName, source string, inputs map[stri
 	log.Printf("scheduler: starting mission %q (%s)", missionName, source)
 
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c))
+	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
 	if err != nil {
 		log.Printf("scheduler: failed to create runner for %q: %v", missionName, err)
 		c.concurrency.NotifyMissionDone(missionName)
@@ -1479,7 +1479,7 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 
 	// Create mission runner
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c))
+	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
 	if err != nil {
 		c.concurrency.NotifyMissionDone(missionName)
 		return "", fmt.Errorf("failed to create runner: %w", err)

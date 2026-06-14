@@ -82,6 +82,11 @@ type Runner struct {
 	// the tool then surfaces "[no human available]" instead of blocking.
 	humanBridge aitools.HumanInputBridge
 
+	// gatewayBridge powers builtins.gateway.post on agents spawned by this
+	// mission. Nil when no gateway is configured; the tool then surfaces
+	// "[no gateway configured]".
+	gatewayBridge aitools.GatewayBridge
+
 	// Task state manager — single authority for task lifecycle
 	stateMgr *TaskStateManager
 
@@ -146,6 +151,15 @@ func WithProviderFactory(factory func() llm.Provider) RunnerOption {
 func WithHumanBridge(bridge aitools.HumanInputBridge) RunnerOption {
 	return func(r *Runner) {
 		r.humanBridge = bridge
+	}
+}
+
+// WithGatewayBridge wires a gateway bridge into agents spawned by this
+// mission so builtins.gateway.post can post to the configured gateway. Pass
+// nil (or omit) to disable — the tool then returns the no-gateway observation.
+func WithGatewayBridge(bridge aitools.GatewayBridge) RunnerOption {
+	return func(r *Runner) {
+		r.gatewayBridge = bridge
 	}
 }
 
@@ -383,7 +397,6 @@ func (r *Runner) MissionName() string {
 func (r *Runner) NotificationConfig() *config.NotificationConfig {
 	return r.mission.Notification
 }
-
 
 // NextMission returns the mission name to launch as a result of cross-mission routing, or "".
 func (r *Runner) NextMission() string {
@@ -1024,6 +1037,7 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 			Provider:            r.testProvider(),
 			Budget:              r.budgetTracker.For(taskName),
 			HumanBridge:         r.humanBridge,
+			GatewayBridge:       r.gatewayBridge,
 		})
 		if err != nil {
 			return fmt.Errorf("creating commander for resaturation of '%s': %w", taskName, err)
@@ -1061,14 +1075,15 @@ func (r *Runner) resaturateCommanders(ctx context.Context, completedTaskNames []
 				continue // Non-fatal: skip agent if messages can't be loaded
 			}
 			restoredAgent, err := agent.RestoreAgent(ctx, agent.Options{
-				ConfigPath:   r.configPath,
-				Config:       r.cfg,
-				AgentName:    agentName,
-				SecretInfos:  r.secretInfos,
-				SecretValues: r.secretValues,
-				DatasetStore: r,
-				MemoryStore:  r.memoryStore,
-				HumanBridge:  r.humanBridge,
+				ConfigPath:    r.configPath,
+				Config:        r.cfg,
+				AgentName:     agentName,
+				SecretInfos:   r.secretInfos,
+				SecretValues:  r.secretValues,
+				DatasetStore:  r,
+				MemoryStore:   r.memoryStore,
+				HumanBridge:   r.humanBridge,
+				GatewayBridge: r.gatewayBridge,
 			}, agentLLMMsgs)
 			if err != nil {
 				continue // Non-fatal: skip agent if it can't be restored
@@ -1144,15 +1159,16 @@ func (r *Runner) restoreAgentSessions(ctx context.Context, sup *agent.Commander,
 		llmMsgs = agent.HealSessionMessages(llmMsgs)
 		mode := config.ModeMission
 		restoredAgent, err := agent.RestoreAgent(ctx, agent.Options{
-			ConfigPath:   r.configPath,
-			Config:       r.cfg,
-			AgentName:    s.AgentName,
-			Mode:         &mode,
-			SecretInfos:  r.secretInfos,
-			SecretValues: r.secretValues,
-			DatasetStore: r,
-			MemoryStore:  r.memoryStore,
-			HumanBridge:  r.humanBridge,
+			ConfigPath:    r.configPath,
+			Config:        r.cfg,
+			AgentName:     s.AgentName,
+			Mode:          &mode,
+			SecretInfos:   r.secretInfos,
+			SecretValues:  r.secretValues,
+			DatasetStore:  r,
+			MemoryStore:   r.memoryStore,
+			HumanBridge:   r.humanBridge,
+			GatewayBridge: r.gatewayBridge,
 		}, llmMsgs)
 		if err != nil {
 			continue
@@ -1286,6 +1302,7 @@ func (r *Runner) runTask(ctx context.Context, task config.Task, missionID string
 		Provider:            r.testProvider(),
 		Budget:              r.budgetTracker.For(task.Name),
 		HumanBridge:         r.humanBridge,
+		GatewayBridge:       r.gatewayBridge,
 	})
 	if err != nil {
 		errStr := err.Error()
@@ -2086,6 +2103,7 @@ Continue until dataset_next returns "exhausted".`, len(items), taskObjective)
 		Provider:            r.testProvider(),
 		Budget:              r.budgetTracker.For(task.Name),
 		HumanBridge:         r.humanBridge,
+		GatewayBridge:       r.gatewayBridge,
 	})
 	if err != nil {
 		return []IterationResult{{
@@ -2539,6 +2557,7 @@ Continue until dataset_next returns "exhausted".`, len(remainingItems), taskObje
 		Provider:            r.testProvider(),
 		Budget:              r.budgetTracker.For(task.Name),
 		HumanBridge:         r.humanBridge,
+		GatewayBridge:       r.gatewayBridge,
 	})
 	if err != nil {
 		return append(iterations, IterationResult{
@@ -2782,6 +2801,7 @@ func (r *Runner) runSingleIteration(ctx context.Context, task config.Task, index
 		Provider:            r.testProvider(),
 		Budget:              r.budgetTracker.For(task.Name),
 		HumanBridge:         r.humanBridge,
+		GatewayBridge:       r.gatewayBridge,
 	})
 	if err != nil {
 		streamer.IterationFailed(task.Name, index, err)

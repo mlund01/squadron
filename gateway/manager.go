@@ -35,6 +35,7 @@ type gatewayClient interface {
 	OnHumanInputRequested(ctx context.Context, rec gwsdk.HumanInputRecord) error
 	OnHumanInputResolved(ctx context.Context, rec gwsdk.HumanInputRecord) error
 	OnNotification(ctx context.Context, rec gwsdk.NotificationRecord) error
+	PostMessage(ctx context.Context, req gwsdk.PostMessageRequest) error
 	Shutdown(ctx context.Context) error
 }
 
@@ -287,6 +288,18 @@ func (m *Manager) Notify(ctx context.Context, rec gwsdk.NotificationRecord) erro
 		return nil
 	}
 	return gw.OnNotification(ctx, rec)
+}
+
+// PostMessage posts a free-form message through the running gateway. Returns
+// an error (surfaced to the calling agent) when no gateway is up.
+func (m *Manager) PostMessage(ctx context.Context, channel, text string) error {
+	m.mu.Lock()
+	gw := m.gw
+	m.mu.Unlock()
+	if gw == nil {
+		return fmt.Errorf("no gateway is currently running")
+	}
+	return gw.PostMessage(ctx, gwsdk.PostMessageRequest{Channel: channel, Text: text})
 }
 
 func (m *Manager) dispatch(ctx context.Context, ev humaninput.Event) {

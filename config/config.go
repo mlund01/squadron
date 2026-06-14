@@ -548,6 +548,11 @@ func (c *Config) Validate() error {
 
 	// Add built-in tools (builtins.http.get, builtins.http.get, etc.)
 	for namespace, tools := range BuiltinTools {
+		// The gateway namespace (builtins.gateway.post) only exists when a
+		// gateway is configured.
+		if namespace == "gateway" && c.Gateway == nil {
+			continue
+		}
 		for _, toolName := range tools {
 			validToolRefs[fmt.Sprintf("builtins.%s.%s", namespace, toolName)] = true
 		}

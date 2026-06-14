@@ -106,6 +106,9 @@ type CommanderOptions struct {
 	// spawns. Nil disables HITL — the tool then returns
 	// "[no human available]" instead of blocking.
 	HumanBridge aitools.HumanInputBridge
+	// GatewayBridge powers builtins.gateway.post on agents this commander
+	// spawns. Nil → the tool returns "[no gateway configured]".
+	GatewayBridge aitools.GatewayBridge
 }
 
 // DependencyOutputSchema describes a completed dependency task's output schema
@@ -348,6 +351,7 @@ type Commander struct {
 	pruneTo            int                    // Prune down to this many turns
 	budget             BudgetChecker          // Optional token/dollar budget enforcer
 	humanBridge        aitools.HumanInputBridge // Optional bridge for builtins.human.ask
+	gatewayBridge      aitools.GatewayBridge    // Optional bridge for builtins.gateway.post
 }
 
 // NewCommander creates a new commander for a mission task
@@ -473,6 +477,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		pricingOverrides: opts.PricingOverrides,
 		budget:           opts.Budget,
 		humanBridge:      opts.HumanBridge,
+		gatewayBridge:    opts.GatewayBridge,
 	}
 
 	// Add result tools to commander's tool map
@@ -737,6 +742,7 @@ func (s *Commander) SetToolCallbacks(callbacks *CommanderToolCallbacks, depSumma
 		Provider:         s.provider,
 		Budget:           s.budget,
 		HumanBridge:      s.humanBridge,
+		GatewayBridge:    s.gatewayBridge,
 	})
 }
 

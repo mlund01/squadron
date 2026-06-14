@@ -15,6 +15,7 @@ import (
 	"squadron/agent"
 	"squadron/config"
 	"squadron/humaninput"
+	"squadron/notification"
 	"squadron/store"
 )
 
@@ -41,7 +42,15 @@ type Client struct {
 	stores     *store.Bundle
 	version    string
 
-	ws        *websocket.Conn
+	// connMu guards the per-connection handles (ws/done/connQuit) so a
+	// reconnect can atomically tear down the previous connection's pumps
+	// before swapping in the new socket. Each pump captures its own conn,
+	// so a stale pump never touches the replacement socket — which is what
+	// gorilla/websocket's single-reader / single-writer rule requires.
+	connMu   sync.Mutex
+	ws       *websocket.Conn
+	connQuit chan struct{} // closed to stop the current connection's pumps
+
 	send      chan []byte
 	connected bool // true after successful Connect + register
 
@@ -72,6 +81,9 @@ type Client struct {
 
 	// In-process notifier for human-input events; nil = no-op.
 	humanInputNotifier *humaninput.Notifier
+
+	// Dispatcher for mission-lifecycle notifications; nil = no-op.
+	notifier *notification.Dispatcher
 
 	// Lifecycle
 	done chan struct{}
@@ -184,18 +196,37 @@ func (c *Client) connectToURL(url string) error {
 	if err != nil {
 		return fmt.Errorf("dial command center: %w", err)
 	}
-	c.ws = ws
-	c.done = make(chan struct{})
 
-	// Start pumps first — register() needs them to send/receive messages
-	go c.readPump()
-	go c.writePump()
+	// Tear down any previous connection's pumps before swapping in the new
+	// socket: signal them to stop and close the old conn so a lingering
+	// readPump/writePump can't keep operating on a shared field that now
+	// points at the new socket (which caused "concurrent write to websocket
+	// connection" panics on reconnect).
+	c.connMu.Lock()
+	if c.connQuit != nil {
+		close(c.connQuit)
+	}
+	if c.ws != nil {
+		c.ws.Close()
+	}
+	quit := make(chan struct{})
+	done := make(chan struct{})
+	c.ws = ws
+	c.connQuit = quit
+	c.done = done
+	c.connMu.Unlock()
+
+	// Each pump captures its own conn + quit so it only ever touches the
+	// connection it was started for. Start pumps first — register() needs
+	// them to send/receive messages.
+	go c.readPump(ws, done)
+	go c.writePump(ws, quit)
 
 	// Register with commander. If registration fails, tear down just the
 	// socket — do NOT call Close(), which would cancel c.ctx and prevent
 	// any future reconnect attempts on this client.
 	if err := c.register(); err != nil {
-		c.ws.Close()
+		ws.Close()
 		return fmt.Errorf("register: %w", err)
 	}
 
@@ -246,9 +277,15 @@ func (c *Client) SetConcurrencyTracker(ct ConcurrencyTracker) {
 func (c *Client) Close() {
 	c.connected = false
 	c.stop()
+	c.connMu.Lock()
+	if c.connQuit != nil {
+		close(c.connQuit)
+		c.connQuit = nil
+	}
 	if c.ws != nil {
 		c.ws.Close()
 	}
+	c.connMu.Unlock()
 }
 
 // InstanceID returns the ID assigned by commander.
@@ -390,20 +427,20 @@ func (c *Client) register() error {
 	return nil
 }
 
-func (c *Client) readPump() {
+func (c *Client) readPump(ws *websocket.Conn, done chan struct{}) {
 	defer func() {
-		close(c.done)
-		c.ws.Close()
+		close(done)
+		ws.Close()
 	}()
 
-	c.ws.SetReadDeadline(time.Now().Add(pongWait))
-	c.ws.SetPongHandler(func(string) error {
-		c.ws.SetReadDeadline(time.Now().Add(pongWait))
+	ws.SetReadDeadline(time.Now().Add(pongWait))
+	ws.SetPongHandler(func(string) error {
+		ws.SetReadDeadline(time.Now().Add(pongWait))
 		return nil
 	})
 
 	for {
-		_, message, err := c.ws.ReadMessage()
+		_, message, err := ws.ReadMessage()
 		if err != nil {
 			if c.connected && websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
 				log.Printf("WebSocket read error: %v", err)
@@ -421,29 +458,33 @@ func (c *Client) readPump() {
 	}
 }
 
-func (c *Client) writePump() {
+func (c *Client) writePump(ws *websocket.Conn, quit <-chan struct{}) {
 	ticker := time.NewTicker(pingPeriod)
 	defer func() {
 		ticker.Stop()
-		c.ws.Close()
+		ws.Close()
 	}()
 
 	for {
 		select {
 		case message, ok := <-c.send:
-			c.ws.SetWriteDeadline(time.Now().Add(writeWait))
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
 			if !ok {
-				c.ws.WriteMessage(websocket.CloseMessage, []byte{})
+				ws.WriteMessage(websocket.CloseMessage, []byte{})
 				return
 			}
-			if err := c.ws.WriteMessage(websocket.TextMessage, message); err != nil {
+			if err := ws.WriteMessage(websocket.TextMessage, message); err != nil {
 				return
 			}
 		case <-ticker.C:
-			c.ws.SetWriteDeadline(time.Now().Add(writeWait))
-			if err := c.ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+			ws.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := ws.WriteMessage(websocket.PingMessage, nil); err != nil {
 				return
 			}
+		case <-quit:
+			// Connection replaced by a reconnect — stop before we can race
+			// the new connection's writePump.
+			return
 		case <-c.ctx.Done():
 			return
 		}
@@ -520,6 +561,21 @@ func (c *Client) sendEnvelope(env *protocol.Envelope) error {
 // SendEvent sends a one-way event to commander (no response expected).
 func (c *Client) SendEvent(env *protocol.Envelope) error {
 	return c.sendEnvelope(env)
+}
+
+// SetNotifier attaches the mission-lifecycle notification dispatcher.
+func (c *Client) SetNotifier(n *notification.Dispatcher) {
+	c.notifier = n
+}
+
+// dispatchNotification fans a mission-lifecycle notification out to the
+// channels the mission opted into. No-op when no dispatcher is attached or the
+// mission declared no notification config.
+func (c *Client) dispatchNotification(cfg *config.NotificationConfig, rec notification.Record) {
+	if c.notifier == nil {
+		return
+	}
+	c.notifier.Dispatch(context.Background(), cfg, rec)
 }
 
 func (c *Client) sendRequest(env *protocol.Envelope) (*protocol.Envelope, error) {

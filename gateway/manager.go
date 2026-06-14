@@ -34,6 +34,7 @@ type gatewayClient interface {
 	Configure(ctx context.Context, settings map[string]string) error
 	OnHumanInputRequested(ctx context.Context, rec gwsdk.HumanInputRecord) error
 	OnHumanInputResolved(ctx context.Context, rec gwsdk.HumanInputRecord) error
+	OnNotification(ctx context.Context, rec gwsdk.NotificationRecord) error
 	Shutdown(ctx context.Context) error
 }
 
@@ -273,6 +274,19 @@ func (m *Manager) dispatchLoop(ctx context.Context, events <-chan humaninput.Eve
 			m.dispatch(ctx, ev)
 		}
 	}
+}
+
+// Notify forwards a mission-lifecycle notification to the running gateway.
+// Best-effort: drops silently when no gateway is currently up (mirrors the
+// human-input dispatch guard).
+func (m *Manager) Notify(ctx context.Context, rec gwsdk.NotificationRecord) error {
+	m.mu.Lock()
+	gw := m.gw
+	m.mu.Unlock()
+	if gw == nil {
+		return nil
+	}
+	return gw.OnNotification(ctx, rec)
 }
 
 func (m *Manager) dispatch(ctx context.Context, ev humaninput.Event) {

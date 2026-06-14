@@ -68,6 +68,7 @@ type fakeGateway struct {
 	configureCalls int
 	requested      []string
 	resolved       []string
+	notified       []string
 	shutdowns      int
 }
 
@@ -93,6 +94,13 @@ func (g *fakeGateway) OnHumanInputResolved(ctx context.Context, rec gwsdk.HumanI
 	return nil
 }
 
+func (g *fakeGateway) OnNotification(ctx context.Context, rec gwsdk.NotificationRecord) error {
+	g.mu.Lock()
+	g.notified = append(g.notified, rec.Event)
+	g.mu.Unlock()
+	return nil
+}
+
 func (g *fakeGateway) Shutdown(ctx context.Context) error {
 	g.mu.Lock()
 	g.shutdowns++
@@ -104,6 +112,12 @@ func (g *fakeGateway) snapshot() (cfg int, req, res []string, sd int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.configureCalls, append([]string(nil), g.requested...), append([]string(nil), g.resolved...), g.shutdowns
+}
+
+func (g *fakeGateway) notifiedEvents() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.notified...)
 }
 
 // scriptedLauncher returns a sequence of (gateway, subprocess) pairs in
@@ -161,6 +175,27 @@ func newTestManager(launch launcher) *Manager {
 	m.maxBackoff = 50 * time.Millisecond
 	return m
 }
+
+var _ = Describe("Manager.Notify", func() {
+	It("forwards a notification to the running gateway", func() {
+		gw := &fakeGateway{}
+		proc := &fakeSubprocess{}
+		s := &scriptedLauncher{results: []launchResult{{gw, proc}}}
+
+		m := newTestManager(s.launcher())
+		Expect(m.Start(context.Background(), Config{Name: "discord", Version: "local"})).To(Succeed())
+		DeferCleanup(m.Stop)
+
+		err := m.Notify(context.Background(), gwsdk.NotificationRecord{Event: "mission_completed"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(gw.notifiedEvents()).To(ConsistOf("mission_completed"))
+	})
+
+	It("no-ops when no gateway is running", func() {
+		m := newTestManager((&scriptedLauncher{}).launcher())
+		Expect(m.Notify(context.Background(), gwsdk.NotificationRecord{Event: "mission_failed"})).To(Succeed())
+	})
+})
 
 var _ = Describe("Manager.Start / Stop", func() {
 	It("launches and configures the gateway with the supplied settings", func() {

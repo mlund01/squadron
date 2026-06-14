@@ -49,7 +49,7 @@ agent "announcer" {
 **The gateway owns the message contract.** Each gateway advertises (via the SDK's `MessageToolSpec`) the tool's description and a JSON Schema for its parameters, so the LLM sees exactly the rich-message shape that gateway supports — squadron just forwards the agent's payload through. For example:
 
 - **Discord** accepts `text` (markdown), an optional `channel` override (name or id), `embeds` (rich cards), and `attachments` (URLs fetched and uploaded as files).
-- **Slack** accepts `text` (mrkdwn), `channel`, `blocks` (Block Kit JSON), and `attachments` (URLs uploaded as files).
+- **Slack** accepts `text` (mrkdwn), `channel`, `blocks` (Block Kit JSON), and `attachments` (URLs uploaded as files). Attachments require the Slack app's bot to have the `files:write` scope — add it only if your agents post files.
 
 A gateway that advertises no spec falls back to a simple `{ message, channel }` shape. The tool is one-way (the agent doesn't wait for a reply); for interactive prompts use `builtins.human.ask` instead.
 

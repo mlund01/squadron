@@ -36,6 +36,7 @@ type gatewayClient interface {
 	OnHumanInputResolved(ctx context.Context, rec gwsdk.HumanInputRecord) error
 	OnNotification(ctx context.Context, rec gwsdk.NotificationRecord) error
 	PostMessage(ctx context.Context, req gwsdk.PostMessageRequest) error
+	MessageToolSpec(ctx context.Context) (gwsdk.MessageToolSpec, error)
 	Shutdown(ctx context.Context) error
 }
 
@@ -65,10 +66,11 @@ type Manager struct {
 	initialBackoff   time.Duration
 	maxBackoff       time.Duration
 
-	mu     sync.Mutex
-	cfg    *Config
-	client subprocess
-	gw     gatewayClient
+	mu      sync.Mutex
+	cfg     *Config
+	client  subprocess
+	gw      gatewayClient
+	msgSpec gwsdk.MessageToolSpec // post-tool spec fetched after the gateway starts
 
 	cancelEvents context.CancelFunc
 	eventDone    chan struct{}
@@ -144,6 +146,16 @@ func (m *Manager) launchLocked(ctx context.Context, cfg Config) error {
 	m.client = proc
 	m.gw = gw
 	m.cfg = &cfg
+
+	// Fetch the post-tool spec so builtins.gateway.post can advertise this
+	// gateway's message format. Best-effort — a gateway that doesn't
+	// implement it leaves the default { message } shape.
+	if spec, specErr := gw.MessageToolSpec(ctx); specErr == nil {
+		m.msgSpec = spec
+	} else {
+		m.msgSpec = gwsdk.MessageToolSpec{}
+		log.Printf("gateway %q: MessageToolSpec: %v", cfg.Name, specErr)
+	}
 
 	// Subscribe synchronously so an event published immediately after
 	// Start returns can't race ahead of the dispatcher goroutine.
@@ -290,16 +302,33 @@ func (m *Manager) Notify(ctx context.Context, rec gwsdk.NotificationRecord) erro
 	return gw.OnNotification(ctx, rec)
 }
 
-// PostMessage posts a free-form message through the running gateway. Returns
-// an error (surfaced to the calling agent) when no gateway is up.
-func (m *Manager) PostMessage(ctx context.Context, channel, text string) error {
+// PostMessage forwards the raw, gateway-schema-shaped payload to the running
+// gateway. Returns an error (surfaced to the calling agent) when no gateway is
+// up. Satisfies aitools.GatewayBridge.
+func (m *Manager) PostMessage(ctx context.Context, payload string) error {
 	m.mu.Lock()
 	gw := m.gw
 	m.mu.Unlock()
 	if gw == nil {
 		return fmt.Errorf("no gateway is currently running")
 	}
-	return gw.PostMessage(ctx, gwsdk.PostMessageRequest{Channel: channel, Text: text})
+	return gw.PostMessage(ctx, gwsdk.PostMessageRequest{Payload: payload})
+}
+
+// MessageToolDescription returns the gateway-supplied post-tool description
+// (empty when the gateway provides none). Satisfies aitools.GatewayBridge.
+func (m *Manager) MessageToolDescription() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.msgSpec.Description
+}
+
+// MessageToolSchema returns the gateway-supplied post-tool params JSON Schema
+// (empty when the gateway provides none). Satisfies aitools.GatewayBridge.
+func (m *Manager) MessageToolSchema() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.msgSpec.ParamsSchema
 }
 
 func (m *Manager) dispatch(ctx context.Context, ev humaninput.Event) {

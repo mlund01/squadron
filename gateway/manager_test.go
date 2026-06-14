@@ -104,9 +104,13 @@ func (g *fakeGateway) OnNotification(ctx context.Context, rec gwsdk.Notification
 
 func (g *fakeGateway) PostMessage(ctx context.Context, req gwsdk.PostMessageRequest) error {
 	g.mu.Lock()
-	g.posted = append(g.posted, req.Text)
+	g.posted = append(g.posted, req.Payload)
 	g.mu.Unlock()
 	return nil
+}
+
+func (g *fakeGateway) MessageToolSpec(ctx context.Context) (gwsdk.MessageToolSpec, error) {
+	return gwsdk.MessageToolSpec{Description: "fake gateway", ParamsSchema: `{"type":"object"}`}, nil
 }
 
 func (g *fakeGateway) Shutdown(ctx context.Context) error {
@@ -213,16 +217,17 @@ var _ = Describe("Manager.PostMessage", func() {
 		Expect(m.Start(context.Background(), Config{Name: "discord", Version: "local"})).To(Succeed())
 		DeferCleanup(m.Stop)
 
-		Expect(m.PostMessage(context.Background(), "#ops", "deploy done")).To(Succeed())
+		Expect(m.PostMessage(context.Background(), `{"text":"deploy done"}`)).To(Succeed())
 		gw.mu.Lock()
 		posted := append([]string(nil), gw.posted...)
 		gw.mu.Unlock()
-		Expect(posted).To(ConsistOf("deploy done"))
+		Expect(posted).To(ConsistOf(`{"text":"deploy done"}`))
+		Expect(m.MessageToolDescription()).To(Equal("fake gateway"))
 	})
 
 	It("errors when no gateway is running", func() {
 		m := newTestManager((&scriptedLauncher{}).launcher())
-		Expect(m.PostMessage(context.Background(), "", "hi")).To(MatchError(ContainSubstring("no gateway")))
+		Expect(m.PostMessage(context.Background(), `{"text":"hi"}`)).To(MatchError(ContainSubstring("no gateway")))
 	})
 })
 

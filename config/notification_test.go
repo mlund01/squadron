@@ -48,7 +48,7 @@ mission "m" {
 			Expect(n.CommandCenter.Events).To(ConsistOf("all"))
 		})
 
-		It("expands \"all\" to the three terminal events", func() {
+		It("expands \"all\" to the terminal events", func() {
 			block := `
   notification {
     command_center { events = ["all"] }
@@ -58,8 +58,8 @@ mission "m" {
 			Expect(err).NotTo(HaveOccurred())
 			ch := cfg.Missions[0].Notification.CommandCenter
 			Expect(ch.EffectiveEvents()).To(ConsistOf(
-				config.NotifyMissionCompleted, config.NotifyMissionFailed, config.NotifyMissionStopped))
-			Expect(ch.WantsEvent(config.NotifyMissionStopped)).To(BeTrue())
+				config.NotifyMissionCompleted, config.NotifyMissionFailed))
+			Expect(ch.WantsEvent(config.NotifyMissionFailed)).To(BeTrue())
 		})
 
 		It("honors enabled = false", func() {

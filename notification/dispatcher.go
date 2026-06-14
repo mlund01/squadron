@@ -1,6 +1,6 @@
 // Package notification delivers mission-lifecycle notifications
-// (mission_completed / mission_failed / mission_stopped) to the channels a
-// mission opted into via its `notification { ... }` config block.
+// (mission_completed / mission_failed) to the channels a mission opted into
+// via its `notification { ... }` config block.
 //
 // It is intentionally separate from human-input: notifications are one-way,
 // informational, and never block a mission. The dispatcher fans a Record out

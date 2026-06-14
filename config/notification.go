@@ -9,7 +9,6 @@ import "fmt"
 const (
 	NotifyMissionCompleted = "mission_completed"
 	NotifyMissionFailed    = "mission_failed"
-	NotifyMissionStopped   = "mission_stopped"
 	// NotifyAllEvents is a convenience value usable in a channel's `events`
 	// list that expands to every terminal event.
 	NotifyAllEvents = "all"
@@ -19,12 +18,11 @@ const (
 var allNotifyEvents = []string{
 	NotifyMissionCompleted,
 	NotifyMissionFailed,
-	NotifyMissionStopped,
 }
 
 func validNotifyEvent(e string) bool {
 	switch e {
-	case NotifyMissionCompleted, NotifyMissionFailed, NotifyMissionStopped, NotifyAllEvents:
+	case NotifyMissionCompleted, NotifyMissionFailed, NotifyAllEvents:
 		return true
 	}
 	return false
@@ -47,7 +45,7 @@ type NotificationChannel struct {
 	Enabled bool `hcl:"enabled,optional" json:"enabled"`
 	// Events is the explicit list of terminal events that fire on this
 	// channel. Required and non-empty. Valid values are mission_completed,
-	// mission_failed, mission_stopped, or "all" (every terminal event).
+	// mission_failed, or "all" (every terminal event).
 	Events []string `hcl:"events,optional" json:"events,omitempty"`
 	// Channel is a gateway-only per-mission destination override. Empty
 	// means "use the gateway's globally configured default channel". It is
@@ -106,13 +104,13 @@ func (ch *NotificationChannel) validate(name string, allowChannel bool) error {
 		return nil
 	}
 	if len(ch.Events) == 0 {
-		return fmt.Errorf("notification %s: 'events' is required (list one or more of %s, %s, %s, or %q)",
-			name, NotifyMissionCompleted, NotifyMissionFailed, NotifyMissionStopped, NotifyAllEvents)
+		return fmt.Errorf("notification %s: 'events' is required (list one or more of %s, %s, or %q)",
+			name, NotifyMissionCompleted, NotifyMissionFailed, NotifyAllEvents)
 	}
 	for _, e := range ch.Events {
 		if !validNotifyEvent(e) {
-			return fmt.Errorf("notification %s: invalid event %q (valid: %s, %s, %s, %q)",
-				name, e, NotifyMissionCompleted, NotifyMissionFailed, NotifyMissionStopped, NotifyAllEvents)
+			return fmt.Errorf("notification %s: invalid event %q (valid: %s, %s, %q)",
+				name, e, NotifyMissionCompleted, NotifyMissionFailed, NotifyAllEvents)
 		}
 	}
 	if !allowChannel && ch.Channel != "" {

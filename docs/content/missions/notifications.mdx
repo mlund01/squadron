@@ -5,9 +5,9 @@ title: Notifications
 # Notifications
 
 A `notification` block makes a mission announce its **terminal outcome** —
-`mission_completed`, `mission_failed`, or `mission_stopped` — to one or both of
-two channels: the configured [gateway](/config/gateways) (Discord, Slack, …) and
-the [command center](/config/command_center).
+`mission_completed` or `mission_failed` — to one or both of two channels: the
+configured [gateway](/config/gateways) (Discord, Slack, …) and the
+[command center](/config/command_center).
 
 Notifications are **opt-in per mission**: a mission with no `notification` block
 emits nothing.
@@ -52,7 +52,7 @@ deleting its config, set `enabled = false`.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `enabled` | bool | no | `true` | Set `false` to keep the channel configured but stop delivery. |
-| `events` | list(string) | **yes** | — | Which terminal events fire. Values: `mission_completed`, `mission_failed`, `mission_stopped`, or `"all"` (every terminal event). |
+| `events` | list(string) | **yes** | — | Which terminal events fire. Values: `mission_completed`, `mission_failed`, or `"all"` (every terminal event). |
 | `channel` | string | no | gateway default | **gateway-only.** Per-mission destination override (e.g. a Slack channel id or `#name`, a Discord channel id or name). When omitted, the gateway posts to its globally configured default channel. Rejected on `command_center`. |
 
 `events` is always explicit — there is no implicit "all". Use `events = ["all"]`
@@ -64,7 +64,8 @@ to opt into every terminal event.
   structured `output` of each task), rendered as JSON on the gateway post and
   attached to the command-center notification.
 - **`mission_failed`** — includes the failure error.
-- **`mission_stopped`** — the lifecycle event only.
+
+A user-initiated stop is **not** a notification event.
 
 ## Examples
 
@@ -103,7 +104,7 @@ notification {
 
 - A `notification` block must declare at least one of `gateway` / `command_center`.
 - Each channel's `events` list is required and must contain only valid values
-  (`mission_completed`, `mission_failed`, `mission_stopped`, `"all"`).
+  (`mission_completed`, `mission_failed`, `"all"`).
 - A `gateway` channel requires a top-level [`gateway`](/config/gateways) block —
   `squadron verify` errors otherwise.
 - `channel` is rejected on the `command_center` channel.

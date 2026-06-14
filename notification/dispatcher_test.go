@@ -87,8 +87,8 @@ var _ = Describe("Dispatcher", func() {
 		d = notification.NewDispatcher(nil, cc)
 		cfg := &config.NotificationConfig{Gateway: allCh(), CommandCenter: allCh()}
 		Expect(func() {
-			d.Dispatch(context.Background(), cfg, rec(config.NotifyMissionStopped))
+			d.Dispatch(context.Background(), cfg, rec(config.NotifyMissionFailed))
 		}).NotTo(Panic())
-		Expect(cc.events).To(ConsistOf(config.NotifyMissionStopped))
+		Expect(cc.events).To(ConsistOf(config.NotifyMissionFailed))
 	})
 })

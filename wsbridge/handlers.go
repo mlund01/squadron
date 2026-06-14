@@ -1259,18 +1259,18 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 				Error:     err.Error(),
 			})
 			c.SendEvent(completeEnv)
-			event := config.NotifyMissionFailed
-			if status == "stopped" {
-				event = config.NotifyMissionStopped
+			// Only mission_failed is a notification event; a user-initiated
+			// stop does not fire one.
+			if status == "failed" {
+				c.dispatchNotification(runner.NotificationConfig(), notification.Record{
+					MissionID:   mid,
+					MissionName: missionName,
+					Event:       config.NotifyMissionFailed,
+					Title:       "Mission \"" + missionName + "\" failed",
+					OccurredAt:  time.Now(),
+					Error:       err.Error(),
+				})
 			}
-			c.dispatchNotification(runner.NotificationConfig(), notification.Record{
-				MissionID:   mid,
-				MissionName: missionName,
-				Event:       event,
-				Title:       "Mission \"" + missionName + "\" " + status,
-				OccurredAt:  time.Now(),
-				Error:       err.Error(),
-			})
 			runner.CloseStores()
 			return
 		}

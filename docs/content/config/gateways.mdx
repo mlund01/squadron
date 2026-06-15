@@ -53,6 +53,8 @@ agent "announcer" {
 
 A gateway that advertises no spec falls back to a simple `{ message, channel }` shape. The tool is one-way (the agent doesn't wait for a reply); for interactive prompts use `builtins.human.ask` instead.
 
+> **Tip:** rich payloads (Block Kit `blocks`, Discord `embeds`) are large nested JSON. Smaller models sometimes drop the nested field and post text only. If an agent needs to emit rich layouts reliably, give it a capable model.
+
 `builtins.gateway.post` is only a valid tool reference **when a gateway block is present** — `squadron verify` rejects it otherwise.
 
 ## Fields

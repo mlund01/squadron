@@ -13,12 +13,13 @@ require (
 	github.com/hashicorp/hcl/v2 v2.24.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/mark3labs/mcp-go v0.46.0
-	github.com/mlund01/squadron-gateway-sdk v0.0.1
+	github.com/mlund01/squadron-gateway-sdk v0.0.2
 	github.com/mlund01/squadron-sdk v0.0.31
-	github.com/mlund01/squadron-wire v0.0.41
+	github.com/mlund01/squadron-wire v0.0.42
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
 	github.com/openai/openai-go v1.12.0
+	github.com/pelletier/go-toml/v2 v2.3.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/cobra v1.10.2
 	github.com/zclconf/go-cty v1.16.3
@@ -84,7 +85,6 @@ require (
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/oklog/run v1.1.0 // indirect
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
-	github.com/pelletier/go-toml/v2 v2.3.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/spf13/cast v1.7.1 // indirect

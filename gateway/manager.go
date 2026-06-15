@@ -12,6 +12,7 @@ import (
 	"github.com/hashicorp/go-plugin"
 	gwsdk "github.com/mlund01/squadron-gateway-sdk"
 
+	"squadron/aitools"
 	"squadron/humaninput"
 	"squadron/store"
 )
@@ -305,14 +306,22 @@ func (m *Manager) Notify(ctx context.Context, rec gwsdk.NotificationRecord) erro
 // PostMessage forwards the raw, gateway-schema-shaped payload to the running
 // gateway. Returns an error (surfaced to the calling agent) when no gateway is
 // up. Satisfies aitools.GatewayBridge.
-func (m *Manager) PostMessage(ctx context.Context, payload string) error {
+func (m *Manager) PostMessage(ctx context.Context, payload string, attachments []aitools.GatewayAttachment) error {
 	m.mu.Lock()
 	gw := m.gw
 	m.mu.Unlock()
 	if gw == nil {
 		return fmt.Errorf("no gateway is currently running")
 	}
-	return gw.PostMessage(ctx, gwsdk.PostMessageRequest{Payload: payload})
+	req := gwsdk.PostMessageRequest{Payload: payload}
+	for _, a := range attachments {
+		req.Attachments = append(req.Attachments, gwsdk.FileAttachment{
+			Filename: a.Filename,
+			MimeType: a.MimeType,
+			Content:  a.Content,
+		})
+	}
+	return gw.PostMessage(ctx, req)
 }
 
 // MessageToolDescription returns the gateway-supplied post-tool description

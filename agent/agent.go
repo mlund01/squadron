@@ -189,6 +189,12 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		tools["file_delete"] = &aitools.MemoryDeleteTool{Store: opts.MemoryStore}
 		tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}
 		tools["file_grep"] = &aitools.MemoryGrepTool{Store: opts.MemoryStore}
+		// The gateway post tool resolves attachments from the same store.
+		for _, tool := range tools {
+			if gp, ok := tool.(*aitools.GatewayPostTool); ok {
+				gp.Store = opts.MemoryStore
+			}
+		}
 	}
 
 	// Resolve skills and add load_skill tool

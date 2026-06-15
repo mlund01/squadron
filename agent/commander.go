@@ -496,6 +496,11 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		sup.tools["file_delete"] = &aitools.MemoryDeleteTool{Store: opts.MemoryStore}
 		sup.tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}
 		sup.tools["file_grep"] = &aitools.MemoryGrepTool{Store: opts.MemoryStore}
+		for _, tool := range sup.tools {
+			if gp, ok := tool.(*aitools.GatewayPostTool); ok {
+				gp.Store = opts.MemoryStore
+			}
+		}
 		if memoryPrompt := prompts.FormatMemoryContext(opts.MemoryStore); memoryPrompt != "" {
 			session.AddSystemPrompt(memoryPrompt)
 		}

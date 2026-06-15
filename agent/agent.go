@@ -98,6 +98,9 @@ type Options struct {
 	// tool is still registered but returns "[no human available]" instead of
 	// blocking (e.g. standalone squadron with no commander attached).
 	HumanBridge aitools.HumanInputBridge
+	// GatewayBridge powers the `builtins.gateway.post` tool. When nil, the
+	// tool is still registered but returns "[no gateway configured]".
+	GatewayBridge aitools.GatewayBridge
 }
 
 // New creates a new agent from config
@@ -155,7 +158,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 
 	// Build tools map and add sanitized aliases so LLM tool calls
 	// (which use API-safe names like "plugins_shell_echo") resolve correctly
-	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, cfg.LoadedMCPClients, opts.DatasetStore, opts.HumanBridge)
+	tools := config.BuildToolsMap(agentCfg.Tools, cfg.CustomTools, cfg.LoadedPlugins, cfg.LoadedMCPClients, opts.DatasetStore, opts.HumanBridge, opts.GatewayBridge)
 	aitools.AddSanitizedAliases(tools)
 
 	// Create result store and interceptor for large results
@@ -186,6 +189,12 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		tools["file_delete"] = &aitools.MemoryDeleteTool{Store: opts.MemoryStore}
 		tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}
 		tools["file_grep"] = &aitools.MemoryGrepTool{Store: opts.MemoryStore}
+		// The gateway post tool resolves attachments from the same store.
+		for _, tool := range tools {
+			if gp, ok := tool.(*aitools.GatewayPostTool); ok {
+				gp.Store = opts.MemoryStore
+			}
+		}
 	}
 
 	// Resolve skills and add load_skill tool
@@ -197,7 +206,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 			AvailableSkills: availableSkills,
 			AgentTools:      tools,
 			ToolBuilder: func(toolRefs []string) map[string]aitools.Tool {
-				t := config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, cfg.LoadedMCPClients, opts.DatasetStore, opts.HumanBridge)
+				t := config.BuildToolsMap(toolRefs, cfg.CustomTools, cfg.LoadedPlugins, cfg.LoadedMCPClients, opts.DatasetStore, opts.HumanBridge, opts.GatewayBridge)
 				aitools.AddSanitizedAliases(t)
 				return t
 			},

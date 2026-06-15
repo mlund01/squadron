@@ -15,7 +15,7 @@ var _ = Describe("Agent", func() {
 			Expect(config.IsBuiltinTool("builtins.utils.current_time")).To(BeTrue())
 			Expect(config.BuiltinTools["utils"]).To(ContainElement("current_time"))
 
-			tool := config.GetBuiltinTool("builtins.utils.current_time", nil, nil)
+			tool := config.GetBuiltinTool("builtins.utils.current_time", nil, nil, nil)
 			Expect(tool).NotTo(BeNil())
 			Expect(tool).To(BeAssignableToTypeOf(&aitools.CurrentTimeTool{}))
 			Expect(tool.ToolName()).To(Equal("current_time"))
@@ -36,7 +36,7 @@ agent "clock" {
 			Expect(cfg.Agents).To(HaveLen(1))
 			Expect(cfg.Agents[0].Tools).To(ConsistOf("builtins.utils.current_time"))
 
-			tools := config.BuildToolsMap(cfg.Agents[0].Tools, nil, nil, nil, nil, nil)
+			tools := config.BuildToolsMap(cfg.Agents[0].Tools, nil, nil, nil, nil, nil, nil)
 			Expect(tools).To(HaveKey("builtins.utils.current_time"))
 			Expect(tools["builtins.utils.current_time"]).To(BeAssignableToTypeOf(&aitools.CurrentTimeTool{}))
 		})

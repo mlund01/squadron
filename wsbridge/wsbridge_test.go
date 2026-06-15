@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -35,36 +36,37 @@ func newTestBundle(t *testing.T) *store.Bundle {
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
 
-// mockCommander is a minimal WebSocket server that mimics a commander for testing.
+// mockCommander is a minimal WebSocket server that mimics a commander for
+// testing. conn is the most recent client connection — it's replaced on every
+// (re)connect, so access is guarded by mu.
 type mockCommander struct {
-	srv  *httptest.Server
-	conn *websocket.Conn
-	t    *testing.T
+	srv     *httptest.Server
+	t       *testing.T
+	mu      sync.Mutex
+	conn    *websocket.Conn
+	writeMu sync.Mutex // serializes writes — tests send from multiple goroutines
 }
 
 func newMockCommander(t *testing.T) *mockCommander {
 	t.Helper()
 	mc := &mockCommander{t: t}
 
-	connCh := make(chan *websocket.Conn, 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
 		ws, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
-			t.Fatalf("upgrade: %v", err)
+			t.Errorf("upgrade: %v", err)
+			return
 		}
-		connCh <- ws
+		mc.mu.Lock()
+		mc.conn = ws
+		mc.mu.Unlock()
 	})
 	mc.srv = httptest.NewServer(mux)
 
-	// Wait for connection from client (will be set after client.Connect())
-	go func() {
-		mc.conn = <-connCh
-	}()
-
 	t.Cleanup(func() {
-		if mc.conn != nil {
-			mc.conn.Close()
+		if c := mc.currentConn(); c != nil {
+			c.Close()
 		}
 		mc.srv.Close()
 	})
@@ -76,9 +78,15 @@ func (mc *mockCommander) wsURL() string {
 	return "ws" + strings.TrimPrefix(mc.srv.URL, "http") + "/ws"
 }
 
+func (mc *mockCommander) currentConn() *websocket.Conn {
+	mc.mu.Lock()
+	defer mc.mu.Unlock()
+	return mc.conn
+}
+
 func (mc *mockCommander) waitForConnection() {
 	for i := 0; i < 50; i++ {
-		if mc.conn != nil {
+		if mc.currentConn() != nil {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -86,10 +94,24 @@ func (mc *mockCommander) waitForConnection() {
 	mc.t.Fatal("timed out waiting for WS connection")
 }
 
+// waitForNewConnection blocks until a connection distinct from prev arrives
+// (used to observe a reconnect), and returns it.
+func (mc *mockCommander) waitForNewConnection(prev *websocket.Conn) *websocket.Conn {
+	for i := 0; i < 200; i++ {
+		if c := mc.currentConn(); c != nil && c != prev {
+			return c
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mc.t.Fatal("timed out waiting for a new WS connection")
+	return nil
+}
+
 func (mc *mockCommander) readEnvelope() *protocol.Envelope {
 	mc.t.Helper()
-	mc.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-	_, msg, err := mc.conn.ReadMessage()
+	conn := mc.currentConn()
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	_, msg, err := conn.ReadMessage()
 	if err != nil {
 		mc.t.Fatalf("read from client: %v", err)
 	}
@@ -106,7 +128,9 @@ func (mc *mockCommander) sendEnvelope(env *protocol.Envelope) {
 	if err != nil {
 		mc.t.Fatalf("marshal: %v", err)
 	}
-	if err := mc.conn.WriteMessage(websocket.TextMessage, data); err != nil {
+	mc.writeMu.Lock()
+	defer mc.writeMu.Unlock()
+	if err := mc.currentConn().WriteMessage(websocket.TextMessage, data); err != nil {
 		mc.t.Fatalf("write: %v", err)
 	}
 }
@@ -192,6 +216,79 @@ func TestClientConnectAndRegister(t *testing.T) {
 
 	if client.InstanceID() != "inst-42" {
 		t.Errorf("expected instance ID 'inst-42', got %q", client.InstanceID())
+	}
+}
+
+// TestClientReconnectStopsStaleWritePump exercises the reconnect path that
+// previously panicked with "concurrent write to websocket connection": a
+// reconnect must tear down the prior connection's pumps before the new ones
+// start. Run under -race to also catch the shared-field data race.
+func TestClientReconnectStopsStaleWritePump(t *testing.T) {
+	mc := newMockCommander(t)
+	cfg := testConfig(mc.wsURL())
+	stores := newTestBundle(t)
+	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
+	defer client.Close()
+
+	// Answers one register handshake on the current connection.
+	ackRegister := func() {
+		env := mc.readEnvelope()
+		if env.Type != protocol.TypeRegister {
+			t.Errorf("expected register, got %s", env.Type)
+			return
+		}
+		resp, _ := protocol.NewResponse(env.RequestID, protocol.TypeRegisterAck, &protocol.RegisterAckPayload{
+			InstanceID: "inst-1",
+			Accepted:   true,
+		})
+		mc.sendEnvelope(resp)
+	}
+
+	// First connection.
+	go func() {
+		mc.waitForConnection()
+		ackRegister()
+	}()
+	if err := client.Connect(); err != nil {
+		t.Fatalf("connect 1: %v", err)
+	}
+	conn1 := mc.currentConn()
+
+	// Reconnect — a second Connect swaps in a new socket. Before the fix the
+	// old writePump kept writing to the shared c.ws field (now the new conn),
+	// racing the new writePump.
+	go func() {
+		mc.waitForNewConnection(conn1)
+		ackRegister()
+	}()
+	if err := client.Connect(); err != nil {
+		t.Fatalf("connect 2 (reconnect): %v", err)
+	}
+	conn2 := mc.currentConn()
+	if conn2 == conn1 {
+		t.Fatal("expected a new connection after reconnect")
+	}
+
+	// Give the stale pump a moment to exit on its quit signal, then drive
+	// write traffic — it must flow over conn2 with no panic/race.
+	time.Sleep(50 * time.Millisecond)
+	for i := 0; i < 3; i++ {
+		evEnv, _ := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
+			MissionID: "m",
+			EventType: protocol.EventMissionStarted,
+		})
+		if err := client.SendEvent(evEnv); err != nil {
+			t.Fatalf("send event after reconnect: %v", err)
+		}
+		if got := mc.readEnvelope(); got.Type != protocol.TypeMissionEvent {
+			t.Errorf("expected mission_event over new connection, got %s", got.Type)
+		}
+	}
+
+	// The original connection should have been closed by the reconnect.
+	conn1.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := conn1.ReadMessage(); err == nil {
+		t.Error("expected the old connection to be closed after reconnect")
 	}
 }
 

@@ -21,7 +21,7 @@ import (
 // humanBridge is optional and powers the `builtins.human.ask` tool. Pass
 // nil when no commander is attached; the tool is still registered and returns
 // a stable "[no human available]" observation to the agent instead of blocking.
-func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient, loadedMCPClients map[string]*squadronmcp.Client, datasetStore aitools.DatasetStore, humanBridge aitools.HumanInputBridge) map[string]aitools.Tool {
+func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins map[string]*plugin.PluginClient, loadedMCPClients map[string]*squadronmcp.Client, datasetStore aitools.DatasetStore, humanBridge aitools.HumanInputBridge, gatewayBridge aitools.GatewayBridge) map[string]aitools.Tool {
 	tools := make(map[string]aitools.Tool)
 
 	// Build a lookup map for custom tool definitions
@@ -45,7 +45,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 				if builtinToolList, ok := BuiltinTools[namespaceName]; ok {
 					for _, toolName := range builtinToolList {
 						ref := "builtins." + namespaceName + "." + toolName
-						tool := GetBuiltinTool(ref, datasetStore, humanBridge)
+						tool := GetBuiltinTool(ref, datasetStore, humanBridge, gatewayBridge)
 						if tool != nil {
 							tools[ref] = tool
 						}
@@ -101,7 +101,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 
 		// Check if it's a builtin tool reference (builtins.{namespace}.{tool})
 		if IsBuiltinTool(toolRef) {
-			tool := GetBuiltinTool(toolRef, datasetStore, humanBridge)
+			tool := GetBuiltinTool(toolRef, datasetStore, humanBridge, gatewayBridge)
 			if tool != nil {
 				tools[toolRef] = tool
 			}
@@ -161,7 +161,7 @@ func BuildToolsMap(agentTools []string, customTools []CustomTool, loadedPlugins 
 // datasetStore is optional and required for dataset tools.
 // humanBridge is optional; when nil, the ask tool returns a stable
 // "[no human available]" observation rather than blocking.
-func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore, humanBridge aitools.HumanInputBridge) aitools.Tool {
+func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore, humanBridge aitools.HumanInputBridge, gatewayBridge aitools.GatewayBridge) aitools.Tool {
 	switch ref {
 	case "builtins.http.get":
 		return &aitools.HTTPGetTool{}
@@ -185,6 +185,8 @@ func GetBuiltinTool(ref string, datasetStore aitools.DatasetStore, humanBridge a
 		return &aitools.CurrentTimeTool{}
 	case "builtins.human.ask":
 		return &aitools.HumanInputTool{Bridge: humanBridge}
+	case "builtins.gateway.post":
+		return &aitools.GatewayPostTool{Bridge: gatewayBridge}
 	default:
 		return nil
 	}

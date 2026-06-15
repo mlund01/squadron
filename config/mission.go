@@ -317,6 +317,7 @@ type Mission struct {
 	Trigger     *Trigger          `json:"trigger,omitempty"`
 	MaxParallel int               `json:"maxParallel,omitempty"` // default 3
 	Budget      *Budget           `json:"budget,omitempty"`
+	Notification *NotificationConfig `json:"notification,omitempty"` // opt-in terminal-event notifications
 }
 
 // GetLocalAgent returns a mission-scoped agent by name, or nil if not found.

@@ -19,7 +19,7 @@ const (
 // ReservedBuiltinNamespaces are names reserved for built-in tools (cannot be
 // used as plugin or mcp server names). "mcp" itself is reserved so that a
 // `plugin "mcp" { ... }` can't shadow the consumer-side namespace.
-var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils", "human", "mcp"}
+var ReservedBuiltinNamespaces = []string{"http", "dataset", "utils", "human", "gateway", "mcp"}
 
 // BuiltinTools maps built-in namespaces to their tools.
 // These are accessed as builtins.http.get, builtins.http.get, etc.
@@ -28,6 +28,7 @@ var BuiltinTools = map[string][]string{
 	"dataset": {"set", "sample", "count"},
 	"utils":   {"sleep", "current_time"},
 	"human":   {"ask"},
+	"gateway": {"post"},
 }
 
 // InternalTools is the list of available internal tools (legacy format for backwards compatibility)

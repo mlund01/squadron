@@ -190,6 +190,10 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		if namespace == "dataset" {
 			continue
 		}
+		// The gateway tool only exists when a gateway is configured.
+		if namespace == "gateway" && cfg.Gateway == nil {
+			continue
+		}
 		pi := protocol.PluginInfo{
 			Name:    namespace,
 			Path:    "builtin",
@@ -198,7 +202,7 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		}
 		for _, toolName := range tools {
 			ref := "builtins." + namespace + "." + toolName
-			if tool := config.GetBuiltinTool(ref, nil, nil); tool != nil {
+			if tool := config.GetBuiltinTool(ref, nil, nil, nil); tool != nil {
 				ti := aitoolToProtocolToolInfo(tool)
 				ti.Name = toolName // Use config-level name, not legacy ToolName()
 				pi.Tools = append(pi.Tools, ti)

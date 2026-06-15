@@ -8,6 +8,8 @@ A `gateway` block runs a managed subprocess that bridges Squadron to an external
 
 The gateway subscribes to live `human_input_requested` / `human_input_resolved` events from Squadron and surfaces them in its target system; user actions in that system flow back to Squadron through the same record store. From the agent's perspective, an answer in Discord is indistinguishable from one typed into the Command Center Inbox.
 
+A gateway can also receive **mission-lifecycle notifications** (`mission_completed` / `mission_failed` / `mission_stopped`) when a mission opts in via a [`notification`](/missions/notifications) block — a one-way post, separate from the interactive human-input flow.
+
 Squadron supports at most one `gateway` block per instance.
 
 ## Minimal Example — Discord
@@ -32,6 +34,27 @@ gateway "discord" {
 ```
 
 Restart Squadron and the next `builtins.human.ask` call will appear in the configured Discord channel as a message with quick-reply buttons (or a multi-select dropdown when `multi_select = true` on the tool call).
+
+## Posting from an agent — `builtins.gateway.post`
+
+When a gateway is configured, agents gain a built-in tool, **`builtins.gateway.post`**, for posting a message to the gateway's channel. Use it to send a heads-up, status update, or summary to the team mid-mission.
+
+```hcl
+agent "announcer" {
+  model = models.anthropic.claude_sonnet_4
+  tools = [builtins.gateway.post]
+}
+```
+
+**The gateway owns the message contract.** Each gateway advertises (via the SDK's `MessageToolSpec`) the tool's description and a JSON Schema for its parameters, so the LLM sees exactly the rich-message shape that gateway supports — squadron just forwards the agent's payload through. See your gateway's README for the exact fields it accepts.
+
+A gateway that advertises no spec falls back to a simple `{ message, channel }` shape. The tool is one-way (the agent doesn't wait for a reply); for interactive prompts use `builtins.human.ask` instead.
+
+**Attachments are local files.** Independent of the gateway-owned fields, squadron adds an `attachments` parameter (present only when the mission has [memory or a scratchpad](/missions/memory)). It takes a list of `{ slot, path }` objects referencing squadron's own files — for example `{ "slot": "scratchpad", "path": "report.pdf" }`. Squadron reads each file and ships the bytes to the gateway to upload. Attachments are **never** URLs the model picks, so there is no outbound-fetch (SSRF) surface; the per-file cap is 25 MB.
+
+> **Tip:** rich payloads (Block Kit `blocks`, Discord `embeds`) are large nested JSON. Smaller models sometimes drop the nested field and post text only. If an agent needs to emit rich layouts reliably, give it a capable model.
+
+`builtins.gateway.post` is only a valid tool reference **when a gateway block is present** — `squadron verify` rejects it otherwise.
 
 ## Fields
 

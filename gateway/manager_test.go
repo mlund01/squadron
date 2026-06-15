@@ -14,6 +14,7 @@ import (
 
 	gwsdk "github.com/mlund01/squadron-gateway-sdk"
 
+	"squadron/aitools"
 	"squadron/humaninput"
 	"squadron/store"
 )
@@ -65,10 +66,13 @@ func (f *fakeSubprocess) wasKilled() bool {
 type fakeGateway struct {
 	mu             sync.Mutex
 	configureErr   error
-	configureCalls int
-	requested      []string
-	resolved       []string
-	shutdowns      int
+	configureCalls    int
+	requested         []string
+	resolved          []string
+	notified          []string
+	posted            []string
+	postedAttachments []gwsdk.FileAttachment
+	shutdowns         int
 }
 
 func (g *fakeGateway) Configure(ctx context.Context, settings map[string]string) error {
@@ -93,6 +97,25 @@ func (g *fakeGateway) OnHumanInputResolved(ctx context.Context, rec gwsdk.HumanI
 	return nil
 }
 
+func (g *fakeGateway) OnNotification(ctx context.Context, rec gwsdk.NotificationRecord) error {
+	g.mu.Lock()
+	g.notified = append(g.notified, rec.Event)
+	g.mu.Unlock()
+	return nil
+}
+
+func (g *fakeGateway) PostMessage(ctx context.Context, req gwsdk.PostMessageRequest) error {
+	g.mu.Lock()
+	g.posted = append(g.posted, req.Payload)
+	g.postedAttachments = req.Attachments
+	g.mu.Unlock()
+	return nil
+}
+
+func (g *fakeGateway) MessageToolSpec(ctx context.Context) (gwsdk.MessageToolSpec, error) {
+	return gwsdk.MessageToolSpec{Description: "fake gateway", ParamsSchema: `{"type":"object"}`}, nil
+}
+
 func (g *fakeGateway) Shutdown(ctx context.Context) error {
 	g.mu.Lock()
 	g.shutdowns++
@@ -104,6 +127,12 @@ func (g *fakeGateway) snapshot() (cfg int, req, res []string, sd int) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.configureCalls, append([]string(nil), g.requested...), append([]string(nil), g.resolved...), g.shutdowns
+}
+
+func (g *fakeGateway) notifiedEvents() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.notified...)
 }
 
 // scriptedLauncher returns a sequence of (gateway, subprocess) pairs in
@@ -161,6 +190,66 @@ func newTestManager(launch launcher) *Manager {
 	m.maxBackoff = 50 * time.Millisecond
 	return m
 }
+
+var _ = Describe("Manager.Notify", func() {
+	It("forwards a notification to the running gateway", func() {
+		gw := &fakeGateway{}
+		proc := &fakeSubprocess{}
+		s := &scriptedLauncher{results: []launchResult{{gw, proc}}}
+
+		m := newTestManager(s.launcher())
+		Expect(m.Start(context.Background(), Config{Name: "discord", Version: "local"})).To(Succeed())
+		DeferCleanup(m.Stop)
+
+		err := m.Notify(context.Background(), gwsdk.NotificationRecord{Event: "mission_completed"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(gw.notifiedEvents()).To(ConsistOf("mission_completed"))
+	})
+
+	It("no-ops when no gateway is running", func() {
+		m := newTestManager((&scriptedLauncher{}).launcher())
+		Expect(m.Notify(context.Background(), gwsdk.NotificationRecord{Event: "mission_failed"})).To(Succeed())
+	})
+})
+
+var _ = Describe("Manager.PostMessage", func() {
+	It("forwards a message to the running gateway", func() {
+		gw := &fakeGateway{}
+		s := &scriptedLauncher{results: []launchResult{{gw, &fakeSubprocess{}}}}
+		m := newTestManager(s.launcher())
+		Expect(m.Start(context.Background(), Config{Name: "discord", Version: "local"})).To(Succeed())
+		DeferCleanup(m.Stop)
+
+		Expect(m.PostMessage(context.Background(), `{"text":"deploy done"}`, nil)).To(Succeed())
+		gw.mu.Lock()
+		posted := append([]string(nil), gw.posted...)
+		gw.mu.Unlock()
+		Expect(posted).To(ConsistOf(`{"text":"deploy done"}`))
+		Expect(m.MessageToolDescription()).To(Equal("fake gateway"))
+	})
+
+	It("forwards file attachments to the gateway as bytes", func() {
+		gw := &fakeGateway{}
+		s := &scriptedLauncher{results: []launchResult{{gw, &fakeSubprocess{}}}}
+		m := newTestManager(s.launcher())
+		Expect(m.Start(context.Background(), Config{Name: "discord", Version: "local"})).To(Succeed())
+		DeferCleanup(m.Stop)
+
+		atts := []aitools.GatewayAttachment{{Filename: "r.txt", MimeType: "text/plain", Content: []byte("hi")}}
+		Expect(m.PostMessage(context.Background(), `{"text":"x"}`, atts)).To(Succeed())
+		gw.mu.Lock()
+		got := append([]gwsdk.FileAttachment(nil), gw.postedAttachments...)
+		gw.mu.Unlock()
+		Expect(got).To(HaveLen(1))
+		Expect(got[0].Filename).To(Equal("r.txt"))
+		Expect(string(got[0].Content)).To(Equal("hi"))
+	})
+
+	It("errors when no gateway is running", func() {
+		m := newTestManager((&scriptedLauncher{}).launcher())
+		Expect(m.PostMessage(context.Background(), `{"text":"hi"}`, nil)).To(MatchError(ContainSubstring("no gateway")))
+	})
+})
 
 var _ = Describe("Manager.Start / Stop", func() {
 	It("launches and configures the gateway with the supplied settings", func() {

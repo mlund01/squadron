@@ -1,0 +1,109 @@
+---
+title: Notifications
+---
+
+# Notifications
+
+A `notification` block makes a mission announce its **terminal outcome** —
+`mission_completed` or `mission_failed` — to one or both of two channels: the
+configured [gateway](/config/gateways) (Discord, Slack, …) and the
+[command center](/config/command_center).
+
+Notifications are **opt-in per mission**: a mission with no `notification` block
+emits nothing.
+
+```hcl
+mission "nightly_ingest" {
+  notification {
+    gateway {
+      events  = ["mission_failed"]   # only ping the gateway on failure
+      channel = "#ops-alerts"        # gateway-only destination override
+    }
+    command_center {
+      events = ["all"]               # show every terminal event in the UI
+    }
+  }
+
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents = [agents.worker]
+  task "ingest" { objective = "Pull and normalize today's data" }
+}
+```
+
+## Channels
+
+A `notification` block contains up to two channel sub-blocks. At least one is
+required.
+
+| Channel | Delivery |
+|---------|----------|
+| `gateway` | Posts a message to the configured gateway's external system (Discord/Slack/…). Requires a top-level [`gateway`](/config/gateways) block. |
+| `command_center` | Pushes the notification to the [command center](/config/command_center) UI (a bell feed). No-ops when no command center is connected. |
+
+A channel fires only when its block is present. To turn a channel off without
+deleting its config, set `enabled = false`.
+
+## Channel fields
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | bool | no | `true` | Set `false` to keep the channel configured but stop delivery. |
+| `events` | list(string) | **yes** | — | Which terminal events fire. Values: `mission_completed`, `mission_failed`, or `"all"` (every terminal event). |
+| `channel` | string | no | gateway default | **gateway-only.** Per-mission destination override — a channel **name** (with or without a leading `#`, e.g. `"#ops-alerts"`) or a raw channel id. The gateway resolves names against its workspace/guild, so you don't need to look up an id. When omitted, the gateway posts to its globally configured default channel. Rejected on `command_center`. |
+
+`events` is always explicit — there is no implicit "all". Use `events = ["all"]`
+to opt into every terminal event.
+
+## What each event carries
+
+- **`mission_completed`** — fires when the mission finishes successfully.
+- **`mission_failed`** — includes the failure error message.
+
+A user-initiated stop is **not** a notification event.
+
+## Examples
+
+### Failures everywhere, completions only in the UI
+
+```hcl
+notification {
+  gateway        { events = ["mission_failed"] }
+  command_center { events = ["all"] }
+}
+```
+
+### Route a mission's alerts to a dedicated channel
+
+```hcl
+notification {
+  gateway {
+    events  = ["all"]
+    channel = "#ops-alerts"   # name or id; this mission posts here, not the gateway default
+  }
+}
+```
+
+### Temporarily mute a channel
+
+```hcl
+notification {
+  command_center {
+    enabled = false           # keep the config, stop delivery
+    events  = ["all"]
+  }
+}
+```
+
+## Validation
+
+- A `notification` block must declare at least one of `gateway` / `command_center`.
+- Each channel's `events` list is required and must contain only valid values
+  (`mission_completed`, `mission_failed`, `"all"`).
+- A `gateway` channel requires a top-level [`gateway`](/config/gateways) block —
+  `squadron verify` errors otherwise.
+- `channel` is rejected on the `command_center` channel.
+
+## Notes
+
+- Notifications fire only in serve mode (`squadron engage`), where the mission
+  runs under the command-center bridge.

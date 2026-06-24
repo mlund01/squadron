@@ -91,15 +91,6 @@ var _ = Describe("file_view tool", func() {
 		_, ok := aitools.MediaToolOf(tool)
 		Expect(ok).To(BeTrue())
 	})
-
-	It("resolves a filename whose exotic whitespace the model normalized", func() {
-		// On disk: U+202F narrow no-break space (as macOS screenshots use).
-		writeSlotFile(store, "input.doc", "Shot 10.39.04 PM.png", append(pngSignature, []byte("x")...))
-		// Model echoes it back with a plain ASCII space.
-		_, media := tool.CallMedia(ctx, viewParams("input.doc", "Shot 10.39.04 PM.png"))
-		Expect(media).To(HaveLen(1))
-		Expect(media[0].Kind).To(Equal(aitools.MediaKindImage))
-	})
 })
 
 var _ = Describe("file_read binary rejection", func() {

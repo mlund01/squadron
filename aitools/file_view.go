@@ -62,9 +62,17 @@ func (t *FileViewTool) CallMedia(ctx context.Context, params string) (string, []
 		return "Error: path is required", nil
 	}
 
-	absPath, info, err := resolveExistingSlotFile(t.Store, p.Slot, p.Path)
+	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error(), nil
+	}
+
+	info, err := os.Stat(absPath)
+	if err != nil {
+		return "Error: " + err.Error(), nil
+	}
+	if info.IsDir() {
+		return "Error: path is a directory, not a file", nil
 	}
 	if info.Size() > maxReadSize {
 		return fmt.Sprintf("Error: file too large (%s, max %s)", formatSize(info.Size()), formatSize(maxReadSize)), nil

@@ -109,6 +109,31 @@ func TestMaterializeFileInputs_Base64FilenameSanitized(t *testing.T) {
 	}
 }
 
+func TestMaterializeFileInputs_Base64FilenameWhitespaceNormalized(t *testing.T) {
+	withTempHome(t)
+	r := fileInputRunner(t, t.TempDir(),
+		[]config.MissionInput{{Name: "doc", Type: config.InputTypeFile}},
+		// macOS screenshot names embed a U+202F narrow no-break space; models
+		// echo the name back from file_list with it normalized to a space.
+		map[string]string{"doc": envelope(t, "Shot 10.39.04 PM.png", []byte("x"))},
+	)
+
+	// The U+202F in the upload name is staged as a plain ASCII space ( ),
+	// matching what the model echoes back from file_list.
+	want := "Shot 10.39.04" + " " + "PM.png"
+
+	dirs, err := r.materializeFileInputs("run-1")
+	if err != nil {
+		t.Fatalf("materialize: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dirs["doc"], want)); err != nil {
+		t.Fatalf("expected staged file %q: %v", want, err)
+	}
+	if name, _ := existingStagedFile(dirs["doc"]); name != want {
+		t.Fatalf("staged filename = %q, want %q", name, want)
+	}
+}
+
 func TestMaterializeFileInputs_PathEscapeRejected(t *testing.T) {
 	withTempHome(t)
 	root := t.TempDir()

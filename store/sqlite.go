@@ -401,9 +401,10 @@ func insertPartsSQLite(tx *sql.Tx, msgID int64, parts []MessagePart) error {
 		text,
 		tool_use_id, tool_name, tool_input_json, thought_signature, is_error,
 		image_data, image_media_type,
+		document_data, document_media_type, document_filename,
 		thinking_signature, thinking_redacted_data, provider_id, encrypted_content,
 		provider_name, provider_type, provider_data_json
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare part insert: %w", err)
 	}
@@ -423,6 +424,7 @@ func insertPartsSQLite(tx *sql.Tx, msgID int64, parts []MessagePart) error {
 			nullIfEmpty(p.Text),
 			nullIfEmpty(p.ToolUseID), nullIfEmpty(p.ToolName), nullIfEmpty(p.ToolInputJSON), thoughtSig, isErr,
 			nullIfEmpty(p.ImageData), nullIfEmpty(p.ImageMediaType),
+			nullIfEmpty(p.DocumentData), nullIfEmpty(p.DocumentMediaType), nullIfEmpty(p.DocumentFilename),
 			nullIfEmpty(p.ThinkingSignature), nullIfEmpty(p.ThinkingRedactedData), nullIfEmpty(p.ProviderID), nullIfEmpty(p.EncryptedContent),
 			nullIfEmpty(p.ProviderName), nullIfEmpty(p.ProviderType), nullIfEmpty(p.ProviderDataJSON),
 		); err != nil {
@@ -470,6 +472,7 @@ func (s *SQLiteSessionStore) GetStructuredMessages(sessionID string) ([]Structur
 		p.text,
 		p.tool_use_id, p.tool_name, p.tool_input_json, p.thought_signature, p.is_error,
 		p.image_data, p.image_media_type,
+		p.document_data, p.document_media_type, p.document_filename,
 		p.thinking_signature, p.thinking_redacted_data, p.provider_id, p.encrypted_content,
 		p.provider_name, p.provider_type, p.provider_data_json
 		FROM session_messages m
@@ -492,6 +495,7 @@ func (s *SQLiteSessionStore) GetStructuredMessages(sessionID string) ([]Structur
 			thoughtSig                       []byte
 			isErr                            sql.NullBool
 			imgData, imgMedia                sql.NullString
+			docData, docMedia, docFilename   sql.NullString
 			thSig, thRed, provID, encContent sql.NullString
 			provName, provType, provData     sql.NullString
 		)
@@ -501,6 +505,7 @@ func (s *SQLiteSessionStore) GetStructuredMessages(sessionID string) ([]Structur
 			&text,
 			&tuID, &tuName, &tuInput, &thoughtSig, &isErr,
 			&imgData, &imgMedia,
+			&docData, &docMedia, &docFilename,
 			&thSig, &thRed, &provID, &encContent,
 			&provName, &provType, &provData,
 		); err != nil {
@@ -514,7 +519,7 @@ func (s *SQLiteSessionStore) GetStructuredMessages(sessionID string) ([]Structur
 			// LEFT JOIN: no parts for this message (legacy row).
 			continue
 		}
-		current.Parts = append(current.Parts, scanMessagePart(pType.String, text, tuID, tuName, tuInput, thoughtSig, isErr, imgData, imgMedia, thSig, thRed, provID, encContent, provName, provType, provData))
+		current.Parts = append(current.Parts, scanMessagePart(pType.String, text, tuID, tuName, tuInput, thoughtSig, isErr, imgData, imgMedia, docData, docMedia, docFilename, thSig, thRed, provID, encContent, provName, provType, provData))
 	}
 	return msgs, rows.Err()
 }
@@ -524,7 +529,7 @@ func scanMessagePart(
 	text, tuID, tuName, tuInput sql.NullString,
 	thoughtSig []byte,
 	isErr sql.NullBool,
-	imgData, imgMedia, thSig, thRed, provID, encContent, provName, provType, provData sql.NullString,
+	imgData, imgMedia, docData, docMedia, docFilename, thSig, thRed, provID, encContent, provName, provType, provData sql.NullString,
 ) MessagePart {
 	p := MessagePart{
 		Type:                 pType,
@@ -535,6 +540,9 @@ func scanMessagePart(
 		ThoughtSignature:     thoughtSig,
 		ImageData:            imgData.String,
 		ImageMediaType:       imgMedia.String,
+		DocumentData:         docData.String,
+		DocumentMediaType:    docMedia.String,
+		DocumentFilename:     docFilename.String,
 		ThinkingSignature:    thSig.String,
 		ThinkingRedactedData: thRed.String,
 		ProviderID:           provID.String,

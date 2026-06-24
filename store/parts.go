@@ -11,6 +11,7 @@ package store
 //
 //   - "text"          → Text
 //   - "image"         → ImageData, ImageMediaType
+//   - "document"      → DocumentData, DocumentMediaType, DocumentFilename
 //   - "tool_use"      → ToolUseID, ToolName, ToolInputJSON, ThoughtSignature
 //   - "tool_result"   → ToolUseID, Text, IsError
 //   - "thinking"      → Text, ThinkingSignature, ThinkingRedactedData,
@@ -32,6 +33,10 @@ type MessagePart struct {
 
 	ImageData      string
 	ImageMediaType string
+
+	DocumentData      string
+	DocumentMediaType string
+	DocumentFilename  string
 
 	ThinkingSignature    string
 	ThinkingRedactedData string

@@ -416,6 +416,12 @@ func (p *AnthropicProvider) buildContentBlocks(m Message) []anthropic.ContentBlo
 					part.ImageData.Data,
 				))
 			}
+		case ContentTypeDocument:
+			if part.Document != nil {
+				blocks = append(blocks, anthropic.NewDocumentBlock(anthropic.Base64PDFSourceParam{
+					Data: part.Document.Data,
+				}))
+			}
 		case ContentTypeToolUse:
 			if part.ToolUse != nil {
 				// Convert json.RawMessage input to any for the SDK

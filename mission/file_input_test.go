@@ -251,7 +251,7 @@ func TestBuildMemoryStoreWithFiles_ReadOnlyAndTextOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = read.Call(ctx, fmt.Sprintf(`{"slot":%q,"path":"blob.bin"}`, slot))
-	if !strings.Contains(out, "UTF-8 text only") {
+	if !strings.Contains(out, "file_view") {
 		t.Fatalf("expected binary rejection, got %q", out)
 	}
 

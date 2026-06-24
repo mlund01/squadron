@@ -622,9 +622,10 @@ func insertPartsPostgres(tx *sql.Tx, msgID int64, parts []MessagePart) error {
 		text,
 		tool_use_id, tool_name, tool_input_json, thought_signature, is_error,
 		image_data, image_media_type,
+		document_data, document_media_type, document_filename,
 		thinking_signature, thinking_redacted_data, provider_id, encrypted_content,
 		provider_name, provider_type, provider_data_json
-	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)`)
+	) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)`)
 	if err != nil {
 		return fmt.Errorf("prepare part insert: %w", err)
 	}
@@ -644,6 +645,7 @@ func insertPartsPostgres(tx *sql.Tx, msgID int64, parts []MessagePart) error {
 			nullIfEmpty(p.Text),
 			nullIfEmpty(p.ToolUseID), nullIfEmpty(p.ToolName), nullIfEmpty(p.ToolInputJSON), thoughtSig, isErr,
 			nullIfEmpty(p.ImageData), nullIfEmpty(p.ImageMediaType),
+			nullIfEmpty(p.DocumentData), nullIfEmpty(p.DocumentMediaType), nullIfEmpty(p.DocumentFilename),
 			nullIfEmpty(p.ThinkingSignature), nullIfEmpty(p.ThinkingRedactedData), nullIfEmpty(p.ProviderID), nullIfEmpty(p.EncryptedContent),
 			nullIfEmpty(p.ProviderName), nullIfEmpty(p.ProviderType), nullIfEmpty(p.ProviderDataJSON),
 		); err != nil {
@@ -691,6 +693,7 @@ func (s *PgSessionStore) GetStructuredMessages(sessionID string) ([]StructuredMe
 		p.text,
 		p.tool_use_id, p.tool_name, p.tool_input_json, p.thought_signature, p.is_error,
 		p.image_data, p.image_media_type,
+		p.document_data, p.document_media_type, p.document_filename,
 		p.thinking_signature, p.thinking_redacted_data, p.provider_id, p.encrypted_content,
 		p.provider_name, p.provider_type, p.provider_data_json
 		FROM session_messages m
@@ -713,6 +716,7 @@ func (s *PgSessionStore) GetStructuredMessages(sessionID string) ([]StructuredMe
 			thoughtSig                       []byte
 			isErr                            sql.NullBool
 			imgData, imgMedia                sql.NullString
+			docData, docMedia, docFilename   sql.NullString
 			thSig, thRed, provID, encContent sql.NullString
 			provName, provType, provData     sql.NullString
 		)
@@ -722,6 +726,7 @@ func (s *PgSessionStore) GetStructuredMessages(sessionID string) ([]StructuredMe
 			&text,
 			&tuID, &tuName, &tuInput, &thoughtSig, &isErr,
 			&imgData, &imgMedia,
+			&docData, &docMedia, &docFilename,
 			&thSig, &thRed, &provID, &encContent,
 			&provName, &provType, &provData,
 		); err != nil {
@@ -734,7 +739,7 @@ func (s *PgSessionStore) GetStructuredMessages(sessionID string) ([]StructuredMe
 		if !pType.Valid {
 			continue
 		}
-		current.Parts = append(current.Parts, scanMessagePart(pType.String, text, tuID, tuName, tuInput, thoughtSig, isErr, imgData, imgMedia, thSig, thRed, provID, encContent, provName, provType, provData))
+		current.Parts = append(current.Parts, scanMessagePart(pType.String, text, tuID, tuName, tuInput, thoughtSig, isErr, imgData, imgMedia, docData, docMedia, docFilename, thSig, thRed, provID, encContent, provName, provType, provData))
 	}
 	return msgs, rows.Err()
 }

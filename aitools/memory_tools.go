@@ -387,18 +387,18 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 	}
 	defer f.Close()
 
-	// Packets and file inputs are text-only reference data. For those slots,
-	// peek at the first 8 KB and reject binary content BEFORE allocating the
-	// full file — a 9 MB stray .pdf would otherwise force a 9 MB read just to
-	// discard it.
-	if isTextOnlySlot(p.Slot) {
+	// file_read returns UTF-8 text only. Peek at the first 8 KB and reject
+	// binary content BEFORE allocating the full file — a 9 MB stray .pdf would
+	// otherwise force a 9 MB read just to discard it. Images, SVGs, and PDFs are
+	// viewed through file_view instead.
+	{
 		head := make([]byte, 8192)
 		n, err := io.ReadFull(f, head)
 		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
 			return "Error: " + err.Error()
 		}
 		if looksBinary(head[:n]) {
-			return "Error: file appears to be binary or non-UTF-8 encoded; this slot accepts UTF-8 text only"
+			return "Error: file appears to be binary or non-UTF-8 encoded; use file_view to view images, SVGs, or PDFs as visual content"
 		}
 		if _, err := f.Seek(0, 0); err != nil {
 			return "Error: " + err.Error()

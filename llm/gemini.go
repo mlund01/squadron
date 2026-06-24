@@ -257,6 +257,15 @@ func messageToParts(m Message, toolNames map[string]string) []*genai.Part {
 					})
 				}
 			}
+		case ContentTypeDocument:
+			if block.Document != nil {
+				data, err := base64.StdEncoding.DecodeString(block.Document.Data)
+				if err == nil {
+					parts = append(parts, &genai.Part{
+						InlineData: &genai.Blob{MIMEType: block.Document.MediaType, Data: data},
+					})
+				}
+			}
 		case ContentTypeToolUse:
 			if block.ToolUse != nil {
 				var args map[string]any

@@ -34,6 +34,12 @@ func (a *SessionAdapter) AddToolResults(results []ToolResultBlock) {
 	a.session.AddToolResults(results)
 }
 
+// AddToolResultMedia merges tool-produced image/document blocks into the
+// tool-results user message just appended.
+func (a *SessionAdapter) AddToolResultMedia(parts []ContentBlock) {
+	a.session.AddToolResultMedia(parts)
+}
+
 // GetSession returns the underlying session (needed for pruning integration)
 func (a *SessionAdapter) GetSession() *Session {
 	return a.session

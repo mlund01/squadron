@@ -64,6 +64,9 @@ type llmSession interface {
 	ContinueStream(ctx context.Context, onChunk func(chunk llm.StreamChunk)) (*llm.ChatResponse, error)
 	// AddToolResults appends tool result messages to the session history
 	AddToolResults(results []llm.ToolResultBlock)
+	// AddToolResultMedia merges image/document blocks produced by a tool into
+	// the tool-results user message just appended by AddToolResults
+	AddToolResultMedia(parts []llm.ContentBlock)
 }
 
 // orchestrator handles the agent conversation loop
@@ -380,6 +383,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 
 		// Execute all tool calls and collect results
 		var toolResults []llm.ToolResultBlock
+		var turnMedia []llm.ContentBlock
 		for _, tc := range toolUses {
 			actionInput := string(tc.Input)
 
@@ -458,7 +462,14 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 			}
 
 			toolStart := time.Now()
-			result := MaybeInterrupted(ctx, tool.Call(ctx, injectedInput))
+			var rawResult string
+			var media []aitools.MediaBlock
+			if mt, ok := aitools.MediaToolOf(tool); ok {
+				rawResult, media = mt.CallMedia(ctx, injectedInput)
+			} else {
+				rawResult = tool.Call(ctx, injectedInput)
+			}
+			result := MaybeInterrupted(ctx, rawResult)
 
 			if o.eventLogger != nil {
 				o.eventLogger.LogEvent("agent_tool_result", map[string]any{
@@ -490,10 +501,15 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 				ToolUseID: tc.ID,
 				Content:   resultContent,
 			})
+
+			if parts := mediaBlocksToContentBlocks(media); len(parts) > 0 {
+				turnMedia = append(turnMedia, parts...)
+			}
 		}
 
 		// Add all tool results to the session
 		o.session.AddToolResults(toolResults)
+		o.session.AddToolResultMedia(turnMedia)
 
 		// Persist tool results from this turn as a single user message with
 		// one tool_result part per call — matches the wire shape providers
@@ -503,7 +519,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 		// even when the turn was cut short.
 		if o.sessionLogger != nil && o.sessionID != "" && len(toolResults) > 0 {
 			now := time.Now()
-			parts := make([]llm.ContentBlock, 0, len(toolResults))
+			parts := make([]llm.ContentBlock, 0, len(toolResults)+len(turnMedia))
 			for i := range toolResults {
 				tr := toolResults[i]
 				parts = append(parts, llm.ContentBlock{
@@ -511,6 +527,7 @@ func (o *orchestrator) processTurn(ctx context.Context, input string, resume boo
 					ToolResult: &tr,
 				})
 			}
+			parts = append(parts, turnMedia...)
 			msg := llm.Message{Role: llm.RoleUser, Parts: parts}
 			o.sessionLogger.AppendStructuredMessage(o.sessionID, "user", AuditContentForMessage(msg), PartsFromMessage(msg), now, now)
 		}

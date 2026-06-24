@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // Reserved slot names for the mission-scoped storage slots. Agents address
@@ -111,6 +112,64 @@ func resolveSlotPath(store MemoryStore, name, relPath string) (string, error) {
 		return "", err
 	}
 	return store.ResolvePath(name, relPath)
+}
+
+// normalizeFilename folds every Unicode whitespace rune to a plain ASCII space
+// so names that differ only by exotic whitespace compare equal. macOS embeds a
+// U+202F narrow no-break space in screenshot filenames, and models routinely
+// echo such names back with the whitespace normalized — without this, the
+// resolved path would stat-miss the on-disk file.
+func normalizeFilename(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, s)
+}
+
+// resolveExistingSlotFile resolves relPath to an existing regular file in a
+// slot. When the exact path is missing, it retries with a whitespace-insensitive
+// match against the directory so a lightly-mangled filename still resolves. It
+// returns the absolute path and the file's os.FileInfo.
+func resolveExistingSlotFile(store MemoryStore, slot, relPath string) (string, os.FileInfo, error) {
+	abs, err := resolveSlotPath(store, slot, relPath)
+	if err != nil {
+		return "", nil, err
+	}
+	if info, statErr := os.Stat(abs); statErr == nil {
+		if info.IsDir() {
+			return "", nil, fmt.Errorf("path is a directory, not a file")
+		}
+		return abs, info, nil
+	} else if !os.IsNotExist(statErr) {
+		return "", nil, statErr
+	}
+
+	dir := filepath.Dir(abs)
+	want := normalizeFilename(filepath.Base(abs))
+	entries, rerr := os.ReadDir(dir)
+	if rerr != nil {
+		return "", nil, fmt.Errorf("file not found: %s", relPath)
+	}
+	var match string
+	for _, e := range entries {
+		if e.Type().IsRegular() && normalizeFilename(e.Name()) == want {
+			if match != "" {
+				return "", nil, fmt.Errorf("file not found: %s", relPath)
+			}
+			match = e.Name()
+		}
+	}
+	if match == "" {
+		return "", nil, fmt.Errorf("file not found: %s", relPath)
+	}
+	full := filepath.Join(dir, match)
+	info, statErr := os.Stat(full)
+	if statErr != nil {
+		return "", nil, statErr
+	}
+	return full, info, nil
 }
 
 // slotParamDescription is reused across every file tool's `slot` parameter
@@ -365,17 +424,9 @@ func (t *MemoryReadTool) Call(ctx context.Context, params string) string {
 		return "Error: path is required"
 	}
 
-	absPath, err := resolveSlotPath(t.Store, p.Slot, p.Path)
+	absPath, info, err := resolveExistingSlotFile(t.Store, p.Slot, p.Path)
 	if err != nil {
 		return "Error: " + err.Error()
-	}
-
-	info, err := os.Stat(absPath)
-	if err != nil {
-		return "Error: " + err.Error()
-	}
-	if info.IsDir() {
-		return "Error: path is a directory, not a file"
 	}
 	if info.Size() > maxReadSize {
 		return fmt.Sprintf("Error: file too large (%s). Use max_bytes to read a portion.", formatSize(info.Size()))
@@ -569,7 +620,7 @@ func (t *MemoryDeleteTool) ToolPayloadSchema() Schema {
 
 type memoryDeleteParams struct {
 	Slot string `json:"slot"`
-	Path   string `json:"path"`
+	Path string `json:"path"`
 }
 
 func (t *MemoryDeleteTool) Call(ctx context.Context, params string) string {

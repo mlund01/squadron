@@ -17,12 +17,14 @@ import (
 
 // On-disk layout under SquadronHome:
 //
-//	<squadron_home>/memories/shared/<name>/                 — shared memory
-//	<squadron_home>/memories/mission/<mission_name>/        — mission memory
-//	<squadron_home>/scratchpads/<mission_name>/<run_id>/    — mission scratchpad
+//	<squadron_home>/memories/shared/<name>/                       — shared memory
+//	<squadron_home>/memories/mission/<mission_name>/              — mission memory
+//	<squadron_home>/scratchpads/<mission_name>/<run_id>/          — mission scratchpad
+//	<squadron_home>/inputs/<mission_name>/<run_id>/<input>/<file> — materialized file input
 const (
 	memoriesSubdir   = "memories"
 	scratchpadSubdir = "scratchpads"
+	inputsSubdir     = "inputs"
 )
 
 // runMetadataFile is the sidecar written inside each materialized scratchpad
@@ -86,6 +88,28 @@ func MissionScratchpadPath(missionName, missionInstanceID string) (string, error
 	return filepath.Join(root, missionName, missionInstanceID), nil
 }
 
+// InputsRoot returns `<squadron_home>/inputs`, the parent of every per-run
+// materialized file-input staging directory. Used by the cleanup sweep.
+func InputsRoot() (string, error) {
+	home, err := paths.SquadronHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, inputsSubdir), nil
+}
+
+// MissionInputsPath returns the per-run staging directory that holds every
+// materialized file input for one mission run. Each file input gets its own
+// subdirectory beneath it. Unique per mission run instance, so it shares the
+// scratchpad cleanup model.
+func MissionInputsPath(missionName, missionInstanceID string) (string, error) {
+	root, err := InputsRoot()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, missionName, missionInstanceID), nil
+}
+
 type missionMemoryStore struct {
 	slots map[string]*memorySlot
 }
@@ -106,6 +130,15 @@ type memorySlot struct {
 // tools enforce the read-only / text-only policy based on the slot name
 // prefix via aitools.IsPacketSlot.
 func buildMemoryStore(mission *config.Mission, memories []config.Memory, packets []config.Packet, missionInstanceID string) (aitools.MemoryStore, error) {
+	return buildMemoryStoreWithFiles(mission, memories, packets, nil, missionInstanceID)
+}
+
+// buildMemoryStoreWithFiles is buildMemoryStore plus materialized file inputs.
+// fileInputDirs maps each file-typed input name to the isolated directory that
+// holds its single staged file; each is registered as a read-only, text-only
+// slot under "input.<name>" (config.InputFileSlotPrefix), enforced by the file
+// tools via aitools.IsInputFileSlot.
+func buildMemoryStoreWithFiles(mission *config.Mission, memories []config.Memory, packets []config.Packet, fileInputDirs map[string]string, missionInstanceID string) (aitools.MemoryStore, error) {
 	store := &missionMemoryStore{
 		slots: make(map[string]*memorySlot),
 	}
@@ -209,6 +242,24 @@ func buildMemoryStore(mission *config.Mission, memories []config.Memory, packets
 		}
 	}
 
+	// File inputs: each materialized input directory becomes a read-only,
+	// text-only slot keyed "input.<name>". The directory holds exactly the one
+	// staged file, so file_list naturally shows just it with no sibling leak.
+	if len(fileInputDirs) > 0 {
+		descByName := make(map[string]string)
+		for _, in := range mission.Inputs {
+			if in.Type == config.InputTypeFile {
+				descByName[in.Name] = in.Description
+			}
+		}
+		for name, dir := range fileInputDirs {
+			store.slots[config.InputFileSlotPrefix+name] = &memorySlot{
+				absPath:     dir,
+				description: descByName[name],
+			}
+		}
+	}
+
 	if len(store.slots) == 0 {
 		return nil, nil
 	}
@@ -304,6 +355,25 @@ func SweepExpiredScratchpads() (removed []string, err error) {
 	if err != nil {
 		return nil, err
 	}
+	return sweepExpiredRuns(root)
+}
+
+// SweepExpiredInputs is the file-input analog of SweepExpiredScratchpads. It
+// walks `<squadron_home>/inputs/*/*` and deletes every per-run staging
+// directory past its cleanup deadline (and the per-input subdirectories and
+// staged files beneath it).
+func SweepExpiredInputs() (removed []string, err error) {
+	root, err := InputsRoot()
+	if err != nil {
+		return nil, err
+	}
+	return sweepExpiredRuns(root)
+}
+
+// sweepExpiredRuns deletes every per-run directory under `root` (laid out as
+// `root/<mission>/<run_id>/`) whose sidecar is past its deadline. Shared by the
+// scratchpad and file-input sweeps, which use the identical per-run layout.
+func sweepExpiredRuns(root string) (removed []string, err error) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		if os.IsNotExist(err) {

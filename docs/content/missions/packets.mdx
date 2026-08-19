@@ -4,7 +4,7 @@ title: Packets
 
 # Packets
 
-A **packet** is a read-only bundle of reference files attached to a mission. Use it when you want agents to be able to read documentation, knowledge bases, examples, prompt libraries, or any other text-only material that should never change during the run.
+A **packet** is a read-only bundle of reference files attached to a mission. Use it when you want agents to be able to read documentation, knowledge bases, examples, prompt libraries, or any other reference material that should never change during the run.
 
 Packets are the read-only counterpart to [memory and scratchpad slots](/missions/folders). Memory slots are writable workspaces with Squadron-managed paths; packets point at *user-controlled* directories and are immutable to agents.
 
@@ -13,7 +13,7 @@ Packets are the read-only counterpart to [memory and scratchpad slots](/missions
 | Agents can read files | yes | yes |
 | Agents can write/delete | **no** | yes |
 | Path | user-supplied | Squadron-derived |
-| Allowed file types | UTF-8 text only | any |
+| Allowed file types | UTF-8 text (`file_read`) + images/SVG/PDF (`file_view`) | any |
 | HCL parsed inside the path | **no** (excluded) | n/a |
 | Tool slot name | `packet.<name>` | `<name>` / `"memory"` / `"scratchpad"` |
 
@@ -97,12 +97,13 @@ Once a packet is attached, agents access it through the same file tools as memor
 }
 ```
 
-The six file tools apply the following policy for packet slots:
+The file tools apply the following policy for packet slots:
 
 | Tool | Behavior in a packet slot |
 |------|---------------------------|
 | `file_list` | Lists files normally |
-| `file_read` | Returns text content. Rejects files that look binary (NUL byte in the first 8 KB) |
+| `file_read` | Returns text content. Rejects files that look binary (NUL byte in the first 8 KB) — use `file_view` for images/SVG/PDF |
+| `file_view` | Returns an image (PNG/JPEG/GIF/WebP), SVG (rasterized to PNG), or PDF as visual/document content the model can perceive |
 | `file_search` | Filename regex search, recursive |
 | `file_grep` | Content regex search; binary files are silently skipped |
 | `file_create` | Always returns `Error: slot is read-only (packet bundles are immutable)` |
@@ -110,9 +111,9 @@ The six file tools apply the following policy for packet slots:
 
 ## File types
 
-Packets are designed for UTF-8 text: Markdown, source code, JSON/YAML, prose, transcripts, anything an LLM can read directly. Binary payloads (images, audio, video, archives, compiled binaries) and non-UTF-8 encodings (e.g. UTF-16) are not supported — `file_read` rejects them up front so agents don't get a wall of garbled bytes.
+Packets are designed for UTF-8 text: Markdown, source code, JSON/YAML, prose, transcripts, anything an LLM can read directly via `file_read`. Images (PNG/JPEG/GIF/WebP), SVGs, and PDFs are also supported — agents perceive them with `file_view` (SVGs are rasterized to PNG; PDFs are sent as native document blocks). `file_read` still rejects binary content up front so agents don't get a wall of garbled bytes.
 
-If you need to expose mixed-type material, split it: keep the text in a packet and put any binaries in a writable memory slot that a pre-processor can stage on demand.
+Other binary payloads (audio, video, archives, compiled binaries) and non-UTF-8 text encodings (e.g. UTF-16) aren't supported by either tool. If you need to expose that kind of material, put it in a writable memory slot that a pre-processor can stage on demand.
 
 ## HCL exclusion
 

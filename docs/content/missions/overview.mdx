@@ -136,9 +136,10 @@ squadron mission report -c ./config --input topic="AI safety" --input format=htm
 
 A `file` input hands the mission a document to work on. Unlike other inputs,
 the contents are **not** interpolated into objectives — instead the file is
-exposed to agents as a **read-only, text-only slot** named `input.<name>`,
-which they read with the `file_read` / `file_grep` / `file_search` tools (the
-same tools used for [memory](/missions/folders) and [packets](/missions/packets)).
+exposed to agents as a **read-only slot** named `input.<name>`, which they read
+with the `file_read` / `file_grep` / `file_search` tools, or perceive as an
+image, SVG, or PDF with `file_view` (the same tools used for
+[memory](/missions/folders) and [packets](/missions/packets)).
 
 ```hcl
 mission "analyze" {
@@ -169,10 +170,11 @@ File inputs are always required and cannot declare a `default` or be
   {"filename": "report.md", "content_base64": "IyBSZXBvcnQK..."}
   ```
 
-Either way the file is staged into an isolated per-run slot. v1 accepts UTF-8
-text files only (binary content is rejected on read), and a single file is
-capped at 10 MB. Files outside the project root must be supplied via the
-base64 form.
+Either way the file is staged into an isolated per-run slot. Agents read text
+files with `file_read`, and view images (PNG/JPEG/GIF/WebP), SVGs, and PDFs with
+`file_view` (SVGs are rasterized to PNG; PDFs are sent as native document
+blocks). A single file is capped at 10 MB, and files outside the project root
+must be supplied via the base64 form.
 
 ## How Missions Execute
 

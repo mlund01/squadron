@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode"
 
 	"squadron/config"
 	"squadron/internal/paths"
@@ -153,7 +154,7 @@ func (r *Runner) stagePathInput(slotDir, rawPath string) error {
 	if info.Size() > maxFileInputBytes {
 		return fmt.Errorf("file too large (%d bytes, max %d)", info.Size(), maxFileInputBytes)
 	}
-	return copyFile(src, filepath.Join(slotDir, filepath.Base(src)))
+	return copyFile(src, filepath.Join(slotDir, normalizeStagedName(filepath.Base(src))))
 }
 
 // resolveProjectFilePath anchors rawPath at the project root and rejects any
@@ -195,7 +196,22 @@ func sanitizeFilename(name string) string {
 	case ".", "..", string(filepath.Separator), "":
 		return ""
 	}
-	return base
+	return normalizeStagedName(base)
+}
+
+// normalizeStagedName folds every Unicode whitespace rune in a filename to a
+// plain ASCII space before it is written to disk. macOS embeds a U+202F narrow
+// no-break space in screenshot filenames; models echo such names back from
+// file_list with the whitespace normalized, so staging under the folded name
+// keeps the listing and the path the model later passes to file_read/file_view
+// byte-for-byte identical.
+func normalizeStagedName(name string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return ' '
+		}
+		return r
+	}, name)
 }
 
 // existingStagedFile returns the name of the first regular file in dir, or ""

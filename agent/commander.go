@@ -492,6 +492,7 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		sup.memoryStore = opts.MemoryStore
 		sup.tools["file_list"] = &aitools.MemoryListTool{Store: opts.MemoryStore}
 		sup.tools["file_read"] = &aitools.MemoryReadTool{Store: opts.MemoryStore}
+		sup.tools["file_view"] = &aitools.FileViewTool{Store: opts.MemoryStore}
 		sup.tools["file_create"] = &aitools.MemoryCreateTool{Store: opts.MemoryStore}
 		sup.tools["file_delete"] = &aitools.MemoryDeleteTool{Store: opts.MemoryStore}
 		sup.tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}
@@ -1594,6 +1595,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 		// Execute all tool calls and collect results
 		var toolResults []llm.ToolResultBlock
+		var turnMedia []llm.ContentBlock
 		for _, tc := range toolUses {
 			actionInput := string(tc.Input)
 
@@ -1630,7 +1632,13 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 			// Execute the tool
 			toolStart := time.Now()
-			rawResult := tool.Call(ctx, actionInput)
+			var rawResult string
+			var media []aitools.MediaBlock
+			if mt, ok := aitools.MediaToolOf(tool); ok {
+				rawResult, media = mt.CallMedia(ctx, actionInput)
+			} else {
+				rawResult = tool.Call(ctx, actionInput)
+			}
 
 			// call_agent is special: when ctx is canceled mid-call, the agent's
 			// session is preserved and ResumeTask re-executes the call_agent on
@@ -1666,6 +1674,10 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 				Content:   resultContent,
 			})
 
+			if parts := mediaBlocksToContentBlocks(media); len(parts) > 0 {
+				turnMedia = append(turnMedia, parts...)
+			}
+
 			// Log tool result event
 			if s.debugLogger != nil {
 				s.debugLogger.LogEvent("tool_result", map[string]any{
@@ -1684,6 +1696,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 
 		// Send tool results back to the in-memory session for the next turn.
 		s.session.AddToolResults(toolResults)
+		s.session.AddToolResultMedia(turnMedia)
 
 		// Persist tool results as a single user message with one tool_result
 		// part per call — matches the wire shape providers see and what we
@@ -1696,7 +1709,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 		// lost" branch, which is the same outcome we'd persist eagerly.
 		if ctx.Err() == nil && s.sessionLogger != nil && s.sessionID != "" && len(toolResults) > 0 {
 			now := time.Now()
-			parts := make([]llm.ContentBlock, 0, len(toolResults))
+			parts := make([]llm.ContentBlock, 0, len(toolResults)+len(turnMedia))
 			for i := range toolResults {
 				tr := toolResults[i]
 				parts = append(parts, llm.ContentBlock{
@@ -1704,6 +1717,7 @@ func (s *Commander) runLoop(ctx context.Context, currentInput string, resume boo
 					ToolResult: &tr,
 				})
 			}
+			parts = append(parts, turnMedia...)
 			msg := llm.Message{Role: llm.RoleUser, Parts: parts}
 			s.sessionLogger.AppendStructuredMessage(s.sessionID, "user", AuditContentForMessage(msg), PartsFromMessage(msg), now, now)
 		}

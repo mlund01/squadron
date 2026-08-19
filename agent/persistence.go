@@ -29,6 +29,12 @@ func partFromContentBlock(b llm.ContentBlock) store.MessagePart {
 			p.ImageData = b.ImageData.Data
 			p.ImageMediaType = b.ImageData.MediaType
 		}
+	case llm.ContentTypeDocument:
+		if b.Document != nil {
+			p.DocumentData = b.Document.Data
+			p.DocumentMediaType = b.Document.MediaType
+			p.DocumentFilename = b.Document.Filename
+		}
 	case llm.ContentTypeToolUse:
 		if b.ToolUse != nil {
 			p.ToolUseID = b.ToolUse.ID
@@ -78,6 +84,8 @@ func contentBlockFromPart(p store.MessagePart) (llm.ContentBlock, error) {
 		b.Text = p.Text
 	case llm.ContentTypeImage:
 		b.ImageData = &llm.ImageBlock{Data: p.ImageData, MediaType: p.ImageMediaType}
+	case llm.ContentTypeDocument:
+		b.Document = &llm.DocumentBlock{Data: p.DocumentData, MediaType: p.DocumentMediaType, Filename: p.DocumentFilename}
 	case llm.ContentTypeToolUse:
 		tu := &llm.ToolUseBlock{ID: p.ToolUseID, Name: p.ToolName}
 		if p.ToolInputJSON != "" {
@@ -202,6 +210,8 @@ func AuditContentForMessage(m llm.Message) string {
 			}
 		case llm.ContentTypeImage:
 			sb.WriteString("[image]")
+		case llm.ContentTypeDocument:
+			sb.WriteString("[document]")
 		case llm.ContentTypeThinking:
 			// Thinking is a continuity-only signal; we don't surface it in
 			// the audit log to avoid noisy transcripts.

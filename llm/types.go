@@ -19,6 +19,7 @@ type ContentType string
 const (
 	ContentTypeText       ContentType = "text"
 	ContentTypeImage      ContentType = "image"
+	ContentTypeDocument   ContentType = "document"
 	ContentTypeToolUse    ContentType = "tool_use"
 	ContentTypeToolResult ContentType = "tool_result"
 	// ContentTypeThinking holds a provider-native reasoning block (e.g.
@@ -37,6 +38,14 @@ const (
 type ImageBlock struct {
 	Data      string // Base64-encoded data (without data URL prefix)
 	MediaType string // MIME type: "image/png", "image/jpeg", "image/gif", "image/webp"
+}
+
+// DocumentBlock represents a base64-encoded document (currently PDF) sent to
+// the model's native document channel.
+type DocumentBlock struct {
+	Data      string // Base64-encoded data (without data URL prefix)
+	MediaType string // MIME type: "application/pdf"
+	Filename  string // Original filename, used for provider titles where supported
 }
 
 // ToolDefinition is a provider-agnostic tool definition passed in API requests
@@ -106,6 +115,7 @@ type ContentBlock struct {
 	Type        ContentType
 	Text        string            // Used when Type == ContentTypeText
 	ImageData   *ImageBlock       // Used when Type == ContentTypeImage
+	Document    *DocumentBlock    // Used when Type == ContentTypeDocument
 	ToolUse     *ToolUseBlock     // Used when Type == ContentTypeToolUse
 	ToolResult  *ToolResultBlock  // Used when Type == ContentTypeToolResult
 	Thinking    *ThinkingBlock    // Used when Type == ContentTypeThinking

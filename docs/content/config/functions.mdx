@@ -141,9 +141,10 @@ line_items = list(object({
 ### file
 
 Defines a file handed to a mission at run time. **Mission inputs only.** The
-caller supplies a path or a base64 upload; agents read the file through a
-read-only `input.<name>` slot rather than via objective interpolation. File
-inputs cannot have a `default` or be `protected`.
+caller supplies a path or a base64 upload; agents access the file through a
+read-only `input.<name>` slot rather than via objective interpolation — reading
+text with `file_read` or viewing images/SVG/PDF with `file_view`. File inputs
+cannot have a `default` or be `protected`.
 
 **Signature:** `file(description, required?)`
 

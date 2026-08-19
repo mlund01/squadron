@@ -223,6 +223,26 @@ func (s *Session) AddToolResults(results []ToolResultBlock) {
 	})
 }
 
+// AddToolResultMedia merges image/document content blocks produced by a tool
+// into the most recent user message when that message holds the tool results.
+// Keeping the media in the same user turn as the tool_result blocks (rather than
+// a separate turn) satisfies Anthropic's strict user/assistant alternation while
+// remaining valid for OpenAI and Gemini, which render the media as standalone
+// multimodal content. Call it immediately after AddToolResults.
+func (s *Session) AddToolResultMedia(parts []ContentBlock) {
+	if len(parts) == 0 {
+		return
+	}
+	if n := len(s.messages); n > 0 && s.messages[n-1].Role == RoleUser {
+		s.messages[n-1].Parts = append(s.messages[n-1].Parts, parts...)
+		return
+	}
+	s.messages = append(s.messages, Message{
+		Role:  RoleUser,
+		Parts: parts,
+	})
+}
+
 // stripStopSequences removes any stop sequence text from response content.
 // When models don't support the 'stop' API parameter, they may output the
 // stop sequence literally. This ensures it's never stored in session history.
@@ -298,6 +318,13 @@ func (s *Session) Clone() *Session {
 					messagesCopy[i].Parts[j].ImageData = &ImageBlock{
 						Data:      part.ImageData.Data,
 						MediaType: part.ImageData.MediaType,
+					}
+				}
+				if part.Document != nil {
+					messagesCopy[i].Parts[j].Document = &DocumentBlock{
+						Data:      part.Document.Data,
+						MediaType: part.Document.MediaType,
+						Filename:  part.Document.Filename,
 					}
 				}
 				if part.ToolUse != nil {

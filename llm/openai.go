@@ -409,33 +409,6 @@ func (p *OpenAIProvider) convertMessages(messages []Message) (string, responses.
 // items (one per tool call); plain text/image content collapses to a single
 // input message.
 func (p *OpenAIProvider) convertUserMessage(m Message) []responses.ResponseInputItemUnionParam {
-	if m.HasParts() {
-		// All-tool-results bundle → one output item per result.
-		allToolResults := true
-		for _, part := range m.Parts {
-			if part.Type != ContentTypeToolResult {
-				allToolResults = false
-				break
-			}
-		}
-		if allToolResults && len(m.Parts) > 0 {
-			out := make([]responses.ResponseInputItemUnionParam, 0, len(m.Parts))
-			for _, part := range m.Parts {
-				tr := part.ToolResult
-				if tr == nil {
-					continue
-				}
-				out = append(out, responses.ResponseInputItemUnionParam{
-					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
-						CallID: tr.ToolUseID,
-						Output: tr.Content,
-					},
-				})
-			}
-			return out
-		}
-	}
-
 	// Plain text content
 	if !m.HasParts() {
 		if m.Content == "" {
@@ -446,11 +419,22 @@ func (p *OpenAIProvider) convertUserMessage(m Message) []responses.ResponseInput
 		}
 	}
 
-	// Multimodal content — collapse to a single input message with a
-	// content list (text + image parts).
+	// Tool results become function_call_output items; any text/image/document
+	// parts (e.g. media produced by a tool, merged into this same user turn)
+	// collapse into one trailing input message.
+	var out []responses.ResponseInputItemUnionParam
 	var content responses.ResponseInputMessageContentListParam
 	for _, part := range m.Parts {
 		switch part.Type {
+		case ContentTypeToolResult:
+			if part.ToolResult != nil {
+				out = append(out, responses.ResponseInputItemUnionParam{
+					OfFunctionCallOutput: &responses.ResponseInputItemFunctionCallOutputParam{
+						CallID: part.ToolResult.ToolUseID,
+						Output: part.ToolResult.Content,
+					},
+				})
+			}
 		case ContentTypeText:
 			content = append(content, responses.ResponseInputContentUnionParam{
 				OfInputText: &responses.ResponseInputTextParam{Text: part.Text},
@@ -465,14 +449,25 @@ func (p *OpenAIProvider) convertUserMessage(m Message) []responses.ResponseInput
 					},
 				})
 			}
+		case ContentTypeDocument:
+			if part.Document != nil {
+				dataURL := fmt.Sprintf("data:%s;base64,%s", part.Document.MediaType, part.Document.Data)
+				fileParam := &responses.ResponseInputFileParam{
+					FileData: param.NewOpt(dataURL),
+				}
+				if part.Document.Filename != "" {
+					fileParam.Filename = param.NewOpt(part.Document.Filename)
+				}
+				content = append(content, responses.ResponseInputContentUnionParam{
+					OfInputFile: fileParam,
+				})
+			}
 		}
 	}
-	if len(content) == 0 {
-		return nil
+	if len(content) > 0 {
+		out = append(out, responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser))
 	}
-	return []responses.ResponseInputItemUnionParam{
-		responses.ResponseInputItemParamOfMessage(content, responses.EasyInputMessageRoleUser),
-	}
+	return out
 }
 
 // convertAssistantMessage emits zero or more input items for a single

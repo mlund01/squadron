@@ -185,6 +185,7 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 	if opts.MemoryStore != nil {
 		tools["file_list"] = &aitools.MemoryListTool{Store: opts.MemoryStore}
 		tools["file_read"] = &aitools.MemoryReadTool{Store: opts.MemoryStore}
+		tools["file_view"] = &aitools.FileViewTool{Store: opts.MemoryStore}
 		tools["file_create"] = &aitools.MemoryCreateTool{Store: opts.MemoryStore}
 		tools["file_delete"] = &aitools.MemoryDeleteTool{Store: opts.MemoryStore}
 		tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}

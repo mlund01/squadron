@@ -18,6 +18,7 @@ type fakeSession struct {
 	errs        []error
 	calls       []string
 	toolResults [][]llm.ToolResultBlock
+	toolMedia   [][]llm.ContentBlock
 }
 
 func (f *fakeSession) nextResp(onChunk func(llm.StreamChunk)) (*llm.ChatResponse, error) {
@@ -60,6 +61,12 @@ func (f *fakeSession) ContinueStream(_ context.Context, onChunk func(llm.StreamC
 
 func (f *fakeSession) AddToolResults(results []llm.ToolResultBlock) {
 	f.toolResults = append(f.toolResults, results)
+}
+
+func (f *fakeSession) AddToolResultMedia(parts []llm.ContentBlock) {
+	if len(parts) > 0 {
+		f.toolMedia = append(f.toolMedia, parts)
+	}
 }
 
 // newTestOrchestrator builds a minimal orchestrator wired to the fake session

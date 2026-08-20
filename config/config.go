@@ -459,6 +459,12 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if c.Storage != nil {
+		if err := c.Storage.Validate(); err != nil {
+			return fmt.Errorf("storage: %w", err)
+		}
+	}
+
 	if c.MCPHost != nil {
 		if err := c.MCPHost.Validate(); err != nil {
 			return fmt.Errorf("mcp_host: %w", err)

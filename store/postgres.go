@@ -363,6 +363,10 @@ func (s *PgMissionStore) ListMissions(limit, offset int) ([]MissionRecord, int, 
 	return missions, total, nil
 }
 
+func (s *PgMissionStore) PurgeExpiredMissions(olderThan time.Time) (int, error) {
+	return purgeExpiredMissions(s.db, olderThan, "$1")
+}
+
 func (s *PgMissionStore) StoreTaskInput(taskID string, iterationIndex *int, objective string) error {
 	id := generateID()
 	_, err := s.db.Exec(

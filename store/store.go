@@ -44,6 +44,10 @@ type MissionStore interface {
 	GetTaskByName(missionID, taskName string) (*MissionTask, error)
 	GetMission(id string) (*MissionRecord, error)
 	ListMissions(limit, offset int) ([]MissionRecord, int, error)
+	// PurgeExpiredMissions deletes finished missions whose COALESCE(finished_at,
+	// started_at) is before olderThan, along with all related rows. Missions in
+	// running/stopping are skipped. Chat sessions (no task_id) are left alone.
+	PurgeExpiredMissions(olderThan time.Time) (purged int, err error)
 	StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON string) error
 	GetTaskOutputs(taskID string) ([]TaskOutputRow, error)
 

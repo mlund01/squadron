@@ -1083,6 +1083,21 @@ Mission state is persisted to SQLite (`.squadron/store.db`) during execution:
 - **Datasets**: Items stored for resume
 - **Route decisions**: Router task, target task, condition (for resume)
 
+### Retention (`storage.ttl_days`)
+
+Optional. Set on the singleton `storage` block:
+
+```hcl
+storage {
+  backend  = "sqlite"
+  ttl_days = 30
+}
+```
+
+`0` or omitted keeps records forever. When set, `MissionStore.PurgeExpiredMissions` deletes finished missions (not `running`/`stopping`) whose `COALESCE(finished_at, started_at)` is older than N days, plus every related row (sessions, messages, tool results, events, costs, datasets, route decisions, human-input requests). Chat sessions are left alone. CLI `debug/` directories matching `_YYYYMMDD_HHMMSS` are swept on the same window.
+
+Sweep runs asynchronously at the start of `Runner.Run()` and hourly in `cmd/engage.go` (alongside scratchpad/input cleanup). Failed/stopped runs past the TTL cannot be resumed.
+
 ### Resume Flow
 
 When `--resume <missionID>` is used:

@@ -122,3 +122,23 @@ func TestRebuildTaskCompleteFromHistory_NoCallNoChange(t *testing.T) {
 		t.Fatal("no task_complete in history should leave state untouched")
 	}
 }
+
+func TestRebuildTaskCompleteFromHistory_TypedMissionInputs(t *testing.T) {
+	c := &Commander{taskComplete: &aitools.TaskCompleteTool{Routes: []aitools.RouteOption{{Target: "fix", IsMission: true}}}}
+	msgs := []llm.Message{
+		{Role: llm.RoleAssistant, Parts: []llm.ContentBlock{{Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{
+			ID: "route", Name: "task_complete", Input: json.RawMessage(`{"route":"fix","summary":"done","mission_inputs":{"messageable":false,"attempt":2,"evidence":"file.sql:42"}}`),
+		}}}},
+		{Role: llm.RoleUser, Parts: []llm.ContentBlock{{Type: llm.ContentTypeToolResult, ToolResult: &llm.ToolResultBlock{
+			ToolUseID: "route", Content: `{"status":"ok","routed_to_mission":"fix"}`,
+		}}}},
+	}
+	c.rebuildTaskCompleteFromHistory(msgs)
+	if !c.taskComplete.IsCompleted() || !c.taskComplete.IsMissionRoute() || c.taskComplete.ChosenRoute() != "fix" {
+		t.Fatal("accepted mission route was not restored")
+	}
+	inputs := c.taskComplete.MissionInputs()
+	if inputs["messageable"] != "false" || inputs["attempt"] != "2" || inputs["evidence"] != "file.sql:42" {
+		t.Fatalf("restored inputs = %#v", inputs)
+	}
+}

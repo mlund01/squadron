@@ -76,7 +76,7 @@ Signal that the task is done. Always include a `summary` of key findings and res
 
 Use `"route": "none"` if no route condition applies.
 
-For **cross-mission routes**, include `mission_inputs` for the target mission's required inputs:
+For **cross-mission routes**, include `mission_inputs` using the destination input definitions in the routing prompt. Supply actual task results; this call starts the destination mission when successful. Values accept native JSON types or string-encoded values:
 
 ```json
 {
@@ -84,7 +84,9 @@ For **cross-mission routes**, include `mission_inputs` for the target mission's 
   "route": "escalation_mission",
   "mission_inputs": {
     "complaint_summary": "Customer demands refund for defective product",
-    "severity": "critical"
+    "severity": "critical",
+    "customer_contacted": false,
+    "attempt": 2
   }
 }
 ```

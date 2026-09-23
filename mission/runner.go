@@ -1672,11 +1672,17 @@ func (r *Runner) routeOptionsForTask(task config.Task) []aitools.RouteOption {
 			for _, m := range r.cfg.Missions {
 				if m.Name == route.Target {
 					for _, inp := range m.Inputs {
+						// Protected inputs take their value from config, so the
+						// commander can't supply them.
+						if inp.Protected {
+							continue
+						}
 						opts[i].Inputs = append(opts[i].Inputs, aitools.RouteInput{
 							Name:        inp.Name,
 							Type:        inp.Type,
 							Description: inp.Description,
-							Required:    inp.Default == nil && !inp.Protected,
+							Required:    inp.Default == nil,
+							Validate:    inp.ValidateValue,
 						})
 					}
 					break

@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"math/big"
 	"regexp"
 	"strconv"
@@ -793,6 +794,13 @@ func (w *Mission) ResolveInputValues(provided map[string]string) (map[string]cty
 	return result, nil
 }
 
+// ValidateValue checks a supplied route input with the same parser used at
+// mission startup, so invalid values can be corrected before the sender completes.
+func (i MissionInput) ValidateValue(value string) error {
+	_, err := parseInputValue(value, i.Type)
+	return err
+}
+
 func parseInputValue(strVal string, inputType string) (cty.Value, error) {
 	switch inputType {
 	case InputTypeString:
@@ -802,11 +810,17 @@ func parseInputValue(strVal string, inputType string) (cty.Value, error) {
 		if err != nil {
 			return cty.NilVal, fmt.Errorf("invalid number: %w", err)
 		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return cty.NilVal, fmt.Errorf("invalid number: must be finite")
+		}
 		return cty.NumberFloatVal(f), nil
 	case InputTypeInteger:
 		f, err := strconv.ParseFloat(strVal, 64)
 		if err != nil {
 			return cty.NilVal, fmt.Errorf("invalid integer: %w", err)
+		}
+		if math.IsNaN(f) || math.IsInf(f, 0) {
+			return cty.NilVal, fmt.Errorf("invalid integer: must be finite")
 		}
 		bf := new(big.Float).SetFloat64(f)
 		if !bf.IsInt() {

@@ -48,7 +48,6 @@ func TestMissionScopedRunnerRestartsInFlightTaskWithoutNewAttempt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("NewRunner(second) error = %v", err)
 	}
-	defer second.CloseStores()
 	if err := second.Run(context.Background(), newMockMissionStreamer()); err != nil {
 		t.Fatalf("resumed Run() error = %v", err)
 	}
@@ -62,6 +61,33 @@ func TestMissionScopedRunnerRestartsInFlightTaskWithoutNewAttempt(t *testing.T) 
 	}
 	if calls := provider.callCount(); calls != 3 {
 		t.Fatalf("provider calls = %d, want commander + interrupted worker + resumed worker", calls)
+	}
+	costs, err := second.stores.Costs.GetCostsByMission(runID)
+	if err != nil {
+		t.Fatalf("GetCostsByMission() error = %v", err)
+	}
+	if len(costs) != 2 {
+		t.Fatalf("cost records = %#v, want one completed commander turn and one completed worker turn", costs)
+	}
+	if costs[0].InputTokens+costs[1].InputTokens != 18 || costs[0].OutputTokens+costs[1].OutputTokens != 7 {
+		t.Fatalf("cost token totals = input %d output %d, want 18 and 7", costs[0].InputTokens+costs[1].InputTokens, costs[0].OutputTokens+costs[1].OutputTokens)
+	}
+	second.CloseStores()
+
+	third, err := NewRunner(cfg, "", "restart_policy", nil, WithResume(runID), WithProviderFactory(func() llm.Provider { return provider }))
+	if err != nil {
+		t.Fatalf("NewRunner(third) error = %v", err)
+	}
+	defer third.CloseStores()
+	if err := third.Run(context.Background(), newMockMissionStreamer()); err != nil {
+		t.Fatalf("second replay Run() error = %v", err)
+	}
+	costs, err = third.stores.Costs.GetCostsByMission(runID)
+	if err != nil {
+		t.Fatalf("GetCostsByMission() after replay error = %v", err)
+	}
+	if len(costs) != 2 || provider.callCount() != 3 {
+		t.Fatalf("replay duplicated work or accounting: calls=%d costs=%#v", provider.callCount(), costs)
 	}
 }
 
@@ -113,13 +139,13 @@ func (p *restartTestProvider) ChatStream(ctx context.Context, _ *llm.ChatRequest
 		switch call {
 		case 1:
 			response := mockToolCall("start_task", json.RawMessage(`{"task_name":"work","model":"fast"}`))
-			ch <- llm.StreamChunk{Done: true, ContentBlocks: response.ContentBlocks}
+			ch <- llm.StreamChunk{Done: true, ContentBlocks: response.ContentBlocks, Usage: &llm.Usage{InputTokens: 7, OutputTokens: 2}}
 		case 2:
 			close(p.taskStarted)
 			<-ctx.Done()
 		case 3:
 			ch <- llm.StreamChunk{Content: "Work completed"}
-			ch <- llm.StreamChunk{Done: true}
+			ch <- llm.StreamChunk{Done: true, Usage: &llm.Usage{InputTokens: 11, OutputTokens: 5}}
 		}
 	}()
 	return ch, nil

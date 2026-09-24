@@ -3,6 +3,7 @@ package runtime
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -57,6 +58,7 @@ type Event struct {
 	ProgressPhase string
 	Recovery      *RecoveryBlock
 	Launch        *CrossMissionLaunch
+	Turns         []ModelTurnTelemetry
 }
 
 // BeginCommanderClarification atomically records the commander's control
@@ -97,7 +99,7 @@ func (h *DurableHarness) BeginCommanderClarification(prompt, message CommanderMe
 	after := candidate.Checkpoint()
 	events := []Event{
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: prompt.ID},
-		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID, Turns: messageTurns(message)},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventTaskClarificationRequested, OccurredAt: time.Now().UTC(), CorrelationID: request.RequestID, TaskName: request.TaskName, RequestID: request.RequestID},
 	}
 	if err := h.commit(before.Revision, after, events); err != nil {
@@ -156,7 +158,7 @@ func (h *DurableHarness) CompleteClarification(requestID, messageID string, resu
 	after := candidate.Checkpoint()
 	events := []Event{
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: ack.ID},
-		{RunID: after.RunID, Revision: after.Revision, Type: EventTaskClarified, OccurredAt: time.Now().UTC(), CorrelationID: requestID, TaskName: clarification.TaskName, RequestID: requestID},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventTaskClarified, OccurredAt: time.Now().UTC(), CorrelationID: requestID, TaskName: clarification.TaskName, RequestID: requestID, Turns: newModelTurns(before.ModelTurns, after.ModelTurns)},
 	}
 	if err := h.commit(before.Revision, after, events); err != nil {
 		return TaskClarification{}, fmt.Errorf("persisting task clarification: %w", err)
@@ -199,7 +201,7 @@ func (h *DurableHarness) ApplyCommanderInspection(prompt, message CommanderMessa
 	after := candidate.Checkpoint()
 	events := []Event{
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: prompt.ID},
-		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID, Turns: messageTurns(message)},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: ack.ID},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventTaskInspected, OccurredAt: time.Now().UTC(), CorrelationID: request.RequestID, TaskName: request.TaskName, RequestID: request.RequestID},
 	}
@@ -362,7 +364,7 @@ func (h *DurableHarness) SaveTaskProgressWithLease(dispatch Dispatch, progress T
 	events := []Event{{
 		RunID: after.RunID, Revision: after.Revision, Type: EventTaskProgressed,
 		OccurredAt: time.Now().UTC(), TaskName: dispatch.TaskName, AttemptID: dispatch.AttemptID,
-		CorrelationID: dispatch.AttemptID, ProgressPhase: committed.Phase,
+		CorrelationID: dispatch.AttemptID, ProgressPhase: committed.Phase, Turns: newModelTurns(before.ModelTurns, after.ModelTurns),
 	}}
 	if err := h.commit(before.Revision, after, events); err != nil {
 		return fmt.Errorf("persisting task progress: %w", err)
@@ -529,6 +531,7 @@ func (h *DurableHarness) AppendCommanderMessage(message CommanderMessage) error 
 		Type:          EventCommanderMessageAppended,
 		OccurredAt:    time.Now().UTC(),
 		CorrelationID: message.ID,
+		Turns:         messageTurns(message),
 	}}
 	if err := h.commit(before.Revision, after, events); err != nil {
 		return fmt.Errorf("persisting commander message: %w", err)
@@ -576,7 +579,7 @@ func (h *DurableHarness) ApplyCommanderDispatch(prompt, message CommanderMessage
 	}
 	events := []Event{
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: prompt.ID},
-		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID, Turns: messageTurns(message)},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: acknowledgement.ID},
 		{
 			RunID: after.RunID, Revision: after.Revision, Type: EventTaskDispatched, OccurredAt: time.Now().UTC(),
@@ -834,7 +837,7 @@ func (h *DurableHarness) ApplyCommanderRoute(prompt, message CommanderMessage, r
 	}
 	events := []Event{
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: prompt.ID},
-		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID, Turns: messageTurns(message)},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: ack.ID},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventRouteSelected, OccurredAt: time.Now().UTC(), CorrelationID: request.RequestID, TaskName: request.TaskName, RequestID: request.RequestID, Route: &selection},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventReadySetPublished, OccurredAt: time.Now().UTC()},
@@ -906,6 +909,28 @@ func validateEventSequence(runID string, events []Event) error {
 		}
 	}
 	return nil
+}
+
+func messageTurns(message CommanderMessage) []ModelTurnTelemetry {
+	if message.Telemetry == nil {
+		return nil
+	}
+	return []ModelTurnTelemetry{*message.Telemetry}
+}
+
+func newModelTurns(before, after map[string]ModelTurnTelemetry) []ModelTurnTelemetry {
+	ids := make([]string, 0)
+	for id := range after {
+		if _, existed := before[id]; !existed {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	turns := make([]ModelTurnTelemetry, 0, len(ids))
+	for _, id := range ids {
+		turns = append(turns, after[id])
+	}
+	return turns
 }
 
 func (h *DurableHarness) commit(expectedRevision uint64, checkpoint Checkpoint, events []Event) error {

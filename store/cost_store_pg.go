@@ -11,12 +11,16 @@ type PgCostStore struct {
 }
 
 func (s *PgCostStore) StoreTurnCost(cost TurnCostRecord) error {
+	if cost.ID == "" {
+		cost.ID = generateID()
+	}
 	_, err := s.db.Exec(
 		`INSERT INTO turn_costs (id, mission_id, task_id, session_id, mission_name, task_name, entity, model,
 		 input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
 		 input_cost, output_cost, cache_read_cost, cache_write_cost, total_cost,
-		 duration_ms, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)`,
-		generateID(), cost.MissionID, cost.TaskID, cost.SessionID,
+		 duration_ms, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+		 ON CONFLICT(id) DO NOTHING`,
+		cost.ID, cost.MissionID, cost.TaskID, cost.SessionID,
 		cost.MissionName, cost.TaskName, cost.Entity, cost.Model,
 		cost.InputTokens, cost.OutputTokens, cost.CacheWriteTokens, cost.CacheReadTokens,
 		cost.InputCost, cost.OutputCost, cost.CacheReadCost, cost.CacheWriteCost, cost.TotalCost,

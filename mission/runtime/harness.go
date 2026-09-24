@@ -141,9 +141,27 @@ type CommanderSession struct {
 // CommanderMessage is one immutable message in the run-scoped commander
 // conversation.
 type CommanderMessage struct {
-	ID    string
-	Role  string
-	Parts []store.MessagePart
+	ID        string
+	Role      string
+	Parts     []store.MessagePart
+	Telemetry *ModelTurnTelemetry
+}
+
+// ModelTurnTelemetry is the provider-neutral accounting record for one
+// completed model response. ID is stable within a mission run, so downstream
+// event, cost, and UI projections can upsert it without double-counting after
+// restart replay.
+type ModelTurnTelemetry struct {
+	ID               string `json:"id"`
+	SessionID        string `json:"sessionId"`
+	Entity           string `json:"entity"`
+	TaskName         string `json:"taskName,omitempty"`
+	Model            string `json:"model,omitempty"`
+	FinishReason     string `json:"finishReason,omitempty"`
+	InputTokens      int    `json:"inputTokens,omitempty"`
+	OutputTokens     int    `json:"outputTokens,omitempty"`
+	CacheWriteTokens int    `json:"cacheWriteTokens,omitempty"`
+	CacheReadTokens  int    `json:"cacheReadTokens,omitempty"`
 }
 
 // TaskSnapshot is the read-only task projection supplied to the commander.
@@ -179,6 +197,7 @@ type Snapshot struct {
 	PendingClarifications []ClarifyTaskRequest
 	Clarifications        map[string][]TaskClarification
 	RecoveryBlocks        map[string]RecoveryBlock
+	ModelTurns            map[string]ModelTurnTelemetry
 	MaxParallel           int
 	AllComplete           bool
 }
@@ -307,6 +326,7 @@ type Checkpoint struct {
 	PendingClarifications map[string]ClarifyTaskRequest
 	Clarifications        map[string][]TaskClarification
 	CommanderMessages     []CommanderMessage
+	ModelTurns            map[string]ModelTurnTelemetry
 }
 
 // Harness owns graph eligibility and state transitions for one mission run.
@@ -336,6 +356,7 @@ type Harness struct {
 	pendingClarifications map[string]ClarifyTaskRequest
 	clarifications        map[string][]TaskClarification
 	commanderMessages     []CommanderMessage
+	modelTurns            map[string]ModelTurnTelemetry
 }
 
 // NewHarness validates a mission graph and creates its pending run projection.
@@ -438,6 +459,7 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 		crossMissionLaunches:  make(map[string]CrossMissionLaunch),
 		pendingClarifications: make(map[string]ClarifyTaskRequest),
 		clarifications:        make(map[string][]TaskClarification),
+		modelTurns:            make(map[string]ModelTurnTelemetry),
 	}, nil
 }
 
@@ -655,6 +677,9 @@ func (h *Harness) SaveTaskProgressWithLease(dispatch Dispatch, progress TaskAtte
 		if prior.Status == ToolOperationCompleted && !reflect.DeepEqual(prior, operation) {
 			return fmt.Errorf("completed tool operation %q is immutable", id)
 		}
+	}
+	if err := h.recordTaskTranscriptTurnsLocked(progress.Transcript); err != nil {
+		return err
 	}
 	h.taskProgress[dispatch.AttemptID] = cloneTaskProgress(progress)
 	h.revision++
@@ -882,6 +907,9 @@ func (h *Harness) CompleteClarification(requestID string, result TaskClarificati
 	if len(result.Answer) == 0 || len(result.SessionTranscript) == 0 {
 		return TaskClarification{}, fmt.Errorf("clarification answer and updated session transcript are required")
 	}
+	if err := h.recordTaskTranscriptTurnsLocked(result.SessionTranscript); err != nil {
+		return TaskClarification{}, err
+	}
 	accepted := h.results[request.TaskName]
 	accepted.SessionTranscript = cloneTaskSessionMessages(result.SessionTranscript)
 	h.results[request.TaskName] = accepted
@@ -919,6 +947,11 @@ func (h *Harness) AppendCommanderMessage(message CommanderMessage) error {
 	}
 	if h.commander.State != CommanderActive && h.commander.State != CommanderWaiting {
 		return fmt.Errorf("commander session is not accepting messages")
+	}
+	if message.Telemetry != nil {
+		if err := h.recordModelTurnLocked(*message.Telemetry); err != nil {
+			return err
+		}
 	}
 	message.Parts = append([]store.MessagePart(nil), message.Parts...)
 	h.commanderMessages = append(h.commanderMessages, message)
@@ -991,6 +1024,7 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 		pendingClarifications: cloneMap(checkpoint.PendingClarifications),
 		clarifications:        cloneClarifications(checkpoint.Clarifications),
 		commanderMessages:     cloneCommanderMessages(checkpoint.CommanderMessages),
+		modelTurns:            cloneMap(checkpoint.ModelTurns),
 	}, nil
 }
 
@@ -1111,6 +1145,9 @@ func (h *Harness) CompleteTaskWithLease(taskName, attemptID string, result TaskR
 	}
 	accepted, err := validateTaskResult(active, h.tasks[taskName].ResultPolicy, result)
 	if err != nil {
+		return &ResultRejectedError{Err: err}
+	}
+	if err := h.recordTaskTranscriptTurnsLocked(accepted.SessionTranscript); err != nil {
 		return &ResultRejectedError{Err: err}
 	}
 	h.taskStates[taskName] = TaskCompleted
@@ -1369,6 +1406,7 @@ func (h *Harness) snapshotLocked() Snapshot {
 		PendingClarifications: pendingClarifications,
 		Clarifications:        cloneClarifications(h.clarifications),
 		RecoveryBlocks:        cloneMap(h.recoveryBlocks),
+		ModelTurns:            cloneMap(h.modelTurns),
 		MaxParallel:           h.maxParallel,
 		AllComplete:           h.allCompleteLocked(),
 	}
@@ -1406,7 +1444,34 @@ func (h *Harness) checkpointLocked() Checkpoint {
 		PendingClarifications: cloneMap(h.pendingClarifications),
 		Clarifications:        cloneClarifications(h.clarifications),
 		CommanderMessages:     cloneCommanderMessages(h.commanderMessages),
+		ModelTurns:            cloneMap(h.modelTurns),
 	}
+}
+
+func (h *Harness) recordTaskTranscriptTurnsLocked(messages []TaskSessionMessage) error {
+	for _, message := range messages {
+		if message.Telemetry == nil {
+			continue
+		}
+		if err := h.recordModelTurnLocked(*message.Telemetry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (h *Harness) recordModelTurnLocked(turn ModelTurnTelemetry) error {
+	if turn.ID == "" || turn.SessionID == "" || turn.Entity == "" {
+		return fmt.Errorf("model turn telemetry requires id, session, and entity")
+	}
+	if previous, ok := h.modelTurns[turn.ID]; ok {
+		if reflect.DeepEqual(previous, turn) {
+			return nil
+		}
+		return fmt.Errorf("model turn %q already exists with different telemetry", turn.ID)
+	}
+	h.modelTurns[turn.ID] = turn
+	return nil
 }
 
 func cloneTaskClarification(value TaskClarification) TaskClarification {
@@ -1559,6 +1624,10 @@ func cloneCommanderMessages(source []CommanderMessage) []CommanderMessage {
 	result := make([]CommanderMessage, len(source))
 	for index, message := range source {
 		message.Parts = append([]store.MessagePart(nil), message.Parts...)
+		if message.Telemetry != nil {
+			telemetry := *message.Telemetry
+			message.Telemetry = &telemetry
+		}
 		result[index] = message
 	}
 	return result

@@ -419,7 +419,10 @@ func TestSQLiteRestartRecoveryAcrossDurableBoundaries(t *testing.T) {
 	bundle, harness, events = reopenSQLiteHarness(t, dbPath, runID)
 	eventsAfterStart := len(events)
 	prompt := CommanderMessage{ID: "dispatch-prompt", Role: "user", Parts: []persistence.MessagePart{{Type: "text", Text: "start classify"}}}
-	message := CommanderMessage{ID: "dispatch-message", Role: "assistant", Parts: []persistence.MessagePart{{Type: "tool_use", ToolUseID: "dispatch-classify", ToolName: "start_task"}}}
+	message := CommanderMessage{
+		ID: "dispatch-message", Role: "assistant", Parts: []persistence.MessagePart{{Type: "tool_use", ToolUseID: "dispatch-classify", ToolName: "start_task"}},
+		Telemetry: &ModelTurnTelemetry{ID: "commander:turn:1:dispatch-message", SessionID: "commander", Entity: "commander", Model: "fast", InputTokens: 8, OutputTokens: 2},
+	}
 	request := DispatchRequest{
 		RequestID: "dispatch-classify", TaskName: "classify",
 		ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("classify"),
@@ -456,7 +459,7 @@ func TestSQLiteRestartRecoveryAcrossDurableBoundaries(t *testing.T) {
 		Phase:     "tool_calls_received",
 		Transcript: []TaskSessionMessage{{Role: "assistant", Parts: []persistence.MessagePart{{
 			Type: "tool_use", ToolUseID: "call-1", ToolName: "lookup", ToolInputJSON: `{"topic":"durability"}`,
-		}}}},
+		}}, Telemetry: &ModelTurnTelemetry{ID: dispatch.AttemptID + ":turn:1:task-response", SessionID: dispatch.AttemptID, Entity: "task", Model: "fast", InputTokens: 11, OutputTokens: 3}}},
 		Tools: map[string]ToolOperation{"call-1": {
 			ToolUseID: "call-1", ToolName: "lookup", InputJSON: `{"topic":"durability"}`, Status: ToolOperationIntended,
 		}},
@@ -561,6 +564,19 @@ func TestSQLiteRestartRecoveryAcrossDurableBoundaries(t *testing.T) {
 	}
 	if launch.State != CrossMissionLaunchLaunched || launch.ChildRunID != childRunID {
 		t.Fatalf("restored launch = %#v", launch)
+	}
+	turns := harness.Snapshot().ModelTurns
+	if len(turns) != 2 || turns[message.Telemetry.ID].InputTokens != 8 || turns[progress.Transcript[0].Telemetry.ID].OutputTokens != 3 {
+		t.Fatalf("restored model turns = %#v", turns)
+	}
+	turnEvents := make(map[string]int)
+	for _, event := range events {
+		for _, turn := range event.Turns {
+			turnEvents[turn.ID]++
+		}
+	}
+	if turnEvents[message.Telemetry.ID] != 1 || turnEvents[progress.Transcript[0].Telemetry.ID] != 1 {
+		t.Fatalf("turn event counts = %#v", turnEvents)
 	}
 	closeSQLiteBundle(t, bundle)
 	assertSQLiteEventCount(t, dbPath, runID, eventsAfterLaunch)

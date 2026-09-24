@@ -23,6 +23,8 @@ type CommanderModelSession interface {
 // ModelCommander adapts one persistent model session to CommanderDriver.
 type ModelCommander struct {
 	session CommanderModelSession
+	model   string
+	turns   int
 }
 
 // CommanderBootstrap is the immutable, model-visible run context. Callers
@@ -58,6 +60,7 @@ func NewModelCommanderWithProvider(provider llm.Provider, model string, bootstra
 	if err != nil {
 		return nil, nil, err
 	}
+	commander.model = model
 	return commander, session, nil
 }
 
@@ -108,7 +111,13 @@ func NewModelCommander(session CommanderModelSession, restored []CommanderMessag
 		{Name: "inspect_task", Description: "Read the complete accepted output for a completed task. Worker turns, reasoning, tool calls, and raw provider output are excluded.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"}},"required":["task_name"],"additionalProperties":false}`)},
 		{Name: "clarify_task_result", Description: "Ask the completed task worker one focused follow-up using its persisted session. Tools are disabled and the number of clarifications is bounded.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"question":{"type":"string","maxLength":4096}},"required":["task_name","question"],"additionalProperties":false}`)},
 	})
-	return &ModelCommander{session: session}, nil
+	turns := 0
+	for _, message := range restored {
+		if message.Telemetry != nil {
+			turns++
+		}
+	}
+	return &ModelCommander{session: session, turns: turns}, nil
 }
 
 func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, _ []CommanderMessage) (CommanderDecision, error) {
@@ -163,6 +172,13 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, _ []Comm
 	decision := CommanderDecision{
 		Prompt:  CommanderMessage{ID: messageID + ":prompt", Role: string(llm.RoleUser), Parts: agent.PartsFromMessage(prompt)},
 		Message: CommanderMessage{ID: messageID, Role: string(llm.RoleAssistant), Parts: agent.PartsFromMessage(assistantMessage)},
+	}
+	c.turns++
+	decision.Message.Telemetry = &ModelTurnTelemetry{
+		ID:        "commander:turn:" + fmt.Sprint(c.turns) + ":" + messageID,
+		SessionID: "commander", Entity: "commander", Model: c.model, FinishReason: response.FinishReason,
+		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
+		CacheWriteTokens: response.Usage.CacheWriteTokens, CacheReadTokens: response.Usage.CacheReadTokens,
 	}
 	if requested.Name == "clarify_task_result" {
 		var input struct {

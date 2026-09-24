@@ -299,6 +299,54 @@ func TestModelTaskSessionReturnsCommittedFinalResponseWithoutAnotherProviderCall
 	}
 }
 
+func TestModelTaskSessionPersistsStableTelemetryAcrossResume(t *testing.T) {
+	t.Parallel()
+	toolUse := &llm.ToolUseBlock{ID: "call-telemetry", Name: "lookup", Input: json.RawMessage(`{"id":"one"}`)}
+	firstModel := &fakeTaskModelSession{responses: []*llm.ChatResponse{
+		{ID: "provider-turn-1", FinishReason: "tool_use", Usage: llm.Usage{InputTokens: 10, OutputTokens: 2}, ContentBlocks: []llm.ContentBlock{{Type: llm.ContentTypeToolUse, ToolUse: toolUse}}},
+		{ID: "provider-turn-2", FinishReason: "end_turn", Usage: llm.Usage{InputTokens: 14, OutputTokens: 5, CacheReadTokens: 7}, Content: "done"},
+	}}
+	factory, _ := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: firstModel}, []TaskObjective{{Name: "work", Objective: "Do work"}})
+	dispatch := Dispatch{RunID: "run-telemetry", TaskName: "work", AttemptID: "run-telemetry:work:1", Grant: ExecutionGrant{TaskName: "work", Model: "fast", RunAs: "user:one", ConfigurationVersion: "v1"}}
+	session, _ := factory.NewTaskSession(context.Background(), dispatch, map[string]aitools.Tool{"lookup": &countingTool{name: "lookup"}})
+	var checkpoint TaskAttemptProgress
+	result, err := session.(ResumableTaskSession).RunResumable(context.Background(), TaskAttemptProgress{
+		AttemptID: dispatch.AttemptID, Phase: "dispatched", Tools: map[string]ToolOperation{},
+	}, func(next TaskAttemptProgress) error {
+		checkpoint = cloneTaskProgress(next)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("RunResumable() error = %v", err)
+	}
+	if result.Summary != "done" || checkpoint.Phase != "final_response" {
+		t.Fatalf("result/checkpoint = %#v / %#v", result, checkpoint)
+	}
+	var turns []ModelTurnTelemetry
+	for _, message := range checkpoint.Transcript {
+		if message.Telemetry != nil {
+			turns = append(turns, *message.Telemetry)
+		}
+	}
+	if len(turns) != 2 || turns[0].ID != dispatch.AttemptID+":turn:1:provider-turn-1" || turns[1].ID != dispatch.AttemptID+":turn:2:provider-turn-2" {
+		t.Fatalf("persisted turns = %#v", turns)
+	}
+	if turns[0].InputTokens != 10 || turns[1].OutputTokens != 5 || turns[1].CacheReadTokens != 7 {
+		t.Fatalf("persisted usage = %#v", turns)
+	}
+
+	restoredModel := &fakeTaskModelSession{}
+	restoredFactory, _ := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: restoredModel}, []TaskObjective{{Name: "work", Objective: "Do work"}})
+	restoredSession, _ := restoredFactory.NewTaskSession(context.Background(), dispatch, nil)
+	replayed, err := restoredSession.(ResumableTaskSession).RunResumable(context.Background(), checkpoint, func(TaskAttemptProgress) error { return nil })
+	if err != nil {
+		t.Fatalf("restored RunResumable() error = %v", err)
+	}
+	if replayed.Summary != "done" || restoredModel.index != 0 || len(restoredModel.prompts) != 0 {
+		t.Fatalf("restored result/provider calls = %#v / %d / %#v", replayed, restoredModel.index, restoredModel.prompts)
+	}
+}
+
 type fakeTaskModelSessionBuilder struct {
 	session  TaskModelSession
 	dispatch Dispatch

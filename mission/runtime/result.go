@@ -75,8 +75,9 @@ type TaskResultEnvelope struct {
 // logical session. The transcript is runtime state, not task output: it is
 // retained only so a bounded clarification can restore the exact session.
 type TaskSessionMessage struct {
-	Role  string              `json:"role"`
-	Parts []store.MessagePart `json:"parts"`
+	Role      string              `json:"role"`
+	Parts     []store.MessagePart `json:"parts"`
+	Telemetry *ModelTurnTelemetry `json:"telemetry,omitempty"`
 }
 
 // ResultField is the deterministic typed-data contract for a task. A nil or
@@ -272,6 +273,10 @@ func cloneTaskSessionMessages(messages []TaskSessionMessage) []TaskSessionMessag
 	result := make([]TaskSessionMessage, len(messages))
 	for index, message := range messages {
 		result[index] = TaskSessionMessage{Role: message.Role, Parts: append([]store.MessagePart(nil), message.Parts...)}
+		if message.Telemetry != nil {
+			telemetry := *message.Telemetry
+			result[index].Telemetry = &telemetry
+		}
 	}
 	return result
 }

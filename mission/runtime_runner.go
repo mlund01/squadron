@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"squadron/config"
 	"squadron/llm"
 	missionruntime "squadron/mission/runtime"
+	"squadron/store"
 	"squadron/streamers"
 )
 
@@ -95,18 +97,26 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	coordinator.SetExecutionObserver(&runtimeExecutionObserver{objectives: definitions, streamer: streamer})
 
 	streamer.MissionStarted(r.mission.Name, runID, len(definitions))
-	if err := coordinator.Run(ctx); err != nil {
+	runErr := coordinator.Run(ctx)
+	telemetryErr := r.projectRuntimeModelTurns(harness.Snapshot())
+	if runErr != nil {
 		status := "failed"
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
 			status = "stopped"
 		} else {
 			var waiting *missionruntime.MissionRecoveryWaitingError
-			if errors.As(err, &waiting) {
+			if errors.As(runErr, &waiting) {
 				status = "waiting"
 			}
 		}
 		_ = r.stores.Missions.UpdateMissionStatus(runID, status)
-		return err
+		if telemetryErr != nil {
+			return errors.Join(runErr, fmt.Errorf("project runtime model telemetry: %w", telemetryErr))
+		}
+		return runErr
+	}
+	if telemetryErr != nil {
+		return fmt.Errorf("project runtime model telemetry: %w", telemetryErr)
 	}
 	for _, launch := range harness.Snapshot().CrossMissionLaunches {
 		if launch.State != missionruntime.CrossMissionLaunchPending {
@@ -127,6 +137,59 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	}
 	streamer.MissionCompleted(r.mission.Name)
 	return nil
+}
+
+// projectRuntimeModelTurns materializes the runtime's durable, provider-neutral
+// turn ledger into the reporting store. Stable IDs and store-level upserts make
+// this safe after replay, including when a process died after a provider
+// response was checkpointed but before reporting was projected.
+func (r *Runner) projectRuntimeModelTurns(snapshot missionruntime.Snapshot) error {
+	ids := make([]string, 0, len(snapshot.ModelTurns))
+	for id := range snapshot.ModelTurns {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	for _, id := range ids {
+		turn := snapshot.ModelTurns[id]
+		model := r.runtimeAPIModel(turn.Model)
+		cost := llm.ComputeTurnCost(
+			llm.GetPricing(model, r.pricingOverrides),
+			turn.InputTokens,
+			turn.OutputTokens,
+			turn.CacheReadTokens,
+			turn.CacheWriteTokens,
+		)
+		if err := r.stores.Costs.StoreTurnCost(store.TurnCostRecord{
+			ID:               r.missionID + ":" + turn.ID,
+			MissionID:        r.missionID,
+			SessionID:        turn.SessionID,
+			MissionName:      r.mission.Name,
+			TaskName:         turn.TaskName,
+			Entity:           turn.Entity,
+			Model:            model,
+			InputTokens:      turn.InputTokens,
+			OutputTokens:     turn.OutputTokens,
+			CacheWriteTokens: turn.CacheWriteTokens,
+			CacheReadTokens:  turn.CacheReadTokens,
+			InputCost:        cost.InputCost,
+			OutputCost:       cost.OutputCost,
+			CacheReadCost:    cost.CacheReadCost,
+			CacheWriteCost:   cost.CacheWriteCost,
+			TotalCost:        cost.TotalCost,
+		}); err != nil {
+			return fmt.Errorf("store turn %q: %w", turn.ID, err)
+		}
+	}
+	return nil
+}
+
+func (r *Runner) runtimeAPIModel(modelKey string) string {
+	for i := range r.cfg.Models {
+		if apiName, ok := r.cfg.Models[i].AvailableModels()[modelKey]; ok {
+			return apiName
+		}
+	}
+	return modelKey
 }
 
 func (r *Runner) visibleRuntimeInputs() map[string]any {

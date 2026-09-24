@@ -147,7 +147,14 @@ func (f *ModelTaskSessionFactory) Clarify(ctx context.Context, dispatch Dispatch
 	if len(answer) == 0 {
 		return TaskClarificationResult{}, fmt.Errorf("task worker returned an empty clarification")
 	}
-	return TaskClarificationResult{Answer: answer, SessionTranscript: taskSessionMessagesFromLLM(session.SnapshotMessages())}, nil
+	updatedTranscript, err := captureTaskTurnTelemetry(
+		taskSessionMessagesFromLLM(session.SnapshotMessages()), transcript, response,
+		dispatch.AttemptID, "task", dispatch.TaskName, dispatch.Grant.Model,
+	)
+	if err != nil {
+		return TaskClarificationResult{}, err
+	}
+	return TaskClarificationResult{Answer: answer, SessionTranscript: updatedTranscript}, nil
 }
 
 type modelTaskSession struct {
@@ -213,8 +220,22 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 		if err != nil {
 			return TaskResultEnvelope{}, err
 		}
+		progress.Transcript, err = captureTaskTurnTelemetry(
+			taskSessionMessagesFromLLM(s.session.SnapshotMessages()), progress.Transcript, response,
+			s.dispatch.AttemptID, "task", s.dispatch.TaskName, s.dispatch.Grant.Model,
+		)
+		if err != nil {
+			return TaskResultEnvelope{}, err
+		}
 	} else if progress.Phase == "tool_results_added" {
 		response, err = s.session.ContinueStream(ctx, nil)
+		if err != nil {
+			return TaskResultEnvelope{}, err
+		}
+		progress.Transcript, err = captureTaskTurnTelemetry(
+			taskSessionMessagesFromLLM(s.session.SnapshotMessages()), progress.Transcript, response,
+			s.dispatch.AttemptID, "task", s.dispatch.TaskName, s.dispatch.Grant.Model,
+		)
 		if err != nil {
 			return TaskResultEnvelope{}, err
 		}
@@ -227,7 +248,7 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 	for turn := 0; turn < maxTaskSessionTurns; turn++ {
 		toolUses := taskToolUses(response)
 		if len(toolUses) == 0 {
-			progress.Transcript = taskSessionMessagesFromLLM(s.session.SnapshotMessages())
+			progress.Transcript = mergeTaskTurnTelemetry(taskSessionMessagesFromLLM(s.session.SnapshotMessages()), progress.Transcript)
 			progress.Phase = "final_response"
 			if err := commit(progress); err != nil {
 				return TaskResultEnvelope{}, &TaskRecoveryBlockedError{Err: fmt.Errorf("checkpoint final task response: %w", err)}
@@ -236,10 +257,10 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 			if err != nil {
 				return TaskResultEnvelope{}, err
 			}
-			result.SessionTranscript = taskSessionMessagesFromLLM(s.session.SnapshotMessages())
+			result.SessionTranscript = cloneTaskSessionMessages(progress.Transcript)
 			return result, nil
 		}
-		progress.Transcript = taskSessionMessagesFromLLM(s.session.SnapshotMessages())
+		progress.Transcript = mergeTaskTurnTelemetry(taskSessionMessagesFromLLM(s.session.SnapshotMessages()), progress.Transcript)
 		progress.Phase = "tool_calls_received"
 		for _, call := range toolUses {
 			if _, exists := progress.Tools[call.ID]; !exists {
@@ -308,7 +329,7 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 			results = append(results, toolResult)
 		}
 		s.session.AddToolResults(results)
-		progress.Transcript = taskSessionMessagesFromLLM(s.session.SnapshotMessages())
+		progress.Transcript = mergeTaskTurnTelemetry(taskSessionMessagesFromLLM(s.session.SnapshotMessages()), progress.Transcript)
 		progress.Phase = "tool_results_added"
 		if err := commit(progress); err != nil {
 			return TaskResultEnvelope{}, &TaskRecoveryBlockedError{Err: fmt.Errorf("checkpoint task tool results: %w", err)}
@@ -317,8 +338,63 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 		if err != nil {
 			return TaskResultEnvelope{}, err
 		}
+		progress.Transcript, err = captureTaskTurnTelemetry(
+			taskSessionMessagesFromLLM(s.session.SnapshotMessages()), progress.Transcript, response,
+			s.dispatch.AttemptID, "task", s.dispatch.TaskName, s.dispatch.Grant.Model,
+		)
+		if err != nil {
+			return TaskResultEnvelope{}, err
+		}
 	}
 	return TaskResultEnvelope{}, fmt.Errorf("task session exceeded %d turns", maxTaskSessionTurns)
+}
+
+func captureTaskTurnTelemetry(current, previous []TaskSessionMessage, response *llm.ChatResponse, sessionID, entity, taskName, model string) ([]TaskSessionMessage, error) {
+	current = mergeTaskTurnTelemetry(current, previous)
+	if response == nil {
+		return nil, fmt.Errorf("cannot capture telemetry for an empty model response")
+	}
+	assistantIndex := -1
+	for index := len(current) - 1; index >= 0; index-- {
+		if current[index].Role == string(llm.RoleAssistant) {
+			assistantIndex = index
+			break
+		}
+	}
+	if assistantIndex < 0 {
+		return nil, fmt.Errorf("model response did not produce an assistant transcript message")
+	}
+	if current[assistantIndex].Telemetry != nil {
+		return nil, fmt.Errorf("assistant transcript message already has turn telemetry")
+	}
+	ordinal := 1
+	for _, message := range current {
+		if message.Telemetry != nil {
+			ordinal++
+		}
+	}
+	responseID := response.ID
+	if responseID == "" {
+		responseID = "response"
+	}
+	current[assistantIndex].Telemetry = &ModelTurnTelemetry{
+		ID:        sessionID + ":turn:" + fmt.Sprint(ordinal) + ":" + responseID,
+		SessionID: sessionID, Entity: entity, TaskName: taskName, Model: model, FinishReason: response.FinishReason,
+		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
+		CacheWriteTokens: response.Usage.CacheWriteTokens, CacheReadTokens: response.Usage.CacheReadTokens,
+	}
+	return current, nil
+}
+
+func mergeTaskTurnTelemetry(current, previous []TaskSessionMessage) []TaskSessionMessage {
+	for index := 0; index < len(current) && index < len(previous); index++ {
+		if previous[index].Telemetry == nil {
+			continue
+		}
+		telemetry := *previous[index].Telemetry
+		current[index].Telemetry = &telemetry
+	}
+	return current
 }
 
 func responseFromTaskTranscript(transcript []TaskSessionMessage) (*llm.ChatResponse, error) {

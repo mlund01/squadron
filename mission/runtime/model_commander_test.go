@@ -14,7 +14,7 @@ func TestModelCommanderExposesOnlyStartTaskAndRestoresTranscript(t *testing.T) {
 	t.Parallel()
 
 	session := &fakeCommanderSession{response: &llm.ChatResponse{
-		ID: "response-1",
+		ID: "response-1", FinishReason: "tool_use", Usage: llm.Usage{InputTokens: 12, OutputTokens: 4, CacheReadTokens: 3},
 		ContentBlocks: []llm.ContentBlock{{
 			Type:    llm.ContentTypeToolUse,
 			ToolUse: &llm.ToolUseBlock{ID: "tool-1", Name: "start_task", Input: json.RawMessage(`{"task_name":"collect","model":"fast"}`)},
@@ -47,6 +47,9 @@ func TestModelCommanderExposesOnlyStartTaskAndRestoresTranscript(t *testing.T) {
 	}
 	if len(decision.Message.Parts) != 1 || decision.Message.Parts[0].ToolName != "start_task" {
 		t.Fatalf("assistant message = %#v", decision.Message)
+	}
+	if turn := decision.Message.Telemetry; turn == nil || turn.ID != "commander:turn:1:response-1" || turn.InputTokens != 12 || turn.OutputTokens != 4 || turn.CacheReadTokens != 3 {
+		t.Fatalf("commander telemetry = %#v", turn)
 	}
 
 	commander.DispatchAccepted(Dispatch{RequestID: "tool-1", AttemptID: "run-1:collect:1", TaskName: "collect"})

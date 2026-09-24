@@ -6,13 +6,13 @@ title: Memory & Scratchpad
 
 Squadron gives missions two kinds of file storage:
 
-| Kind | What it's for | Lifetime | Slot name agents use |
+| Kind | What it's for | Lifetime | Slot name task executors use |
 |------|---------------|----------|-----------------------|
 | **Shared memory** | Reference or output data many missions touch | Persists | the HCL label |
 | **Mission memory** | A mission's own long-lived state — archives, accumulated output | Persists | `"memory"` |
 | **Mission scratchpad** | Working space for one mission run — intermediate files, drafts | One per run, auto-deleted after 7 days | `"scratchpad"` |
 
-Agents reach all three through the same `file_list`, `file_read`, `file_view`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools, naming the slot on each call via the `slot` parameter. **Every slot is writable** — there is no read-only mode.
+Task executors reach granted slots through the same `file_list`, `file_read`, `file_view`, `file_create`, `file_delete`, `file_search`, and `file_grep` tools, naming the slot on each call via the `slot` parameter. **Every granted memory slot is writable** — there is no read-only mode.
 
 > **No `path` attribute.** Squadron owns the on-disk layout — you declare what storage you need and Squadron picks the path. Everything lives under `<squadron_home>/`.
 
@@ -32,14 +32,14 @@ memory "reference" {
 
 | Attribute | Type | Description |
 |-----------|------|-------------|
-| `description` | string (required) | Human-readable description shown to agents |
+| `description` | string (required) | Human-readable description shown to task executors |
 
 Missions opt in by listing them, then refer to them by name in tool calls:
 
 ```hcl
 mission "analyze" {
   memories = [memories.research, memories.reference]
-  # agents call e.g. file_read with slot = "research"
+  # task executors call e.g. file_read with slot = "research"
 }
 ```
 
@@ -57,7 +57,7 @@ mission "analyze" {
 }
 ```
 
-Same shape as the top-level memory block (just a required `description`) — no label because the slot name is always `"memory"`. Agents reach it under that name:
+Same shape as the top-level memory block (just a required `description`) — no label because the slot name is always `"memory"`. Task executors reach it under that name:
 
 ```json
 { "slot": "memory", "path": "2026-04-23/report.md", "content": "..." }
@@ -67,7 +67,7 @@ Same shape as the top-level memory block (just a required `description`) — no 
 |-----------|------|-------------|
 | `description` | string (required) | What this mission's memory is for |
 
-A mission with no `memory { ... }` block has no `"memory"` slot — agents only see whatever shared memories the mission lists (plus the scratchpad, if enabled).
+A mission with no `memory { ... }` block has no `"memory"` slot — task executors only see the shared memories granted by mission policy (plus the scratchpad, if enabled).
 
 ## Mission Scratchpad
 
@@ -81,9 +81,9 @@ mission "analyze" {
 }
 ```
 
-That's the whole configuration. Scratchpads are auto-deleted 7 days after the run started — long enough to inspect what an agent produced and to resume a mission with `squadron mission --resume <id>`, short enough to keep disk usage in check.
+That's the whole configuration. Scratchpads are auto-deleted 7 days after the run started — long enough to inspect what a task executor produced and to resume a mission with `squadron mission --resume <id>`, short enough to keep disk usage in check.
 
-Agents reach it under the name `scratchpad`:
+Task executors reach it under the name `scratchpad`:
 
 ```json
 { "slot": "scratchpad", "path": "notes.txt", "content": "..." }
@@ -93,7 +93,7 @@ Agents reach it under the name `scratchpad`:
 
 Reach for the scratchpad when one run needs working storage that the *next* run shouldn't see:
 
-- **Multi-step or multi-agent pipelines.** Agent A scrapes 50 pages and writes them to `scratchpad/raw/`; agent B reads, filters, and summarizes; agent C writes only the final summary to `memory/`. Each run starts clean — no stale `raw/` files leaking between runs.
+- **Multi-step mission pipelines.** One task scrapes 50 pages into `scratchpad/raw/`; a dependent task reads, filters, and summarizes them; a final task writes only the finished summary to `memory/`. Each run starts clean.
 - **Intermediate computation you don't want to ship.** Partial JSON, debug dumps, retry attempts, half-rendered output — anything the LLM produces while figuring out the right answer but that shouldn't accumulate forever.
 - **Per-run isolation under concurrency.** Two simultaneous runs of the same mission can both write to `scratchpad` without colliding; each gets its own `<mission>/<run-id>/` directory.
 - **Resume material.** If a long-running mission crashes mid-flight, its scratchpad stays on disk so `squadron mission --resume <id>` can pick up where it left off.

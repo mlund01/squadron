@@ -14,6 +14,7 @@ type ToolInfo struct {
 	Name        string
 	Description string
 	Schema      aitools.Schema
+	Idempotent  bool
 }
 
 // convertSchema translates an MCP tool input schema into an aitools.Schema.

@@ -30,6 +30,7 @@ func NewSQLiteBundle(dbPath string) (*Bundle, error) {
 	batchingEvents := NewBatchingEventStore(&SQLiteEventStore{db: db})
 	return &Bundle{
 		Missions:    &SQLiteMissionStore{db: db},
+		Runtime:     &SQLiteRuntimeStore{db: db},
 		Datasets:    &SQLiteDatasetStore{db: db},
 		Sessions:    &SQLiteSessionStore{db: db},
 		Events:      batchingEvents,

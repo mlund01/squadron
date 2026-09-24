@@ -36,15 +36,15 @@ func newBareClient() *Client {
 	ctx, cancel := context.WithCancel(context.Background())
 	DeferCleanup(cancel)
 	return &Client{
-		send:        make(chan []byte, 16),
-		handlers:    make(map[protocol.MessageType]RequestHandler),
-		pending:     make(map[string]chan *protocol.Envelope),
-		humanInputs: newHumanInputListeners(),
-		stores:      bundle,
+		send:          make(chan []byte, 16),
+		handlers:      make(map[protocol.MessageType]RequestHandler),
+		pending:       make(map[string]chan *protocol.Envelope),
+		humanInputs:   newHumanInputListeners(),
+		stores:        bundle,
 		subscriptions: NewSubscriptionManager(),
-		ctx:         ctx,
-		stop:        cancel,
-		done:        make(chan struct{}),
+		ctx:           ctx,
+		stop:          cancel,
+		done:          make(chan struct{}),
 	}
 }
 
@@ -78,6 +78,22 @@ var _ = Describe("humanInputListeners", func() {
 })
 
 var _ = Describe("Client.AskHuman", func() {
+	It("returns an already-resolved durable request immediately after restart", func() {
+		c := newBareClient()
+		Expect(c.stores.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+			ToolCallID: "stable-call", Question: "pick one",
+		})).To(Succeed())
+		_, err := c.stores.HumanInputs.ResolveRequest("stable-call", "A", "user@example.com")
+		Expect(err).NotTo(HaveOccurred())
+
+		response, err := c.AskHuman(context.Background(), aitools.HumanInputRequest{
+			ToolCallID: "stable-call", Question: "pick one",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(response).To(Equal("A"))
+		Expect(c.HumanInputReplaySafe()).To(BeTrue())
+	})
+
 	It("persists an open request and unblocks when a resolution arrives", func() {
 		c := newBareClient()
 

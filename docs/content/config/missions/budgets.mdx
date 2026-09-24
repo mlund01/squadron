@@ -4,7 +4,7 @@ title: Budgets
 
 # Budgets
 
-Missions and tasks can declare spending limits in a `budget` block. When a limit is reached, the current task fails and the whole mission fails — in-flight commanders and agents unwind immediately.
+Missions and tasks can declare spending limits in a `budget` block. When a limit is reached, the current task fails and the whole mission fails — the commander and in-flight task executors unwind immediately.
 
 Both a **token** cap and a **dollar** cap are supported. Either one alone is valid; the first limit reached wins.
 
@@ -32,11 +32,11 @@ Conversely, a **dollar-only** budget is useful when you want one number that nat
 
 ### Mission budget
 
-Sums tokens and cost across every task in the mission — commanders, agents they spawn, every iteration of every iterated task. The first limit reached fails the mission.
+Sums tokens and cost across the mission commander and every task-executor attempt, including every iteration of an iterated task. The first limit reached fails the mission.
 
 ### Task budget
 
-Sums across that task's commander and every agent it spawns. **Iteration suffixes are stripped** — `crawl[0]`, `crawl[1]`, `crawl[2]` all contribute to the same `crawl` counter. That means a task-level budget caps the whole iterated task, not each iteration.
+Sums across every executor attempt for that task. **Iteration suffixes are stripped** — `crawl[0]`, `crawl[1]`, `crawl[2]` all contribute to the same `crawl` counter. That means a task-level budget caps the whole iterated task, not each iteration.
 
 ### Validation
 

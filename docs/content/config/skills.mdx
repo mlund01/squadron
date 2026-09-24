@@ -66,27 +66,9 @@ agent "assistant" {
 }
 ```
 
-Agent-scoped skills are implicitly available — they don't need to be listed in `skills = [...]`. They can also be used on mission-scoped agents:
-
-```hcl
-mission "research" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-
-  agent "worker" {
-    model       = models.anthropic.claude_sonnet_4
-    personality = "Efficient"
-    skills      = [skills.web_scraping]
-
-    skill "mission_helper" {
-      description  = "Load for mission-specific analysis"
-      instructions = load("./skills/mission_analysis.md")
-    }
-  }
-
-  agents = [agents.worker]
-  task "analyze" { objective = "Analyze the target" }
-}
-```
+Agent-scoped skills are implicitly available — they don't need to be listed in
+`skills = [...]`. Missions are separate from managed agents; mission task
+executors receive only the skills and capabilities declared by mission policy.
 
 ## How Skills Work at Runtime
 

@@ -119,10 +119,16 @@ func (c *MissionCommander) GetToolResponseMaxBytes() int {
 
 // Mission represents a mission configuration with multiple tasks
 type Mission struct {
-	Name         string              `hcl:"name,label"`
-	Directive    string              `hcl:"directive,optional"`
-	Source       *ConfigSource       `hcl:"-" json:"-"`
-	Commander    *MissionCommander   `json:"-"` // Parsed manually from commander block
+	Name      string            `hcl:"name,label"`
+	Directive string            `hcl:"directive,optional"`
+	Source    *ConfigSource     `hcl:"-" json:"-"`
+	Commander *MissionCommander `json:"-"` // Parsed manually from commander block
+	// Models is the mission-level model pool that the commander may assign to
+	// task executors. It is intentionally separate from the commander's model.
+	Models []string `json:"models,omitempty"`
+	// Tools is the mission-level capability pool that the commander may grant
+	// to task executors. The commander never receives these tools itself.
+	Tools        []string            `json:"tools,omitempty"`
 	Agents       []string            `hcl:"agents"`
 	LocalAgents  []Agent             `json:"localAgents,omitempty"` // Mission-scoped agents
 	Tasks        []Task              `hcl:"task,block"`
@@ -154,13 +160,34 @@ type Task struct {
 	ObjectiveExpr hcl.Expression `json:"-"`
 	RawObjective  string         `json:"rawObjective,omitempty"` // Raw objective text from HCL source (with ${...} placeholders intact)
 	Agents        []string       `hcl:"agents,optional" json:"agents,omitempty"`
-	Packets       []string       `json:"packets,omitempty"` // task-scoped declared packet references (parsed manually)
-	DependsOn     []string       `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
-	Iterator      *TaskIterator  `json:"iterator,omitempty"`
-	Output        *OutputSchema  `json:"output,omitempty"`
-	Router        *TaskRouter    `json:"router,omitempty"`
-	SendTo        []string       `json:"sendTo,omitempty"`
-	Budget        *Budget        `json:"budget,omitempty"`
+	// Models narrows the mission model pool for this task. When omitted, the
+	// executor may use any model declared by the mission.
+	Models []string `json:"models,omitempty"`
+	// Tools are capabilities always granted to this task executor. Additional
+	// tools may be selected from the mission-level tool pool at dispatch time.
+	Tools      []string      `json:"tools,omitempty"`
+	MaxRetries int           `json:"maxRetries,omitempty"`
+	Packets    []string      `json:"packets,omitempty"` // task-scoped declared packet references (parsed manually)
+	DependsOn  []string      `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
+	Iterator   *TaskIterator `json:"iterator,omitempty"`
+	Output     *OutputSchema `json:"output,omitempty"`
+	Router     *TaskRouter   `json:"router,omitempty"`
+	SendTo     []string      `json:"sendTo,omitempty"`
+	Budget     *Budget       `json:"budget,omitempty"`
+}
+
+// HasExecutorPolicy reports whether the mission declares model or tool policy
+// for its task executors.
+func (m *Mission) HasExecutorPolicy() bool {
+	if len(m.Models) > 0 || len(m.Tools) > 0 {
+		return true
+	}
+	for _, task := range m.Tasks {
+		if len(task.Models) > 0 || len(task.Tools) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // TaskRouter defines conditional routing after task completion
@@ -190,6 +217,18 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, pa
 		return fmt.Errorf("commander '%s' not found in models", w.Commander.Model)
 	}
 
+	hasExecutorPolicy := w.HasExecutorPolicy()
+	if hasExecutorPolicy {
+		if len(w.Agents) > 0 || len(w.LocalAgents) > 0 {
+			return fmt.Errorf("missions cannot reference managed agents; declare executor models and tools on the mission or task")
+		}
+		for _, modelRef := range w.Models {
+			if !isValidModelRef(modelRef, models) {
+				return fmt.Errorf("executor model '%s' not found in models", modelRef)
+			}
+		}
+	}
+
 	// Validate compaction settings if present
 	if w.Commander.Compaction != nil {
 		if w.Commander.Compaction.TokenLimit <= 0 {
@@ -217,10 +256,12 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, pa
 		w.Commander.Reasoning = normalized
 	}
 
-	// Validate mission-scoped (local) agents
-	for i := range w.LocalAgents {
-		if err := w.LocalAgents[i].Validate(); err != nil {
-			return err
+	// Managed agents are a separate product primitive and are not task executors.
+	if !hasExecutorPolicy {
+		for i := range w.LocalAgents {
+			if err := w.LocalAgents[i].Validate(); err != nil {
+				return err
+			}
 		}
 	}
 
@@ -333,7 +374,7 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, pa
 
 	// Validate each task
 	for _, t := range w.Tasks {
-		if err := t.Validate(taskNames, agentNames, datasetNames, w.Agents, allMissionNames); err != nil {
+		if err := t.Validate(taskNames, agentNames, datasetNames, w.Agents, w.Models, models, hasExecutorPolicy, allMissionNames); err != nil {
 			return fmt.Errorf("task '%s': %w", t.Name, err)
 		}
 	}
@@ -674,7 +715,7 @@ func isValidModelRef(modelRef string, models []Model) bool {
 
 // Validate checks that the task configuration is valid
 // missionAgents are the agents defined at the mission level
-func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, datasetNames map[string]bool, missionAgents []string, allMissionNames map[string]bool) error {
+func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, datasetNames map[string]bool, missionAgents []string, missionModels []string, configuredModels []Model, hasExecutorPolicy bool, allMissionNames map[string]bool) error {
 	if t.Name == "" {
 		return fmt.Errorf("task name is required")
 	}
@@ -683,15 +724,38 @@ func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, d
 		return fmt.Errorf("objective is required")
 	}
 
-	// Task must have agents either at task level or mission level
-	if len(t.Agents) == 0 && len(missionAgents) == 0 {
-		return fmt.Errorf("no agents specified (neither at task nor mission level)")
-	}
-
-	// Validate task-level agent references (if specified)
-	for _, agentRef := range t.Agents {
-		if !agentNames[agentRef] {
-			return fmt.Errorf("agent '%s' not found", agentRef)
+	if hasExecutorPolicy {
+		if len(t.Agents) > 0 {
+			return fmt.Errorf("mission tasks cannot reference managed agents")
+		}
+		allowedModels := missionModels
+		if len(t.Models) > 0 {
+			allowedModels = t.Models
+		}
+		if len(allowedModels) == 0 {
+			return fmt.Errorf("no executor models specified (neither at task nor mission level)")
+		}
+		missionModelSet := make(map[string]bool, len(missionModels))
+		for _, modelRef := range missionModels {
+			missionModelSet[modelRef] = true
+		}
+		for _, modelRef := range t.Models {
+			if !isValidModelRef(modelRef, configuredModels) {
+				return fmt.Errorf("executor model '%s' not found in models", modelRef)
+			}
+			if len(missionModelSet) > 0 && !missionModelSet[modelRef] {
+				return fmt.Errorf("executor model '%s' is not in the mission model pool", modelRef)
+			}
+		}
+	} else {
+		// Legacy missions require agents either at task or mission scope.
+		if len(t.Agents) == 0 && len(missionAgents) == 0 {
+			return fmt.Errorf("no agents specified (neither at task nor mission level)")
+		}
+		for _, agentRef := range t.Agents {
+			if !agentNames[agentRef] {
+				return fmt.Errorf("agent '%s' not found", agentRef)
+			}
 		}
 	}
 

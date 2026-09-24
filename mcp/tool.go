@@ -23,6 +23,7 @@ type mcpTool struct {
 func (t *mcpTool) ToolName() string                  { return t.info.Name }
 func (t *mcpTool) ToolDescription() string           { return t.info.Description }
 func (t *mcpTool) ToolPayloadSchema() aitools.Schema { return t.info.Schema }
+func (t *mcpTool) ToolReplaySafe() bool              { return t.info.Idempotent }
 
 // Call invokes the tool on the MCP server. params is a JSON string (the agent's
 // serialized arguments). The return value is a plain string suitable for an
@@ -50,6 +51,7 @@ func (t *mcpTool) CallMedia(ctx context.Context, params string) (string, []aitoo
 	req := mcpproto.CallToolRequest{}
 	req.Params.Name = t.info.Name
 	req.Params.Arguments = args
+	applyInvocationMetadata(ctx, &req)
 
 	result, err := t.callOnce(ctx, req)
 	if err != nil && isTransportError(err) {
@@ -71,6 +73,17 @@ func (t *mcpTool) CallMedia(ctx context.Context, params string) (string, []aitoo
 		return "error: " + text, nil
 	}
 	return text, media
+}
+
+func applyInvocationMetadata(ctx context.Context, req *mcpproto.CallToolRequest) {
+	metadata, ok := aitools.InvocationMetadataFromContext(ctx)
+	if !ok || metadata.IdempotencyKey == "" {
+		return
+	}
+	req.Params.Meta = mcpproto.NewMetaFromMap(map[string]any{
+		"squadron.io/idempotency-key": metadata.IdempotencyKey,
+		"squadron.io/tool-use-id":     metadata.ToolUseID,
+	})
 }
 
 func contentFromMCPResult(result *mcpproto.CallToolResult) (string, []aitools.MediaBlock) {

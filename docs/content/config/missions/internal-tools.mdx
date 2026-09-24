@@ -1,362 +1,50 @@
 ---
-title: Internal Tools
+title: Internal Controls
 ---
 
-# Internal Tools
+# Internal Controls
 
-Missions use specialized internal tools that enable communication between commanders and agents. These tools are automatically available during mission execution and are managed by the system.
+The mission commander receives a small intrinsic control surface. These
+operations are implemented by the harness and are not plugin, MCP, or built-in
+tools. They cannot expose task credentials or invoke task capabilities.
 
-> **Note:** These tools are used internally by the mission runtime. You do not need to configure or reference them in your mission definitions — they are automatically available to commanders and agents as needed.
+## `inspect_mission`
 
-## Commander Tools
+Returns the current mission status, declared graph, ready set, running work,
+completed results, pending human input, and remaining budgets.
 
-Commanders have access to tools for planning work, delegating to agents, submitting outputs, and querying data from completed tasks.
+## `start_task`
 
-### Subtask Planning
+Requests execution of a ready task. The request identifies the task, selects an
+allowed model, and may select capabilities from the mission-level pool. The
+harness rejects tasks outside the ready set and any model or capability outside
+the declared policy.
 
-Every commander must plan its work using subtasks before doing anything else.
+Task-level tools are always included in the resulting immutable grant.
 
-#### set_subtasks
+## `inspect_task`
 
-Define the ordered subtasks for the current task. This **must** be the commander's first action.
+Returns persisted state and results for a task. The commander receives compact
+result content and artifact references; the full executor transcript and raw
+tool activity remain available to operators through run drill-in.
 
-```json
-{
-  "subtasks": ["Research the API endpoints", "Implement data extraction", "Validate results"]
-}
-```
+## `select_route`
 
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `subtasks` | array of strings | Ordered list of 1-10 subtask titles (required) |
+Selects one of the routes declared by a completed routing task. The harness
+validates the selection and applies the graph transition atomically.
 
-Once any subtask has been completed, the plan is locked and `set_subtasks` cannot be called again. For sequential dataset tasks, `set_subtasks` can be called again after each `dataset_next` advancement.
+## `finish_mission`
 
-#### get_subtasks
+Requests mission completion. The harness accepts the request only when required
+work is complete and no unresolved runtime condition prevents completion.
 
-Get all subtasks with their current status.
+## Task executor tools
 
-```json
-{}
-```
+Task executors receive only the capabilities in their persisted dispatch grant:
 
-Returns each subtask's index, title, and status (`pending`, `in_progress`, or `completed`).
+- tools declared directly on the task; and
+- optional tools selected from the mission-level pool.
 
-#### complete_subtask
-
-Mark the current subtask as completed and advance to the next one.
-
-```json
-{}
-```
-
-Completes the first non-completed subtask in order. All subtasks must be completed before calling `task_complete`.
-
-### Task Completion
-
-#### task_complete
-
-Signal that the task is done. Always include a `summary` of key findings and results — this is passed as context to downstream dependent tasks.
-
-```json
-{
-  "summary": "Analyzed the data and found 3 key trends...",
-  "succeed": true
-}
-```
-
-**With routing:** If the task has a `router` block, route options are injected as a system prompt. The commander must include a `route` parameter when calling `task_complete`:
-
-```json
-{
-  "summary": "Classified request as billing issue based on keyword analysis.",
-  "route": "handle_billing"
-}
-```
-
-Use `"route": "none"` if no route condition applies.
-
-For **cross-mission routes**, include `mission_inputs` for the target mission's required inputs:
-
-```json
-{
-  "summary": "Escalation required due to severity.",
-  "route": "escalation_mission",
-  "mission_inputs": {
-    "complaint_summary": "Customer demands refund for defective product",
-    "severity": "critical"
-  }
-}
-```
-
-**Failure:**
-
-```json
-{
-  "succeed": false,
-  "reason": "Unable to complete — external API is unreachable."
-}
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `route` | string | Key of the chosen route, or `"none"` (optional — only for routing tasks) |
-| `mission_inputs` | object | Input values for mission route targets (optional — only for cross-mission routes) |
-
-See [Routing](/config/missions/routing) for full details.
-
-#### submit_output
-
-Submit structured output for the task. Only available when the task defines an `output` schema.
-
-```json
-{
-  "output": {
-    "total_revenue": 150000,
-    "top_product": "Widget Pro"
-  }
-}
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `output` | object | The structured output matching the task's output schema (required) |
-
-For iterated tasks, `submit_output` is called once per item. Required output fields are validated automatically.
-
-### Agent Delegation
-
-#### call_agent
-
-Delegate a task to an agent.
-
-```json
-{
-  "name": "assistant",
-  "task": "Fetch the current weather for Chicago, IL"
-}
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `name` | string | Name of the agent to call (required) |
-| `task` | string | Task description for the agent (required) |
-
-The commander waits for the agent to complete and receives the result.
-
-#### ask_agent
-
-Query an agent that was used by a dependency task. Use this to get additional information from agents that have already executed and have relevant context.
-
-```json
-{
-  "agent_id": "assistant",
-  "question": "What API endpoints did you use?"
-}
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `agent_id` | string | Name of the agent (matches the name used in `call_agent`) (required) |
-| `question` | string | Question to ask the agent (required) |
-
-The agent responds from its existing conversation context without making new tool calls.
-
-### Data Querying
-
-#### query_task_output
-
-Query structured data from completed dependency tasks.
-
-```json
-{
-  "task": "fetch_sales",
-  "filters": [{"field": "amount", "op": "gt", "value": 1000}],
-  "limit": 10
-}
-```
-
-##### Query Options
-
-| Option | Description |
-|--------|-------------|
-| `task` | Task name to query (required) |
-| `filters` | Array of filter conditions |
-| `item_ids` | Specific item IDs for iterated tasks |
-| `limit` | Maximum results (default: 20) |
-| `offset` | Skip N results |
-| `order_by` | Field to sort by |
-| `desc` | Sort descending |
-| `aggregate` | Aggregate operation |
-
-##### Filter Operators
-
-| Operator | Description |
-|----------|-------------|
-| `eq` | Equal to |
-| `ne` | Not equal to |
-| `gt` | Greater than |
-| `lt` | Less than |
-| `gte` | Greater than or equal |
-| `lte` | Less than or equal |
-| `contains` | String contains |
-
-##### Aggregate Operations
-
-```json
-{
-  "task": "get_weather",
-  "aggregate": {
-    "op": "avg",
-    "field": "temperature"
-  }
-}
-```
-
-| Operation | Description |
-|-----------|-------------|
-| `count` | Count matching items |
-| `sum` | Sum of field values |
-| `avg` | Average of field values |
-| `min` | Minimum value (returns item) |
-| `max` | Maximum value (returns item) |
-| `distinct` | Unique values |
-| `group_by` | Group and aggregate |
-
-##### Group By Example
-
-```json
-{
-  "task": "get_weather",
-  "aggregate": {
-    "op": "group_by",
-    "group_by": "state",
-    "group_op": "avg",
-    "field": "temperature"
-  }
-}
-```
-
-#### ask_commander
-
-Ask a follow-up question to a completed commander from a dependency task. Use this when you need more details than what's available in the structured output.
-
-```json
-{
-  "task_name": "fetch_sales",
-  "question": "What was the average order value for premium customers?"
-}
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `task_name` | string | Name of the completed dependency task (required) |
-| `question` | string | Follow-up question to ask (required) |
-| `index` | integer | For iterated tasks: the iteration index to query |
-
-The queried commander will answer from its existing context and can use `ask_agent` to query its own agents if needed.
-
-##### Querying Iterated Tasks
-
-For tasks that iterate over a dataset, use the `index` parameter to query a specific iteration's commander. Get the index from `query_task_output` results — each iteration has an `index` field.
-
-```json
-{
-  "task_name": "process_cities",
-  "index": 2,
-  "question": "Why was this city flagged for review?"
-}
-```
-
-**Context behavior:** The first query to a commander creates a clone from its completed state. Subsequent queries to the same commander build on previous questions and answers, enabling natural follow-up conversations.
-
-#### list_commander_questions
-
-List questions that have already been asked to a dependency task's commander. Useful in parallel iterations to avoid asking duplicate questions.
-
-```json
-{
-  "task_name": "fetch_sales"
-}
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `task_name` | string | Name of the dependency task (required) |
-
-Returns a list of previously asked questions with their indices.
-
-#### get_commander_answer
-
-Get a cached answer for a previously asked question by its index. Use with `list_commander_questions` to reuse answers from other iterations.
-
-```json
-{
-  "task_name": "fetch_sales",
-  "index": 0
-}
-```
-
-| Parameter | Type | Description |
-|-----------|------|-------------|
-| `task_name` | string | Name of the dependency task (required) |
-| `index` | integer | Index of the question from `list_commander_questions` (required) |
-
-### Sequential Dataset Processing
-
-These tools are available when a task iterates over a dataset sequentially (`parallel = false`).
-
-#### dataset_next
-
-Get the next item from the dataset for sequential processing.
-
-```json
-{}
-```
-
-Returns the next item with its index and total count. Returns `{"status": "exhausted"}` when all items have been processed.
-
-**Constraints:**
-- `submit_output` must be called for the current item before advancing
-- All subtasks must be completed before advancing (if subtasks are defined)
-
-## Agent Tools
-
-Agents have access to the tools configured in their agent definition, plus mission-level dataset tools when running in mission context. See [Tools](/config/tools) for configuring agent tools.
-
-### Dataset Tools
-
-When running inside a mission, agents automatically get these dataset tools:
-
-| Tool | Description |
-|------|-------------|
-| `set_dataset` | Populate a dataset with items |
-| `dataset_sample` | Get sample items from a dataset |
-| `dataset_count` | Get the number of items in a dataset |
-| `result_to_dataset` | Convert a large intercepted result into a dataset for iteration |
-
-See [Datasets](/config/missions/datasets) for details and examples.
-
-### File Tools
-
-When a mission declares at least one storage slot — a top-level `memory "name"` referenced in `memories = [...]`, a mission-scoped `memory { }`, or `scratchpad = true` — every agent in that mission automatically gets these file tools:
-
-| Tool | Description |
-|------|-------------|
-| `file_list` | List files and directories in a slot, with optional recursion and pagination |
-| `file_read` | Read a file's text contents (optionally capped by lines or bytes) |
-| `file_view` | View an image (PNG/JPEG/GIF/WebP), SVG, or PDF as visual/document content the model can perceive |
-| `file_create` | Create, overwrite, or append to a file |
-| `file_delete` | Delete a file (directories are not allowed) |
-| `file_search` | Recursively search for files by filename regex |
-| `file_grep` | Search file contents by regex |
-
-Every call takes a required `slot` parameter naming which slot to operate in:
-
-- `"memory"` — the mission's persistent memory (only available if the mission declares `memory { }`)
-- `"scratchpad"` — the mission's ephemeral per-run scratchpad (only available if the mission sets `scratchpad = true`; auto-cleaned after 7 days)
-- a shared memory's HCL label — for any memory the mission lists in `memories = [...]`
-
-Paths are always relative to the slot's root. Absolute paths and `..` escapes are rejected.
-
-A mission with no `memories =`, no `memory { }`, and no `scratchpad = true` does NOT get the file tools — they appear only when there's somewhere to put files. See [Memory & Scratchpad](/config/missions/folders) for the full slot model and the storage paths Squadron picks.
+The commander never receives these tools. Dataset access, result paging, file
+access, human-input requests, MCP tools, plugin tools, and built-ins follow the
+same grant rule rather than being implicitly added to the commander.

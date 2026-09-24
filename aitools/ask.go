@@ -17,6 +17,13 @@ type HumanInputBridge interface {
 	AskHuman(ctx context.Context, req HumanInputRequest) (string, error)
 }
 
+// ReplaySafeHumanInputBridge guarantees that AskHuman is idempotent for a
+// stable ToolCallID and reconnects to an existing open/resolved request.
+type ReplaySafeHumanInputBridge interface {
+	HumanInputBridge
+	HumanInputReplaySafe() bool
+}
+
 // HumanInputRequest is the payload the bridge needs to deliver one
 // ask. ToolCallID is generated here; mission/task ids come from ctx
 // (see WithMissionContext) so callers don't have to thread mission
@@ -39,6 +46,11 @@ type HumanInputRequest struct {
 // Bridge field is nil when no commander is attached.
 type HumanInputTool struct {
 	Bridge HumanInputBridge
+}
+
+func (t *HumanInputTool) ToolReplaySafe() bool {
+	bridge, ok := t.Bridge.(ReplaySafeHumanInputBridge)
+	return ok && bridge.HumanInputReplaySafe()
 }
 
 // ToolName is the bare verb. The HCL ref `builtins.human.ask` already
@@ -116,8 +128,12 @@ func (t *HumanInputTool) Call(ctx context.Context, params string) string {
 	}
 
 	missionID, taskID := MissionContextFromContext(ctx)
+	toolCallID := uuid.NewString()
+	if invocation, ok := InvocationMetadataFromContext(ctx); ok && invocation.IdempotencyKey != "" {
+		toolCallID = invocation.IdempotencyKey
+	}
 	req := HumanInputRequest{
-		ToolCallID:        uuid.NewString(),
+		ToolCallID:        toolCallID,
 		MissionID:         missionID,
 		TaskID:            taskID,
 		Question:          p.Question,
@@ -130,8 +146,15 @@ func (t *HumanInputTool) Call(ctx context.Context, params string) string {
 
 	callCtx := ctx
 	if p.TimeoutSeconds != nil && *p.TimeoutSeconds > 0 {
+		timeout := time.Duration(*p.TimeoutSeconds * float64(time.Second))
+		if invocation, ok := InvocationMetadataFromContext(ctx); ok && !invocation.StartedAt.IsZero() {
+			timeout -= time.Since(invocation.StartedAt)
+			if timeout < 0 {
+				timeout = 0
+			}
+		}
 		var cancel context.CancelFunc
-		callCtx, cancel = context.WithTimeout(ctx, time.Duration(*p.TimeoutSeconds*float64(time.Second)))
+		callCtx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
 

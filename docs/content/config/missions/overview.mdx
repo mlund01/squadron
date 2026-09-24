@@ -4,7 +4,8 @@ title: Missions Overview
 
 # Missions
 
-Missions orchestrate multi-task pipelines using commanders and agents.
+Missions are declarative workflows coordinated by one mission commander. The
+harness executes each task in an ephemeral, policy-constrained task executor.
 
 ## Basic Structure
 
@@ -14,10 +15,13 @@ mission "data_pipeline" {
     model     = models.anthropic.claude_sonnet_4
     reasoning = "medium" # optional — see Agents → Reasoning
   }
-  agents = [agents.researcher, agents.writer]
+
+  models = [models.anthropic.claude_haiku_4_5]
+  tools  = [plugins.http.all]
 
   task "fetch_data" {
     objective = "Fetch the latest data from the API"
+    tools     = [mcp.warehouse.query]
   }
 
   task "process_data" {
@@ -37,9 +41,9 @@ mission "data_pipeline" {
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `directive` | string | High-level description of the mission's purpose |
-| `commander` | string or block | Model for task commanders (block form: `commander { model = ...; reasoning = "low\|medium\|high" }`; see [Agents → Reasoning](/config/agents#reasoning)) |
-| `agents` | list | Agents available to every task in this mission. Tasks inherit this list automatically and only need their own `agents = [...]` to restrict to a different subset. |
-| `agent` | block | Mission-scoped agent definition (repeatable, see [Agents](/config/agents#mission-scoped-agents)) |
+| `commander` | block | The model and context policy for the mission's single commander |
+| `models` | list | Models the commander may assign to task executors |
+| `tools` | list | Optional capabilities the commander may grant to task executors |
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |
 | `dataset` | block | Dataset definitions (optional) |
@@ -134,7 +138,7 @@ squadron mission report -c ./config --input topic="AI safety" --input format=htm
 
 A `file` input hands the mission a document to work on. Unlike other inputs,
 the contents are **not** interpolated into objectives — instead the file is
-exposed to agents as a **read-only slot** named `input.<name>`, which they read
+exposed to task executors as a **read-only slot** named `input.<name>`, which they read
 with the `file_read` / `file_grep` / `file_search` tools, or perceive as an
 image, SVG, or PDF with `file_view` (the same tools used for
 [memory](/config/missions/folders) and [packets](/config/missions/packets)).
@@ -168,7 +172,7 @@ File inputs are always required and cannot declare a `default` or be
   {"filename": "report.md", "content_base64": "IyBSZXBvcnQK..."}
   ```
 
-Either way the file is staged into an isolated per-run slot. Agents read text
+Either way the file is staged into an isolated per-run slot. Task executors read text
 files with `file_read`, and view images (PNG/JPEG/GIF/WebP), SVGs, and PDFs with
 `file_view` (SVGs are rasterized to PNG; PDFs are sent as native document
 blocks). A single file is capped at 10 MB, and files outside the project root
@@ -176,12 +180,12 @@ must be supplied via the base64 form.
 
 ## How Missions Execute
 
-1. **Dependency Resolution** - Tasks are sorted topologically; dynamically activated tasks (router/send_to targets) are excluded from the initial sort
-2. **Parallel Execution** - Independent tasks run concurrently
-3. **Commander Creation** - Each task gets a commander
-4. **Agent Delegation** - Commanders delegate to agents via `call_agent`
-5. **Dynamic Activation** - After a task completes, its `send_to` targets fire immediately; if it has a `router`, the commander picks a branch
-6. **Result Propagation** - Structured outputs are stored and queryable by downstream tasks
+1. **Run initialization** - The harness loads the declared graph and creates one mission commander session.
+2. **Ready-set calculation** - The harness derives eligible tasks from persisted state and dependencies.
+3. **Dispatch** - The commander selects eligible work; the harness resolves and persists an immutable executor grant.
+4. **Task execution** - Ephemeral task executors use only their granted models and tools.
+5. **Validation and routing** - The harness validates results and route selections before applying graph transitions.
+6. **Completion** - The mission finishes only when the graph and result contract permit it.
 
 ## Execution Flow
 
@@ -213,21 +217,17 @@ With inputs:
 squadron mission data_pipeline -c ./config --input source=api --input format=json
 ```
 
-## Commander Tools
+## Commander Controls
 
-Commanders have access to special tools:
+The commander has only intrinsic mission-control operations:
 
-- **set_subtasks** / **complete_subtask** / **get_subtasks** - Plan and track work through ordered subtasks
-- **call_agent** - Delegate work to an agent
-- **ask_agent** - Ask a completed agent follow-up questions
-- **submit_output** - Submit structured output matching the task's output schema
-- **task_complete** - Signal that the task is done (includes `summary` for downstream context, and `route` for routing tasks)
-- **query_task_output** - Query structured data from completed dependency tasks
-- **ask_commander** - Query a dependency task's commander for more context
-- **dataset_next** - Get the next item in sequential dataset processing
-- **list_commander_questions** / **get_commander_answer** - Reuse answers from the shared question store (parallel dedup)
+- **inspect_mission** - Read graph state, ready work, budgets, and pending conditions.
+- **start_task** - Request an eligible task with an allowed model and capability selection.
+- **inspect_task** - Read persisted task progress and results.
+- **select_route** - Choose one of a task's declared routes.
+- **finish_mission** - Request completion when the harness permits it.
 
-See [Internal Tools](/config/missions/internal-tools) for full details.
+See [Internal Controls](/config/missions/internal-tools) for full details.
 
 ## Context Protection
 
@@ -261,7 +261,8 @@ task "analyze" {
 }
 ```
 
-Downstream tasks can query this data using `query_task_output` with filtering and aggregation. See [Tasks](/config/missions/tasks#structured-output) for details.
+Validated data is included in the dependency context and remains available by
+reference for downstream task executors. See [Tasks](/config/missions/tasks#structured-output) for details.
 
 ## Persistence & Resume
 
@@ -271,7 +272,8 @@ Mission state is automatically persisted to SQLite during execution. If a missio
 squadron mission data_pipeline -c ./config --resume <mission-id>
 ```
 
-Resume skips completed tasks and picks up interrupted tasks from where they left off — including restoring LLM conversation state for commanders and agents.
+Resume reconstructs the one commander session, skips completed work, and
+reconciles interrupted executor attempts from persisted dispatch state.
 
 See [squadron mission](/config/cli/mission#resume) for details.
 
@@ -282,4 +284,5 @@ See [squadron mission](/config/cli/mission#resume) for details.
 - [Datasets](/config/missions/datasets) - Working with data collections
 - [Iteration](/config/missions/iteration) - Processing lists of items
 - [Scheduling Missions](/product/schedules) - Product-managed schedules and configured webhooks
-- [Internal Tools](/config/missions/internal-tools) - Commander and agent tools
+- [Runtime Architecture](/config/missions/runtime) - Commander, harness, and task-executor boundaries
+- [Internal Controls](/config/missions/internal-tools) - Harness-owned commander operations

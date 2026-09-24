@@ -6,8 +6,8 @@ import (
 
 	goplugin "github.com/hashicorp/go-plugin"
 
-	"squadron/aitools"
 	"github.com/mlund01/squadron-sdk"
+	"squadron/aitools"
 )
 
 var (
@@ -20,6 +20,7 @@ type ToolInfo struct {
 	Description  string
 	Schema       aitools.Schema
 	OutputSchema json.RawMessage
+	Idempotent   bool
 }
 
 type ToolProvider interface {
@@ -77,6 +78,7 @@ func sdkToLocalToolInfo(t *squadron.ToolInfo) *ToolInfo {
 		Description:  t.Description,
 		Schema:       schema,
 		OutputSchema: t.OutputSchema,
+		Idempotent:   t.Idempotent,
 	}
 }
 

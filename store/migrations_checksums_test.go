@@ -35,18 +35,20 @@ import (
 //
 //	shasum -a 256 store/migrations/<file>
 var migrationChecksums = map[string]string{
-	"0001_baseline.sqlite.sql":               "ea7a46271d90d7e19daff1b608d67137a091811dba1382f9f4267828c1d9ffa6",
-	"0001_baseline.postgres.sql":             "ada6e4e89800425c2512877f20b090f22eacb8e9fa3aea3d8ebb94e953448c8f",
-	"0002_human_input_requests.sqlite.sql":   "fba61b19e6012c83812b575426d16af148717c31c18bf225af4157a47ce55859",
-	"0002_human_input_requests.postgres.sql": "65efa3f72f005b8b01424616115177da6bca365cabb1abc9824529755fe6e2ee",
-	"0003_session_message_parts.sqlite.sql":   "40371e8a46c410ca7c06324d998ab1db2177a1011f2e1d6a7ac9ab3ca04c973d",
-	"0003_session_message_parts.postgres.sql": "281190245e3a27f9cd4bf5feec9e973a5857a962d64e35caef8fef6440d6b8d9",
-	"0004_document_message_parts.sqlite.sql":   "393bc55e5b52c272731d7f6af2d285099b668e512e1f3b36386f6123b2f47108",
-	"0004_document_message_parts.postgres.sql": "81e29920ee25bab1e6c76665a3ed367788b5305fda06d20dd48e412f13c7e8aa",
-	"0005_reserved_legacy_slot.sqlite.sql":     "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
-	"0005_reserved_legacy_slot.postgres.sql":   "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
+	"0001_baseline.sqlite.sql":                       "ea7a46271d90d7e19daff1b608d67137a091811dba1382f9f4267828c1d9ffa6",
+	"0001_baseline.postgres.sql":                     "ada6e4e89800425c2512877f20b090f22eacb8e9fa3aea3d8ebb94e953448c8f",
+	"0002_human_input_requests.sqlite.sql":           "fba61b19e6012c83812b575426d16af148717c31c18bf225af4157a47ce55859",
+	"0002_human_input_requests.postgres.sql":         "65efa3f72f005b8b01424616115177da6bca365cabb1abc9824529755fe6e2ee",
+	"0003_session_message_parts.sqlite.sql":          "40371e8a46c410ca7c06324d998ab1db2177a1011f2e1d6a7ac9ab3ca04c973d",
+	"0003_session_message_parts.postgres.sql":        "281190245e3a27f9cd4bf5feec9e973a5857a962d64e35caef8fef6440d6b8d9",
+	"0004_document_message_parts.sqlite.sql":         "393bc55e5b52c272731d7f6af2d285099b668e512e1f3b36386f6123b2f47108",
+	"0004_document_message_parts.postgres.sql":       "81e29920ee25bab1e6c76665a3ed367788b5305fda06d20dd48e412f13c7e8aa",
+	"0005_reserved_legacy_slot.sqlite.sql":           "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
+	"0005_reserved_legacy_slot.postgres.sql":         "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
 	"0006_repair_session_message_parts.sqlite.sql":   "037f03fcf9fbdf9747613fd127f0bad84ef7abe8615840a705beab86bec28f5f",
 	"0006_repair_session_message_parts.postgres.sql": "9286e6f058d2e422b3c534827176634693c23e81e7a70e90ea8aeba83e69a6cc",
+	"0007_mission_runtime.sqlite.sql":                "be6bd55bb60f14bfe6569ce60d4c657517b2bb55cb623bba40939e21e6cf752e",
+	"0007_mission_runtime.postgres.sql":              "6eaa637e1c44f588bf88d29e463a5da4f566565313ea3b83b72af07397936069",
 }
 
 var _ = Describe("Migration checksums", func() {

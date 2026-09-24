@@ -15,10 +15,11 @@ import (
 // canned response (or error). It can optionally block until the
 // caller's ctx expires to exercise timeout paths.
 type fakeBridge struct {
-	got    aitools.HumanInputRequest
-	reply  string
-	err    error
-	block  bool
+	got        aitools.HumanInputRequest
+	reply      string
+	err        error
+	block      bool
+	replaySafe bool
 }
 
 func (f *fakeBridge) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (string, error) {
@@ -29,6 +30,8 @@ func (f *fakeBridge) AskHuman(ctx context.Context, req aitools.HumanInputRequest
 	}
 	return f.reply, f.err
 }
+
+func (f *fakeBridge) HumanInputReplaySafe() bool { return f.replaySafe }
 
 var _ = Describe("HumanInputTool", func() {
 	It("returns [no human available] when no bridge is attached", func() {
@@ -59,12 +62,37 @@ var _ = Describe("HumanInputTool", func() {
 		Expect(br.got.TaskID).To(Equal("t-7"))
 	})
 
+	It("uses durable invocation identity and advertises replay safety only for a durable bridge", func() {
+		br := &fakeBridge{reply: "ok", replaySafe: true}
+		tool := &aitools.HumanInputTool{Bridge: br}
+		ctx := aitools.WithInvocationMetadata(context.Background(), aitools.InvocationMetadata{
+			ToolUseID: "provider-call", IdempotencyKey: "sq_stable_call",
+		})
+		Expect(tool.Call(ctx, `{"question":"hi"}`)).To(Equal("ok"))
+		Expect(br.got.ToolCallID).To(Equal("sq_stable_call"))
+		Expect(aitools.IsReplaySafe(tool)).To(BeTrue())
+		br.replaySafe = false
+		Expect(aitools.IsReplaySafe(tool)).To(BeFalse())
+	})
+
 	It("returns a timeout observation when timeout_seconds elapses", func() {
 		br := &fakeBridge{block: true}
 		tool := &aitools.HumanInputTool{Bridge: br}
 
 		out := tool.Call(context.Background(), `{"question":"are you there?","timeout_seconds":0.05}`)
 		Expect(out).To(ContainSubstring("no human response within"))
+	})
+
+	It("does not reset a durable timeout after restart", func() {
+		br := &fakeBridge{block: true}
+		tool := &aitools.HumanInputTool{Bridge: br}
+		ctx := aitools.WithInvocationMetadata(context.Background(), aitools.InvocationMetadata{
+			IdempotencyKey: "sq_wait", StartedAt: time.Now().Add(-time.Second),
+		})
+		started := time.Now()
+		out := tool.Call(ctx, `{"question":"are you there?","timeout_seconds":0.5}`)
+		Expect(out).To(ContainSubstring("no human response within"))
+		Expect(time.Since(started)).To(BeNumerically("<", 100*time.Millisecond))
 	})
 
 	It("returns a cancellation observation when the outer ctx is cancelled", func() {

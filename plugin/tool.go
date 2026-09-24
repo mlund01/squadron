@@ -4,7 +4,17 @@ import (
 	"context"
 	"encoding/json"
 
+	"google.golang.org/grpc/metadata"
+
 	"squadron/aitools"
+)
+
+const (
+	pluginRunIDMetadataKey       = "squadron-run-id"
+	pluginTaskNameMetadataKey    = "squadron-task-name"
+	pluginAttemptIDMetadataKey   = "squadron-attempt-id"
+	pluginToolUseIDMetadataKey   = "squadron-tool-use-id"
+	pluginIdempotencyMetadataKey = "squadron-idempotency-key"
 )
 
 type PluginTool struct {
@@ -34,13 +44,29 @@ func (t *PluginTool) ToolPayloadSchema() aitools.Schema {
 func (t *PluginTool) ToolOutputSchema() json.RawMessage {
 	return t.info.OutputSchema
 }
+func (t *PluginTool) ToolReplaySafe() bool { return t.info.Idempotent }
 
 func (t *PluginTool) Call(ctx context.Context, params string) string {
+	ctx = withPluginInvocationMetadata(ctx)
 	result, err := t.provider.Call(ctx, t.info.Name, params)
 	if err != nil {
 		return "error: " + err.Error()
 	}
 	return result
+}
+
+func withPluginInvocationMetadata(ctx context.Context) context.Context {
+	invocation, ok := aitools.InvocationMetadataFromContext(ctx)
+	if !ok {
+		return ctx
+	}
+	return metadata.AppendToOutgoingContext(ctx,
+		pluginRunIDMetadataKey, invocation.RunID,
+		pluginTaskNameMetadataKey, invocation.TaskName,
+		pluginAttemptIDMetadataKey, invocation.AttemptID,
+		pluginToolUseIDMetadataKey, invocation.ToolUseID,
+		pluginIdempotencyMetadataKey, invocation.IdempotencyKey,
+	)
 }
 
 // CallMedia preserves image data returned by legacy string-based plugins as

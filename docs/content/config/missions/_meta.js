@@ -1,6 +1,8 @@
 export default {
   overview: 'Overview',
   harness: 'The Harness',
+  runtime: 'Runtime Architecture',
+  'runtime-specification': 'Runtime Specification',
   tasks: 'Tasks',
   routing: 'Routing',
   datasets: 'Datasets',

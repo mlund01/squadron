@@ -98,14 +98,27 @@ Only the chosen branch executes. If the commander picks "none", no branch activa
 
 ### How It Works
 
-Route options are injected as a system prompt when the commander starts, so it knows the available routes upfront. When calling `task_complete`, the commander includes a `route` parameter alongside the `summary`:
+Route options are part of the immutable mission graph supplied to the single mission commander. Task workers return results; they never select routes. After the harness accepts a router task's result, it publishes a pending route decision to the commander:
 
-1. Commander sees route options in its system prompt (injected automatically from the `router` config)
-2. Commander does its work, delegating to agents as needed
-3. Commander calls `task_complete` with `summary` and `route` — choosing the route whose condition best matches the results, or `none` if no route applies
-4. The chosen route's target task is activated; unchosen branches never execute
+1. The task worker completes and its validated result is persisted.
+2. The commander inspects the result and declared route conditions.
+3. The commander calls the intrinsic `select_route` control with one declared target, or `none` if no condition applies.
+4. The harness revision-checks and persists the decision before activating the selected target. Unchosen branches never execute.
 
-This happens in a single tool call — no extra turns needed for route selection.
+`select_route` is an orchestration control, not a task capability. A task worker cannot invoke it, and the commander cannot invent a target that is absent from the mission configuration.
+
+The normal result summary should contain the evidence needed to choose. If it
+does not, the commander may call `inspect_task` to load the accepted rich
+content and typed data. This remains a result inspection—not access to the
+worker's private reasoning, complete conversation, or tool-call history.
+
+If inspection still leaves one concrete ambiguity, the commander may call
+`clarify_task_result` with a focused question. Squadron restores the same
+logical worker session from its persisted transcript, disables every tool, and
+records the supplemental answer before routing continues. This is for
+extracting or explaining evidence the worker already gathered; it is not a way
+to send the worker back out to perform more work. The harness permits at most
+three clarifications for a task.
 
 ### Chained Routers
 
@@ -229,7 +242,7 @@ task "handle_complaint" {
 }
 ```
 
-When the commander selects a mission route, it also provides any required inputs for the target mission. The `task_complete` tool presents the target mission's input requirements and the commander fills them in.
+A cross-mission selection requires the cross-mission launcher to create a separately authorized run with explicit inputs and a persisted parent/child relationship. The harness rejects the selection when that launcher is unavailable; it never silently treats the route as complete. The child does not inherit credentials merely because the parent selected it.
 
 A mission can route to itself — this creates a new instance, not a loop. This is useful for retry or restart patterns.
 
@@ -353,10 +366,10 @@ Route decisions are persisted to the database. On resume:
 
 1. Route decisions are loaded to reconstruct which task activated which
 2. Incomplete dynamic targets are re-queued for execution
-3. The activating task's commander is restored so the dynamic target can query it for context
+3. The mission commander is restored and the activating task's persisted result is included in dependency context
 
 ## See Also
 
 - [Tasks](/config/missions/tasks) - Task configuration and dependencies
-- [Internal Tools](/config/missions/internal-tools) - `task_complete` routing parameters
+- [Internal Controls](/config/missions/internal-tools) - Harness-owned route selection
 - [Missions Overview](/config/missions/overview) - Mission structure and execution

@@ -34,6 +34,7 @@ func NewPostgresBundle(connStr string) (*Bundle, error) {
 	batchingEvents := NewBatchingEventStore(&PgEventStore{db: db})
 	return &Bundle{
 		Missions:    &PgMissionStore{db: db},
+		Runtime:     &PgRuntimeStore{db: db},
 		Datasets:    &PgDatasetStore{db: db},
 		Sessions:    &PgSessionStore{db: db},
 		Events:      batchingEvents,

@@ -24,7 +24,7 @@ agent "assistant" {
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `model` | reference | Model reference (e.g., `models.anthropic.claude_sonnet_4`) |
-| `personality` | string | Personality traits for the agent — also serves as the agent's description when commanders pick which agent to delegate to |
+| `personality` | string | Personality traits and behavioral guidance for the agent |
 | `tools` | list | Tools available to the agent (optional) |
 | `reasoning` | string | Native reasoning level: `"low"`, `"medium"`, or `"high"` (optional) |
 
@@ -79,41 +79,11 @@ tools = [
 
 See [MCP Tools](/config/mcp_tools) for how to declare consumer-side MCP servers.
 
-## Mission-Scoped Agents
+## Agents and missions
 
-Agents can be defined inside a `mission` block, making them available only to that mission. This is useful for specialized agents that don't make sense as global definitions.
-
-```hcl
-mission "research" {
-  commander { model = models.anthropic.claude_sonnet_4 }
-
-  agent "specialist" {
-    model       = models.anthropic.claude_opus_4
-    personality = "Deep domain expert"
-    tools       = [plugins.shell.exec]
-  }
-
-  agents = [agents.global_helper, agents.specialist]
-
-  task "gather" {
-    objective = "Research the topic"
-    # No agents attribute — task inherits the mission's list,
-    # so both `global_helper` and `specialist` are available.
-  }
-
-  task "deep_dive" {
-    objective = "Run the specialized analysis"
-    agents    = [agents.specialist]  # Restrict this task to one agent.
-  }
-}
-```
-
-Mission-scoped agents use the same syntax and attributes as global agents. They must be listed in the mission's `agents = [...]` to be available — once listed there, every task in the mission can use them automatically. A task only needs its own `agents = [...]` attribute when you want to restrict that task to a different subset.
-
-**Rules:**
-- A scoped agent name must not conflict with any global agent name
-- Two different missions can each define an agent with the same name (they are independently scoped)
-- Multiple scoped agents per mission are supported
+Agents are independent managed assistants. Missions do not reference or launch
+agents; mission work runs in ephemeral task executors governed by the mission's
+model and tool policy. See [Mission Runtime](/config/missions/runtime).
 
 ## Example: Specialized Agents
 

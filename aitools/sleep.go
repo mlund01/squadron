@@ -10,6 +10,8 @@ import (
 // SleepTool pauses execution for a specified duration.
 type SleepTool struct{}
 
+func (*SleepTool) ToolReplaySafe() bool { return true }
+
 func (t *SleepTool) ToolName() string {
 	return "sleep"
 }
@@ -50,8 +52,18 @@ func (t *SleepTool) Call(ctx context.Context, params string) string {
 		return fmt.Sprintf("Error: maximum sleep duration is %d seconds", maxSleepSeconds)
 	}
 
+	duration := time.Duration(p.Seconds * float64(time.Second))
+	remaining := duration
+	if invocation, ok := InvocationMetadataFromContext(ctx); ok && !invocation.StartedAt.IsZero() {
+		remaining -= time.Since(invocation.StartedAt)
+	}
+	if remaining <= 0 {
+		return fmt.Sprintf("Slept for %.1f seconds.", p.Seconds)
+	}
+	timer := time.NewTimer(remaining)
+	defer timer.Stop()
 	select {
-	case <-time.After(time.Duration(p.Seconds * float64(time.Second))):
+	case <-timer.C:
 		return fmt.Sprintf("Slept for %.1f seconds.", p.Seconds)
 	case <-ctx.Done():
 		return "Error: sleep cancelled"

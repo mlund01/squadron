@@ -12,12 +12,43 @@ import (
 // directly by the runner and can be backed by SQLite separately.
 type Bundle struct {
 	Missions    MissionStore
+	Runtime     RuntimeStore
 	Datasets    DatasetStore
 	Sessions    SessionStore
 	Events      EventStore
 	Costs       CostStore
 	HumanInputs HumanInputStore
 	closer      func() error
+}
+
+// RuntimeCheckpointRecord is the opaque, revisioned projection for one
+// mission run. The store owns atomicity; the runtime package owns the payload
+// schema and converts it at this boundary.
+type RuntimeCheckpointRecord struct {
+	RunID       string
+	Revision    uint64
+	PayloadJSON string
+	UpdatedAt   time.Time
+}
+
+// RuntimeEventRecord is one ordered audit event committed with a checkpoint.
+type RuntimeEventRecord struct {
+	Sequence      uint64
+	RunID         string
+	Revision      uint64
+	EventType     string
+	OccurredAt    time.Time
+	CorrelationID string
+	PayloadJSON   string
+}
+
+// RuntimeStore is the single persistence boundary for mission execution.
+// A checkpoint and its events must become visible atomically, and Commit must
+// reject a stale expectedRevision. Event sequences are assigned by the store.
+type RuntimeStore interface {
+	CreateRuntime(checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord) error
+	CommitRuntime(runID string, expectedRevision uint64, checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord) error
+	LoadRuntime(runID string) (RuntimeCheckpointRecord, []RuntimeEventRecord, error)
 }
 
 // Close cleans up the bundle resources

@@ -12,6 +12,36 @@ import (
 var _ = Describe("Mission", func() {
 
 	Describe("parsing", func() {
+		It("parses executor model and tool declarations without agents", func() {
+			hcl := minimalVarsHCL() + minimalModelHCL() + `
+mission "executor_policy" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  models = [models.anthropic.claude_sonnet_4, models.anthropic.claude_haiku_4_5]
+  tools  = [builtins.http.get]
+
+  task "collect" {
+    objective = "Collect source material"
+    models    = [models.anthropic.claude_haiku_4_5]
+    tools     = [builtins.utils.current_time]
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Validate()).To(Succeed())
+			Expect(cfg.Missions).To(HaveLen(1))
+			mission := cfg.Missions[0]
+			Expect(mission.HasExecutorPolicy()).To(BeTrue())
+			Expect(mission.Agents).To(BeEmpty())
+			Expect(mission.Models).To(ConsistOf("claude_sonnet_4", "claude_haiku_4_5"))
+			Expect(mission.Tools).To(ConsistOf("builtins.http.get"))
+			Expect(mission.Tasks[0].Models).To(ConsistOf("claude_haiku_4_5"))
+			Expect(mission.Tasks[0].Tools).To(ConsistOf("builtins.utils.current_time"))
+		})
+
 		It("parses a minimal mission with one task", func() {
 			hcl := fullBaseHCL() + `
 mission "simple" {
@@ -213,6 +243,25 @@ mission "parallel" {
 			Expect(iter.MaxRetries).To(Equal(3))
 		})
 
+		It("parses bounded retries for a task worker", func() {
+			hcl := fullBaseHCL() + `
+mission "retryable" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "work" {
+    objective   = "Perform retryable work"
+    max_retries = 2
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Tasks[0].MaxRetries).To(Equal(2))
+		})
+
 		It("parses dataset with bind_to input reference", func() {
 			hcl := fullBaseHCL() + `
 mission "bound" {
@@ -331,6 +380,40 @@ mission "huge_limits" {
 
 	Describe("Validate", func() {
 		Context("mission-level", func() {
+			It("rejects mixing managed agents with mission task executors", func() {
+				hcl := fullBaseHCL() + `
+mission "mixed" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  models = [models.anthropic.claude_sonnet_4]
+  agents = [agents.test_agent]
+  task "t" { objective = "Do work" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(MatchError(ContainSubstring("cannot reference managed agents")))
+			})
+
+			It("rejects a task model outside the mission model pool", func() {
+				hcl := minimalVarsHCL() + minimalModelHCL() + `
+mission "bad_pool" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  models = [models.anthropic.claude_haiku_4_5]
+  task "t" {
+    objective = "Do work"
+    models = [models.anthropic.claude_sonnet_4]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				cfg, err := config.LoadFile(f)
+				Expect(err).NotTo(HaveOccurred())
+				err = cfg.Validate()
+				Expect(err).To(MatchError(ContainSubstring("is not in the mission model pool")))
+			})
+
 			It("rejects mission with no commander", func() {
 				hcl := fullBaseHCL() + `
 mission "no_commander" {

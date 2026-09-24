@@ -1,0 +1,445 @@
+---
+title: Mission Runtime Specification
+---
+
+# Mission Runtime Specification
+
+This specification is normative. It defines the durable state and authority
+boundaries required for every Squadron mission implementation.
+
+## Persisted entities
+
+### Mission run
+
+A mission run stores:
+
+- run ID, mission name, status, and timestamps;
+- immutable configuration snapshot and digest;
+- resolved mission inputs and run-as identity;
+- commander session ID;
+- current graph state and ready-set revision;
+- budget counters and stop reason; and
+- the latest replay checkpoint.
+
+Configuration changes after a run starts never alter that run.
+
+### Commander session
+
+Exactly one commander session belongs to a mission run. It stores the selected
+model, reasoning and context policy, ordered messages and content parts,
+intrinsic control requests and results, token/cost accounting, compaction
+checkpoints, and terminal status.
+
+The commander session is run-scoped. No task owns it, and resume never creates
+a replacement commander merely because the active task changed.
+
+### Task instance
+
+A task instance is one declared graph node in one run. It stores its state,
+dependency and route activation records, iteration metadata when applicable,
+the accepted result, current attempt number, and terminal reason.
+
+### Task attempt
+
+Every dispatch creates a task attempt. It stores:
+
+- attempt ID and idempotency key;
+- task instance ID and attempt number;
+- selected model and immutable capability-grant ID;
+- input, dependency, memory, packet, and configuration snapshots;
+- run-as identity;
+- executor session and tool-call records;
+- result submission or failure; and
+- start, heartbeat, deadline, and finish timestamps.
+
+Retries create new attempts. They never reopen or overwrite a prior attempt.
+
+### Capability grant
+
+A capability grant is an immutable snapshot of the selected model, task tools,
+selected mission tools, authorized data and file scopes, credential bindings,
+secret handles, policy version, and run-as identity.
+
+The persisted grant contains references to secret bindings, never secret values.
+
+The harness resolves and persists this grant before an attempt becomes
+`running`. A bounded executor then creates a fresh task session and builds a
+new capability map containing exactly the granted tools. Sessions and mutable
+tool maps are never shared between attempts, including parallel attempts.
+Intrinsic commander controls such as `start_task` are invalid executor
+capabilities and are rejected even if a malformed policy names them.
+
+Every executor session receives run ID, task name, attempt ID, model, run-as
+identity, input snapshot, policy snapshot, and configuration version from the
+persisted dispatch. Tool telemetry uses that attribution. Credential material
+is resolved later by the credential broker and is not stored in the grant or
+placed in model-visible input.
+
+### Result envelope
+
+A result envelope contains required `status` and `summary` fields plus optional
+rich `content`, artifact references, typed `data`, and `diagnostics`. The
+harness stores both the submitted envelope and its validation outcome. It also
+stores the exact final provider response and immutable run, task, attempt,
+model, run-as, and configuration provenance.
+
+The harness validates the active attempt, successful status, bounded summary
+and payload size, artifact-reference scheme, and provenance on every result.
+When a task declares an output schema, its `data` value is required and is
+mechanically validated before the task can complete. When no schema is
+declared, natural-language text, images, documents, and artifact-only results
+remain valid. Commander interpretation may add meaning but cannot override a
+failed mechanical validation.
+
+Commander snapshots expose a bounded result projection: status, summary,
+artifact count, and presence of typed data. Full content and raw output require
+an explicit `inspect_task` read so large results do not silently consume the
+commander context window.
+
+### Runtime event and checkpoint
+
+Runtime events form an append-only, monotonically sequenced audit log for a
+mission run. A checkpoint stores a projection revision and the last applied
+event sequence. Checkpoints accelerate replay but never replace the event log.
+
+## State machines
+
+### Mission run
+
+| From | Allowed next states |
+|---|---|
+| `pending` | `running`, `failed` |
+| `running` | `waiting`, `stopping`, `completed`, `failed` |
+| `waiting` | `running`, `stopping`, `failed` |
+| `stopping` | `stopped`, `failed` |
+| `stopped` | `running` |
+| `completed` | none |
+| `failed` | none |
+
+`waiting` means the run has no executable action until an external condition,
+such as human input or a retry deadline, is satisfied. It is not terminal.
+
+### Commander session
+
+| From | Allowed next states |
+|---|---|
+| `initializing` | `active`, `failed` |
+| `active` | `waiting`, `stopping`, `completed`, `failed` |
+| `waiting` | `active`, `stopping`, `failed` |
+| `stopping` | `stopped`, `failed` |
+| `stopped` | `active` |
+| `completed` | none |
+| `failed` | none |
+
+### Task instance
+
+| From | Allowed next states |
+|---|---|
+| `blocked` | `ready`, `skipped`, `canceled` |
+| `ready` | `dispatching`, `skipped`, `canceled` |
+| `dispatching` | `running`, `ready`, `failed`, `canceled` |
+| `running` | `waiting`, `retry_pending`, `completed`, `failed`, `canceled` |
+| `waiting` | `running`, `retry_pending`, `failed`, `canceled` |
+| `retry_pending` | `ready`, `failed`, `canceled` |
+| `completed` | none |
+| `failed` | none |
+| `skipped` | none |
+| `canceled` | none |
+
+### Task attempt
+
+| From | Allowed next states |
+|---|---|
+| `created` | `running`, `canceled` |
+| `running` | `waiting`, `completed`, `failed`, `timed_out`, `canceled` |
+| `waiting` | `running`, `failed`, `timed_out`, `canceled` |
+| `completed` | none |
+| `failed` | none |
+| `timed_out` | none |
+| `canceled` | none |
+
+All transitions use compare-and-swap against the persisted prior state. An
+in-memory transition is visible only after the durable write succeeds.
+
+## Persistence ownership
+
+`RuntimeStore` is the only persistence boundary for mission execution. Each
+write atomically commits the next run checkpoint and its ordered runtime
+events. Checkpoints are complete restart projections; events are the audit and
+telemetry stream derived from the same transition.
+
+Mission execution does not independently write task state through
+`MissionStore`, buffer a second event history through `EventStore`, or persist
+commander and task-executor conversations through task-owned `SessionStore`
+records. Those would create multiple authorities that can disagree after a
+crash. Structured commander messages and task-attempt session state belong in
+the runtime checkpoint and event transaction.
+
+`SessionStore` remains the persistence boundary for standalone agent sessions,
+whose lifecycle is independent of a mission run. Dataset, cost, and human-input
+storage remain supporting stores, referenced by stable run and attempt IDs;
+they do not own mission state transitions.
+
+## Ready-set algorithm
+
+The harness computes the ready set from persisted state; the commander never
+declares a task ready.
+
+A task is ready only when:
+
+1. its task-instance state is `blocked` or `retry_pending`;
+2. every declared dependency has an accepted successful result;
+3. every required route activation exists;
+4. no mutually exclusive route selected a different branch;
+5. iteration inputs, required mission inputs, and policy resolution succeed;
+6. mission and task concurrency limits permit another dispatch; and
+7. the mission is `running` and neither its stop nor budget latch is set.
+
+Each ready-set publication carries a monotonically increasing revision. A
+`start_task` request must cite that revision; stale requests are rejected and
+the commander receives the latest snapshot.
+
+The run checkpoint also stores its maximum parallelism. The harness rejects a
+dispatch once the number of active immutable attempts reaches that ceiling.
+The coordinator may ask the commander for additional legal `start_task`
+decisions while capacity remains, but it executes only dispatches already
+committed by the harness. A fan-in task is not published until every declared
+dependency has committed an accepted result. Restoring a checkpoint resumes
+its active dispatch handles before requesting new work.
+
+When an executor fails, the harness first commits `task.attempt_failed`. If the
+task's `max_retries` budget remains, it also commits `task.retry_scheduled` and
+publishes the task ready for a new immutable attempt. Once the budget is
+exhausted, it commits terminal task and mission failure instead. Completion or
+failure for any non-active attempt ID is rejected without changing state.
+
+## Intrinsic commander controls
+
+| Control | Harness validation |
+|---|---|
+| `inspect_mission` | Read-only projection at a specific revision |
+| `start_task` | Ready-set membership, revision, model pool, tool pool, concurrency, budget, and identity |
+| `inspect_task` | Task belongs to the run; result and artifact visibility follow policy |
+| `clarify_task_result` | Completed router task, pending route, persisted worker transcript, focused question, clarification limit |
+| `select_route` | Source task completed, target edge declared, no prior selection |
+| `finish_mission` | All required work terminal, no unresolved input, route, retry, or result validation |
+
+These controls are not executable capabilities. The commander receives no
+plugin, MCP, file, memory, dataset, or built-in task tools.
+
+`inspect_task` uses progressive disclosure. Ordinary snapshots contain only a
+bounded result projection. Inspection returns the accepted output envelope
+needed for orchestration, excluding executor conversation history, reasoning,
+tool calls, and telemetry. The inspection request and harness-produced result
+are persisted in the commander transcript and audit event stream.
+
+`clarify_task_result` is a bounded continuation, not a new task. The runtime
+persists the pending clarification before calling a provider, restores the
+accepted attempt's exact structured transcript into a fresh provider session,
+and registers no tools. The worker must answer only from evidence already in
+that session. The answer, updated worker transcript, commander tool result, and
+`task.clarified` event commit atomically. A pending request is resumed after a
+crash before the commander can make another decision. At most three
+clarifications are accepted for one task.
+
+The commander's model session exposes intrinsic orchestration controls as
+native calls.
+For every accepted request, one runtime transaction persists the model-visible
+snapshot prompt, the assistant's signed tool-use block, the harness-generated
+tool result, the accepted dispatch, and the resulting checkpoint. This keeps
+provider conversation history valid after restart and prevents a decision from
+being recorded without its state transition.
+
+If a process stops after dispatch acceptance but before task execution, the
+restored checkpoint contains the active immutable attempt. The coordinator
+resumes that attempt before asking the commander for another decision; it does
+not create another commander session or repeat the accepted control call.
+
+## Event model
+
+Every event includes `event_id`, `run_id`, monotonic `sequence`, `event_type`,
+`occurred_at`, `actor`, `correlation_id`, `causation_id`, and typed payload.
+Events that mutate external state also carry an idempotency key.
+
+Required event families include:
+
+- `mission.created`, `mission.started`, `mission.waiting`, `mission.stopping`,
+  `mission.stopped`, `mission.completed`, and `mission.failed`;
+- `commander.session_started`, `commander.turn_started`,
+  `commander.turn_completed`, `commander.compacted`, and
+  `commander.session_completed`;
+- `ready_set.published` and `control.rejected`;
+- `task.activated`, `task.ready`, `task.dispatch_requested`,
+  `task.dispatched`, `task.waiting`, `task.retry_scheduled`,
+  `task.completed`, `task.failed`, `task.skipped`, and `task.canceled`;
+- `attempt.started`, `attempt.heartbeat`, `attempt.completed`,
+  `attempt.failed`, `attempt.timed_out`, and `attempt.canceled`;
+- `executor.turn_started`, `executor.turn_completed`, `tool.started`,
+  `tool.completed`, and `tool.failed`;
+- `task.progressed` after each durable worker transcript or tool-operation
+  boundary;
+- `result.submitted`, `result.accepted`, and `result.rejected`;
+- `route.selected`, `human_input.requested`, and `human_input.resolved`;
+- `task.clarification_requested` and `task.clarified`;
+- `artifact.created` and `memory.update_committed`.
+
+Events are the telemetry source of truth. Product views may project or group
+them, but cannot infer state changes from transcript text.
+
+## Replay and recovery
+
+Recovery follows one algorithm:
+
+1. Load the immutable run configuration and latest checkpoint.
+2. Replay later events in sequence, rejecting gaps or duplicate event IDs with
+   conflicting payloads.
+3. Rebuild mission, commander, task-instance, attempt, route, input, budget,
+   and ready-set projections.
+4. Reconcile nonterminal attempts with their execution backend using the
+   persisted attempt ID and idempotency key.
+5. Record a terminal outcome, resume waiting, or republish the ready set.
+6. Resume the existing commander session from persisted structured messages.
+
+Replay itself never invokes an LLM, tool, webhook, notification, or task
+executor. External work begins only after reconciliation commits a new event.
+
+### Transparent restart contract
+
+Stopping and restarting Squadron must preserve the same commander and every
+in-flight logical task session. Recovery resumes from the latest committed
+structured-message or operation boundary; it does not turn an active task into
+a fresh attempt or discard completed model turns.
+
+Task-worker transcripts are checkpointed after every completed model turn,
+tool-use request, and tool result. Tool intent is committed before invocation,
+and its result is committed afterward. Each call carries a stable idempotency
+key derived from `(run_id, attempt_id, provider_tool_use_id)`. The identity is
+transport metadata, never model-authored input. HTTP tools use
+`Idempotency-Key`, MCP tools use request `_meta`, and plugins use gRPC metadata
+exposed by the Go and Python SDKs. When Squadron cannot determine whether an
+external side effect completed, the attempt enters a durable reconciliation or
+manual-resolution state rather than repeating the call blindly.
+
+That state persists the task, attempt, tool-use ID, tool name, stable key, and
+reason. Waiting attempts are excluded from the executable active set but retain
+their original dispatch identity. A resolution must atomically append
+`task.recovery_resolved`, commit the verified tool result, and move the same
+attempt back to running. Resolving a block never creates a retry attempt or asks
+the model to reconstruct the result. The run returns to running only after all
+recovery blocks have been resolved.
+
+An interrupted provider stream has one unavoidable boundary: unless the model
+provider supports resumable requests, Squadron may reissue the incomplete
+model request from the last committed structured-message boundary. This must
+never repeat a previously committed tool call or externally visible side
+effect.
+
+Graceful shutdown stops admitting new work, checkpoints active sessions, and
+releases execution leases. Abrupt recovery reacquires expired leases and
+resumes every nonterminal parallel attempt under its original attempt ID,
+grant, model, run-as identity, and configuration version.
+
+Each active attempt has one persisted execution lease containing an owner,
+opaque fencing token, and expiry. Progress, completion, failure, and recovery-
+blocking transitions must present the current token. Heartbeats extend the
+lease while execution is healthy. A replacement process may take ownership
+only after expiry; takeover rotates the token, so delayed writes from the old
+process are rejected even though both processes refer to the same logical
+attempt. Completion, failure, and recovery-blocking consume the lease in the
+same checkpoint transaction. Cooperative cancellation releases it without
+marking the attempt failed.
+
+`builtins.human.ask` uses the runtime's stable invocation key as its persisted
+request identity. Its bridge creates requests idempotently, reconnects to an
+existing open request after restart, and immediately returns an answer that was
+resolved while Squadron was offline. Cancellation is never committed as a
+synthetic tool result: the operation remains in flight and the restored worker
+reattaches to the same request.
+
+The persisted tool-operation record includes its original start time. Duration-
+based built-ins use that timestamp when replaying: `builtins.time.sleep` waits
+only for the remaining duration, and `builtins.human.ask` preserves the
+original timeout deadline. Restart never grants a fresh full timeout.
+
+A cross-mission route commits the selected mission and its non-secret string
+inputs as part of the parent's route selection. Reconstructing a completed
+parent therefore reproduces the same launch intent without another commander
+turn. The external launcher must consume that intent through an idempotent,
+acknowledged child-launch protocol before cross-mission delivery is exactly
+once.
+
+## Security invariants
+
+1. The commander has no execution path to mission or task tools.
+2. A task grant is a subset of declared mission and task policy.
+3. Task-level tools are mandatory; selected mission tools must come from the
+   mission pool.
+4. Secret values never enter commander context, task prompts, persisted grants,
+   events, telemetry, or result envelopes.
+5. Credential resolution happens after grant authorization and immediately
+   before tool execution under the dispatch run-as identity.
+6. Run-as identity and configuration digest cannot change within an attempt.
+7. Task executors cannot call mission controls or dispatch other tasks.
+8. Artifact and memory access is scoped explicitly in the grant.
+
+## Idempotency invariants
+
+1. `(run_id, control_request_id)` identifies one commander control result.
+2. `(task_instance_id, attempt_number)` identifies one attempt.
+3. One accepted dispatch exists per attempt ID.
+4. One terminal result exists per attempt; late results are recorded as ignored
+   diagnostics and cannot change task state.
+5. One route decision exists per routing task instance.
+6. One stable tool-call ID identifies intent, execution, reconciliation, and
+   result across any number of process restarts.
+7. Recovery never creates a new attempt unless the active attempt reaches a
+   persisted terminal failure and the retry policy authorizes another.
+8. One accepted response exists per human-input request.
+9. Tool calls use `(attempt_id, tool_call_id)` as their idempotency boundary.
+10. Every state transition uses durable compare-and-swap.
+
+## Capability decisions
+
+| Capability | Decision | Runtime behavior |
+|---|---|---|
+| Declarative DAG and dependencies | Retain | Harness computes eligibility and rejects bypasses |
+| Mission commander | Redesign | Exactly one persisted commander session per run |
+| Task commanders | Remove | Task work runs in ephemeral task executors |
+| Managed-agent references in missions | Remove | Managed agents remain independent product primitives |
+| Mission-scoped agent blocks | Remove | Task policy declares models, tools, skills, and data scopes directly |
+| Commander subtask tools | Remove | Executor planning stays inside its task transcript |
+| `ask_commander` and commander resaturation | Remove | Results and artifacts are persisted; one commander retains run continuity |
+| Task models and tools | Redesign | Harness resolves immutable per-attempt grants |
+| Structured output | Redesign | Universal result envelope; typed `data` schema is optional |
+| Parallel tasks | Retain | Harness dispatches from the ready set under concurrency limits |
+| Iteration | Redesign | Iterations are child task instances/attempts, never child commanders |
+| Conditional routing | Retain | Commander selects only declared edges; harness commits once |
+| `send_to` fan-out | Retain | Harness activates declared targets deterministically |
+| Retries and timeouts | Retain | New immutable attempt per retry with persisted deadlines |
+| Stop and resume | Retain | Durable state transition plus attempt reconciliation |
+| Human input | Redesign | Typed request/response events move runs through `waiting` |
+| Datasets | Retain | Explicit executor capability and immutable input snapshots |
+| Large tool results | Retain | Stored as artifacts with sampled/reference-based context |
+| Packets and files | Retain | Read/write scopes are explicit grant entries |
+| Mission memory | Redesign | Commander, executor, artifact, and persistent scopes are separate |
+| Secrets | Retain with stricter boundary | Broker resolves handles only at authorized tool execution |
+| Budgets | Retain | Aggregate commander plus executor usage; harness latches breach |
+| Cross-mission routing | Redesign | Starts a separate persisted run with explicit inputs and identity |
+| Scheduling and run-as | Retain in product | Command Center supplies trigger and principal; run persists both |
+| Notifications | Retain in product | Projected from persisted runtime events |
+| Telemetry | Redesign | Mission commander span with nested task attempts and executor drill-in |
+
+## Failure rules
+
+- Configuration or grant-resolution failure prevents dispatch and fails the
+  task without starting an executor.
+- Executor or tool failure terminates the attempt, then either schedules a new
+  attempt or fails the task according to declared retry policy.
+- Commander failure fails the mission unless a replayable provider error can be
+  resumed without changing the committed control history.
+- Persistence failure prevents the corresponding in-memory transition.
+- Budget breach latches once, cancels in-flight work, and fails the mission.
+- A result rejected by schema or policy is not a completed task result.
+
+These rules are testable at the state-machine, store, replay, and end-to-end
+levels and are required for every storage or execution backend.

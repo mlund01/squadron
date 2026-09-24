@@ -1,8 +1,8 @@
 package aitools
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +20,8 @@ var httpClient = &http.Client{
 
 // HTTPGetTool performs HTTP GET requests
 type HTTPGetTool struct{}
+
+func (*HTTPGetTool) ToolReplaySafe() bool { return true }
 
 func (t *HTTPGetTool) ToolName() string {
 	return "http_get"
@@ -273,8 +275,19 @@ func (t *HTTPDeleteTool) Call(ctx context.Context, params string) string {
 	for k, v := range p.Headers {
 		req.Header.Set(k, v)
 	}
+	setIdempotencyHeader(req)
 
 	return executeRequest(req)
+}
+
+func setIdempotencyHeader(req *http.Request) {
+	if req.Header.Get("Idempotency-Key") != "" {
+		return
+	}
+	metadata, ok := InvocationMetadataFromContext(req.Context())
+	if ok && metadata.IdempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", metadata.IdempotencyKey)
+	}
 }
 
 // Helper functions
@@ -338,6 +351,7 @@ func executeBodyRequest(ctx context.Context, method string, p httpBodyParams) st
 	for k, v := range p.Headers {
 		req.Header.Set(k, v)
 	}
+	setIdempotencyHeader(req)
 
 	return executeRequest(req)
 }

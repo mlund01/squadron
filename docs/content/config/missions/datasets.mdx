@@ -133,7 +133,8 @@ dataset "regions" {
 
 ### 3. Dynamic Population
 
-Agents can populate datasets at runtime using the `set_dataset` tool:
+Task executors can populate datasets at runtime when `set_dataset` is included
+in their capability grant:
 
 ```hcl
 task "load_data" {
@@ -150,7 +151,7 @@ task "process_cities" {
 
 ## Dataset Tools
 
-When running in a mission, agents automatically have access to:
+Dataset capabilities must be granted to the task executor that needs them:
 
 - **set_dataset** - Populate a dataset with items
 - **dataset_sample** - Get sample items from a dataset

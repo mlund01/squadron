@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -610,6 +611,23 @@ func (c *Config) Validate() error {
 			for _, toolRef := range a.Tools {
 				if !validToolRefs[toolRef] {
 					return fmt.Errorf("mission '%s' agent '%s': unknown tool '%s'. Available tools: %v", m.Name, a.Name, toolRef, getToolNames(validToolRefs))
+				}
+			}
+		}
+	}
+
+	// Validate mission executor capability declarations. These references are not
+	// wired into the commander: they are only eligible for task-executor grants.
+	for _, m := range c.Missions {
+		for _, toolRef := range m.Tools {
+			if !validToolRefs[toolRef] {
+				return fmt.Errorf("mission '%s': unknown executor tool '%s'. Available tools: %v", m.Name, toolRef, getToolNames(validToolRefs))
+			}
+		}
+		for _, task := range m.Tasks {
+			for _, toolRef := range task.Tools {
+				if !validToolRefs[toolRef] {
+					return fmt.Errorf("mission '%s' task '%s': unknown executor tool '%s'. Available tools: %v", m.Name, task.Name, toolRef, getToolNames(validToolRefs))
 				}
 			}
 		}
@@ -2072,7 +2090,9 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 	// Parse the mission block content
 	missionContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
-			{Name: "agents", Required: true},
+			{Name: "agents"}, // Removed from the mission model; parsed for a clear validation error.
+			{Name: "models"}, // Task-executor model pool.
+			{Name: "tools"},  // Task-executor capability pool.
 			{Name: "directive"},
 			{Name: "memories"},   // shared memory references: memories = [memories.foo]
 			{Name: "packets"},    // read-only packet references: packets = [packets.foo]
@@ -2227,17 +2247,40 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		}
 	}
 
-	// Get agents attribute (mission-level agents) — use mission context so local agents resolve
-	agentsAttr := missionContent.Attributes["agents"]
-	agentsVal, diags := agentsAttr.Expr.Value(missionCtx)
-	if diags.HasErrors() {
-		return nil, fmt.Errorf("mission '%s': %w", missionName, diags)
+	var missionAgents []string
+	if agentsAttr, ok := missionContent.Attributes["agents"]; ok {
+		agentsVal, diags := agentsAttr.Expr.Value(missionCtx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' agents: %w", missionName, diags)
+		}
+		for it := agentsVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			missionAgents = append(missionAgents, v.AsString())
+		}
 	}
 
-	var missionAgents []string
-	for it := agentsVal.ElementIterator(); it.Next(); {
-		_, v := it.Element()
-		missionAgents = append(missionAgents, v.AsString())
+	var missionModels []string
+	if modelsAttr, ok := missionContent.Attributes["models"]; ok {
+		modelsVal, diags := modelsAttr.Expr.Value(missionCtx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' models: %w", missionName, diags)
+		}
+		for it := modelsVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			missionModels = append(missionModels, v.AsString())
+		}
+	}
+
+	var missionTools []string
+	if toolsAttr, ok := missionContent.Attributes["tools"]; ok {
+		toolsVal, diags := toolsAttr.Expr.Value(missionCtx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("mission '%s' tools: %w", missionName, diags)
+		}
+		for it := toolsVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			missionTools = append(missionTools, v.AsString())
+		}
 	}
 
 	var directive string
@@ -2385,6 +2428,8 @@ func parseMissionBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Mission, error)
 		Directive:    directive,
 		Source:       sourceForBlock(block),
 		Commander:    missionCommander,
+		Models:       missionModels,
+		Tools:        missionTools,
 		Agents:       missionAgents,
 		LocalAgents:  localAgents,
 		Memories:     missionMemories,
@@ -2786,8 +2831,11 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 	taskContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
 			{Name: "objective", Required: true},
-			{Name: "agents"},  // Optional - uses mission-level agents if not specified
-			{Name: "packets"}, // Optional - task-scoped declared packet references
+			{Name: "agents"},      // Optional - uses mission-level agents if not specified
+			{Name: "models"},      // Optional - narrows the mission executor model pool
+			{Name: "tools"},       // Optional - capabilities always granted to this executor
+			{Name: "max_retries"}, // Optional - bounded task-attempt retries
+			{Name: "packets"},     // Optional - task-scoped declared packet references
 			{Name: "depends_on"},
 			{Name: "send_to"},
 			{Name: "output"}, // shorthand: output = { field = string("desc", true) }
@@ -2825,6 +2873,46 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			_, v := it.Element()
 			agents = append(agents, v.AsString())
 		}
+	}
+
+	var taskModels []string
+	if modelsAttr, ok := taskContent.Attributes["models"]; ok {
+		modelsVal, diags := modelsAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s' models: %w", taskName, diags)
+		}
+		for it := modelsVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			taskModels = append(taskModels, v.AsString())
+		}
+	}
+
+	var taskTools []string
+	if toolsAttr, ok := taskContent.Attributes["tools"]; ok {
+		toolsVal, diags := toolsAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s' tools: %w", taskName, diags)
+		}
+		for it := toolsVal.ElementIterator(); it.Next(); {
+			_, v := it.Element()
+			taskTools = append(taskTools, v.AsString())
+		}
+	}
+
+	maxRetries := 0
+	if retriesAttr, ok := taskContent.Attributes["max_retries"]; ok {
+		retriesVal, diags := retriesAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s' max_retries: %w", taskName, diags)
+		}
+		if !retriesVal.IsKnown() || retriesVal.IsNull() || retriesVal.Type() != cty.Number {
+			return nil, fmt.Errorf("task '%s' max_retries must be a number", taskName)
+		}
+		value, accuracy := retriesVal.AsBigFloat().Int64()
+		if accuracy != big.Exact || value < 0 {
+			return nil, fmt.Errorf("task '%s' max_retries must be a non-negative integer", taskName)
+		}
+		maxRetries = int(value)
 	}
 
 	// Get packets (optional array of packet names)
@@ -2950,6 +3038,9 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		ObjectiveExpr: objectiveExpr,
 		RawObjective:  rawObjective,
 		Agents:        agents,
+		Models:        taskModels,
+		Tools:         taskTools,
+		MaxRetries:    maxRetries,
 		Packets:       taskPackets,
 		DependsOn:     dependsOn,
 		SendTo:        sendTo,

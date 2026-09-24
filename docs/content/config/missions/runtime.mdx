@@ -1,0 +1,254 @@
+---
+title: Mission Runtime Architecture
+---
+
+# Mission Runtime
+
+Each mission run has one durable **commander**. The commander coordinates the
+complete graph while the deterministic **harness** remains the authority for
+task eligibility, state transitions, capability grants, concurrency, budgets,
+retries, persistence, resume, and replay.
+
+## Missions and agents
+
+Missions and managed agents are separate product primitives:
+
+- A **mission** is a declarative, policy-constrained workflow. Its tasks run in
+  ephemeral, mission-owned **task executors**.
+- An **agent** is a reusable assistant definition with its own model, tools,
+  skills, instructions, and configurable memory. Agent sessions are started
+  independently of missions.
+
+A mission does not reference or launch managed agents. A task executor is not
+a managed-agent session, even when both use shared conversation-runtime code.
+
+## Authority boundary
+
+### Commander
+
+The commander may inspect the mission and ready set, start an eligible task
+with an allowed model and capability grant, inspect task progress and results,
+choose a declared route, and finish the mission when the harness permits it.
+
+The commander cannot call mission or task tools, access secret values, invent
+tasks or routes, bypass dependencies, or mutate run state directly.
+
+### Harness
+
+The harness computes the ready set and validates every commander request. It
+owns durable state, idempotency, timeouts, retry limits, budgets, route
+eligibility, result validation, and recovery after restart.
+
+### Task executor
+
+A task executor receives one bounded task, a resolved model, an immutable tool
+grant, input and dependency context, a run-as identity, and a result contract.
+It cannot start other tasks, change the graph, or acquire capabilities that
+were not granted by the harness.
+
+## Declarative capability policy
+
+The commander's model is fixed for the mission session. The mission's `models`
+and `tools` are pools the commander can assign to task executors; they are not
+tools the commander can call. A task may narrow the model pool and declare
+tools that are always granted to its executor.
+
+```hcl
+mission "research" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+
+  models = [
+    models.anthropic.claude_haiku_4_5,
+    models.openai.gpt_5,
+  ]
+
+  tools = [plugins.search.all]
+
+  task "collect" {
+    objective = "Collect relevant source material"
+    models    = [models.anthropic.claude_haiku_4_5]
+    tools     = [mcp.filesystem.read_file]
+  }
+
+  task "synthesize" {
+    objective  = "Synthesize the collected material"
+    depends_on = [tasks.collect]
+  }
+}
+```
+
+For `collect`, the task model declaration narrows the mission model pool. Its
+filesystem tool is always present, and the commander may additionally select
+search capabilities from the mission pool. For `synthesize`, the commander may
+select any model and tool allowed by the mission.
+
+The resolved model, tools, policy, input snapshot, configuration version, and
+run-as identity are persisted with every dispatch.
+
+When multiple tasks are ready, the harness admits commander dispatches up to
+the mission's `max_parallel` limit and persists each attempt before execution.
+Those attempts run concurrently. Tasks that join the branches remain blocked
+until every dependency has an accepted result; process restart restores the
+same active attempt handles rather than issuing duplicate dispatches.
+
+A task may declare bounded retries. Each retry creates and persists a new
+attempt; the failed attempt remains immutable in the event history.
+
+```hcl
+task "collect" {
+  objective   = "Collect relevant source material"
+  max_retries = 2
+}
+```
+
+After the final allowed attempt fails, the task and mission become terminally
+failed. Late completion or failure messages from an older attempt are rejected
+by attempt ID and cannot overwrite the current state.
+
+For conditional branches, accepting a router task's result does not activate a
+branch by itself. The harness publishes the declared options to the commander,
+which must call `select_route` with one target or `none`. The selection and its
+commander transcript are committed together before a local target becomes
+ready. `send_to` remains deterministic and activates every declared target as
+part of the source task's completion transaction.
+
+The worker receives the declared route conditions so it can surface relevant
+evidence, but it cannot choose a branch. The commander normally routes from the
+bounded result summary. When that is insufficient it may call the read-only
+`inspect_task` control, which returns the complete accepted content, typed data,
+artifacts, diagnostics, and provenance. It does not expose worker reasoning,
+turn history, tool calls, or telemetry.
+
+If the accepted result still lacks one specific fact needed to choose a route,
+the commander may call `clarify_task_result`. The runtime first persists the
+request, restores the exact worker session transcript, removes all tools, and
+runs one focused follow-up turn. The answer and updated transcript are then
+committed before the commander continues. Clarifications are limited to three
+per task. They cannot perform new external work and survive coordinator
+restarts without creating a different logical worker session.
+
+Every accepted attempt creates a fresh provider session. The executor sends
+only that task's objective and immutable input snapshot, and registers only the
+tools named by the persisted grant. Tool maps and model sessions are not shared
+between parallel attempts.
+
+The provider session is only a process-local carrier for a durable logical
+session. After every completed model response, tool-use request, and tool
+result, Squadron checkpoints the task transcript and tool-operation state. On
+restart it builds a provider session with the same model and immutable grant,
+loads that transcript, and continues the original attempt. A committed final
+response is accepted without another provider call, and a committed tool result
+is fed back to the model without invoking the tool again.
+
+Before invoking a tool, Squadron persists its stable call ID, name, raw
+non-secret input, and `in_flight` state. If the process dies while that call is
+in flight, the outcome is treated as uncertain and the attempt stops for
+reconciliation rather than repeating a potentially side-effecting call.
+
+The runtime derives one opaque idempotency key from the run ID, original task
+attempt ID, and provider tool-use ID. That key is not included in model-authored
+arguments. Built-in mutating HTTP tools send it as `Idempotency-Key`; MCP calls
+send it in request `_meta`; and plugin calls send it as gRPC metadata. Go and
+Python plugin SDKs expose the metadata to the tool implementation so plugins
+can pass the key to a downstream API or use it in their own durable result
+ledger. A transport accepting the key does not by itself prove the destination
+deduplicates it. Squadron automatically replays only tools explicitly marked
+idempotent (MCP's `idempotentHint`, MCP read-only tools, or the plugin SDK's
+idempotent declaration), always with the original key. Other uncertain outcomes
+remain blocked for transport-specific reconciliation or manual resolution.
+
+Blocked reconciliation is itself durable. The task moves to `waiting` while
+retaining its original attempt, transcript, immutable grant, in-flight tool
+record, and idempotency key. After parallel siblings settle, the run and
+commander also move to `waiting`; the blocked attempt is no longer returned as
+executable work. A reconciler or authorized operator records the verified
+original tool result (including whether it is an error) as one atomic audited
+transition. Once all blocks are resolved, the same run, commander, and task
+attempt resume and the stored result is delivered to the model as the original
+tool response.
+
+Active attempts are also protected by persisted execution leases. A lease has
+a short expiry and an opaque fencing token. The coordinator heartbeats it while
+the task is running, and every progress or terminal write must carry the
+current token. After an abrupt process loss, a replacement waits for expiry,
+reclaims the same attempt with a new token, and continues from its last
+checkpoint. Any late write from the former process is rejected. A graceful
+cancellation releases the lease immediately and leaves the attempt resumable.
+
+Human questions follow the same identity contract. If Squadron stops while a
+worker is waiting on `builtins.human.ask`, the open question remains available
+to the operator. Restart reconnects the original tool call to that request; an
+answer submitted while the worker was offline is returned immediately. A
+cancellation message is not recorded as though it were the human's answer.
+
+Waits retain their original clock. A restarted `builtins.time.sleep` waits only
+for the remaining duration, and a restarted human question keeps its original
+timeout instead of beginning the timeout again.
+
+Cross-mission route choices and their non-secret child inputs are checkpointed
+with the parent run. Restart can reconstruct the same child-launch intent
+without asking the commander to route again.
+
+When the model calls a granted tool, the executor sends the raw call plus its
+run, task, attempt, tool, and run-as attribution to the credential broker. The
+broker authorizes the call and resolves credential references immediately
+before execution. Secret values are therefore absent from commander context,
+task prompts, capability grants, and stored model messages.
+
+## Task results
+
+Every task attempt returns a small validated envelope:
+
+```json
+{
+  "status": "succeeded",
+  "summary": "Concise result for the commander",
+  "content": [{ "type": "text", "text": "Optional rich content" }],
+  "artifacts": [],
+  "data": {},
+  "diagnostics": {},
+  "rawOutput": [],
+  "provenance": {
+    "runId": "run_...",
+    "taskName": "collect",
+    "attemptId": "run_...:collect:1",
+    "model": "models.anthropic.claude_haiku_4_5",
+    "runAs": "user:...",
+    "configurationVersion": "sha256:..."
+  }
+}
+```
+
+Only `status` and `summary` are universally required. Tasks may declare an
+output schema when typed data is needed for deterministic routing, downstream
+automation, or an external contract. The harness always validates the envelope,
+artifact references, provenance, payload limits, and state transition. When a
+schema is declared, `data` must satisfy it before the task may complete or
+unlock a dependency. Without a schema, natural-language and rich-only results
+are accepted.
+
+The commander's ordinary snapshot contains only the bounded summary, status,
+artifact count, and whether typed data exists. Full rich content is loaded only
+through explicit task inspection. The exact final provider response is retained
+as `rawOutput` for audit rather than reconstructed from the summary.
+
+## Memory scopes
+
+- **Commander context** contains graph state, decisions, and compact summaries.
+- **Executor scratchpad** is isolated to one task attempt.
+- **Run artifacts** are immutable results with provenance.
+- **Persistent mission memory** has an explicit schema, retention policy,
+  authorization, and serialized writes.
+
+Parallel executors do not share mutable memory implicitly. An executor may
+propose a persistent-memory update, but the harness authorizes, orders, and
+audits the commit.
+
+Managed-agent memory is configured separately as disabled, session-scoped, or
+persistent. Agent memory never mixes with mission memory implicitly.
+
+The [Runtime Specification](/config/missions/runtime-specification) defines the
+persisted entities, state machines, events, replay rules, invariants, and
+capability decisions that implementations must follow.

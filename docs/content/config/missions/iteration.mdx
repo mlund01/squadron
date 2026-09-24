@@ -225,13 +225,15 @@ When an iteration fails:
 
 If a dataset is empty, the task completes immediately.
 
-## Querying Iteration Commanders
+## Iteration Results
 
-Dependent tasks can query specific iteration commanders using `ask_commander` with the `index` parameter. This enables follow-up questions to the commander that processed a particular item.
+Each iteration is a distinct task-executor attempt with its own validated
+result, transcript, artifacts, and index. Dependent tasks receive the collected
+iteration results as dependency context.
 
 ### Getting Iteration Results
 
-First, use `query_task_output` to get results from the iterated task. Each result includes an `index` field:
+Each structured iteration result includes an `index` field:
 
 ```json
 {
@@ -240,20 +242,6 @@ First, use `query_task_output` to get results from the iterated task. Each resul
 }
 // Returns: [{"city": "Chicago", "temperature": 28, "index": 0}, ...]
 ```
-
-### Querying a Specific Iteration
-
-Use the `index` from the query results to ask follow-up questions:
-
-```json
-{
-  "task_name": "get_weather",
-  "index": 0,
-  "question": "What was the wind speed in Chicago?"
-}
-```
-
-The iteration commander responds from its completed context — it remembers the full conversation with its agents and can query them for additional details.
 
 ### Example: Character Crossover
 
@@ -282,11 +270,8 @@ task "character_crossover" {
   depends_on = ["create_backstories"]
 
   objective = <<-EOT
-    1. Use query_task_output to get all backstories
-    2. Pick two interesting characters
-    3. For each, use ask_commander with the character's index to ask:
-       "How would this character react to meeting someone from another world?"
-    4. Write a crossover scene using both answers
+    Review all validated backstory results, choose two interesting characters,
+    and write a crossover scene consistent with both result records.
   EOT
 }
 ```

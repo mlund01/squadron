@@ -29,7 +29,8 @@ task "summarize" {
 |-----------|------|-------------|
 | `objective` | string | What the task should accomplish |
 | `depends_on` | list | Tasks that must complete first |
-| `agents` | list | Agents available to this task's commander. Optional — when omitted, the task inherits the mission's `agents` list. When set, it fully replaces the mission list for this task. |
+| `models` | list | Optional subset of the mission model pool that may execute this task |
+| `tools` | list | Capabilities always granted to this task's executor |
 | `output` | block | Structured output schema (optional) |
 | `router` | block | Conditional routing — LLM picks a branch after task completes (optional) |
 | `send_to` | list | Unconditional routing — activate target tasks on completion (optional) |
@@ -47,29 +48,35 @@ task "combine" {
 
 Dependencies are specified using `tasks.<task_name>`.
 
-## Task-Level Agents
+## Task Executor Policy
 
-Every agent listed on the mission's `agents = [...]` is automatically available to every task in that mission — you do **not** need to repeat them on each `task` block.
-
-Only set `agents` on a task when you want to **restrict** that task to a subset of the mission's agents (for example, to keep a code-review task away from the general-purpose agent):
+Mission-level `models` and `tools` define pools the commander may assign to
+task executors. A task-level `models` list narrows the allowed model pool. A
+task-level `tools` list declares capabilities that are always present for that
+task, in addition to any optional capabilities selected from the mission pool.
 
 ```hcl
 mission "pipeline" {
-  agents = [agents.general, agents.coder]
+  commander { model = models.anthropic.claude_sonnet_4 }
+
+  models = [models.anthropic.claude_haiku_4_5, models.openai.gpt_5]
+  tools  = [plugins.search.all]
 
   task "draft" {
     objective = "Draft the change description"
-    # No agents attribute — task can use both `general` and `coder`.
+    # Either mission model is eligible. Search may be granted at dispatch.
   }
 
   task "code_review" {
     objective = "Review the code changes"
-    agents    = [agents.coder]  # Restrict this task to the coder agent only.
+    models    = [models.openai.gpt_5]
+    tools     = [mcp.github.read_pull_request]
   }
 }
 ```
 
-A task-level `agents` list fully replaces the mission's list for that task — pick exactly the agents you want available to the task's commander.
+The commander never receives any of these tools. The harness resolves the grant
+and supplies it only to the ephemeral task executor.
 
 ## Dynamic Objectives
 
@@ -87,21 +94,21 @@ mission "report" {
 }
 ```
 
-## Commander Behavior
+## Execution Behavior
 
-Each task gets a commander that:
+The mission commander:
 
-1. Receives the objective
-2. Breaks the task into subtasks using `set_subtasks`
-3. Works through each subtask, delegating to agents using `call_agent`
-4. Calls `submit_output` if the task has an output schema
-5. Calls `task_complete` when all work is done
+1. Inspects the harness-computed ready set.
+2. Requests a ready task with an allowed model and optional mission-level capabilities.
+3. Inspects the validated result returned by the task executor.
+4. Chooses any declared routing decision and continues coordinating the graph.
 
 ## Context from Dependencies
 
-When a task completes, the commander provides a `summary` in `task_complete`. This summary is automatically passed as context to all dependent tasks — no extra LLM calls needed.
-
-Commanders can also query structured data from dependencies using `query_task_output`, and ask follow-up questions to previous commanders using `ask_commander` if the summary doesn't have enough detail.
+Each task result contains a required status and summary plus optional content,
+artifacts, typed data, and diagnostics. The harness persists the result and
+supplies a compact dependency snapshot to downstream task executors. Large or
+rich results remain available through provenance-linked references.
 
 ```hcl
 task "step_2" {
@@ -110,11 +117,12 @@ task "step_2" {
 }
 ```
 
-The step_2 commander can query step_1's structured output and ask its commander clarifying questions.
+The executor for `step_2` receives the validated result from `step_1` as dependency context.
 
 ## Structured Output
 
-Tasks can define a structured output schema. When defined, the commander must call `submit_output` with data matching the schema:
+Tasks can define a structured output schema. When defined, the harness validates
+the task executor's `data` result against that schema:
 
 ```hcl
 task "analyze_sales" {
@@ -174,11 +182,12 @@ task "analyze_sales" {
 }
 ```
 
-Nested types are fully supported — lists can contain objects, objects can contain lists, etc. The commander's system prompt will display the full nested schema so the LLM knows the exact structure expected.
+Nested types are fully supported — lists can contain objects, objects can contain lists, etc. The task executor receives the full nested schema as its result contract.
 
 See [Functions](/config/functions) for the complete reference on all helper functions and type references.
 
-Structured output is automatically captured and stored. Downstream tasks can query it using the `query_task_output` tool (see [Internal Tools](/config/missions/internal-tools)).
+Structured output is captured, validated, and stored. Downstream executors
+receive the relevant data in their dependency context or by reference.
 
 ## Routing
 
@@ -223,4 +232,4 @@ task "fetch" {
 
 - [Routing](/config/missions/routing) - Conditional and unconditional routing
 - [Missions Overview](/config/missions/overview) - Mission structure
-- [Internal Tools](/config/missions/internal-tools) - Commander and agent tools
+- [Internal Controls](/config/missions/internal-tools) - Mission commander control surface

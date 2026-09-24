@@ -4,14 +4,14 @@ title: Packets
 
 # Packets
 
-A **packet** is a read-only bundle of reference files attached to a mission. Use it when you want agents to be able to read documentation, knowledge bases, examples, prompt libraries, or any other reference material that should never change during the run.
+A **packet** is a read-only bundle of reference files attached to a mission. Use it when task executors need documentation, knowledge bases, examples, prompt libraries, or other reference material that must not change during the run.
 
-Packets are the read-only counterpart to [memory and scratchpad slots](/config/missions/folders). Memory slots are writable workspaces with Squadron-managed paths; packets point at *user-controlled* directories and are immutable to agents.
+Packets are the read-only counterpart to [memory and scratchpad slots](/config/missions/folders). Memory slots are writable workspaces with Squadron-managed paths; packets point at *user-controlled* directories and are immutable to task executors.
 
 | Capability | Packet | Memory / Scratchpad |
 |------------|--------|----------------------|
-| Agents can read files | yes | yes |
-| Agents can write/delete | **no** | yes |
+| Task executors can read files | yes | yes |
+| Task executors can write/delete | **no** | yes |
 | Path | user-supplied | Squadron-derived |
 | Allowed file types | UTF-8 text (`file_read`) + images/SVG/PDF (`file_view`) | any |
 | HCL parsed inside the path | **no** (excluded) | n/a |
@@ -36,7 +36,7 @@ packet "examples" {
 | Attribute | Type | Description |
 |-----------|------|-------------|
 | `path` | string (required) | Directory path. Resolved by the project-wide rule (see below). Must already exist — packets are reference data, so Squadron never creates the folder for you. |
-| `description` | string | Human-readable description shown to agents in the system prompt. |
+| `description` | string | Human-readable description shown to granted task executors. |
 
 ### Path resolution
 
@@ -69,7 +69,7 @@ A mission opts in by listing the packets it cares about. The same namespace work
 ```hcl
 mission "answer_questions" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.researcher]
+  models    = [models.anthropic.claude_haiku_4_5]
 
   # Mission-wide packet — available to every task
   packets = [packets.knowledge_base]

@@ -15,6 +15,7 @@ import (
 	"squadron/aitools"
 	"squadron/config"
 	"squadron/llm"
+	missionruntime "squadron/mission/runtime"
 	"squadron/store"
 	"squadron/streamers"
 )
@@ -71,8 +72,9 @@ type Runner struct {
 	routerParents map[string]string  // taskName → routerTaskName that activated it
 
 	// Cross-mission routing result (set when a router chooses a mission target)
-	nextMission       string            // mission name to launch, or ""
-	nextMissionInputs map[string]string // inputs for the next mission
+	nextMission         string            // mission name to launch, or ""
+	nextMissionInputs   map[string]string // inputs for the next mission
+	nextMissionLaunchID string            // durable parent launch request to acknowledge
 
 	// Provider factory for testing — when set, commanders and agents use this instead of creating real providers
 	providerFactory func() llm.Provider
@@ -408,9 +410,30 @@ func (r *Runner) NextMissionInputs() map[string]string {
 	return r.nextMissionInputs
 }
 
+// AcknowledgeNextMissionLaunch records the child run that consumed the
+// parent's durable launch request. Reopening an acknowledged parent will not
+// emit the launch again.
+func (r *Runner) AcknowledgeNextMissionLaunch(childRunID string) error {
+	if r.nextMissionLaunchID == "" {
+		return fmt.Errorf("no pending cross-mission launch")
+	}
+	harness, _, err := missionruntime.RestoreDurableHarness(r.stores.Runtime, r.missionID)
+	if err != nil {
+		return fmt.Errorf("restore parent launch state: %w", err)
+	}
+	if _, err := harness.CompleteCrossMissionLaunch(r.nextMissionLaunchID, childRunID); err != nil {
+		return err
+	}
+	r.nextMission, r.nextMissionInputs, r.nextMissionLaunchID = "", nil, ""
+	return nil
+}
+
 // Run executes the mission.
 // The caller is responsible for closing r.stores after Run returns and all events are flushed.
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
+	if r.mission.HasExecutorPolicy() {
+		return r.runMissionScoped(ctx, streamer)
+	}
 
 	// Derive a mission-scoped context so the budget tracker can cancel every in-flight
 	// commander and agent the moment a task or mission budget is breached.

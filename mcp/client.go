@@ -162,6 +162,7 @@ func bringUpTransport(ctx context.Context, name string, spec Spec) (*mcpgoclient
 			Name:        t.Name,
 			Description: t.Description,
 			Schema:      convertSchema(t.InputSchema),
+			Idempotent:  (t.Annotations.IdempotentHint != nil && *t.Annotations.IdempotentHint) || (t.Annotations.ReadOnlyHint != nil && *t.Annotations.ReadOnlyHint),
 		})
 	}
 

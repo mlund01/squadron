@@ -88,6 +88,19 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 		return "", fmt.Errorf("ask: persist open request: %w", err)
 	}
 
+	// Register before reading the canonical row. This closes the race where a
+	// response arrives after the read but before the waiter becomes visible.
+	ch := make(chan protocol.ResolveHumanInputPayload, 1)
+	cancel := c.humanInputs.register(req.ToolCallID, ch)
+	defer cancel()
+	stored, err := c.stores.HumanInputs.GetByToolCallID(req.ToolCallID)
+	if err != nil {
+		return "", fmt.Errorf("ask: load persisted request: %w", err)
+	}
+	if stored.State == store.HumanInputStateResolved && stored.Response != nil {
+		return *stored.Response, nil
+	}
+
 	c.emitHumanInputRequested(req)
 
 	// Re-read so the in-process notifier carries the canonical row
@@ -95,14 +108,8 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 	// the wire path already fired and gateways can still catch up via
 	// SquadronAPI.ListHumanInputs.
 	if c.humanInputNotifier != nil {
-		if stored, err := c.stores.HumanInputs.GetByToolCallID(req.ToolCallID); err == nil {
-			humaninput.PublishCreated(c.humanInputNotifier, *stored)
-		}
+		humaninput.PublishCreated(c.humanInputNotifier, *stored)
 	}
-
-	ch := make(chan protocol.ResolveHumanInputPayload, 1)
-	cancel := c.humanInputs.register(req.ToolCallID, ch)
-	defer cancel()
 
 	select {
 	case resp := <-ch:
@@ -110,6 +117,12 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 	case <-ctx.Done():
 		return "", ctx.Err()
 	}
+}
+
+// HumanInputReplaySafe declares the persisted tool-call ID contract used by
+// the mission runtime after restart.
+func (c *Client) HumanInputReplaySafe() bool {
+	return c != nil && c.stores != nil && c.stores.HumanInputs != nil
 }
 
 // handleGetHumanInputs is a list passthrough — squadron is the source

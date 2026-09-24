@@ -6,6 +6,8 @@ import (
 
 	"squadron/config"
 	missionruntime "squadron/mission/runtime"
+
+	"github.com/zclconf/go-cty/cty"
 )
 
 func TestCapabilityPolicyResolveGrant(t *testing.T) {
@@ -142,3 +144,28 @@ func TestRuntimeTaskDefinitionsPreserveOptionalOutputContract(t *testing.T) {
 		t.Fatalf("result fields = %#v", fields)
 	}
 }
+
+func TestRuntimeTaskDefinitionsExposeOnlyPublicDestinationInputs(t *testing.T) {
+	t.Parallel()
+	source := &config.Mission{Tasks: []config.Task{{
+		Name: "classify", Router: &config.TaskRouter{Routes: []config.TaskRoute{{Target: "follow_up", IsMission: true, Condition: "needs follow-up"}}},
+	}}}
+	destinations := []config.Mission{{
+		Name: "follow_up",
+		Inputs: []config.MissionInput{
+			{Name: "topic", Type: config.InputTypeString, Description: "Subject"},
+			{Name: "attempt", Type: config.InputTypeInteger, Default: ctyValuePtr(cty.NumberIntVal(1))},
+			{Name: "token", Type: config.InputTypeString, Protected: true},
+		},
+	}}
+	definitions, err := RuntimeTaskDefinitionsWithMissions(source, destinations)
+	if err != nil {
+		t.Fatalf("RuntimeTaskDefinitionsWithMissions() error = %v", err)
+	}
+	inputs := definitions[0].Routes[0].Inputs
+	if len(inputs) != 2 || inputs[0].Name != "topic" || !inputs[0].Required || inputs[1].Name != "attempt" || inputs[1].Required {
+		t.Fatalf("route inputs = %#v", inputs)
+	}
+}
+
+func ctyValuePtr(value cty.Value) *cty.Value { return &value }

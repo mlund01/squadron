@@ -83,8 +83,19 @@ func (r *RuntimeGrantResolver) ResolveExecutionGrant(request missionruntime.Gran
 // RuntimeTaskDefinitions translates the declarative task graph and optional
 // structured output contracts into the durable runtime's immutable form.
 func RuntimeTaskDefinitions(m *config.Mission) ([]missionruntime.TaskDefinition, error) {
+	return RuntimeTaskDefinitionsWithMissions(m, nil)
+}
+
+// RuntimeTaskDefinitionsWithMissions also resolves the public input contract
+// for cross-mission routes. Protected destination inputs are intentionally
+// excluded from commander-visible and harness-accepted route inputs.
+func RuntimeTaskDefinitionsWithMissions(m *config.Mission, missions []config.Mission) ([]missionruntime.TaskDefinition, error) {
 	if m == nil {
 		return nil, fmt.Errorf("mission is required")
+	}
+	destinations := make(map[string]*config.Mission, len(missions))
+	for index := range missions {
+		destinations[missions[index].Name] = &missions[index]
 	}
 	definitions := make([]missionruntime.TaskDefinition, 0, len(m.Tasks))
 	for _, task := range m.Tasks {
@@ -96,7 +107,24 @@ func RuntimeTaskDefinitions(m *config.Mission) ([]missionruntime.TaskDefinition,
 		}
 		if task.Router != nil {
 			for _, route := range task.Router.Routes {
-				definition.Routes = append(definition.Routes, missionruntime.RouteDefinition{Target: route.Target, Condition: route.Condition, IsMission: route.IsMission})
+				runtimeRoute := missionruntime.RouteDefinition{Target: route.Target, Condition: route.Condition, IsMission: route.IsMission}
+				if route.IsMission {
+					destination := destinations[route.Target]
+					if destination == nil && len(missions) > 0 {
+						return nil, fmt.Errorf("route target mission %q is not configured", route.Target)
+					}
+					if destination != nil {
+						for _, input := range destination.Inputs {
+							if input.Protected {
+								continue
+							}
+							runtimeRoute.Inputs = append(runtimeRoute.Inputs, missionruntime.RouteInputDefinition{
+								Name: input.Name, Type: input.Type, Description: input.Description, Required: input.Default == nil,
+							})
+						}
+					}
+				}
+				definition.Routes = append(definition.Routes, runtimeRoute)
 			}
 		}
 		if task.Output != nil {

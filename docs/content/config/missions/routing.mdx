@@ -223,7 +223,7 @@ task "notify" {
 
 ## Cross-Mission Routing
 
-Route targets can reference other missions using `missions.name` instead of `tasks.name`. When a mission route is chosen, the current mission completes and the target mission launches as a new instance.
+Route targets can reference other missions using `missions.name` instead of `tasks.name`. When a mission route is chosen, the current mission completes and records a durable request to launch the target as a new instance.
 
 ```hcl
 task "handle_complaint" {
@@ -242,7 +242,7 @@ task "handle_complaint" {
 }
 ```
 
-When the commander selects a mission route, it supplies `mission_inputs` using the destination's input names, types, descriptions, and required status shown in its routing prompt. Completed task outputs remain available to the commander, but neither `submit_output` nor the completion summary automatically populates the destination's inputs.
+When the commander calls `select_route` for a mission target, it supplies `inputs` using the destination's input names, types, descriptions, and required status shown in the mission graph. Completed task results remain available to the commander, but they do not automatically populate the destination's inputs.
 
 Input values accept native JSON types or string-encoded values, such as `false` or `"false"` for a boolean. Omit optional inputs to use their defaults; explicit `null` is rejected. A `file` input accepts a project path or a base64 envelope (`{"filename": "...", "content_base64": "..."}`) as a JSON object or string. Protected inputs are not offered to the commander — they always take their configured value. Invalid selections report all missing, unknown, and malformed inputs so the commander can correct the payload.
 

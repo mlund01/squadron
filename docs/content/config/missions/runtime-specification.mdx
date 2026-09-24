@@ -361,12 +361,13 @@ based built-ins use that timestamp when replaying: `builtins.time.sleep` waits
 only for the remaining duration, and `builtins.human.ask` preserves the
 original timeout deadline. Restart never grants a fresh full timeout.
 
-A cross-mission route commits the selected mission and its non-secret string
-inputs as part of the parent's route selection. Reconstructing a completed
-parent therefore reproduces the same launch intent without another commander
-turn. The external launcher must consume that intent through an idempotent,
-acknowledged child-launch protocol before cross-mission delivery is exactly
-once.
+A cross-mission route validates the destination's non-secret typed inputs and
+commits their canonical representation as part of the parent's route
+selection. Reconstructing a completed parent therefore reproduces the same
+launch intent without another commander turn. The launcher consumes that
+intent through an idempotent, acknowledged child-launch protocol: the child
+run ID is stored on the request, and an acknowledged request is not emitted
+again.
 
 ## Security invariants
 

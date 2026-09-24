@@ -106,6 +106,55 @@ func TestModelCommanderSelectsPendingDeclaredRoute(t *testing.T) {
 	}
 }
 
+func TestModelCommanderNormalizesAndValidatesTypedMissionRouteInputs(t *testing.T) {
+	t.Parallel()
+	session := &fakeCommanderSession{response: &llm.ChatResponse{ID: "route-response", ContentBlocks: []llm.ContentBlock{{
+		Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "route-tool", Name: "select_route", Input: json.RawMessage(`{"task_name":"classify","target":"follow_up","inputs":{"enabled":false,"attempt":2,"labels":["a","b"]}}`)},
+	}}}}
+	commander, err := NewModelCommander(session, nil)
+	if err != nil {
+		t.Fatalf("NewModelCommander() error = %v", err)
+	}
+	routes := []RouteDefinition{{
+		Target: "follow_up", Condition: "follow up", IsMission: true,
+		Inputs: []RouteInputDefinition{
+			{Name: "enabled", Type: "bool", Required: true},
+			{Name: "attempt", Type: "integer", Required: true},
+			{Name: "labels", Type: "list"},
+		},
+	}}
+	decision, err := commander.Decide(context.Background(), Snapshot{
+		RunID: "run-route", Revision: 7, PendingRoutes: map[string][]RouteDefinition{"classify": routes},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Decide() error = %v", err)
+	}
+	if decision.Route.Inputs["enabled"] != "false" || decision.Route.Inputs["attempt"] != "2" || decision.Route.Inputs["labels"] != `["a","b"]` {
+		t.Fatalf("normalized route inputs = %#v", decision.Route.Inputs)
+	}
+}
+
+func TestModelCommanderRejectsInvalidMissionRouteInputsTogether(t *testing.T) {
+	t.Parallel()
+	session := &fakeCommanderSession{response: &llm.ChatResponse{ID: "route-response", ContentBlocks: []llm.ContentBlock{{
+		Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "route-tool", Name: "select_route", Input: json.RawMessage(`{"task_name":"classify","target":"follow_up","inputs":{"enabled":"maybe","extra":1}}`)},
+	}}}}
+	commander, err := NewModelCommander(session, nil)
+	if err != nil {
+		t.Fatalf("NewModelCommander() error = %v", err)
+	}
+	_, err = commander.Decide(context.Background(), Snapshot{
+		RunID: "run-route", Revision: 7,
+		PendingRoutes: map[string][]RouteDefinition{"classify": {{
+			Target: "follow_up", IsMission: true,
+			Inputs: []RouteInputDefinition{{Name: "enabled", Type: "bool", Required: true}, {Name: "attempt", Type: "integer", Required: true}},
+		}}},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "inputs.attempt is required") || !strings.Contains(err.Error(), "inputs.enabled: expected bool") || !strings.Contains(err.Error(), "inputs.extra is not declared") {
+		t.Fatalf("Decide() error = %v", err)
+	}
+}
+
 func TestModelCommanderInspectsAcceptedTaskBeforeRouting(t *testing.T) {
 	t.Parallel()
 	session := &fakeCommanderSession{response: &llm.ChatResponse{ID: "inspect-response", ContentBlocks: []llm.ContentBlock{{

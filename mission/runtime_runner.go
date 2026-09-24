@@ -19,7 +19,7 @@ import (
 // missions. MissionStore receives only the run directory record needed by
 // existing product discovery; RuntimeStore is the sole state authority.
 func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.MissionHandler) error {
-	definitions, err := RuntimeTaskDefinitions(r.mission)
+	definitions, err := RuntimeTaskDefinitionsWithMissions(r.mission, r.cfg.Missions)
 	if err != nil {
 		return err
 	}

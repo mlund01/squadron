@@ -229,7 +229,10 @@ func TestHarnessSelectsDeclaredRouteAndIgnoresUnchosenBranch(t *testing.T) {
 
 func TestHarnessPersistsCrossMissionRouteAsCompletedLaunchIntent(t *testing.T) {
 	harness, err := NewHarness("run-cross-mission", "commander-cross-mission", []TaskDefinition{{
-		Name: "classify", Routes: []RouteDefinition{{Target: "follow_up", Condition: "needs follow-up", IsMission: true}},
+		Name: "classify", Routes: []RouteDefinition{{
+			Target: "follow_up", Condition: "needs follow-up", IsMission: true,
+			Inputs: []RouteInputDefinition{{Name: "topic", Type: "string", Required: true}},
+		}},
 	}})
 	if err != nil {
 		t.Fatalf("NewHarness() error = %v", err)
@@ -287,6 +290,39 @@ func TestHarnessPersistsCrossMissionRouteAsCompletedLaunchIntent(t *testing.T) {
 	launch = restored.Snapshot().CrossMissionLaunches["route-1"]
 	if launch.State != CrossMissionLaunchLaunched || launch.ChildRunID != "child-run-1" {
 		t.Fatalf("restored cross-mission launch = %#v", launch)
+	}
+}
+
+func TestHarnessRejectsInvalidCanonicalCrossMissionInputs(t *testing.T) {
+	t.Parallel()
+	harness, err := NewHarness("run-route-inputs", "commander-route-inputs", []TaskDefinition{{
+		Name: "classify", Routes: []RouteDefinition{{
+			Target: "follow_up", Condition: "needs follow-up", IsMission: true,
+			Inputs: []RouteInputDefinition{{Name: "enabled", Type: "bool", Required: true}},
+		}},
+	}})
+	if err != nil {
+		t.Fatalf("NewHarness() error = %v", err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	dispatch, err := harness.DispatchTask(DispatchRequest{RequestID: "dispatch", TaskName: "classify", ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("classify")})
+	if err != nil {
+		t.Fatalf("DispatchTask() error = %v", err)
+	}
+	if err := harness.CompleteTask("classify", dispatch.AttemptID, testResult(dispatch)); err != nil {
+		t.Fatalf("CompleteTask() error = %v", err)
+	}
+	_, err = harness.SelectRoute(RouteRequest{
+		RequestID: "route", TaskName: "classify", Target: "follow_up",
+		Inputs: map[string]string{"enabled": "not-a-bool", "extra": "value"}, Revision: harness.Snapshot().Revision,
+	})
+	if err == nil || !strings.Contains(err.Error(), "inputs.enabled: expected bool") || !strings.Contains(err.Error(), "inputs.extra is not declared") {
+		t.Fatalf("SelectRoute() error = %v", err)
+	}
+	if len(harness.Snapshot().CrossMissionLaunches) != 0 {
+		t.Fatalf("invalid route created launch = %#v", harness.Snapshot().CrossMissionLaunches)
 	}
 }
 

@@ -26,9 +26,19 @@ type TaskDefinition struct {
 }
 
 type RouteDefinition struct {
-	Target    string `json:"target"`
-	Condition string `json:"condition"`
-	IsMission bool   `json:"isMission,omitempty"`
+	Target    string                 `json:"target"`
+	Condition string                 `json:"condition"`
+	IsMission bool                   `json:"isMission,omitempty"`
+	Inputs    []RouteInputDefinition `json:"inputs,omitempty"`
+}
+
+// RouteInputDefinition is the non-secret portion of a destination mission's
+// input contract made available to the commander and durable harness.
+type RouteInputDefinition struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description,omitempty"`
+	Required    bool   `json:"required"`
 }
 
 type RouteRequest struct {
@@ -1171,6 +1181,11 @@ func (h *Harness) SelectRoute(request RouteRequest) (RouteSelection, error) {
 	}
 	if selected != nil && !selected.IsMission && len(request.Inputs) > 0 {
 		return RouteSelection{}, fmt.Errorf("local route %q cannot receive mission inputs", selected.Target)
+	}
+	if selected != nil && selected.IsMission {
+		if err := validateCanonicalRouteInputs(*selected, request.Inputs); err != nil {
+			return RouteSelection{}, fmt.Errorf("mission %q inputs: %w", selected.Target, err)
+		}
 	}
 	selection := RouteSelection{
 		RequestID: request.RequestID, TaskName: request.TaskName, Target: request.Target,

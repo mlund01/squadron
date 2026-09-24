@@ -104,7 +104,7 @@ func NewModelCommander(session CommanderModelSession, restored []CommanderMessag
 	session.LoadMessages(messages)
 	session.SetTools([]llm.ToolDefinition{
 		{Name: "start_task", Description: "Request that the mission harness start one task from the current ready set.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"model":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}}},"required":["task_name","model"],"additionalProperties":false}`)},
-		{Name: "select_route", Description: "Choose one declared target for a completed router task, or none when no condition applies. For a mission target, include its non-secret string inputs.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"target":{"type":"string"},"inputs":{"type":"object","additionalProperties":{"type":"string"}}},"required":["task_name","target"],"additionalProperties":false}`)},
+		{Name: "select_route", Description: "Choose one declared target for a completed router task, or none when no condition applies. For a mission target, include its declared non-secret inputs using their native JSON types.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"target":{"type":"string"},"inputs":{"type":"object","additionalProperties":true}},"required":["task_name","target"],"additionalProperties":false}`)},
 		{Name: "inspect_task", Description: "Read the complete accepted output for a completed task. Worker turns, reasoning, tool calls, and raw provider output are excluded.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"}},"required":["task_name"],"additionalProperties":false}`)},
 		{Name: "clarify_task_result", Description: "Ask the completed task worker one focused follow-up using its persisted session. Tools are disabled and the number of clarifications is bounded.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"question":{"type":"string","maxLength":4096}},"required":["task_name","question"],"additionalProperties":false}`)},
 	})
@@ -193,9 +193,9 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, _ []Comm
 	}
 	if requested.Name == "select_route" {
 		var input struct {
-			TaskName string            `json:"task_name"`
-			Target   string            `json:"target"`
-			Inputs   map[string]string `json:"inputs"`
+			TaskName string                     `json:"task_name"`
+			Target   string                     `json:"target"`
+			Inputs   map[string]json.RawMessage `json:"inputs"`
 		}
 		if err := json.Unmarshal(requested.Input, &input); err != nil {
 			return CommanderDecision{}, fmt.Errorf("decode select_route input: %w", err)
@@ -203,7 +203,11 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, _ []Comm
 		if input.TaskName == "" || input.Target == "" {
 			return CommanderDecision{}, fmt.Errorf("select_route task_name and target are required")
 		}
-		decision.Route = RouteRequest{RequestID: requested.ID, TaskName: input.TaskName, Target: input.Target, Inputs: input.Inputs, Revision: snapshot.Revision}
+		inputs, err := prepareRouteInputs(snapshot.PendingRoutes[input.TaskName], input.Target, input.Inputs)
+		if err != nil {
+			return CommanderDecision{}, err
+		}
+		decision.Route = RouteRequest{RequestID: requested.ID, TaskName: input.TaskName, Target: input.Target, Inputs: inputs, Revision: snapshot.Revision}
 		return decision, nil
 	}
 	var input struct {

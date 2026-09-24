@@ -567,6 +567,13 @@ func (h *DurableHarness) ApplyCommanderDispatch(prompt, message CommanderMessage
 		return Dispatch{}, err
 	}
 	after := candidate.Checkpoint()
+	// Replaying a fully committed commander turn is a no-op. Every constituent
+	// operation is idempotent, so an unchanged revision means the dispatch and
+	// all three transcript messages already exist. Do not append a second event
+	// batch for the same logical turn after process recovery.
+	if after.Revision == before.Revision {
+		return dispatch, nil
+	}
 	events := []Event{
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: prompt.ID},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID},
@@ -819,6 +826,12 @@ func (h *DurableHarness) ApplyCommanderRoute(prompt, message CommanderMessage, r
 		return RouteSelection{}, err
 	}
 	after := candidate.Checkpoint()
+	// As with dispatch, a restored process may replay the last provider turn.
+	// If its transcript and route selection are already committed, preserve the
+	// original selection without creating duplicate audit/launch events.
+	if after.Revision == before.Revision {
+		return selection, nil
+	}
 	events := []Event{
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: prompt.ID},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: time.Now().UTC(), CorrelationID: message.ID},

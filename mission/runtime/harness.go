@@ -908,9 +908,6 @@ func (h *Harness) AppendCommanderMessage(message CommanderMessage) error {
 	if len(message.Parts) == 0 {
 		return fmt.Errorf("commander message parts are required")
 	}
-	if h.commander.State != CommanderActive && h.commander.State != CommanderWaiting {
-		return fmt.Errorf("commander session is not accepting messages")
-	}
 	for _, existing := range h.commanderMessages {
 		if existing.ID != message.ID {
 			continue
@@ -919,6 +916,9 @@ func (h *Harness) AppendCommanderMessage(message CommanderMessage) error {
 			return nil
 		}
 		return fmt.Errorf("commander message %q already exists with different content", message.ID)
+	}
+	if h.commander.State != CommanderActive && h.commander.State != CommanderWaiting {
+		return fmt.Errorf("commander session is not accepting messages")
 	}
 	message.Parts = append([]store.MessagePart(nil), message.Parts...)
 	h.commanderMessages = append(h.commanderMessages, message)

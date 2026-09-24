@@ -15,7 +15,9 @@ func generateID() string {
 	return string(b)
 }
 
-func missionLaunchID(parentRunID, launchID string) string {
+// MissionIDForLaunch returns the stable child-run identity for one durable
+// parent launch request.
+func MissionIDForLaunch(parentRunID, launchID string) string {
 	digest := sha256.Sum256([]byte(parentRunID + "\x00" + launchID))
 	return "route_" + hex.EncodeToString(digest[:12])
 }

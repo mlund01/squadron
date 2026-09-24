@@ -67,7 +67,7 @@ func (s *SQLiteMissionStore) CreateMissionForLaunch(parentRunID, launchID, name,
 	if parentRunID == "" || launchID == "" {
 		return "", fmt.Errorf("parent run ID and launch ID are required")
 	}
-	id := missionLaunchID(parentRunID, launchID)
+	id := MissionIDForLaunch(parentRunID, launchID)
 	_, err := s.db.Exec(
 		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
 		id, name, inputsJSON, configJSON, tsNow(),

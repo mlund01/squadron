@@ -17,6 +17,7 @@ import (
 	"squadron/config"
 	"squadron/config/runtimemodels"
 	"squadron/mission"
+	missionruntime "squadron/mission/runtime"
 	"squadron/notification"
 	"squadron/store"
 	"squadron/streamers"
@@ -1253,6 +1254,11 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		// Chain into the next mission.
 		log.Printf("Mission %q routed to mission %q", missionName, nextMission)
 		missionName = nextMission
+		if !c.concurrency.NotifyMissionStarted(nextMission) {
+			log.Printf("Mission %q launch %q is waiting for concurrency capacity", nextMission, launchRequestID)
+			parentRunner.CloseStores()
+			return
+		}
 
 		cfg := c.getConfig()
 		debugLogger, _ := mission.NewDebugLogger("")
@@ -1264,6 +1270,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, options...)
 		if newErr != nil {
 			log.Printf("Failed to create runner for chained mission %q: %v", nextMission, newErr)
+			c.concurrency.NotifyMissionDone(nextMission)
 			parentRunner.CloseStores()
 			return
 		}
@@ -1304,13 +1311,62 @@ func (c *Client) ResumeOrphanedMissions() {
 		return
 	}
 
-	records, _, err := c.stores.Missions.ListMissions(100, 0)
-	if err != nil {
-		log.Printf("auto-resume: failed to list missions: %v", err)
-		return
+	var records []store.MissionRecord
+	for offset := 0; ; offset += 100 {
+		page, total, err := c.stores.Missions.ListMissions(100, offset)
+		if err != nil {
+			log.Printf("auto-resume: failed to list missions: %v", err)
+			return
+		}
+		records = append(records, page...)
+		if len(records) >= total || len(page) == 0 {
+			break
+		}
+	}
+
+	type pendingLaunch struct {
+		parentRunID string
+		launch      missionruntime.CrossMissionLaunch
+	}
+	pendingByChild := make(map[string]pendingLaunch)
+	for _, record := range records {
+		if record.Status != "completed" {
+			continue
+		}
+		harness, _, err := missionruntime.RestoreDurableHarness(c.stores.Runtime, record.ID)
+		if err != nil {
+			continue
+		}
+		for _, launch := range harness.Snapshot().CrossMissionLaunches {
+			if launch.State != missionruntime.CrossMissionLaunchPending {
+				continue
+			}
+			childID := store.MissionIDForLaunch(record.ID, launch.ID)
+			pendingByChild[childID] = pendingLaunch{parentRunID: record.ID, launch: launch}
+		}
+	}
+
+	childrenWithoutRuntime := make(map[string]bool)
+	for _, record := range records {
+		pending, ok := pendingByChild[record.ID]
+		if !ok {
+			continue
+		}
+		if _, _, err := missionruntime.RestoreDurableHarness(c.stores.Runtime, record.ID); err != nil {
+			childrenWithoutRuntime[record.ID] = true
+			continue
+		}
+		if err := c.acknowledgeRecoveredLaunch(pending.parentRunID, pending.launch.ID, record.ID); err != nil {
+			log.Printf("auto-resume: failed to acknowledge recovered child %q: %v", record.ID, err)
+			continue
+		}
+		delete(pendingByChild, record.ID)
 	}
 
 	for _, r := range records {
+		if childrenWithoutRuntime[r.ID] {
+			continue
+		}
 		if r.Status != "running" {
 			continue
 		}
@@ -1358,6 +1414,56 @@ func (c *Client) ResumeOrphanedMissions() {
 		c.runningMissions[r.ID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 		c.missionMu.Unlock()
 	}
+
+	for _, pending := range pendingByChild {
+		c.resumePendingCrossMissionLaunch(cfg, pending.parentRunID, pending.launch)
+	}
+}
+
+func (c *Client) acknowledgeRecoveredLaunch(parentRunID, launchID, childRunID string) error {
+	harness, _, err := missionruntime.RestoreDurableHarness(c.stores.Runtime, parentRunID)
+	if err != nil {
+		return err
+	}
+	_, err = harness.CompleteCrossMissionLaunch(launchID, childRunID)
+	return err
+}
+
+func (c *Client) resumePendingCrossMissionLaunch(cfg *config.Config, parentRunID string, launch missionruntime.CrossMissionLaunch) {
+	if !c.concurrency.NotifyMissionStarted(launch.Target) {
+		log.Printf("auto-resume: pending launch %q is waiting for capacity on mission %q", launch.ID, launch.Target)
+		return
+	}
+	debugLogger, _ := mission.NewDebugLogger("")
+	runner, err := mission.NewRunner(cfg, c.configPath, launch.Target, launch.Inputs,
+		mission.WithDebugLogger(debugLogger),
+		mission.WithCrossMissionLaunch(parentRunID, launch.ID),
+		mission.WithHumanBridge(c),
+		mission.WithGatewayBridge(c.gatewayBridge))
+	if err != nil {
+		c.concurrency.NotifyMissionDone(launch.Target)
+		log.Printf("auto-resume: failed to rebuild pending launch %q: %v", launch.ID, err)
+		return
+	}
+	wsHandler := NewWSMissionHandler(c)
+	storingHandler := streamers.NewStoringMissionHandler(wsHandler, runner.EventStore(), runner.CostStore())
+	missionCtx, missionCancel := context.WithCancel(context.Background())
+	go c.runMissionChain(missionCtx, missionCancel, runner, storingHandler, wsHandler, launch.Target)
+
+	go func() {
+		childID, err := wsHandler.WaitForMissionID(30 * time.Second)
+		if err != nil {
+			missionCancel()
+			log.Printf("auto-resume: pending launch %q failed to start: %v", launch.ID, err)
+			return
+		}
+		if err := c.acknowledgeRecoveredLaunch(parentRunID, launch.ID, childID); err != nil {
+			log.Printf("auto-resume: failed to acknowledge launch %q to child %q: %v", launch.ID, childID, err)
+		}
+		c.missionMu.Lock()
+		c.runningMissions[childID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
+		c.missionMu.Unlock()
+	}()
 }
 
 // RunMissionDirect starts a mission without going through the WebSocket protocol.

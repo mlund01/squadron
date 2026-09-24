@@ -71,7 +71,7 @@ func (s *PgMissionStore) CreateMissionForLaunch(parentRunID, launchID, name, inp
 	if parentRunID == "" || launchID == "" {
 		return "", fmt.Errorf("parent run ID and launch ID are required")
 	}
-	id := missionLaunchID(parentRunID, launchID)
+	id := MissionIDForLaunch(parentRunID, launchID)
 	_, err := s.db.Exec(
 		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(id) DO NOTHING`,
 		id, name, inputsJSON, configJSON, tsNow(),

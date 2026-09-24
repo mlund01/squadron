@@ -370,6 +370,13 @@ and launch request deterministically identify one child run, so retrying after
 child creation cannot insert a duplicate. The child run ID is then stored on
 the request, and an acknowledged request is not emitted again.
 
+Startup reconciliation scans completed durable parents as well as running
+runs. A pending launch with an existing child runtime is acknowledged and the
+child is resumed normally. If only the child directory row was inserted before
+the crash, Squadron retries initialization under the same deterministic child
+ID before acknowledging it. If no child exists, Squadron creates it from the
+persisted target and canonical inputs.
+
 ## Security invariants
 
 1. The commander has no execution path to mission or task tools.

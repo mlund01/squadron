@@ -63,6 +63,28 @@ func (s *SQLiteMissionStore) CreateMission(name string, inputsJSON, configJSON s
 	return id, nil
 }
 
+func (s *SQLiteMissionStore) CreateMissionForLaunch(parentRunID, launchID, name, inputsJSON, configJSON string) (string, error) {
+	if parentRunID == "" || launchID == "" {
+		return "", fmt.Errorf("parent run ID and launch ID are required")
+	}
+	id := missionLaunchID(parentRunID, launchID)
+	_, err := s.db.Exec(
+		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+		id, name, inputsJSON, configJSON, tsNow(),
+	)
+	if err != nil {
+		return "", fmt.Errorf("create launched mission: %w", err)
+	}
+	record, err := s.GetMission(id)
+	if err != nil {
+		return "", fmt.Errorf("read launched mission: %w", err)
+	}
+	if record.MissionName != name || record.InputValuesJSON != inputsJSON || record.ConfigJSON != configJSON {
+		return "", fmt.Errorf("launch %q for parent %q conflicts with existing mission %q", launchID, parentRunID, id)
+	}
+	return id, nil
+}
+
 func (s *SQLiteMissionStore) UpdateMissionStatus(id, status string) error {
 	var finishedAt *string
 	if status == "completed" || status == "failed" {

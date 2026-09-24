@@ -61,8 +61,10 @@ type Runner struct {
 	askCommanderStore *askCommanderStore
 
 	// Resume support
-	resumeMissionID string            // Non-empty when resuming a prior mission
-	rawInputs       map[string]string // Raw input strings for persistence/resume
+	resumeMissionID       string            // Non-empty when resuming a prior mission
+	launchParentMissionID string            // Parent run for idempotent cross-mission creation
+	launchRequestID       string            // Durable parent launch request
+	rawInputs             map[string]string // Raw input strings for persistence/resume
 
 	// Memory access for mission
 	memoryStore aitools.MemoryStore
@@ -134,6 +136,15 @@ func WithDebugLogger(logger *DebugLogger) RunnerOption {
 func WithResume(missionID string) RunnerOption {
 	return func(r *Runner) {
 		r.resumeMissionID = missionID
+	}
+}
+
+// WithCrossMissionLaunch binds a fresh child runner to one durable parent
+// launch request. Mission creation then becomes idempotent across crashes.
+func WithCrossMissionLaunch(parentMissionID, launchRequestID string) RunnerOption {
+	return func(r *Runner) {
+		r.launchParentMissionID = parentMissionID
+		r.launchRequestID = launchRequestID
 	}
 }
 
@@ -394,6 +405,9 @@ func (r *Runner) MissionName() string {
 	return r.mission.Name
 }
 
+// MissionID returns the persisted run identity after execution has started.
+func (r *Runner) MissionID() string { return r.missionID }
+
 // NotificationConfig returns the mission's notification config, or nil when
 // the mission did not declare a `notification` block.
 func (r *Runner) NotificationConfig() *config.NotificationConfig {
@@ -408,6 +422,22 @@ func (r *Runner) NextMission() string {
 // NextMissionInputs returns the inputs for the next mission to launch, or nil.
 func (r *Runner) NextMissionInputs() map[string]string {
 	return r.nextMissionInputs
+}
+
+// NextMissionLaunchID identifies the durable launch request that must be
+// acknowledged with the created child run ID.
+func (r *Runner) NextMissionLaunchID() string { return r.nextMissionLaunchID }
+
+func (r *Runner) createMissionRecord(inputsJSON, configJSON string) (string, error) {
+	if r.launchParentMissionID == "" && r.launchRequestID == "" {
+		return r.stores.Missions.CreateMission(r.mission.Name, inputsJSON, configJSON)
+	}
+	if r.launchParentMissionID == "" || r.launchRequestID == "" {
+		return "", fmt.Errorf("cross-mission launch requires both parent mission ID and launch request ID")
+	}
+	return r.stores.Missions.CreateMissionForLaunch(
+		r.launchParentMissionID, r.launchRequestID, r.mission.Name, inputsJSON, configJSON,
+	)
 }
 
 // AcknowledgeNextMissionLaunch records the child run that consumed the
@@ -588,7 +618,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		rawInputsJSON, _ := json.Marshal(r.rawInputs)
 		configJSON, _ := json.Marshal(r.missionSnapshot())
 		var err error
-		missionID, err = r.stores.Missions.CreateMission(r.mission.Name, string(rawInputsJSON), string(configJSON))
+		missionID, err = r.createMissionRecord(string(rawInputsJSON), string(configJSON))
 		if err != nil {
 			return fmt.Errorf("create mission record: %w", err)
 		}

@@ -1,6 +1,10 @@
 package store
 
-import "math/rand"
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"math/rand"
+)
 
 func generateID() string {
 	const chars = "abcdefghijklmnopqrstuvwxyz0123456789"
@@ -9,4 +13,9 @@ func generateID() string {
 		b[i] = chars[rand.Intn(len(chars))]
 	}
 	return string(b)
+}
+
+func missionLaunchID(parentRunID, launchID string) string {
+	digest := sha256.Sum256([]byte(parentRunID + "\x00" + launchID))
+	return "route_" + hex.EncodeToString(digest[:12])
 }

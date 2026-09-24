@@ -67,6 +67,28 @@ func (s *PgMissionStore) CreateMission(name string, inputsJSON, configJSON strin
 	return id, nil
 }
 
+func (s *PgMissionStore) CreateMissionForLaunch(parentRunID, launchID, name, inputsJSON, configJSON string) (string, error) {
+	if parentRunID == "" || launchID == "" {
+		return "", fmt.Errorf("parent run ID and launch ID are required")
+	}
+	id := missionLaunchID(parentRunID, launchID)
+	_, err := s.db.Exec(
+		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES ($1, $2, $3, $4, $5) ON CONFLICT(id) DO NOTHING`,
+		id, name, inputsJSON, configJSON, tsNow(),
+	)
+	if err != nil {
+		return "", fmt.Errorf("create launched mission: %w", err)
+	}
+	record, err := s.GetMission(id)
+	if err != nil {
+		return "", fmt.Errorf("read launched mission: %w", err)
+	}
+	if record.MissionName != name || record.InputValuesJSON != inputsJSON || record.ConfigJSON != configJSON {
+		return "", fmt.Errorf("launch %q for parent %q conflicts with existing mission %q", launchID, parentRunID, id)
+	}
+	return id, nil
+}
+
 func (s *PgMissionStore) UpdateMissionStatus(id, status string) error {
 	var finishedAt *string
 	if status == "completed" || status == "failed" {

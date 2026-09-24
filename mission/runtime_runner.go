@@ -42,7 +42,7 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		harness, _, err = missionruntime.RestoreDurableHarness(r.stores.Runtime, runID)
 	} else {
 		rawInputsJSON, _ := json.Marshal(r.rawInputs)
-		runID, err = r.stores.Missions.CreateMission(r.mission.Name, string(rawInputsJSON), string(configuration))
+		runID, err = r.createMissionRecord(string(rawInputsJSON), string(configuration))
 		if err == nil {
 			harness, err = missionruntime.CreateDurableHarnessWithMaxParallel(r.stores.Runtime, runID, runID+":commander", definitions, r.mission.MaxParallel)
 		}

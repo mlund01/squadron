@@ -68,6 +68,27 @@ var _ = Describe("SQLite MissionStore", func() {
 			Expect(m.StartedAt).NotTo(BeZero())
 			Expect(m.FinishedAt).To(BeNil())
 		})
+
+		It("idempotently creates one child mission for a durable launch request", func() {
+			first, err := bundle.Missions.CreateMissionForLaunch("parent-1", "route-1", "child", `{"topic":"x"}`, `{"cfg":1}`)
+			Expect(err).NotTo(HaveOccurred())
+			second, err := bundle.Missions.CreateMissionForLaunch("parent-1", "route-1", "child", `{"topic":"x"}`, `{"cfg":1}`)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(second).To(Equal(first))
+
+			records, total, err := bundle.Missions.ListMissions(10, 0)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(1))
+			Expect(records).To(HaveLen(1))
+			Expect(records[0].ID).To(Equal(first))
+		})
+
+		It("rejects reuse of a launch identity with different child data", func() {
+			_, err := bundle.Missions.CreateMissionForLaunch("parent-1", "route-1", "child", `{}`, `{"cfg":1}`)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = bundle.Missions.CreateMissionForLaunch("parent-1", "route-1", "other-child", `{}`, `{"cfg":1}`)
+			Expect(err).To(MatchError(ContainSubstring("conflicts with existing mission")))
+		})
 	})
 
 	// =========================================================================

@@ -62,6 +62,10 @@ func (b *Bundle) Close() error {
 // MissionStore tracks mission runs and their tasks
 type MissionStore interface {
 	CreateMission(name string, inputsJSON, configJSON string) (id string, err error)
+	// CreateMissionForLaunch idempotently creates the child run for one durable
+	// parent launch request. Repeating the same parent/launch pair returns the
+	// same run ID and never inserts a second mission.
+	CreateMissionForLaunch(parentRunID, launchID, name, inputsJSON, configJSON string) (id string, err error)
 	UpdateMissionStatus(id, status string) error
 	// UpdateMissionStatusCAS atomically transitions a mission status, returning false if current status doesn't match expected.
 	UpdateMissionStatusCAS(id, expectedOldStatus, newStatus string) (bool, error)

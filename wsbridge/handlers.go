@@ -1242,20 +1242,29 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 			return
 		}
 
-		// Close stores for completed mission before chaining
-		runner.CloseStores()
+		// Keep the parent store open until the child has a persisted run ID. The
+		// child uses a deterministic identity derived from this durable request,
+		// so retrying after a crash cannot create a duplicate run.
+		parentRunner := runner
+		parentMissionID := parentRunner.MissionID()
+		launchRequestID := parentRunner.NextMissionLaunchID()
+		inputs := parentRunner.NextMissionInputs()
 
-		// Chain into the next mission
+		// Chain into the next mission.
 		log.Printf("Mission %q routed to mission %q", missionName, nextMission)
 		missionName = nextMission
-		inputs := runner.NextMissionInputs()
 
 		cfg := c.getConfig()
 		debugLogger, _ := mission.NewDebugLogger("")
 		var newErr error
-		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
+		options := []mission.RunnerOption{mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge)}
+		if launchRequestID != "" {
+			options = append(options, mission.WithCrossMissionLaunch(parentMissionID, launchRequestID))
+		}
+		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, options...)
 		if newErr != nil {
 			log.Printf("Failed to create runner for chained mission %q: %v", nextMission, newErr)
+			parentRunner.CloseStores()
 			return
 		}
 
@@ -1263,16 +1272,27 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		storingHandler = streamers.NewStoringMissionHandler(wsHandler, runner.EventStore(), runner.CostStore())
 
 		// Wait for mission ID in a separate goroutine — we need it to track the running mission
-		go func() {
-			chainedMID, err := wsHandler.WaitForMissionID(30 * time.Second)
+		childRunner := runner
+		childHandler := wsHandler
+		go func(parentRunner, childRunner *mission.Runner, childHandler *WSMissionHandler, parentMissionID, launchRequestID, nextMission string) {
+			chainedMID, err := childHandler.WaitForMissionID(30 * time.Second)
 			if err != nil {
 				log.Printf("Chained mission %q failed to start: %v", nextMission, err)
+				parentRunner.CloseStores()
 				return
 			}
+			if launchRequestID != "" {
+				if err := parentRunner.AcknowledgeNextMissionLaunch(chainedMID); err != nil {
+					log.Printf("Failed to acknowledge launch %q from mission %q to child %q: %v", launchRequestID, parentMissionID, chainedMID, err)
+				} else {
+					log.Printf("Acknowledged launch %q from mission %q to child %q", launchRequestID, parentMissionID, chainedMID)
+				}
+			}
+			parentRunner.CloseStores()
 			c.missionMu.Lock()
-			c.runningMissions[chainedMID] = &runningMission{cancel: cancel, drain: runner.Drain}
+			c.runningMissions[chainedMID] = &runningMission{cancel: cancel, drain: childRunner.Drain}
 			c.missionMu.Unlock()
-		}()
+		}(parentRunner, childRunner, childHandler, parentMissionID, launchRequestID, nextMission)
 	}
 }
 

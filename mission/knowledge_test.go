@@ -12,8 +12,8 @@ import (
 // mockMissionStore implements store.MissionStore for testing.
 // Only GetTaskByName and GetTaskOutputs are used by PersistentKnowledgeStore.
 type mockMissionStore struct {
-	tasks   map[string]*store.MissionTask           // key: missionID + "|" + taskName
-	outputs map[string][]store.TaskOutputRow         // key: taskID
+	tasks   map[string]*store.MissionTask    // key: missionID + "|" + taskName
+	outputs map[string][]store.TaskOutputRow // key: taskID
 }
 
 func newMockStore() *mockMissionStore {
@@ -58,8 +58,13 @@ func (m *mockMissionStore) GetTaskOutputs(taskID string) ([]store.TaskOutputRow,
 func (m *mockMissionStore) CreateMission(name, inputsJSON, configJSON string) (string, error) {
 	return "", nil
 }
+func (m *mockMissionStore) CreateMissionForLaunch(parentRunID, launchID, name, inputsJSON, configJSON string) (string, error) {
+	return "", nil
+}
 func (m *mockMissionStore) UpdateMissionStatus(id, status string) error { return nil }
-func (m *mockMissionStore) UpdateMissionStatusCAS(id, expectedOld, newStatus string) (bool, error) { return true, nil }
+func (m *mockMissionStore) UpdateMissionStatusCAS(id, expectedOld, newStatus string) (bool, error) {
+	return true, nil
+}
 func (m *mockMissionStore) CreateTask(missionID, taskName, configJSON string) (string, error) {
 	return "", nil
 }
@@ -69,7 +74,7 @@ func (m *mockMissionStore) UpdateTaskStatus(id, status string, outputJSON, errMs
 func (m *mockMissionStore) UpdateTaskStatusCAS(id, expectedOld, newStatus string, outputJSON, errMsg *string) (bool, error) {
 	return true, nil
 }
-func (m *mockMissionStore) UpdateTaskSummary(id, summary string) error { return nil }
+func (m *mockMissionStore) UpdateTaskSummary(id, summary string) error    { return nil }
 func (m *mockMissionStore) GetTask(id string) (*store.MissionTask, error) { return nil, nil }
 func (m *mockMissionStore) GetTasksByMission(missionID string) ([]store.MissionTask, error) {
 	return nil, nil
@@ -1027,7 +1032,7 @@ func TestCompareValues_Numeric(t *testing.T) {
 		{1.0, 2.0, -1},
 		{2.0, 1.0, 1},
 		{3.0, 3.0, 0},
-		{1, 2.0, -1},   // int vs float64
+		{1, 2.0, -1}, // int vs float64
 		{int64(5), 3.0, 1},
 	}
 	for _, tt := range tests {
@@ -1102,9 +1107,9 @@ func TestGetFieldValue_StandardFields(t *testing.T) {
 
 func TestGetNumericValue_Types(t *testing.T) {
 	tests := []struct {
-		name  string
+		name   string
 		output map[string]any
-		want  float64
+		want   float64
 	}{
 		{"float64", map[string]any{"v": float64(3.14)}, 3.14},
 		{"float32", map[string]any{"v": float32(2.5)}, 2.5},

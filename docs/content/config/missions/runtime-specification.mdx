@@ -365,9 +365,10 @@ A cross-mission route validates the destination's non-secret typed inputs and
 commits their canonical representation as part of the parent's route
 selection. Reconstructing a completed parent therefore reproduces the same
 launch intent without another commander turn. The launcher consumes that
-intent through an idempotent, acknowledged child-launch protocol: the child
-run ID is stored on the request, and an acknowledged request is not emitted
-again.
+intent through an idempotent, acknowledged child-launch protocol. A parent run
+and launch request deterministically identify one child run, so retrying after
+child creation cannot insert a duplicate. The child run ID is then stored on
+the request, and an acknowledged request is not emitted again.
 
 ## Security invariants
 

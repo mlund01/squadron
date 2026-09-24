@@ -242,7 +242,11 @@ task "handle_complaint" {
 }
 ```
 
-A cross-mission selection requires the cross-mission launcher to create a separately authorized run with explicit inputs and a persisted parent/child relationship. The harness rejects the selection when that launcher is unavailable; it never silently treats the route as complete. The child does not inherit credentials merely because the parent selected it.
+When the commander selects a mission route, it supplies `mission_inputs` using the destination's input names, types, descriptions, and required status shown in its routing prompt. Completed task outputs remain available to the commander, but neither `submit_output` nor the completion summary automatically populates the destination's inputs.
+
+Input values accept native JSON types or string-encoded values, such as `false` or `"false"` for a boolean. Omit optional inputs to use their defaults; explicit `null` is rejected. A `file` input accepts a project path or a base64 envelope (`{"filename": "...", "content_base64": "..."}`) as a JSON object or string. Protected inputs are not offered to the commander — they always take their configured value. Invalid selections report all missing, unknown, and malformed inputs so the commander can correct the payload.
+
+A valid selection creates a durable launch request. The cross-mission launcher creates a separately authorized child run and atomically records its run ID on that request. Reopening an acknowledged parent does not launch the child again. The child never inherits credentials merely because the parent selected it.
 
 A mission can route to itself — this creates a new instance, not a loop. This is useful for retry or restart patterns.
 

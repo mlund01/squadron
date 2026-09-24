@@ -1,9 +1,12 @@
 package aitools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 )
 
 // RouteOption represents a routing option presented to the commander
@@ -14,12 +17,14 @@ type RouteOption struct {
 	Inputs    []RouteInput `json:"inputs,omitempty"`
 }
 
-// RouteInput describes a required input for a mission route target
+// RouteInput describes an input for a mission route target.
 type RouteInput struct {
 	Name        string `json:"name"`
 	Type        string `json:"type"`
 	Description string `json:"description,omitempty"`
 	Required    bool   `json:"required"`
+	// Validate uses the destination's input parser before the source task completes.
+	Validate func(string) error `json:"-"`
 }
 
 // TaskCompleteTool allows the commander to signal that it has finished the task.
@@ -32,10 +37,10 @@ type TaskCompleteTool struct {
 	SubtaskChecker func() (total int, incomplete int)
 
 	// Routing support
-	Routes        []RouteOption // Set by runner if task has routes (nil otherwise)
-	chosenRoute   string
+	Routes         []RouteOption // Set by runner if task has routes (nil otherwise)
+	chosenRoute    string
 	isMissionRoute bool
-	missionInputs map[string]string
+	missionInputs  map[string]string
 }
 
 func (t *TaskCompleteTool) ToolName() string {
@@ -79,7 +84,7 @@ func (t *TaskCompleteTool) ToolPayloadSchema() Schema {
 		if hasMissionInputs {
 			props["mission_inputs"] = Property{
 				Type:        TypeObject,
-				Description: "Input values for a mission route target. Required when the chosen route is a mission that has required inputs.",
+				Description: "Input values for the selected mission route. Use the names and types in the routing prompt; booleans, numbers, arrays, and objects can be supplied directly as JSON values.",
 			}
 		}
 	}
@@ -90,29 +95,12 @@ func (t *TaskCompleteTool) ToolPayloadSchema() Schema {
 }
 
 func (t *TaskCompleteTool) Call(ctx context.Context, params string) string {
-	succeed := true
-	reason := ""
-	route := ""
-	var missionInputs map[string]string
-
-	if params != "" && params != "{}" {
-		var input struct {
-			Succeed       *bool             `json:"succeed"`
-			Summary       string            `json:"summary"`
-			Reason        string            `json:"reason"`
-			Route         string            `json:"route"`
-			MissionInputs map[string]string `json:"mission_inputs"`
-		}
-		if err := json.Unmarshal([]byte(params), &input); err == nil {
-			if input.Succeed != nil {
-				succeed = *input.Succeed
-			}
-			t.summary = input.Summary
-			reason = input.Reason
-			route = input.Route
-			missionInputs = input.MissionInputs
-		}
+	input, err := decodeTaskCompletion(params)
+	if err != nil {
+		return taskCompletionError("Invalid task_complete arguments: " + err.Error())
 	}
+	succeed := input.Succeed == nil || *input.Succeed
+	reason, route := input.Reason, input.Route
 
 	// Require reason when failing
 	if !succeed && reason == "" {
@@ -134,6 +122,7 @@ func (t *TaskCompleteTool) Call(ctx context.Context, params string) string {
 		t.completed = true
 		t.succeeded = false
 		t.failureReason = reason
+		t.summary = input.Summary
 		return `{"status": "ok", "message": "Task marked as failed."}`
 	}
 
@@ -146,17 +135,16 @@ func (t *TaskCompleteTool) Call(ctx context.Context, params string) string {
 			t.completed = true
 			t.succeeded = true
 			t.chosenRoute = ""
+			t.summary = input.Summary
 			return `{"status": "ok", "message": "Task completed without routing."}`
 		}
 		for _, r := range t.Routes {
 			if r.Target == route {
+				var missionInputs map[string]string
 				if r.IsMission {
-					for _, inp := range r.Inputs {
-						if inp.Required {
-							if missionInputs == nil || missionInputs[inp.Name] == "" {
-								return fmt.Sprintf(`{"status": "error", "error": "Mission '%s' requires input '%s' (%s). Provide it via mission_inputs."}`, route, inp.Name, inp.Description)
-							}
-						}
+					missionInputs, err = r.prepareInputs(input.MissionInputs)
+					if err != nil {
+						return taskCompletionError(fmt.Sprintf("Mission %q inputs: %s", route, err))
 					}
 				}
 				t.completed = true
@@ -164,24 +152,26 @@ func (t *TaskCompleteTool) Call(ctx context.Context, params string) string {
 				t.chosenRoute = route
 				t.isMissionRoute = r.IsMission
 				t.missionInputs = missionInputs
+				t.summary = input.Summary
 				if r.IsMission {
 					return fmt.Sprintf(`{"status": "ok", "routed_to_mission": "%s"}`, route)
 				}
 				return fmt.Sprintf(`{"status": "ok", "routed_to": "%s"}`, route)
 			}
 		}
-		return fmt.Sprintf(`{"status": "error", "error": "Invalid route key '%s'. Choose one of the route keys from the routing options in your system prompt, or 'none'."}`, route)
+		return taskCompletionError(fmt.Sprintf("Invalid route key %q. Choose a route key from the routing options or 'none'.", route))
 	}
 
 	// No routes — complete immediately
 	t.completed = true
 	t.succeeded = true
+	t.summary = input.Summary
 	return `{"status": "ok"}`
 }
 
-func (t *TaskCompleteTool) IsCompleted() bool             { return t.completed }
-func (t *TaskCompleteTool) IsSucceeded() bool             { return t.succeeded }
-func (t *TaskCompleteTool) FailureReason() string         { return t.failureReason }
+func (t *TaskCompleteTool) IsCompleted() bool     { return t.completed }
+func (t *TaskCompleteTool) IsSucceeded() bool     { return t.succeeded }
+func (t *TaskCompleteTool) FailureReason() string { return t.failureReason }
 
 // ApplyStateFromSuccessfulInput rebuilds in-memory completion state from a
 // task_complete tool_use input JSON that we already know succeeded (the
@@ -194,19 +184,27 @@ func (t *TaskCompleteTool) ApplyStateFromSuccessfulInput(params string) {
 	if params == "" {
 		return
 	}
-	var input struct {
-		Succeed       *bool             `json:"succeed"`
-		Summary       string            `json:"summary"`
-		Reason        string            `json:"reason"`
-		Route         string            `json:"route"`
-		MissionInputs map[string]string `json:"mission_inputs"`
-	}
-	if err := json.Unmarshal([]byte(params), &input); err != nil {
+	input, err := decodeTaskCompletion(params)
+	if err != nil {
 		return
 	}
 	succeed := true
 	if input.Succeed != nil {
 		succeed = *input.Succeed
+	}
+	// Replay accepted values without revalidating against a potentially changed config.
+	// Non-mission routes and failed completions did not consume mission_inputs.
+	var missionInputs map[string]string
+	if succeed {
+		for _, route := range t.Routes {
+			if route.Target == input.Route && route.IsMission {
+				missionInputs, err = normalizeMissionInputs(input.MissionInputs)
+				if err != nil {
+					return
+				}
+				break
+			}
+		}
 	}
 	t.summary = input.Summary
 	t.completed = true
@@ -221,14 +219,134 @@ func (t *TaskCompleteTool) ApplyStateFromSuccessfulInput(params string) {
 			if r.Target == input.Route {
 				t.isMissionRoute = r.IsMission
 				if input.MissionInputs != nil {
-					t.missionInputs = input.MissionInputs
+					t.missionInputs = missionInputs
 				}
 				break
 			}
 		}
 	}
 }
-func (t *TaskCompleteTool) Summary() string               { return t.summary }
-func (t *TaskCompleteTool) ChosenRoute() string           { return t.chosenRoute }
-func (t *TaskCompleteTool) IsMissionRoute() bool          { return t.isMissionRoute }
+func (t *TaskCompleteTool) Summary() string                  { return t.summary }
+func (t *TaskCompleteTool) ChosenRoute() string              { return t.chosenRoute }
+func (t *TaskCompleteTool) IsMissionRoute() bool             { return t.isMissionRoute }
 func (t *TaskCompleteTool) MissionInputs() map[string]string { return t.missionInputs }
+
+type taskCompletionInput struct {
+	Succeed       *bool                      `json:"succeed"`
+	Summary       string                     `json:"summary"`
+	Reason        string                     `json:"reason"`
+	Route         string                     `json:"route"`
+	MissionInputs map[string]json.RawMessage `json:"mission_inputs"`
+}
+
+func decodeTaskCompletion(params string) (taskCompletionInput, error) {
+	var input taskCompletionInput
+	if params == "" {
+		return input, nil
+	}
+	if !strings.HasPrefix(strings.TrimSpace(params), "{") {
+		return input, fmt.Errorf("expected a JSON object")
+	}
+	err := json.Unmarshal([]byte(params), &input)
+	return input, err
+}
+
+func taskCompletionError(message string) string {
+	result, _ := json.Marshal(map[string]string{"status": "error", "error": message})
+	return string(result)
+}
+
+// The runner accepts strings (including JSON-encoded collections). Preserve JSON
+// numbers as text rather than round-tripping through float64 and losing precision.
+func normalizeMissionInput(raw json.RawMessage) (string, error) {
+	raw = bytes.TrimSpace(raw)
+	if bytes.Equal(raw, []byte("null")) {
+		return "", fmt.Errorf("null is not an input value; omit optional inputs to use their defaults")
+	}
+	if len(raw) > 0 && raw[0] == '"' {
+		var value string
+		err := json.Unmarshal(raw, &value)
+		return value, err
+	}
+	var compact bytes.Buffer
+	if err := json.Compact(&compact, raw); err != nil {
+		return "", err
+	}
+	return compact.String(), nil
+}
+
+func normalizeMissionInputs(raw map[string]json.RawMessage) (map[string]string, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	values := make(map[string]string, len(raw))
+	for name, value := range raw {
+		text, err := normalizeMissionInput(value)
+		if err != nil {
+			return nil, fmt.Errorf("mission_inputs.%s: %w", name, err)
+		}
+		values[name] = text
+	}
+	return values, nil
+}
+
+func (r RouteOption) prepareInputs(raw map[string]json.RawMessage) (map[string]string, error) {
+	values := make(map[string]string, len(raw))
+	known := make(map[string]bool, len(r.Inputs))
+	var problems []string
+	for _, input := range r.Inputs {
+		known[input.Name] = true
+		value, present := raw[input.Name]
+		if !present {
+			if input.Required {
+				problems = append(problems, fmt.Sprintf("mission_inputs.%s is required (%s)", input.Name, input.Description))
+			}
+			continue
+		}
+		text, err := normalizeMissionInput(value)
+		if err == nil && input.Required && strings.TrimSpace(text) == "" {
+			err = fmt.Errorf("required value must not be empty")
+		}
+		// String-encoded values use the destination parser. Native JSON must have
+		// the declared shape, even when its text could be parsed as another type.
+		trimmed := bytes.TrimSpace(value)
+		if err == nil && len(trimmed) > 0 && trimmed[0] != '"' {
+			kind := trimmed[0]
+			valid := false
+			switch input.Type {
+			case "bool":
+				valid = kind == 't' || kind == 'f'
+			case "number", "integer":
+				valid = kind == '-' || kind >= '0' && kind <= '9'
+			case "list":
+				valid = kind == '['
+			case "object", "map":
+				valid = kind == '{'
+			case "file":
+				// Base64 upload envelope: {"filename": ..., "content_base64": ...}
+				valid = kind == '{'
+			}
+			if !valid {
+				err = fmt.Errorf("expected %s", input.Type)
+			}
+		}
+		if err == nil && input.Validate != nil {
+			err = input.Validate(text)
+		}
+		if err != nil {
+			problems = append(problems, fmt.Sprintf("mission_inputs.%s: %s", input.Name, err))
+			continue
+		}
+		values[input.Name] = text
+	}
+	for name := range raw {
+		if !known[name] {
+			problems = append(problems, fmt.Sprintf("mission_inputs.%s is not declared by this mission", name))
+		}
+	}
+	if len(problems) > 0 {
+		sort.Strings(problems)
+		return nil, fmt.Errorf("%s", strings.Join(problems, "; "))
+	}
+	return values, nil
+}

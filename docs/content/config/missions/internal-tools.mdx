@@ -33,6 +33,13 @@ tool activity remain available to operators through run drill-in.
 Selects one of the routes declared by a completed routing task. The harness
 validates the selection and applies the graph transition atomically.
 
+For a cross-mission route, the commander supplies `mission_inputs` from the
+destination's visible input contract. Values may use native JSON types or
+string-encoded values. Optional values may be omitted to use their defaults;
+explicit `null`, unknown names, and values that do not match the destination
+type are rejected together. Protected inputs are never exposed to the
+commander and retain their configured values.
+
 ## `finish_mission`
 
 Requests mission completion. The harness accepts the request only when required

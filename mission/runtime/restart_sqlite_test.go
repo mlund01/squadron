@@ -3,12 +3,169 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	persistence "squadron/store"
 )
+
+func TestSQLiteHumanInputBoundarySurvivesRestarts(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "runtime.db")
+	bundle := openSQLiteBundle(t, dbPath)
+	request := &persistence.HumanInputRequestRecord{
+		ID: "human-input-1", MissionID: "run-human-input", TaskID: "task-1",
+		ToolCallID: "call-human-input", Question: "Approve?", State: persistence.HumanInputStateOpen,
+		RequestedAt: time.Now().UTC().Add(-time.Minute).Truncate(time.Millisecond),
+	}
+	if err := bundle.HumanInputs.CreateRequest(request); err != nil {
+		t.Fatalf("CreateRequest() error = %v", err)
+	}
+	closeSQLiteBundle(t, bundle)
+
+	bundle = openSQLiteBundle(t, dbPath)
+	if err := bundle.HumanInputs.CreateRequest(&persistence.HumanInputRequestRecord{
+		ID: "different-id", ToolCallID: request.ToolCallID, Question: "Approve?",
+	}); err != nil {
+		t.Fatalf("replayed CreateRequest() error = %v", err)
+	}
+	open, err := bundle.HumanInputs.GetByToolCallID(request.ToolCallID)
+	if err != nil {
+		t.Fatalf("GetByToolCallID(open) error = %v", err)
+	}
+	if open.ID != request.ID || open.State != persistence.HumanInputStateOpen || !open.RequestedAt.Equal(request.RequestedAt) {
+		t.Fatalf("restored open request = %#v", open)
+	}
+	resolved, err := bundle.HumanInputs.ResolveRequest(request.ToolCallID, "yes", "user-1")
+	if err != nil {
+		t.Fatalf("ResolveRequest() error = %v", err)
+	}
+	closeSQLiteBundle(t, bundle)
+
+	bundle = openSQLiteBundle(t, dbPath)
+	replayed, err := bundle.HumanInputs.ResolveRequest(request.ToolCallID, "different", "user-2")
+	if err != nil {
+		t.Fatalf("replayed ResolveRequest() error = %v", err)
+	}
+	_, total, err := bundle.HumanInputs.ListRequests(persistence.HumanInputFilter{MissionID: request.MissionID})
+	if err != nil {
+		t.Fatalf("ListRequests() error = %v", err)
+	}
+	closeSQLiteBundle(t, bundle)
+	if total != 1 || !reflect.DeepEqual(replayed, resolved) || replayed.Response == nil || *replayed.Response != "yes" {
+		t.Fatalf("replayed human input = %#v, total=%d; want canonical %#v", replayed, total, resolved)
+	}
+}
+
+func TestSQLiteRecoveryAfterAbruptProcessDeath(t *testing.T) {
+	directory := t.TempDir()
+	dbPath := filepath.Join(directory, "runtime.db")
+	effectPath := filepath.Join(directory, "effect.txt")
+	command := exec.Command(os.Args[0], "-test.run=^TestSQLiteAbruptProcessDeathHelper$", "-test.count=1")
+	command.Env = append(os.Environ(),
+		"SQUADRON_CRASH_HELPER=1",
+		"SQUADRON_CRASH_DB="+dbPath,
+		"SQUADRON_CRASH_EFFECT="+effectPath,
+	)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("crash helper failed: %v\n%s", err, output)
+	}
+
+	const runID = "run-abrupt-death"
+	bundle, harness, _ := reopenSQLiteHarness(t, dbPath, runID)
+	active := harness.Snapshot().Active
+	if len(active) != 1 {
+		t.Fatalf("restored active attempts = %#v", active)
+	}
+	progress, ok := harness.TaskProgress(active[0].AttemptID)
+	if !ok || progress.Tools["call-abrupt"].Status != ToolOperationCompleted {
+		t.Fatalf("restored abrupt-death progress = %#v, %v", progress, ok)
+	}
+	executor := &abruptDeathRecoveryExecutor{}
+	coordinator, err := NewCoordinator(harness, &readyCommander{}, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatalf("NewCoordinator() error = %v", err)
+	}
+	if err := coordinator.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run() error = %v", err)
+	}
+	if executor.effects != 0 {
+		t.Fatalf("recovery repeated external effect %d times", executor.effects)
+	}
+	if snapshot := harness.Snapshot(); snapshot.RunState != RunCompleted || snapshot.Tasks["work"].Attempt != 1 {
+		t.Fatalf("recovered snapshot = %#v", snapshot)
+	}
+	closeSQLiteBundle(t, bundle)
+	marker, err := os.ReadFile(effectPath)
+	if err != nil {
+		t.Fatalf("ReadFile(effect) error = %v", err)
+	}
+	if string(marker) != "effect-once" {
+		t.Fatalf("effect marker = %q, want one effect", marker)
+	}
+}
+
+func TestSQLiteAbruptProcessDeathHelper(t *testing.T) {
+	if os.Getenv("SQUADRON_CRASH_HELPER") != "1" {
+		t.Skip("subprocess helper")
+	}
+	dbPath := os.Getenv("SQUADRON_CRASH_DB")
+	effectPath := os.Getenv("SQUADRON_CRASH_EFFECT")
+	bundle := openSQLiteBundle(t, dbPath)
+	harness, err := CreateDurableHarness(bundle.Runtime, "run-abrupt-death", "commander-abrupt-death", []TaskDefinition{{Name: "work"}})
+	if err != nil {
+		t.Fatalf("CreateDurableHarness() error = %v", err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	dispatch, err := harness.DispatchTask(DispatchRequest{
+		RequestID: "dispatch-work", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("work"),
+	})
+	if err != nil {
+		t.Fatalf("DispatchTask() error = %v", err)
+	}
+	progress := TaskAttemptProgress{
+		AttemptID: dispatch.AttemptID, Phase: "tool_calls_received",
+		Tools: map[string]ToolOperation{"call-abrupt": {
+			ToolUseID: "call-abrupt", ToolName: "external_write", InputJSON: `{}`, Status: ToolOperationInFlight,
+		}},
+	}
+	if err := harness.SaveTaskProgress(dispatch, progress); err != nil {
+		t.Fatalf("SaveTaskProgress(in-flight) error = %v", err)
+	}
+	if err := os.WriteFile(effectPath, []byte("effect-once"), 0o600); err != nil {
+		t.Fatalf("WriteFile(effect) error = %v", err)
+	}
+	operation := progress.Tools["call-abrupt"]
+	operation.Status = ToolOperationCompleted
+	operation.Result = "effect committed"
+	progress.Tools["call-abrupt"] = operation
+	progress.Phase = "final_response"
+	if err := harness.SaveTaskProgress(dispatch, progress); err != nil {
+		t.Fatalf("SaveTaskProgress(completed) error = %v", err)
+	}
+	// Intentionally bypass testing cleanup and Bundle.Close to model abrupt
+	// process death immediately after the durable tool result boundary.
+	os.Exit(0)
+}
+
+type abruptDeathRecoveryExecutor struct{ effects int }
+
+func (e *abruptDeathRecoveryExecutor) Execute(context.Context, Dispatch) (TaskResultEnvelope, error) {
+	return TaskResultEnvelope{}, errors.New("expected resumable execution")
+}
+
+func (e *abruptDeathRecoveryExecutor) ExecuteResumable(_ context.Context, dispatch Dispatch, progress TaskAttemptProgress, _ func(TaskAttemptProgress) error) (TaskResultEnvelope, error) {
+	if operation := progress.Tools["call-abrupt"]; operation.Status == ToolOperationCompleted {
+		return testResult(dispatch), nil
+	}
+	e.effects++
+	return TaskResultEnvelope{}, errors.New("recovery attempted external effect")
+}
 
 func TestSQLiteRestartAfterPersistedToolResultDoesNotRepeatSideEffect(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "runtime.db")

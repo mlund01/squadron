@@ -12,4 +12,5 @@ export default {
   mcp_host: 'MCP Host',
   gateways: 'Gateways',
   command_center: 'Command Center',
+  storage: 'Storage',
 }

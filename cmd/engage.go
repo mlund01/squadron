@@ -460,7 +460,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 
 	// Periodic sweep of expired per-run ephemeral memory directories.
 	// Runs hourly; walks the filesystem so the live config isn't needed.
-	go runScratchpadCleanupLoop(shutdown)
+	go runScratchpadCleanupLoop(shutdown, stores, client, engageConfigPath)
 
 	// Even without valid config we still try to connect — the command center
 	// can show vars and config files so the user can fix things from the UI.
@@ -997,16 +997,40 @@ func openBrowser(url string) {
 }
 
 // runScratchpadCleanupLoop periodically sweeps expired per-run scratchpad and
-// file-input directories. The sweeps walk the entire scratchpads / inputs
-// trees, so they don't need to know which missions are configured. It runs
+// file-input directories, plus finished mission records and CLI debug dirs
+// when storage.ttl_days is set. Scratchpad/input sweeps walk the filesystem
+// so they don't need the live config; mission-record TTL is read from the
+// current client config so a SIGHUP reload picks up a new value. It runs
 // once immediately, then hourly, and exits when shutdown is closed.
-func runScratchpadCleanupLoop(shutdown <-chan struct{}) {
+func runScratchpadCleanupLoop(shutdown <-chan struct{}, stores *store.Bundle, client *wsbridge.Client, configPath string) {
 	sweep := func() {
 		if _, err := mission.SweepExpiredScratchpads(); err != nil {
 			log.Printf("scratchpad cleanup: %v", err)
 		}
 		if _, err := mission.SweepExpiredInputs(); err != nil {
 			log.Printf("file-input cleanup: %v", err)
+		}
+
+		ttlDays := 0
+		if client != nil {
+			if cfg := client.GetConfig(); cfg != nil && cfg.Storage != nil {
+				ttlDays = cfg.Storage.TTLDays
+			}
+		}
+		if ttlDays <= 0 {
+			return
+		}
+		n, err := mission.SweepExpiredMissionRecords(stores, ttlDays)
+		if err != nil {
+			log.Printf("mission record cleanup: %v", err)
+		} else if n > 0 {
+			log.Printf("mission record cleanup: purged %d mission(s)", n)
+		}
+		removed, err := mission.SweepExpiredDebugDirs(ttlDays, mission.DebugSweepRoots(configPath))
+		if err != nil {
+			log.Printf("debug dir cleanup: %v", err)
+		} else if len(removed) > 0 {
+			log.Printf("debug dir cleanup: removed %d directories", len(removed))
 		}
 	}
 

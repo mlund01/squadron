@@ -964,6 +964,10 @@ func (s *SQLiteMissionStore) ListMissions(limit, offset int) ([]MissionRecord, i
 	return missions, total, nil
 }
 
+func (s *SQLiteMissionStore) PurgeExpiredMissions(olderThan time.Time) (int, error) {
+	return purgeExpiredMissions(s.db, olderThan, "?")
+}
+
 func (s *SQLiteMissionStore) StoreTaskInput(taskID string, iterationIndex *int, objective string) error {
 	id := generateID()
 	_, err := s.db.Exec(

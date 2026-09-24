@@ -39,6 +39,8 @@ squadron mission data_pipeline -c ./config --resume abc123def456
 
 Resume rebuilds the exact state from stored sessions — completed tasks are skipped, and interrupted tasks pick up where they left off. Mission state is persisted to `.squadron/store.db`.
 
+If `storage.ttl_days` is set, finished runs older than that window (and their transcripts) are deleted and can no longer be resumed. See [storage](/config/storage).
+
 ## Debug Mode
 
 ```bash
@@ -49,6 +51,8 @@ Creates a `debug/` folder with:
 - `events.log` - Task and tool events
 - `commander_*.md` - Full commander conversations
 - `agent_*.md` - Full agent conversations
+
+When `storage.ttl_days` is set, these directories are deleted on the same schedule as expired mission records.
 
 ## See Also
 

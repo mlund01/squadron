@@ -605,6 +605,16 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		go func() { _, _ = SweepExpiredScratchpads() }()
 	}
 
+	if r.cfg != nil && r.cfg.Storage != nil && r.cfg.Storage.TTLDays > 0 {
+		days := r.cfg.Storage.TTLDays
+		stores := r.stores
+		configPath := r.configPath
+		go func() {
+			_, _ = SweepExpiredMissionRecords(stores, days)
+			_, _ = SweepExpiredDebugDirs(days, DebugSweepRoots(configPath))
+		}()
+	}
+
 	// Materialize file-typed inputs (path or base64 upload) into isolated,
 	// read-only slots before building the memory store.
 	fileInputDirs, err := r.materializeFileInputs(missionID)

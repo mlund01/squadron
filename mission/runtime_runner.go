@@ -136,7 +136,8 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		} else {
 			var waiting *missionruntime.MissionRecoveryWaitingError
 			var humanWaiting *missionruntime.MissionHumanInputWaitingError
-			if errors.As(runErr, &waiting) || errors.As(runErr, &humanWaiting) {
+			var retryWaiting *missionruntime.MissionRetryWaitingError
+			if errors.As(runErr, &waiting) || errors.As(runErr, &humanWaiting) || errors.As(runErr, &retryWaiting) {
 				status = "waiting"
 			}
 		}

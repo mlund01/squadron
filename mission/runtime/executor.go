@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"squadron/aitools"
 )
@@ -50,6 +51,12 @@ type MissionHumanInputWaitingError struct{ Waits []HumanInputWait }
 
 func (e *MissionHumanInputWaitingError) Error() string {
 	return fmt.Sprintf("mission is waiting for %d human input response(s)", len(e.Waits))
+}
+
+type MissionRetryWaitingError struct{ Deadlines map[string]time.Time }
+
+func (e *MissionRetryWaitingError) Error() string {
+	return fmt.Sprintf("mission is waiting for %d retry deadline(s)", len(e.Deadlines))
 }
 
 // TaskSessionFactory creates a fresh session from an immutable dispatch and

@@ -166,15 +166,16 @@ type Task struct {
 	Models []string `json:"models,omitempty"`
 	// Tools are capabilities always granted to this task executor. Additional
 	// tools may be selected from the mission-level tool pool at dispatch time.
-	Tools      []string      `json:"tools,omitempty"`
-	MaxRetries int           `json:"maxRetries,omitempty"`
-	Packets    []string      `json:"packets,omitempty"` // task-scoped declared packet references (parsed manually)
-	DependsOn  []string      `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
-	Iterator   *TaskIterator `json:"iterator,omitempty"`
-	Output     *OutputSchema `json:"output,omitempty"`
-	Router     *TaskRouter   `json:"router,omitempty"`
-	SendTo     []string      `json:"sendTo,omitempty"`
-	Budget     *Budget       `json:"budget,omitempty"`
+	Tools             []string      `json:"tools,omitempty"`
+	MaxRetries        int           `json:"maxRetries,omitempty"`
+	RetryDelaySeconds int           `json:"retryDelaySeconds,omitempty"`
+	Packets           []string      `json:"packets,omitempty"` // task-scoped declared packet references (parsed manually)
+	DependsOn         []string      `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
+	Iterator          *TaskIterator `json:"iterator,omitempty"`
+	Output            *OutputSchema `json:"output,omitempty"`
+	Router            *TaskRouter   `json:"router,omitempty"`
+	SendTo            []string      `json:"sendTo,omitempty"`
+	Budget            *Budget       `json:"budget,omitempty"`
 }
 
 // HasExecutorPolicy reports whether the mission declares model or tool policy

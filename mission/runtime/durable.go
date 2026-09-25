@@ -34,6 +34,8 @@ const (
 	EventIterationExpanded           EventType = "iteration.expanded"
 	EventTaskAttemptFailed           EventType = "task.attempt_failed"
 	EventTaskRetryScheduled          EventType = "task.retry_scheduled"
+	EventTaskRetryReady              EventType = "task.retry_ready"
+	EventMissionRetryWaiting         EventType = "mission.retry_waiting"
 	EventTaskFailed                  EventType = "task.failed"
 	EventMissionFailed               EventType = "mission.failed"
 	EventRouteSelected               EventType = "route.selected"
@@ -63,6 +65,7 @@ type Event struct {
 	Recovery      *RecoveryBlock
 	HumanInput    *HumanInputWait
 	HumanAnswer   *HumanInputResponse
+	RetryReadyAt  *time.Time
 	Launch        *CrossMissionLaunch
 	Turns         []ModelTurnTelemetry
 	IterationPlan *IterationPlan
@@ -317,10 +320,14 @@ func (h *DurableHarness) FailTaskWithLease(taskName, attemptID string, cause err
 	failure := after.Failures[taskName]
 	events := []Event{{RunID: after.RunID, Revision: after.Revision, Type: EventTaskAttemptFailed, OccurredAt: time.Now().UTC(), TaskName: taskName, AttemptID: attemptID, Failure: &failure}}
 	if retry {
-		events = append(events,
-			Event{RunID: after.RunID, Revision: after.Revision, Type: EventTaskRetryScheduled, OccurredAt: time.Now().UTC(), TaskName: taskName, AttemptID: attemptID},
-			Event{RunID: after.RunID, Revision: after.Revision, Type: EventReadySetPublished, OccurredAt: time.Now().UTC()},
-		)
+		scheduled := Event{RunID: after.RunID, Revision: after.Revision, Type: EventTaskRetryScheduled, OccurredAt: time.Now().UTC(), TaskName: taskName, AttemptID: attemptID}
+		if deadline, delayed := after.RetryDeadlines[taskName]; delayed {
+			scheduled.RetryReadyAt = &deadline
+		}
+		events = append(events, scheduled)
+		if after.TaskStates[taskName] == TaskReady {
+			events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventReadySetPublished, OccurredAt: time.Now().UTC()})
+		}
 	} else {
 		events = append(events,
 			Event{RunID: after.RunID, Revision: after.Revision, Type: EventTaskFailed, OccurredAt: time.Now().UTC(), TaskName: taskName, AttemptID: attemptID},
@@ -332,6 +339,34 @@ func (h *DurableHarness) FailTaskWithLease(taskName, attemptID string, cause err
 	}
 	h.inner = candidate
 	return retry, nil
+}
+
+func (h *DurableHarness) PromoteDueRetries(now time.Time) ([]string, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	before := h.inner.Checkpoint()
+	candidate, err := RestoreHarness(before)
+	if err != nil {
+		return nil, err
+	}
+	ready := candidate.PromoteDueRetries(now)
+	if len(ready) == 0 {
+		return nil, nil
+	}
+	after := candidate.Checkpoint()
+	events := make([]Event, 0, len(ready)+2)
+	for _, taskName := range ready {
+		events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventTaskRetryReady, OccurredAt: now, TaskName: taskName})
+	}
+	events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventReadySetPublished, OccurredAt: now})
+	if before.RunState == RunWaiting && after.RunState == RunRunning {
+		events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventMissionResumed, OccurredAt: now})
+	}
+	if err := h.commit(before.Revision, after, events); err != nil {
+		return nil, fmt.Errorf("persisting retry deadline promotion: %w", err)
+	}
+	h.inner = candidate
+	return ready, nil
 }
 
 // TaskResult returns the full validated result without placing it in every
@@ -483,6 +518,8 @@ func (h *DurableHarness) EnterRecoveryWaiting() error {
 	eventType := EventMissionRecoveryWaiting
 	if len(after.HumanInputWaits) > 0 && len(after.RecoveryBlocks) == 0 {
 		eventType = EventMissionHumanInputWaiting
+	} else if len(after.RetryDeadlines) > 0 && len(after.RecoveryBlocks) == 0 {
+		eventType = EventMissionRetryWaiting
 	}
 	events := []Event{{RunID: after.RunID, Revision: after.Revision, Type: eventType, OccurredAt: time.Now().UTC()}}
 	if err := h.commit(before.Revision, after, events); err != nil {

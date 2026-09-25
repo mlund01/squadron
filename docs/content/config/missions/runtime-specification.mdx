@@ -222,10 +222,13 @@ dependency has committed an accepted result. Restoring a checkpoint resumes
 its active dispatch handles before requesting new work.
 
 When an executor fails, the harness first commits `task.attempt_failed`. If the
-task's `max_retries` budget remains, it also commits `task.retry_scheduled` and
-publishes the task ready for a new immutable attempt. Once the budget is
-exhausted, it commits terminal task and mission failure instead. Completion or
-failure for any non-active attempt ID is rejected without changing state.
+task's `max_retries` budget remains, it also commits `task.retry_scheduled`.
+With `retry_delay_seconds`, the checkpoint stores an absolute deadline and
+the task remains `retry_pending` until that deadline; otherwise it is
+immediately ready. A restart preserves the deadline rather than resetting the
+delay. Once the budget is exhausted, it commits terminal task and mission
+failure instead. Completion or failure for any non-active attempt ID is
+rejected without changing state.
 
 ## Intrinsic commander controls
 

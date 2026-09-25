@@ -121,9 +121,10 @@ func RuntimeTaskDefinitionsWithMissions(m *config.Mission, missions []config.Mis
 	for _, task := range m.Tasks {
 		definition := missionruntime.TaskDefinition{
 			Name: task.Name, Objective: task.RawObjective,
-			DependsOn:  append([]string(nil), task.DependsOn...),
-			SendTo:     append([]string(nil), task.SendTo...),
-			MaxRetries: task.MaxRetries,
+			DependsOn:         append([]string(nil), task.DependsOn...),
+			SendTo:            append([]string(nil), task.SendTo...),
+			MaxRetries:        task.MaxRetries,
+			RetryDelaySeconds: task.RetryDelaySeconds,
 		}
 		if task.Iterator != nil {
 			definition.Iterator = &missionruntime.IterationPolicy{

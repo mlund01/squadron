@@ -16,15 +16,16 @@ import (
 // TaskDefinition is the graph information the harness needs to determine
 // eligibility. Execution policy is resolved after a dispatch is accepted.
 type TaskDefinition struct {
-	Name         string
-	Objective    string
-	DependsOn    []string
-	SendTo       []string
-	Routes       []RouteDefinition
-	MaxRetries   int
-	ResultPolicy ResultPolicy
-	Iterator     *IterationPolicy
-	ParentTask   string
+	Name              string
+	Objective         string
+	DependsOn         []string
+	SendTo            []string
+	Routes            []RouteDefinition
+	MaxRetries        int
+	RetryDelaySeconds int
+	ResultPolicy      ResultPolicy
+	Iterator          *IterationPolicy
+	ParentTask        string
 }
 
 type RouteDefinition struct {
@@ -201,6 +202,7 @@ type Snapshot struct {
 	RecoveryBlocks        map[string]RecoveryBlock
 	HumanInputWaits       map[string]HumanInputWait
 	HumanInputResponses   map[string]HumanInputResponse
+	RetryDeadlines        map[string]time.Time
 	ModelTurns            map[string]ModelTurnTelemetry
 	IterationPlans        map[string]IterationPlan
 	MaxParallel           int
@@ -395,6 +397,7 @@ type Checkpoint struct {
 	RecoveryBlocks        map[string]RecoveryBlock
 	HumanInputWaits       map[string]HumanInputWait
 	HumanInputResponses   map[string]HumanInputResponse
+	RetryDeadlines        map[string]time.Time
 	Results               map[string]AcceptedTaskResult
 	Failures              map[string]TaskFailure
 	Activations           map[string][]string
@@ -428,6 +431,7 @@ type Harness struct {
 	recoveryBlocks        map[string]RecoveryBlock
 	humanInputWaits       map[string]HumanInputWait
 	humanInputResponses   map[string]HumanInputResponse
+	retryDeadlines        map[string]time.Time
 	results               map[string]AcceptedTaskResult
 	failures              map[string]TaskFailure
 	activations           map[string][]string
@@ -473,6 +477,9 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 		definition.Routes = append([]RouteDefinition(nil), definition.Routes...)
 		if definition.MaxRetries < 0 {
 			return nil, fmt.Errorf("task %q max retries cannot be negative", definition.Name)
+		}
+		if err := validateRetryDelay(definition); err != nil {
+			return nil, err
 		}
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
 		if definition.Iterator != nil {
@@ -539,6 +546,7 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 		recoveryBlocks:        make(map[string]RecoveryBlock),
 		humanInputWaits:       make(map[string]HumanInputWait),
 		humanInputResponses:   make(map[string]HumanInputResponse),
+		retryDeadlines:        make(map[string]time.Time),
 		results:               make(map[string]AcceptedTaskResult),
 		failures:              make(map[string]TaskFailure),
 		activations:           make(map[string][]string),
@@ -611,10 +619,11 @@ func (h *Harness) ExpandIteration(plan IterationPlan) error {
 	for _, child := range plan.Children {
 		h.tasks[child.Name] = TaskDefinition{
 			Name: child.Name, Objective: parent.Objective,
-			DependsOn:    append([]string(nil), child.DependsOn...),
-			MaxRetries:   plan.Policy.MaxRetries,
-			ResultPolicy: cloneResultPolicy(parent.ResultPolicy),
-			ParentTask:   plan.ParentTask,
+			DependsOn:         append([]string(nil), child.DependsOn...),
+			MaxRetries:        plan.Policy.MaxRetries,
+			RetryDelaySeconds: parent.RetryDelaySeconds,
+			ResultPolicy:      cloneResultPolicy(parent.ResultPolicy),
+			ParentTask:        plan.ParentTask,
 		}
 		h.taskStates[child.Name] = TaskBlocked
 	}
@@ -1022,7 +1031,7 @@ func (h *Harness) ResolveHumanInputWait(attemptID, toolCallID, response, respond
 func (h *Harness) EnterRecoveryWaiting() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(h.recoveryBlocks) == 0 && len(h.humanInputWaits) == 0 {
+	if len(h.recoveryBlocks) == 0 && len(h.humanInputWaits) == 0 && len(h.retryDeadlines) == 0 {
 		return fmt.Errorf("run has no waiting operations")
 	}
 	for _, state := range h.taskStates {
@@ -1279,6 +1288,9 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 		definition.SendTo = append([]string(nil), definition.SendTo...)
 		definition.Routes = append([]RouteDefinition(nil), definition.Routes...)
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
+		if err := validateRetryDelay(definition); err != nil {
+			return nil, err
+		}
 		if definition.Iterator != nil {
 			policy := *definition.Iterator
 			definition.Iterator = &policy
@@ -1317,6 +1329,7 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 		recoveryBlocks:        cloneMap(checkpoint.RecoveryBlocks),
 		humanInputWaits:       cloneHumanInputWaits(checkpoint.HumanInputWaits),
 		humanInputResponses:   cloneMap(checkpoint.HumanInputResponses),
+		retryDeadlines:        cloneMap(checkpoint.RetryDeadlines),
 		results:               cloneAcceptedResults(checkpoint.Results),
 		failures:              cloneMap(checkpoint.Failures),
 		activations:           cloneStringSliceMap(checkpoint.Activations),
@@ -1715,7 +1728,11 @@ func (h *Harness) FailTaskWithLease(taskName, attemptID string, cause error, lea
 
 	if h.runState == RunRunning && active.Attempt <= h.tasks[taskName].MaxRetries {
 		h.taskStates[taskName] = TaskRetryPending
-		h.taskStates[taskName] = TaskReady
+		if seconds := h.tasks[taskName].RetryDelaySeconds; seconds > 0 {
+			h.retryDeadlines[taskName] = time.Now().UTC().Add(time.Duration(seconds) * time.Second)
+		} else {
+			h.taskStates[taskName] = TaskReady
+		}
 		h.revision++
 		return true, nil
 	}
@@ -1725,6 +1742,44 @@ func (h *Harness) FailTaskWithLease(taskName, attemptID string, cause error, lea
 	h.commander.State = CommanderFailed
 	h.revision++
 	return false, nil
+}
+
+func validateRetryDelay(definition TaskDefinition) error {
+	if definition.RetryDelaySeconds < 0 || int64(definition.RetryDelaySeconds) > int64((1<<63-1)/time.Second) {
+		return fmt.Errorf("task %q retry delay must be a non-negative whole number of seconds", definition.Name)
+	}
+	return nil
+}
+
+// PromoteDueRetries applies persisted deadlines exactly once. A restart may
+// call this repeatedly; only tasks still pending at or before now become ready.
+func (h *Harness) PromoteDueRetries(now time.Time) []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.runState != RunRunning && h.runState != RunWaiting {
+		return nil
+	}
+	ready := make([]string, 0)
+	for taskName, deadline := range h.retryDeadlines {
+		if deadline.After(now) {
+			continue
+		}
+		if h.taskStates[taskName] != TaskRetryPending {
+			continue
+		}
+		h.taskStates[taskName] = TaskReady
+		delete(h.retryDeadlines, taskName)
+		ready = append(ready, taskName)
+	}
+	if len(ready) > 0 {
+		sort.Strings(ready)
+		if h.runState == RunWaiting {
+			h.runState = RunRunning
+			h.commander.State = CommanderActive
+		}
+		h.revision++
+	}
+	return ready
 }
 
 func (h *Harness) publishReadySetLocked() {
@@ -1812,6 +1867,7 @@ func (h *Harness) snapshotLocked() Snapshot {
 		RecoveryBlocks:        cloneMap(h.recoveryBlocks),
 		HumanInputWaits:       cloneHumanInputWaits(h.humanInputWaits),
 		HumanInputResponses:   cloneMap(h.humanInputResponses),
+		RetryDeadlines:        cloneMap(h.retryDeadlines),
 		ModelTurns:            cloneMap(h.modelTurns),
 		IterationPlans:        cloneIterationPlans(h.iterationPlans),
 		MaxParallel:           h.maxParallel,
@@ -1869,6 +1925,7 @@ func (h *Harness) checkpointLocked() Checkpoint {
 		RecoveryBlocks:        cloneMap(h.recoveryBlocks),
 		HumanInputWaits:       cloneHumanInputWaits(h.humanInputWaits),
 		HumanInputResponses:   cloneMap(h.humanInputResponses),
+		RetryDeadlines:        cloneMap(h.retryDeadlines),
 		Results:               cloneAcceptedResults(h.results),
 		Failures:              cloneMap(h.failures),
 		Activations:           cloneStringSliceMap(h.activations),

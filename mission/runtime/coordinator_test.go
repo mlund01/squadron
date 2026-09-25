@@ -348,6 +348,62 @@ func TestCoordinatorPersistsFailureAndRetriesWithANewAttempt(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRestoresDelayedRetryAtPersistedDeadline(t *testing.T) {
+	t.Parallel()
+	runtimeStore := store.NewMemoryRuntimeStore()
+	harness, err := CreateDurableHarness(runtimeStore, "run-delayed-retry", "commander-delayed-retry", []TaskDefinition{{Name: "unstable", MaxRetries: 1, RetryDelaySeconds: 60}})
+	if err != nil {
+		t.Fatalf("CreateDurableHarness() error = %v", err)
+	}
+	commander := &retryCommander{}
+	executor := &failOnceExecutor{}
+	coordinator, err := NewCoordinator(harness, commander, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatalf("NewCoordinator() error = %v", err)
+	}
+	var waiting *MissionRetryWaitingError
+	if err := coordinator.Run(context.Background()); !errors.As(err, &waiting) {
+		t.Fatalf("Run() error = %v, want retry wait", err)
+	}
+	deadline := waiting.Deadlines["unstable"]
+	if deadline.IsZero() || harness.Snapshot().Tasks["unstable"].State != TaskRetryPending || harness.Snapshot().RunState != RunWaiting {
+		t.Fatalf("retry not parked with a deadline: %#v", harness.Snapshot())
+	}
+	restored, events, err := RestoreDurableHarness(runtimeStore, "run-delayed-retry")
+	if err != nil {
+		t.Fatalf("RestoreDurableHarness() error = %v", err)
+	}
+	var scheduled bool
+	for _, event := range events {
+		if event.Type == EventTaskRetryScheduled && event.RetryReadyAt != nil && event.RetryReadyAt.Equal(deadline) {
+			scheduled = true
+		}
+	}
+	if !scheduled {
+		t.Fatalf("persisted retry deadline event missing: %#v", events)
+	}
+	if ready, err := restored.PromoteDueRetries(deadline.Add(-time.Nanosecond)); err != nil || len(ready) != 0 {
+		t.Fatalf("early promotion = %v, %v", ready, err)
+	}
+	if restored.Snapshot().RunState != RunWaiting {
+		t.Fatal("early promotion woke the run")
+	}
+	resumed, err := NewCoordinator(restored, commander, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatalf("NewCoordinator(restored) error = %v", err)
+	}
+	resumed.now = func() time.Time { return deadline }
+	if err := resumed.Run(context.Background()); err != nil {
+		t.Fatalf("Run(restored) error = %v", err)
+	}
+	if snapshot := restored.Snapshot(); snapshot.RunState != RunCompleted || snapshot.Tasks["unstable"].Attempt != 2 || len(snapshot.RetryDeadlines) != 0 {
+		t.Fatalf("final snapshot = %#v", snapshot)
+	}
+	if ready, err := restored.PromoteDueRetries(deadline.Add(time.Second)); err != nil || len(ready) != 0 {
+		t.Fatalf("duplicate promotion = %v, %v", ready, err)
+	}
+}
+
 func TestCoordinatorPersistsRouteDecisionAndExecutesOnlySelectedBranch(t *testing.T) {
 	t.Parallel()
 	runtimeStore := store.NewMemoryRuntimeStore()

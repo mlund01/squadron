@@ -100,8 +100,14 @@ attempt; the failed attempt remains immutable in the event history.
 task "collect" {
   objective   = "Collect relevant source material"
   max_retries = 2
+  retry_delay_seconds = 30
 }
 ```
+
+The delay is optional; omitted or zero means the next attempt is immediately
+eligible. A delayed retry stores an absolute deadline in the run checkpoint.
+The mission waits when no other work is ready, and restarting the worker does
+not restart the delay.
 
 After the final allowed attempt fails, the task and mission become terminally
 failed. Late completion or failure messages from an older attempt are rejected

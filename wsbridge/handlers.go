@@ -67,7 +67,8 @@ func (c *Client) registerHandlers() {
 func isMissionWaiting(err error) bool {
 	var human *missionruntime.MissionHumanInputWaitingError
 	var recovery *missionruntime.MissionRecoveryWaitingError
-	return errors.As(err, &human) || errors.As(err, &recovery)
+	var retry *missionruntime.MissionRetryWaitingError
+	return errors.As(err, &human) || errors.As(err, &recovery) || errors.As(err, &retry)
 }
 
 type syncModelConnectionsPayload struct {

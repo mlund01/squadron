@@ -213,13 +213,13 @@ func sameHumanInputDeadline(a, b *time.Time) bool {
 }
 
 // resumeReadyHumanInputMission is driven by an accepted answer or a persisted
-// deadline. It checks the runtime wait before resuming, so agent-session
-// questions and unrelated inbox rows cannot start a mission.
+// human/retry deadline. It checks runtime waits before resuming, so
+// agent-session questions and unrelated inbox rows cannot start a mission.
 func (c *Client) resumeReadyHumanInputMission(missionID string) {
 	if c.ctx != nil && c.ctx.Err() != nil {
 		return
 	}
-	if missionID == "" || c.stores == nil || c.stores.Runtime == nil || c.stores.Missions == nil || c.stores.HumanInputs == nil {
+	if missionID == "" || c.stores == nil || c.stores.Runtime == nil || c.stores.Missions == nil {
 		return
 	}
 	record, err := c.stores.Missions.GetMission(missionID)
@@ -231,8 +231,21 @@ func (c *Client) resumeReadyHumanInputMission(missionID string) {
 		log.Printf("human input resume: restore mission %q: %v", missionID, err)
 		return
 	}
+	snapshot := harness.Snapshot()
 	ready := false
-	for _, wait := range harness.Snapshot().HumanInputWaits {
+	for _, deadline := range snapshot.RetryDeadlines {
+		if !deadline.After(time.Now().UTC()) {
+			ready = true
+			break
+		}
+	}
+	for _, wait := range snapshot.HumanInputWaits {
+		if ready {
+			break
+		}
+		if c.stores.HumanInputs == nil {
+			return
+		}
 		input, err := c.stores.HumanInputs.GetByToolCallID(wait.ToolCallID)
 		if err != nil {
 			log.Printf("human input resume: load request %q: %v", wait.ToolCallID, err)
@@ -289,7 +302,14 @@ func (c *Client) scheduleWaitingHumanInputMission(missionID string) {
 		return
 	}
 	var earliest *time.Time
-	for _, wait := range harness.Snapshot().HumanInputWaits {
+	snapshot := harness.Snapshot()
+	for _, deadline := range snapshot.RetryDeadlines {
+		if earliest == nil || deadline.Before(*earliest) {
+			copy := deadline
+			earliest = &copy
+		}
+	}
+	for _, wait := range snapshot.HumanInputWaits {
 		if wait.DeadlineAt != nil && (earliest == nil || wait.DeadlineAt.Before(*earliest)) {
 			deadline := *wait.DeadlineAt
 			earliest = &deadline
@@ -302,7 +322,9 @@ func (c *Client) scheduleWaitingHumanInputMission(missionID string) {
 		}
 		// Wake just after the stored deadline so a sub-millisecond clock
 		// difference cannot turn this into an early no-op.
-		delay += time.Millisecond
+		if delay <= time.Duration(1<<63-1)-time.Millisecond {
+			delay += time.Millisecond
+		}
 		time.AfterFunc(delay, func() { c.resumeReadyHumanInputMission(missionID) })
 	}
 }

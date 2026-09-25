@@ -137,6 +137,12 @@ func (c *Coordinator) SetExecutionLeasePolicy(ownerID string, ttl, heartbeat tim
 // Run completes a mission while preserving single-commander ownership.
 func (c *Coordinator) Run(ctx context.Context) error {
 	snapshot := c.harness.Snapshot()
+	if snapshot.RunState == RunRunning || snapshot.RunState == RunWaiting {
+		if _, err := c.harness.PromoteDueRetries(c.now().UTC()); err != nil {
+			return fmt.Errorf("promote due retries: %w", err)
+		}
+		snapshot = c.harness.Snapshot()
+	}
 	switch snapshot.RunState {
 	case RunPending:
 		if err := c.harness.Start(); err != nil {
@@ -148,6 +154,9 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		}
 	case RunRunning:
 	case RunWaiting:
+		if len(snapshot.RetryDeadlines) > 0 && len(snapshot.HumanInputWaits) == 0 && len(snapshot.RecoveryBlocks) == 0 {
+			return &MissionRetryWaitingError{Deadlines: cloneMap(snapshot.RetryDeadlines)}
+		}
 		if len(snapshot.HumanInputWaits) > 0 {
 			return &MissionHumanInputWaitingError{Waits: sortedHumanInputWaits(snapshot.HumanInputWaits)}
 		}
@@ -161,6 +170,9 @@ func (c *Coordinator) Run(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		if _, err := c.harness.PromoteDueRetries(c.now().UTC()); err != nil {
+			return fmt.Errorf("promote due retries: %w", err)
 		}
 		snapshot = c.harness.Snapshot()
 		if snapshot.AllComplete {
@@ -245,12 +257,15 @@ func (c *Coordinator) Run(ctx context.Context) error {
 			}
 			continue
 		}
-		if len(snapshot.HumanInputWaits) > 0 || len(snapshot.RecoveryBlocks) > 0 {
+		if len(snapshot.HumanInputWaits) > 0 || len(snapshot.RecoveryBlocks) > 0 || len(snapshot.RetryDeadlines) > 0 {
 			if err := c.harness.EnterRecoveryWaiting(); err != nil {
 				return fmt.Errorf("persist mission waiting state: %w", err)
 			}
 			if len(snapshot.HumanInputWaits) > 0 {
 				return &MissionHumanInputWaitingError{Waits: sortedHumanInputWaits(snapshot.HumanInputWaits)}
+			}
+			if len(snapshot.RetryDeadlines) > 0 && len(snapshot.RecoveryBlocks) == 0 {
+				return &MissionRetryWaitingError{Deadlines: cloneMap(snapshot.RetryDeadlines)}
 			}
 			return &MissionRecoveryWaitingError{Blocks: sortedRecoveryBlocks(snapshot.RecoveryBlocks)}
 		}
@@ -301,7 +316,7 @@ func (c *Coordinator) executeConcurrent(ctx context.Context, dispatches []Dispat
 	}
 	wg.Wait()
 	snapshot := c.harness.Snapshot()
-	if (len(snapshot.RecoveryBlocks) > 0 || len(snapshot.HumanInputWaits) > 0) && snapshot.RunState == RunRunning {
+	if (len(snapshot.RecoveryBlocks) > 0 || len(snapshot.HumanInputWaits) > 0 || len(snapshot.RetryDeadlines) > 0) && snapshot.RunState == RunRunning {
 		if len(snapshot.Active) > 0 {
 			return firstErr
 		}
@@ -316,6 +331,9 @@ func (c *Coordinator) executeConcurrent(ctx context.Context, dispatches []Dispat
 		snapshot = c.harness.Snapshot()
 		if len(snapshot.HumanInputWaits) > 0 {
 			return &MissionHumanInputWaitingError{Waits: sortedHumanInputWaits(snapshot.HumanInputWaits)}
+		}
+		if len(snapshot.RetryDeadlines) > 0 && len(snapshot.RecoveryBlocks) == 0 {
+			return &MissionRetryWaitingError{Deadlines: cloneMap(snapshot.RetryDeadlines)}
 		}
 		return &MissionRecoveryWaitingError{Blocks: sortedRecoveryBlocks(snapshot.RecoveryBlocks)}
 	}

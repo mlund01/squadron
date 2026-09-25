@@ -155,7 +155,7 @@ func TestRuntimeTaskDefinitionsPreserveOptionalOutputContract(t *testing.T) {
 	t.Parallel()
 
 	m := &config.Mission{Tasks: []config.Task{{
-		Name: "summarize", RawObjective: "Summarize the source", DependsOn: []string{"collect"}, MaxRetries: 2,
+		Name: "summarize", RawObjective: "Summarize the source", DependsOn: []string{"collect"}, MaxRetries: 2, RetryDelaySeconds: 30,
 		SendTo: []string{"publish"},
 		Router: &config.TaskRouter{Routes: []config.TaskRoute{{Target: "review", Condition: "Review required"}}},
 		Output: &config.OutputSchema{Fields: []config.OutputField{
@@ -171,7 +171,7 @@ func TestRuntimeTaskDefinitionsPreserveOptionalOutputContract(t *testing.T) {
 		t.Fatalf("definitions = %#v", definitions)
 	}
 	definition := definitions[0]
-	if definition.Objective != "Summarize the source" || len(definition.DependsOn) != 1 || definition.MaxRetries != 2 || len(definition.SendTo) != 1 || len(definition.Routes) != 1 {
+	if definition.Objective != "Summarize the source" || len(definition.DependsOn) != 1 || definition.MaxRetries != 2 || definition.RetryDelaySeconds != 30 || len(definition.SendTo) != 1 || len(definition.Routes) != 1 {
 		t.Fatalf("definition = %#v", definition)
 	}
 	fields := definition.ResultPolicy.Fields

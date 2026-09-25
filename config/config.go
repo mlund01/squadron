@@ -2831,11 +2831,12 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 	taskContent, _, diags := block.Body.PartialContent(&hcl.BodySchema{
 		Attributes: []hcl.AttributeSchema{
 			{Name: "objective", Required: true},
-			{Name: "agents"},      // Optional - uses mission-level agents if not specified
-			{Name: "models"},      // Optional - narrows the mission executor model pool
-			{Name: "tools"},       // Optional - capabilities always granted to this executor
-			{Name: "max_retries"}, // Optional - bounded task-attempt retries
-			{Name: "packets"},     // Optional - task-scoped declared packet references
+			{Name: "agents"},              // Optional - uses mission-level agents if not specified
+			{Name: "models"},              // Optional - narrows the mission executor model pool
+			{Name: "tools"},               // Optional - capabilities always granted to this executor
+			{Name: "max_retries"},         // Optional - bounded task-attempt retries
+			{Name: "retry_delay_seconds"}, // Optional - persisted delay before a retry
+			{Name: "packets"},             // Optional - task-scoped declared packet references
 			{Name: "depends_on"},
 			{Name: "send_to"},
 			{Name: "output"}, // shorthand: output = { field = string("desc", true) }
@@ -2913,6 +2914,21 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			return nil, fmt.Errorf("task '%s' max_retries must be a non-negative integer", taskName)
 		}
 		maxRetries = int(value)
+	}
+	retryDelaySeconds := 0
+	if delayAttr, ok := taskContent.Attributes["retry_delay_seconds"]; ok {
+		delayVal, diags := delayAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s' retry_delay_seconds: %w", taskName, diags)
+		}
+		if !delayVal.IsKnown() || delayVal.IsNull() || delayVal.Type() != cty.Number {
+			return nil, fmt.Errorf("task '%s' retry_delay_seconds must be a number", taskName)
+		}
+		value, accuracy := delayVal.AsBigFloat().Int64()
+		if accuracy != big.Exact || value < 0 || value > int64((1<<63-1)/time.Second) {
+			return nil, fmt.Errorf("task '%s' retry_delay_seconds must be a non-negative whole number of seconds", taskName)
+		}
+		retryDelaySeconds = int(value)
 	}
 
 	// Get packets (optional array of packet names)
@@ -3034,20 +3050,21 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 	}
 
 	return &Task{
-		Name:          taskName,
-		ObjectiveExpr: objectiveExpr,
-		RawObjective:  rawObjective,
-		Agents:        agents,
-		Models:        taskModels,
-		Tools:         taskTools,
-		MaxRetries:    maxRetries,
-		Packets:       taskPackets,
-		DependsOn:     dependsOn,
-		SendTo:        sendTo,
-		Iterator:      iterator,
-		Output:        output,
-		Router:        router,
-		Budget:        taskBudget,
+		Name:              taskName,
+		ObjectiveExpr:     objectiveExpr,
+		RawObjective:      rawObjective,
+		Agents:            agents,
+		Models:            taskModels,
+		Tools:             taskTools,
+		MaxRetries:        maxRetries,
+		RetryDelaySeconds: retryDelaySeconds,
+		Packets:           taskPackets,
+		DependsOn:         dependsOn,
+		SendTo:            sendTo,
+		Iterator:          iterator,
+		Output:            output,
+		Router:            router,
+		Budget:            taskBudget,
 	}, nil
 }
 

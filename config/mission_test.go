@@ -253,6 +253,7 @@ mission "retryable" {
   task "work" {
     objective   = "Perform retryable work"
     max_retries = 2
+    retry_delay_seconds = 30
   }
 }
 `
@@ -260,6 +261,26 @@ mission "retryable" {
 			cfg, err := config.LoadFile(f)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Missions[0].Tasks[0].MaxRetries).To(Equal(2))
+			Expect(cfg.Missions[0].Tasks[0].RetryDelaySeconds).To(Equal(30))
+		})
+
+		It("rejects a negative retry delay", func() {
+			hcl := fullBaseHCL() + `
+mission "invalid_retry_delay" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  agents = [agents.test_agent]
+  task "work" {
+    objective = "Perform work"
+    max_retries = 1
+    retry_delay_seconds = -1
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(MatchError(ContainSubstring("retry_delay_seconds must be a non-negative whole number of seconds")))
 		})
 
 		It("parses dataset with bind_to input reference", func() {

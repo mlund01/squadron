@@ -82,6 +82,30 @@ func TestIterationChildPromptReceivesOnlyItsFrozenItem(t *testing.T) {
 	}
 }
 
+func TestTaskPromptReceivesAcceptedDependencyAggregate(t *testing.T) {
+	modelSession := &fakeTaskModelSession{responses: []*llm.ChatResponse{{Content: "analyzed"}}}
+	factory, err := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: modelSession}, []TaskObjective{{Name: "analyze", Objective: "Analyze the completed work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := Dispatch{RunID: "run-aggregate", TaskName: "analyze", AttemptID: "run-aggregate:analyze:1", Grant: ExecutionGrant{
+		TaskName: "analyze", Model: "fast", Dependencies: []DependencySnapshot{{
+			TaskName: "work", Status: ResultSucceeded, Summary: "Completed 2 iteration items",
+			Data: json.RawMessage(`{"total":2,"items":[{"index":0,"taskName":"work[0]"},{"index":1,"taskName":"work[1]"}]}`),
+		}},
+	}}
+	session, err := factory.NewTaskSession(context.Background(), dispatch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(modelSession.prompts) != 1 || !strings.Contains(modelSession.prompts[0], `"dependencies"`) || !strings.Contains(modelSession.prompts[0], `"taskName":"work[1]"`) {
+		t.Fatalf("dependency prompt = %v", modelSession.prompts)
+	}
+}
+
 func TestModelTaskSessionRequestsAndReturnsTypedData(t *testing.T) {
 	t.Parallel()
 

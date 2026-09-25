@@ -203,16 +203,18 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 		return TaskResultEnvelope{}, fmt.Errorf("task input snapshot is invalid JSON")
 	}
 	prompt, err := json.Marshal(struct {
-		Task            string            `json:"task"`
-		Objective       string            `json:"objective"`
-		Inputs          json.RawMessage   `json:"inputs"`
-		Iteration       *IterationInput   `json:"iteration,omitempty"`
-		OutputContract  []ResultField     `json:"outputContract,omitempty"`
-		OutputRule      string            `json:"outputRule,omitempty"`
-		RoutingCriteria []RouteDefinition `json:"routingCriteria,omitempty"`
-		RoutingRule     string            `json:"routingRule,omitempty"`
+		Task            string               `json:"task"`
+		Objective       string               `json:"objective"`
+		Inputs          json.RawMessage      `json:"inputs"`
+		Iteration       *IterationInput      `json:"iteration,omitempty"`
+		Dependencies    []DependencySnapshot `json:"dependencies,omitempty"`
+		OutputContract  []ResultField        `json:"outputContract,omitempty"`
+		OutputRule      string               `json:"outputRule,omitempty"`
+		RoutingCriteria []RouteDefinition    `json:"routingCriteria,omitempty"`
+		RoutingRule     string               `json:"routingRule,omitempty"`
 	}{
 		Task: s.dispatch.TaskName, Objective: s.objective, Inputs: inputJSON, Iteration: s.dispatch.Grant.Iteration,
+		Dependencies:    s.dispatch.Grant.Dependencies,
 		OutputContract:  s.resultPolicy.Fields,
 		OutputRule:      outputRule(s.resultPolicy),
 		RoutingCriteria: s.routes,

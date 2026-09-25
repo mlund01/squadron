@@ -225,6 +225,18 @@ type ExecutionGrant struct {
 	PolicyJSON           string
 	ConfigurationVersion string
 	Iteration            *IterationInput
+	Dependencies         []DependencySnapshot
+}
+
+// DependencySnapshot is the accepted, model-visible output of a declared
+// prerequisite at dispatch time. Raw provider output and worker transcripts
+// never cross this boundary.
+type DependencySnapshot struct {
+	TaskName  string              `json:"taskName"`
+	Status    ResultStatus        `json:"status"`
+	Summary   string              `json:"summary"`
+	Data      json.RawMessage     `json:"data,omitempty"`
+	Artifacts []ArtifactReference `json:"artifacts,omitempty"`
 }
 
 // IterationInput is injected by the harness from the frozen plan, never from a
@@ -234,6 +246,25 @@ type IterationInput struct {
 	Index      int             `json:"index"`
 	Item       json.RawMessage `json:"item"`
 }
+
+// IterationAggregate is an ordered, bounded projection of accepted child
+// results. The full child envelopes remain addressable individually.
+type IterationAggregate struct {
+	Total        int                      `json:"total"`
+	Items        []IterationAggregateItem `json:"items"`
+	OmittedItems int                      `json:"omittedItems,omitempty"`
+}
+
+type IterationAggregateItem struct {
+	Index          int                 `json:"index"`
+	TaskName       string              `json:"taskName"`
+	Summary        string              `json:"summary"`
+	Data           json.RawMessage     `json:"data,omitempty"`
+	Artifacts      []ArtifactReference `json:"artifacts,omitempty"`
+	DetailsOmitted bool                `json:"detailsOmitted,omitempty"`
+}
+
+const maxIterationAggregateBytes = 1024 * 1024
 
 // Dispatch is the accepted immutable identity for one task attempt.
 type Dispatch struct {
@@ -574,10 +605,12 @@ func (h *Harness) completeIterationParentLocked(parentName string) {
 		return
 	}
 	summary := fmt.Sprintf("Completed %d iteration items", len(plan.Children))
+	aggregate := h.iterationAggregateLocked(plan)
+	aggregateJSON, _ := json.Marshal(aggregate) // accepted child data is already valid JSON
 	h.results[parentName] = AcceptedTaskResult{
 		Envelope: TaskResultEnvelope{
 			Status: ResultSucceeded, Summary: summary,
-			Content:    []store.MessagePart{{Type: "text", Text: summary}},
+			Content: []store.MessagePart{{Type: "text", Text: summary}}, Data: aggregateJSON,
 			Provenance: ResultProvenance{RunID: h.runID, TaskName: parentName, AttemptID: "iteration:" + plan.DatasetDigest, Model: "harness"},
 		},
 		Validation: ResultValidation{Valid: true},
@@ -586,6 +619,34 @@ func (h *Harness) completeIterationParentLocked(parentName string) {
 	for _, target := range h.tasks[parentName].SendTo {
 		h.activateLocked(target, parentName)
 	}
+}
+
+func (h *Harness) iterationAggregateLocked(plan IterationPlan) IterationAggregate {
+	aggregate := IterationAggregate{Total: len(plan.Children), Items: make([]IterationAggregateItem, 0, len(plan.Children))}
+	used := 64 // reserve space for the enclosing object and omitted count
+	for _, child := range plan.Children {
+		envelope := h.results[child.Name].Envelope
+		entry := IterationAggregateItem{
+			Index: child.Index, TaskName: child.Name, Summary: envelope.Summary,
+			Data:      append(json.RawMessage(nil), envelope.Data...),
+			Artifacts: append([]ArtifactReference(nil), envelope.Artifacts...),
+		}
+		encoded, _ := json.Marshal(entry)
+		if used+len(encoded)+1 > maxIterationAggregateBytes {
+			entry.Data, entry.Artifacts, entry.DetailsOmitted = nil, nil, true
+			if runes := []rune(entry.Summary); len(runes) > 512 {
+				entry.Summary = string(runes[:512])
+			}
+			encoded, _ = json.Marshal(entry)
+		}
+		if used+len(encoded)+1 > maxIterationAggregateBytes {
+			break
+		}
+		aggregate.Items = append(aggregate.Items, entry)
+		used += len(encoded) + 1
+	}
+	aggregate.OmittedItems = aggregate.Total - len(aggregate.Items)
+	return aggregate
 }
 
 // Stop pauses a quiescent run and its existing commander session. Active task
@@ -1192,6 +1253,21 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 	if request.Grant.Iteration != nil {
 		return Dispatch{}, fmt.Errorf("iteration input is harness-owned")
 	}
+	if len(request.Grant.Dependencies) > 0 {
+		return Dispatch{}, fmt.Errorf("dependency snapshots are harness-owned")
+	}
+	for _, dependency := range definition.DependsOn {
+		accepted, exists := h.results[dependency]
+		if !exists || h.taskStates[dependency] != TaskCompleted {
+			return Dispatch{}, fmt.Errorf("dependency %q has no accepted result", dependency)
+		}
+		envelope := accepted.Envelope
+		request.Grant.Dependencies = append(request.Grant.Dependencies, DependencySnapshot{
+			TaskName: dependency, Status: envelope.Status, Summary: envelope.Summary,
+			Data:      append(json.RawMessage(nil), envelope.Data...),
+			Artifacts: append([]ArtifactReference(nil), envelope.Artifacts...),
+		})
+	}
 	if definition.ParentTask != "" {
 		for _, child := range h.iterationPlans[definition.ParentTask].Children {
 			if child.Name == request.TaskName {
@@ -1293,6 +1369,13 @@ func cloneExecutionGrant(grant ExecutionGrant) ExecutionGrant {
 		item.Item = append(json.RawMessage(nil), item.Item...)
 		grant.Iteration = &item
 	}
+	dependencies := make([]DependencySnapshot, len(grant.Dependencies))
+	for index, dependency := range grant.Dependencies {
+		dependency.Data = append(json.RawMessage(nil), dependency.Data...)
+		dependency.Artifacts = append([]ArtifactReference(nil), dependency.Artifacts...)
+		dependencies[index] = dependency
+	}
+	grant.Dependencies = dependencies
 	return grant
 }
 

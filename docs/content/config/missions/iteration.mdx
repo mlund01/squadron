@@ -37,4 +37,8 @@ An empty dataset completes the parent task without launching a worker. Once ever
 
 ## Results
 
-If the task declares an output schema, the harness validates each child against that schema before accepting it. Child outputs, artifacts, transcripts, and telemetry remain separately attributable. The parent's result is a bounded completion summary; it is not a fabricated merge of all child outputs. The commander can inspect individual child results when deciding a subsequent route or task.
+If the task declares an output schema, the harness validates each child against that schema before accepting it. Child outputs, artifacts, transcripts, and telemetry remain separately attributable.
+
+After every child succeeds, the parent receives an ordered aggregate of accepted child results. Each entry identifies its child index and task name and includes its summary, structured data, and artifact references. The aggregate is a projection, not a newly generated model answer or a merge of the children's output schemas. A downstream task receives it as the accepted result of its declared parent dependency. The commander can still inspect an individual child for its full accepted result.
+
+The model-visible aggregate is bounded to 1 MiB. If child data and artifact references do not fit, that entry retains a shortened summary and marks `detailsOmitted`; if even those entries cannot fit, `omittedItems` reports how many tail entries were omitted. The full child results remain persisted and independently inspectable. Never treat an incomplete aggregate as the complete dataset.

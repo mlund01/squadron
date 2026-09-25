@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -225,6 +226,8 @@ func TestMissionScopedRunnerExecutesInlineIteration(t *testing.T) {
 		mockResponse{Content: "First item complete"},
 		mockToolCall("start_task", json.RawMessage(`{"task_name":"work[1]","model":"fast"}`)),
 		mockResponse{Content: "Second item complete"},
+		mockToolCall("start_task", json.RawMessage(`{"task_name":"finish","model":"fast"}`)),
+		mockResponse{Content: "Analysis complete"},
 	)
 	cfg := &config.Config{
 		Storage: &config.StorageConfig{Backend: "sqlite", Path: ":memory:"},
@@ -232,7 +235,10 @@ func TestMissionScopedRunnerExecutesInlineIteration(t *testing.T) {
 		Missions: []config.Mission{{
 			Name: "iterate_inline", Commander: &config.MissionCommander{Model: "fast"}, Models: []string{"fast"},
 			Datasets: []config.Dataset{{Name: "items", Items: []cty.Value{cty.StringVal("first"), cty.StringVal("second")}}},
-			Tasks:    []config.Task{{Name: "work", RawObjective: "Process the supplied item", Iterator: &config.TaskIterator{Dataset: "items"}}},
+			Tasks: []config.Task{
+				{Name: "work", RawObjective: "Process the supplied item", Iterator: &config.TaskIterator{Dataset: "items"}},
+				{Name: "finish", RawObjective: "Analyze the completed items", DependsOn: []string{"work"}},
+			},
 		}},
 	}
 	runner, err := NewRunner(cfg, "", "iterate_inline", nil, WithProviderFactory(func() llm.Provider { return provider }))
@@ -263,6 +269,17 @@ func TestMissionScopedRunnerExecutesInlineIteration(t *testing.T) {
 		if got := string(snapshot.IterationPlans["work"].Children[index].Item); got != want {
 			t.Fatalf("child %s frozen item = %s, want %s", name, got, want)
 		}
+	}
+	var finishPrompt string
+	for _, call := range provider.getCalls() {
+		for _, message := range call.Messages {
+			if strings.Contains(message.Content, `"task":"finish"`) {
+				finishPrompt = message.Content
+			}
+		}
+	}
+	if !strings.Contains(finishPrompt, `"taskName":"work[0]"`) || !strings.Contains(finishPrompt, `"taskName":"work[1]"`) {
+		t.Fatalf("downstream worker did not receive ordered child results: %s", finishPrompt)
 	}
 }
 
@@ -305,6 +322,41 @@ func TestMissionScopedRunnerIteratesDatasetProducedByTaskWorker(t *testing.T) {
 	}
 	if state := restored.Snapshot().RunState; state != missionruntime.RunCompleted {
 		t.Fatalf("run state = %q", state)
+	}
+}
+
+func TestMissionScopedRunnerIteratesInputBoundDataset(t *testing.T) {
+	provider := newMockProvider(
+		mockToolCall("start_task", json.RawMessage(`{"task_name":"work[0]","model":"fast"}`)),
+		mockResponse{Content: "First input complete"},
+		mockToolCall("start_task", json.RawMessage(`{"task_name":"work[1]","model":"fast"}`)),
+		mockResponse{Content: "Second input complete"},
+	)
+	cfg := &config.Config{
+		Storage: &config.StorageConfig{Backend: "sqlite", Path: ":memory:"},
+		Models:  []config.Model{{Name: "test", Provider: config.ProviderOpenAICompatible, BaseURL: "http://localhost", Aliases: map[string]string{"fast": "fast"}}},
+		Missions: []config.Mission{{
+			Name: "iterate_input", Commander: &config.MissionCommander{Model: "fast"}, Models: []string{"fast"},
+			Inputs:   []config.MissionInput{{Name: "cities", Type: config.InputTypeList}},
+			Datasets: []config.Dataset{{Name: "items", BindTo: "cities"}},
+			Tasks:    []config.Task{{Name: "work", RawObjective: "Process the supplied item", Iterator: &config.TaskIterator{Dataset: "items"}}},
+		}},
+	}
+	runner, err := NewRunner(cfg, "", "iterate_input", map[string]string{"cities": `["Paris","Tokyo"]`}, WithProviderFactory(func() llm.Provider { return provider }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.CloseStores()
+	if err := runner.Run(context.Background(), newMockMissionStreamer()); err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := missionruntime.RestoreDurableHarness(runner.stores.Runtime, runner.missionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := restored.Snapshot().IterationPlans["work"]
+	if restored.Snapshot().RunState != missionruntime.RunCompleted || len(plan.Children) != 2 || string(plan.Children[0].Item) != `"Paris"` || string(plan.Children[1].Item) != `"Tokyo"` {
+		t.Fatalf("input-bound iteration = %#v", restored.Snapshot())
 	}
 }
 

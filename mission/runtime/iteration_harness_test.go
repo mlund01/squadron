@@ -98,7 +98,7 @@ func TestDurableIterationSequentialRecoveryAndParentCompletion(t *testing.T) {
 	if expansions != 1 {
 		t.Fatalf("expansion events = %d, want 1", expansions)
 	}
-	for _, name := range []string{"work[0]", "work[1]"} {
+	for index, name := range []string{"work[0]", "work[1]"} {
 		snapshot := restored.Snapshot()
 		if !reflect.DeepEqual(snapshot.Ready, []string{name}) {
 			t.Fatalf("ready set before %s = %v", name, snapshot.Ready)
@@ -107,7 +107,12 @@ func TestDurableIterationSequentialRecoveryAndParentCompletion(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := restored.CompleteTask(name, dispatch.AttemptID, testResult(dispatch)); err != nil {
+		result := testResult(dispatch)
+		result.Data = json.RawMessage(fmt.Sprintf(`{"item":%d}`, index+1))
+		if name == "work[1]" {
+			result.Artifacts = []ArtifactReference{{ID: "artifact-2", URI: "artifact://result-2", MediaType: "image/png"}}
+		}
+		if err := restored.CompleteTask(name, dispatch.AttemptID, result); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -118,6 +123,23 @@ func TestDurableIterationSequentialRecoveryAndParentCompletion(t *testing.T) {
 	result, ok := restored.TaskResult("work")
 	if !ok || result.Envelope.Summary != "Completed 2 iteration items" {
 		t.Fatalf("parent result = %#v, %v", result, ok)
+	}
+	var aggregate IterationAggregate
+	if err := json.Unmarshal(result.Envelope.Data, &aggregate); err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Total != 2 || len(aggregate.Items) != 2 || aggregate.Items[0].TaskName != "work[0]" || aggregate.Items[1].TaskName != "work[1]" {
+		t.Fatalf("ordered parent aggregate = %#v", aggregate)
+	}
+	if string(aggregate.Items[0].Data) != `{"item":1}` || string(aggregate.Items[1].Data) != `{"item":2}` || len(aggregate.Items[1].Artifacts) != 1 || aggregate.Items[1].Artifacts[0].ID != "artifact-2" {
+		t.Fatalf("child data and artifact reference missing from aggregate: %#v", aggregate)
+	}
+	finish, err := restored.DispatchTask(DispatchRequest{RequestID: "finish", TaskName: "finish", ReadySetRevision: snapshot.Revision, Grant: testGrant("finish")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finish.Grant.Dependencies) != 1 || finish.Grant.Dependencies[0].TaskName != "work" || string(finish.Grant.Dependencies[0].Data) != string(result.Envelope.Data) {
+		t.Fatalf("downstream dependency snapshot = %#v", finish.Grant.Dependencies)
 	}
 }
 
@@ -170,6 +192,103 @@ func TestDurableIterationParallelLimitAndEmptyDataset(t *testing.T) {
 	}
 }
 
+func TestIterationAggregateBoundsLargeChildDataWithoutInventingOutput(t *testing.T) {
+	policy := IterationPolicy{Dataset: "items"}
+	plan := iterationTestPlan(t, policy, `1`, `2`)
+	h := &Harness{results: make(map[string]AcceptedTaskResult)}
+	for _, child := range plan.Children {
+		h.results[child.Name] = AcceptedTaskResult{Envelope: TaskResultEnvelope{
+			Summary: child.Name,
+			Data:    json.RawMessage(`{"text":"` + strings.Repeat("x", 700*1024) + `"}`),
+		}}
+	}
+	aggregate := h.iterationAggregateLocked(plan)
+	if aggregate.Total != 2 || len(aggregate.Items) != 2 || aggregate.OmittedItems != 0 || aggregate.Items[0].DetailsOmitted || !aggregate.Items[1].DetailsOmitted {
+		t.Fatalf("bounded aggregate = %#v", aggregate)
+	}
+	encoded, err := json.Marshal(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > maxIterationAggregateBytes {
+		t.Fatalf("aggregate size = %d, limit = %d", len(encoded), maxIterationAggregateBytes)
+	}
+}
+
+func TestIterationFanInWaitsForEveryChildAndOtherDependency(t *testing.T) {
+	policy := IterationPolicy{Dataset: "items"}
+	h, err := CreateDurableHarness(persistence.NewMemoryRuntimeStore(), "run-iteration-fanin", "commander", []TaskDefinition{
+		{Name: "work", Iterator: &policy},
+		{Name: "other"},
+		{Name: "finish", DependsOn: []string{"work", "other"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ExpandIteration(iterationTestPlan(t, policy, `1`, `2`)); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"other", "work[0]"} {
+		dispatch, err := h.DispatchTask(DispatchRequest{RequestID: name, TaskName: name, ReadySetRevision: h.Snapshot().Revision, Grant: testGrant(name)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := h.CompleteTask(name, dispatch.AttemptID, testResult(dispatch)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ready := h.Snapshot().Ready; !reflect.DeepEqual(ready, []string{"work[1]"}) {
+		t.Fatalf("fan-in released before final child: %v", ready)
+	}
+	last, err := h.DispatchTask(DispatchRequest{RequestID: "last", TaskName: "work[1]", ReadySetRevision: h.Snapshot().Revision, Grant: testGrant("work[1]")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.CompleteTask("work[1]", last.AttemptID, testResult(last)); err != nil {
+		t.Fatal(err)
+	}
+	if ready := h.Snapshot().Ready; !reflect.DeepEqual(ready, []string{"finish"}) {
+		t.Fatalf("fan-in failed to release: %v", ready)
+	}
+	finish, err := h.DispatchTask(DispatchRequest{RequestID: "finish", TaskName: "finish", ReadySetRevision: h.Snapshot().Revision, Grant: testGrant("finish")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(finish.Grant.Dependencies) != 2 || finish.Grant.Dependencies[0].TaskName != "work" || finish.Grant.Dependencies[1].TaskName != "other" {
+		t.Fatalf("fan-in dependency snapshots = %#v", finish.Grant.Dependencies)
+	}
+}
+
+func TestIterationChildRetryExhaustionDoesNotCompleteParent(t *testing.T) {
+	policy := IterationPolicy{Dataset: "items", MaxRetries: 0}
+	h, err := CreateDurableHarness(persistence.NewMemoryRuntimeStore(), "run-iteration-exhausted", "commander", []TaskDefinition{
+		{Name: "work", Iterator: &policy},
+		{Name: "finish", DependsOn: []string{"work"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ExpandIteration(iterationTestPlan(t, policy, `1`, `2`)); err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := h.DispatchTask(DispatchRequest{RequestID: "first", TaskName: "work[0]", ReadySetRevision: h.Snapshot().Revision, Grant: testGrant("work[0]")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := h.FailTask("work[0]", dispatch.AttemptID, fmt.Errorf("permanent failure")); err != nil || retry {
+		t.Fatalf("failed exhausted child = retry %v, error %v", retry, err)
+	}
+	if snapshot := h.Snapshot(); snapshot.RunState != RunFailed || snapshot.Tasks["work"].State == TaskCompleted || snapshot.Tasks["finish"].State == TaskReady {
+		t.Fatalf("failure incorrectly released parent or downstream: %#v", snapshot)
+	}
+}
+
 func TestSQLiteIterationPlanAndChildAttemptSurviveRestart(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "iteration.db")
 	policy := IterationPolicy{Dataset: "items", Parallel: true, ConcurrencyLimit: 2, Smoketest: true}
@@ -193,7 +312,6 @@ func TestSQLiteIterationPlanAndChildAttemptSurviveRestart(t *testing.T) {
 	closeSQLiteBundle(t, bundle)
 
 	bundle, restored, _ := reopenSQLiteHarness(t, path, "run-sqlite-iteration")
-	defer closeSQLiteBundle(t, bundle)
 	if got := restored.Snapshot(); got.Tasks["work[0]"].State != TaskRunning || got.Tasks["work[1]"].State != TaskBlocked || !reflect.DeepEqual(got.IterationPlans["work"], plan) {
 		t.Fatalf("restored iteration = %#v", got)
 	}
@@ -203,6 +321,27 @@ func TestSQLiteIterationPlanAndChildAttemptSurviveRestart(t *testing.T) {
 	snapshot = restored.Snapshot()
 	if !reflect.DeepEqual(snapshot.Ready, []string{"work[1]"}) {
 		t.Fatalf("smoketest did not release second item: %v", snapshot.Ready)
+	}
+	second, err := restored.DispatchTask(DispatchRequest{RequestID: "second", TaskName: "work[1]", ReadySetRevision: snapshot.Revision, Grant: testGrant("work[1]")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.CompleteTask("work[1]", second.AttemptID, testResult(second)); err != nil {
+		t.Fatal(err)
+	}
+	closeSQLiteBundle(t, bundle)
+	bundle, restored, _ = reopenSQLiteHarness(t, path, "run-sqlite-iteration")
+	defer closeSQLiteBundle(t, bundle)
+	parent, ok := restored.TaskResult("work")
+	if !ok || restored.Snapshot().RunState != RunCompleted {
+		t.Fatalf("parent result after restart = %#v, %v", parent, ok)
+	}
+	var aggregate IterationAggregate
+	if err := json.Unmarshal(parent.Envelope.Data, &aggregate); err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Total != 2 || len(aggregate.Items) != 2 || aggregate.Items[0].TaskName != "work[0]" || aggregate.Items[1].TaskName != "work[1]" {
+		t.Fatalf("restored ordered aggregate = %#v", aggregate)
 	}
 }
 

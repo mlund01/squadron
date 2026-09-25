@@ -47,6 +47,12 @@ is not dispatched; it completes only when all children complete, or
 immediately for an empty dataset. Recovery loads the committed plan rather
 than re-expanding mutable source data.
 
+The successful parent result includes a bounded, child-index-ordered projection
+of accepted summaries, structured data, and artifact references. Its dependency
+snapshot is supplied to downstream task workers. The aggregate explicitly
+indicates omitted data when it exceeds its size limit; full child results remain
+separately persisted for inspection.
+
 ### Task attempt
 
 Every dispatch creates a task attempt. It stores:

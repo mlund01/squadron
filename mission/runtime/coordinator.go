@@ -36,6 +36,12 @@ type GrantResolver interface {
 	ResolveExecutionGrant(GrantRequest) (ExecutionGrant, error)
 }
 
+// IterationPlanResolver reads the dataset when a declared iterator becomes
+// eligible. The harness persists its returned plan before any child runs.
+type IterationPlanResolver interface {
+	ResolveIterationPlan(context.Context, string) (IterationPlan, error)
+}
+
 // CommanderDriver is the one run-scoped model session that reasons over
 // mission snapshots. An implementation retains its session for the entire run.
 type CommanderDriver interface {
@@ -74,19 +80,29 @@ type ExecutionObserver interface {
 // Coordinator drives a mission using one commander and the durable harness.
 // It never creates a commander per task and cannot bypass graph eligibility.
 type Coordinator struct {
-	harness   *DurableHarness
-	commander CommanderDriver
-	executor  TaskExecutor
-	grants    GrantResolver
-	observer  ExecutionObserver
-	ownerID   string
-	leaseTTL  time.Duration
-	heartbeat time.Duration
-	now       func() time.Time
+	harness        *DurableHarness
+	commander      CommanderDriver
+	executor       TaskExecutor
+	grants         GrantResolver
+	observer       ExecutionObserver
+	iterations     IterationPlanResolver
+	iterationTasks map[string]bool
+	ownerID        string
+	leaseTTL       time.Duration
+	heartbeat      time.Duration
+	now            func() time.Time
 }
 
 func (c *Coordinator) SetExecutionObserver(observer ExecutionObserver) {
 	c.observer = observer
+}
+
+func (c *Coordinator) SetIterationPlanResolver(resolver IterationPlanResolver, taskNames []string) {
+	c.iterations = resolver
+	c.iterationTasks = make(map[string]bool, len(taskNames))
+	for _, name := range taskNames {
+		c.iterationTasks[name] = true
+	}
 }
 
 func NewCoordinator(harness *DurableHarness, commander CommanderDriver, executor TaskExecutor, grants GrantResolver) (*Coordinator, error) {
@@ -146,6 +162,27 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		snapshot = c.harness.Snapshot()
 		if snapshot.AllComplete {
 			return nil
+		}
+		expanded := false
+		for _, taskName := range snapshot.Ready {
+			if !c.iterationTasks[taskName] {
+				continue
+			}
+			if c.iterations == nil {
+				return fmt.Errorf("iteration plan resolver is required for task %q", taskName)
+			}
+			plan, err := c.iterations.ResolveIterationPlan(ctx, taskName)
+			if err != nil {
+				return fmt.Errorf("resolve iteration %q: %w", taskName, err)
+			}
+			if err := c.harness.ExpandIteration(plan); err != nil {
+				return fmt.Errorf("expand iteration %q: %w", taskName, err)
+			}
+			expanded = true
+			break
+		}
+		if expanded {
+			continue
 		}
 		if len(snapshot.PendingClarifications) > 0 {
 			if err := c.resumeClarification(ctx, snapshot.PendingClarifications[0]); err != nil {

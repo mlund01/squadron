@@ -3,12 +3,15 @@ package mission
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/zclconf/go-cty/cty"
 
 	"squadron/config"
 	"squadron/llm"
@@ -21,6 +24,9 @@ import (
 // missions. MissionStore receives only the run directory record needed by
 // existing product discovery; RuntimeStore is the sole state authority.
 func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.MissionHandler) error {
+	if err := r.restoreRuntimeInputs(); err != nil {
+		return err
+	}
 	definitions, err := RuntimeTaskDefinitionsWithMissions(r.mission, r.cfg.Missions)
 	if err != nil {
 		return err
@@ -53,6 +59,9 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		return fmt.Errorf("initialize mission runtime: %w", err)
 	}
 	r.missionID = runID
+	if err := r.initializeRuntimeDatasets(); err != nil {
+		return fmt.Errorf("initialize runtime datasets: %w", err)
+	}
 
 	commanderProvider, commanderModel, err := r.runtimeProvider(ctx, r.mission.Commander.Model)
 	if err != nil {
@@ -85,7 +94,17 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	for _, task := range r.mission.Tasks {
 		toolRefs = append(toolRefs, task.Tools...)
 	}
-	registry := config.BuildToolsMap(toolRefs, r.cfg.CustomTools, r.cfg.LoadedPlugins, r.cfg.LoadedMCPClients, nil, r.humanBridge, r.gatewayBridge)
+	registry := config.BuildToolsMap(toolRefs, r.cfg.CustomTools, r.cfg.LoadedPlugins, r.cfg.LoadedMCPClients, r, r.humanBridge, r.gatewayBridge)
+	// The shared registry keeps legacy dataset aliases for older callers. The
+	// mission executor grants only declared capability names, so retain the
+	// canonical references explicitly requested by this mission or task.
+	for _, ref := range toolRefs {
+		if strings.HasPrefix(ref, "builtins.dataset.") {
+			if tool := config.GetBuiltinTool(ref, r, r.humanBridge, r.gatewayBridge); tool != nil {
+				registry[ref] = tool
+			}
+		}
+	}
 	executor, err := missionruntime.NewBoundedExecutor(registry, sessionFactory, &runtimeCredentialBroker{secrets: r.secretValues})
 	if err != nil {
 		return err
@@ -95,6 +114,13 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		return err
 	}
 	coordinator.SetExecutionObserver(&runtimeExecutionObserver{objectives: definitions, streamer: streamer})
+	iterationTasks := make([]string, 0)
+	for _, definition := range definitions {
+		if definition.Iterator != nil {
+			iterationTasks = append(iterationTasks, definition.Name)
+		}
+	}
+	coordinator.SetIterationPlanResolver(&runtimeIterationPlanResolver{runner: r, definitions: definitions}, iterationTasks)
 
 	streamer.MissionStarted(r.mission.Name, runID, len(definitions))
 	runErr := coordinator.Run(ctx)
@@ -137,6 +163,105 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	}
 	streamer.MissionCompleted(r.mission.Name)
 	return nil
+}
+
+func (r *Runner) restoreRuntimeInputs() error {
+	if r.resumeMissionID == "" {
+		return nil
+	}
+	record, err := r.stores.Missions.GetMission(r.resumeMissionID)
+	if err != nil {
+		return fmt.Errorf("load resumed mission %q: %w", r.resumeMissionID, err)
+	}
+	if record.MissionName != r.mission.Name {
+		return fmt.Errorf("resumed mission name mismatch: stored %q, requested %q", record.MissionName, r.mission.Name)
+	}
+	var rawInputs map[string]string
+	if err := json.Unmarshal([]byte(record.InputValuesJSON), &rawInputs); err != nil {
+		return fmt.Errorf("decode resumed mission inputs: %w", err)
+	}
+	values, err := r.mission.ResolveInputValues(rawInputs)
+	if err != nil {
+		return fmt.Errorf("resolve resumed mission inputs: %w", err)
+	}
+	r.rawInputs = rawInputs
+	r.inputValues = values
+	r.secretValues = make(map[string]string)
+	for _, input := range r.mission.Inputs {
+		if input.Protected && input.Value != nil && input.Value.Type() == cty.String {
+			r.secretValues[input.Name] = input.Value.AsString()
+		}
+	}
+	return nil
+}
+
+func (r *Runner) initializeRuntimeDatasets() error {
+	for _, dataset := range r.mission.Datasets {
+		id, err := r.stores.Datasets.GetDatasetByName(r.missionID, dataset.Name)
+		if err != nil {
+			if r.resumeMissionID != "" || !errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("restore dataset %q: %w", dataset.Name, err)
+			}
+			id, err = r.stores.Datasets.CreateDataset(r.missionID, dataset.Name, dataset.Description)
+			if err != nil {
+				return fmt.Errorf("create dataset %q: %w", dataset.Name, err)
+			}
+			if items := r.resolvedDatasets[dataset.Name]; len(items) > 0 {
+				if err := r.stores.Datasets.AddItems(id, items); err != nil {
+					return fmt.Errorf("populate dataset %q: %w", dataset.Name, err)
+				}
+			}
+		}
+		r.datasetIDs[dataset.Name] = id
+	}
+	r.resolvedDatasets = nil
+	return nil
+}
+
+type runtimeIterationPlanResolver struct {
+	runner      *Runner
+	definitions []missionruntime.TaskDefinition
+}
+
+func (r *runtimeIterationPlanResolver) ResolveIterationPlan(ctx context.Context, taskName string) (missionruntime.IterationPlan, error) {
+	var policy *missionruntime.IterationPolicy
+	for _, definition := range r.definitions {
+		if definition.Name == taskName {
+			policy = definition.Iterator
+			break
+		}
+	}
+	if policy == nil {
+		return missionruntime.IterationPlan{}, fmt.Errorf("task %q has no iterator", taskName)
+	}
+	id, ok := r.runner.datasetIDs[policy.Dataset]
+	if !ok {
+		return missionruntime.IterationPlan{}, fmt.Errorf("dataset %q is not initialized", policy.Dataset)
+	}
+	if err := ctx.Err(); err != nil {
+		return missionruntime.IterationPlan{}, err
+	}
+	// Lock before reading: once the first child can run, the dataset's ordered
+	// contents must remain stable for retries and process restarts.
+	if err := r.runner.stores.Datasets.LockDataset(id); err != nil {
+		return missionruntime.IterationPlan{}, fmt.Errorf("lock dataset %q: %w", policy.Dataset, err)
+	}
+	count, err := r.runner.stores.Datasets.GetItemCount(id)
+	if err != nil {
+		return missionruntime.IterationPlan{}, fmt.Errorf("count dataset %q: %w", policy.Dataset, err)
+	}
+	raw, err := r.runner.stores.Datasets.GetItemsRaw(id, 0, count)
+	if err != nil {
+		return missionruntime.IterationPlan{}, fmt.Errorf("read dataset %q: %w", policy.Dataset, err)
+	}
+	if len(raw) != count {
+		return missionruntime.IterationPlan{}, fmt.Errorf("dataset %q changed while being read", policy.Dataset)
+	}
+	items := make([]json.RawMessage, len(raw))
+	for index, item := range raw {
+		items[index] = json.RawMessage(item)
+	}
+	return missionruntime.BuildIterationPlan(taskName, *policy, items)
 }
 
 // projectRuntimeModelTurns materializes the runtime's durable, provider-neutral

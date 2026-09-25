@@ -23,6 +23,8 @@ type TaskDefinition struct {
 	Routes       []RouteDefinition
 	MaxRetries   int
 	ResultPolicy ResultPolicy
+	Iterator     *IterationPolicy
+	ParentTask   string
 }
 
 type RouteDefinition struct {
@@ -198,6 +200,7 @@ type Snapshot struct {
 	Clarifications        map[string][]TaskClarification
 	RecoveryBlocks        map[string]RecoveryBlock
 	ModelTurns            map[string]ModelTurnTelemetry
+	IterationPlans        map[string]IterationPlan
 	MaxParallel           int
 	AllComplete           bool
 }
@@ -221,6 +224,15 @@ type ExecutionGrant struct {
 	InputsJSON           string
 	PolicyJSON           string
 	ConfigurationVersion string
+	Iteration            *IterationInput
+}
+
+// IterationInput is injected by the harness from the frozen plan, never from a
+// commander-provided grant.
+type IterationInput struct {
+	ParentTask string          `json:"parentTask"`
+	Index      int             `json:"index"`
+	Item       json.RawMessage `json:"item"`
 }
 
 // Dispatch is the accepted immutable identity for one task attempt.
@@ -327,6 +339,7 @@ type Checkpoint struct {
 	Clarifications        map[string][]TaskClarification
 	CommanderMessages     []CommanderMessage
 	ModelTurns            map[string]ModelTurnTelemetry
+	IterationPlans        map[string]IterationPlan
 }
 
 // Harness owns graph eligibility and state transitions for one mission run.
@@ -357,6 +370,7 @@ type Harness struct {
 	clarifications        map[string][]TaskClarification
 	commanderMessages     []CommanderMessage
 	modelTurns            map[string]ModelTurnTelemetry
+	iterationPlans        map[string]IterationPlan
 }
 
 // NewHarness validates a mission graph and creates its pending run projection.
@@ -394,6 +408,10 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 			return nil, fmt.Errorf("task %q max retries cannot be negative", definition.Name)
 		}
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
+		if definition.Iterator != nil {
+			policy := *definition.Iterator
+			definition.Iterator = &policy
+		}
 		tasks[definition.Name] = definition
 		statesByTask[definition.Name] = TaskBlocked
 	}
@@ -460,6 +478,7 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 		pendingClarifications: make(map[string]ClarifyTaskRequest),
 		clarifications:        make(map[string][]TaskClarification),
 		modelTurns:            make(map[string]ModelTurnTelemetry),
+		iterationPlans:        make(map[string]IterationPlan),
 	}, nil
 }
 
@@ -479,6 +498,92 @@ func (h *Harness) Start() error {
 	h.commander.State = CommanderActive
 	h.publishReadySetLocked()
 	return nil
+}
+
+// ExpandIteration freezes a ready parent's dataset into durable child task
+// instances. The parent itself is never dispatched to a worker.
+func (h *Harness) ExpandIteration(plan IterationPlan) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.runState != RunRunning || h.commander.State != CommanderActive {
+		return fmt.Errorf("run is not accepting iteration expansion")
+	}
+	parent, exists := h.tasks[plan.ParentTask]
+	if !exists || parent.Iterator == nil {
+		return fmt.Errorf("task %q is not an iterated task", plan.ParentTask)
+	}
+	if previous, exists := h.iterationPlans[plan.ParentTask]; exists {
+		if reflect.DeepEqual(previous, plan) {
+			return nil
+		}
+		return fmt.Errorf("iteration %q already has a different frozen plan", plan.ParentTask)
+	}
+	if h.taskStates[plan.ParentTask] != TaskReady {
+		return fmt.Errorf("iteration %q is not ready", plan.ParentTask)
+	}
+	items := make([]json.RawMessage, len(plan.Children))
+	for index, child := range plan.Children {
+		items[index] = child.Item
+	}
+	canonical, err := BuildIterationPlan(plan.ParentTask, *parent.Iterator, items)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(canonical, plan) {
+		return fmt.Errorf("iteration %q plan is not canonical for its declared policy", plan.ParentTask)
+	}
+	for _, child := range plan.Children {
+		if _, exists := h.tasks[child.Name]; exists {
+			return fmt.Errorf("iteration child %q collides with a declared task", child.Name)
+		}
+	}
+	h.iterationPlans[plan.ParentTask] = cloneIterationPlan(plan)
+	h.taskStates[plan.ParentTask] = TaskWaiting
+	for _, child := range plan.Children {
+		h.tasks[child.Name] = TaskDefinition{
+			Name: child.Name, Objective: parent.Objective,
+			DependsOn:    append([]string(nil), child.DependsOn...),
+			MaxRetries:   plan.Policy.MaxRetries,
+			ResultPolicy: cloneResultPolicy(parent.ResultPolicy),
+			ParentTask:   plan.ParentTask,
+		}
+		h.taskStates[child.Name] = TaskBlocked
+	}
+	if len(plan.Children) == 0 {
+		h.completeIterationParentLocked(plan.ParentTask)
+	}
+	h.publishReadySetLocked()
+	if h.allCompleteLocked() {
+		h.runState = RunCompleted
+		h.commander.State = CommanderCompleted
+		h.revision++
+	}
+	return nil
+}
+
+func (h *Harness) completeIterationParentLocked(parentName string) {
+	plan := h.iterationPlans[parentName]
+	for _, child := range plan.Children {
+		if h.taskStates[child.Name] != TaskCompleted {
+			return
+		}
+	}
+	if h.taskStates[parentName] == TaskCompleted {
+		return
+	}
+	summary := fmt.Sprintf("Completed %d iteration items", len(plan.Children))
+	h.results[parentName] = AcceptedTaskResult{
+		Envelope: TaskResultEnvelope{
+			Status: ResultSucceeded, Summary: summary,
+			Content:    []store.MessagePart{{Type: "text", Text: summary}},
+			Provenance: ResultProvenance{RunID: h.runID, TaskName: parentName, AttemptID: "iteration:" + plan.DatasetDigest, Model: "harness"},
+		},
+		Validation: ResultValidation{Valid: true},
+	}
+	h.taskStates[parentName] = TaskCompleted
+	for _, target := range h.tasks[parentName].SendTo {
+		h.activateLocked(target, parentName)
+	}
 }
 
 // Stop pauses a quiescent run and its existing commander session. Active task
@@ -984,6 +1089,10 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 		definition.SendTo = append([]string(nil), definition.SendTo...)
 		definition.Routes = append([]RouteDefinition(nil), definition.Routes...)
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
+		if definition.Iterator != nil {
+			policy := *definition.Iterator
+			definition.Iterator = &policy
+		}
 		definitions[definition.Name] = definition
 	}
 	if err := validateAcyclic(definitions); err != nil {
@@ -1025,6 +1134,7 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 		clarifications:        cloneClarifications(checkpoint.Clarifications),
 		commanderMessages:     cloneCommanderMessages(checkpoint.CommanderMessages),
 		modelTurns:            cloneMap(checkpoint.ModelTurns),
+		iterationPlans:        cloneIterationPlans(checkpoint.IterationPlans),
 	}, nil
 }
 
@@ -1058,8 +1168,38 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 	if len(h.activeByTask) >= h.maxParallel {
 		return Dispatch{}, fmt.Errorf("run has reached its maximum of %d parallel tasks", h.maxParallel)
 	}
+	definition := h.tasks[request.TaskName]
+	if definition.Iterator != nil {
+		return Dispatch{}, fmt.Errorf("iterated task %q must expand before dispatch", request.TaskName)
+	}
+	if definition.ParentTask != "" {
+		plan := h.iterationPlans[definition.ParentTask]
+		activeChildren := 0
+		for name := range h.activeByTask {
+			if h.tasks[name].ParentTask == definition.ParentTask {
+				activeChildren++
+			}
+		}
+		if activeChildren >= plan.Policy.ConcurrencyLimit {
+			return Dispatch{}, fmt.Errorf("iteration %q has reached its maximum of %d parallel children", definition.ParentTask, plan.Policy.ConcurrencyLimit)
+		}
+	}
 	if err := validateExecutionGrant(request.TaskName, request.Grant); err != nil {
 		return Dispatch{}, err
+	}
+	if request.Grant.Iteration != nil {
+		return Dispatch{}, fmt.Errorf("iteration input is harness-owned")
+	}
+	if definition.ParentTask != "" {
+		for _, child := range h.iterationPlans[definition.ParentTask].Children {
+			if child.Name == request.TaskName {
+				request.Grant.Iteration = &IterationInput{ParentTask: definition.ParentTask, Index: child.Index, Item: append(json.RawMessage(nil), child.Item...)}
+				break
+			}
+		}
+		if request.Grant.Iteration == nil {
+			return Dispatch{}, fmt.Errorf("iteration child %q is absent from its frozen plan", request.TaskName)
+		}
 	}
 
 	h.taskStates[request.TaskName] = TaskDispatching
@@ -1107,6 +1247,11 @@ func validateExecutionGrant(taskName string, grant ExecutionGrant) error {
 
 func cloneExecutionGrant(grant ExecutionGrant) ExecutionGrant {
 	grant.Tools = append([]string(nil), grant.Tools...)
+	if grant.Iteration != nil {
+		item := *grant.Iteration
+		item.Item = append(json.RawMessage(nil), item.Item...)
+		grant.Iteration = &item
+	}
 	return grant
 }
 
@@ -1158,6 +1303,9 @@ func (h *Harness) CompleteTaskWithLease(taskName, attemptID string, result TaskR
 	delete(h.executionLeases, attemptID)
 	for _, target := range h.tasks[taskName].SendTo {
 		h.activateLocked(target, taskName)
+	}
+	if parent := h.tasks[taskName].ParentTask; parent != "" {
+		h.completeIterationParentLocked(parent)
 	}
 	h.publishReadySetLocked()
 
@@ -1358,7 +1506,10 @@ func (h *Harness) snapshotLocked() Snapshot {
 	for name := range h.tasks {
 		state := h.taskStates[name]
 		if state == TaskReady {
-			ready = append(ready, name)
+			parent := h.tasks[name].ParentTask
+			if parent == "" || h.activeIterationChildrenLocked(parent) < h.iterationPlans[parent].Policy.ConcurrencyLimit {
+				ready = append(ready, name)
+			}
 		}
 		tasks[name] = TaskSnapshot{Name: name, State: state, Attempt: h.attempts[name]}
 	}
@@ -1407,9 +1558,20 @@ func (h *Harness) snapshotLocked() Snapshot {
 		Clarifications:        cloneClarifications(h.clarifications),
 		RecoveryBlocks:        cloneMap(h.recoveryBlocks),
 		ModelTurns:            cloneMap(h.modelTurns),
+		IterationPlans:        cloneIterationPlans(h.iterationPlans),
 		MaxParallel:           h.maxParallel,
 		AllComplete:           h.allCompleteLocked(),
 	}
+}
+
+func (h *Harness) activeIterationChildrenLocked(parent string) int {
+	count := 0
+	for name := range h.activeByTask {
+		if h.tasks[name].ParentTask == parent {
+			count++
+		}
+	}
+	return count
 }
 
 func (h *Harness) checkpointLocked() Checkpoint {
@@ -1419,6 +1581,10 @@ func (h *Harness) checkpointLocked() Checkpoint {
 		definition.SendTo = append([]string(nil), definition.SendTo...)
 		definition.Routes = append([]RouteDefinition(nil), definition.Routes...)
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
+		if definition.Iterator != nil {
+			policy := *definition.Iterator
+			definition.Iterator = &policy
+		}
 		definitions = append(definitions, definition)
 	}
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
@@ -1445,6 +1611,7 @@ func (h *Harness) checkpointLocked() Checkpoint {
 		Clarifications:        cloneClarifications(h.clarifications),
 		CommanderMessages:     cloneCommanderMessages(h.commanderMessages),
 		ModelTurns:            cloneMap(h.modelTurns),
+		IterationPlans:        cloneIterationPlans(h.iterationPlans),
 	}
 }
 
@@ -1477,6 +1644,25 @@ func (h *Harness) recordModelTurnLocked(turn ModelTurnTelemetry) error {
 func cloneTaskClarification(value TaskClarification) TaskClarification {
 	value.Answer = append([]store.MessagePart(nil), value.Answer...)
 	return value
+}
+
+func cloneIterationPlan(plan IterationPlan) IterationPlan {
+	children := make([]IterationChild, len(plan.Children))
+	for index, child := range plan.Children {
+		child.Item = append(json.RawMessage(nil), child.Item...)
+		child.DependsOn = append([]string(nil), child.DependsOn...)
+		children[index] = child
+	}
+	plan.Children = children
+	return plan
+}
+
+func cloneIterationPlans(source map[string]IterationPlan) map[string]IterationPlan {
+	result := make(map[string]IterationPlan, len(source))
+	for name, plan := range source {
+		result[name] = cloneIterationPlan(plan)
+	}
+	return result
 }
 
 func cloneRouteSelections(source map[string]RouteSelection) map[string]RouteSelection {

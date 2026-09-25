@@ -39,6 +39,14 @@ A task instance is one declared graph node in one run. It stores its state,
 dependency and route activation records, iteration metadata when applicable,
 the accepted result, current attempt number, and terminal reason.
 
+When an iterated task becomes ready, the harness locks and reads its dataset,
+canonicalizes the ordered items, and commits an immutable expansion plan with
+a digest and stable child names (`task[0]`, `task[1]`, and so on). Each child is
+a distinct task instance with its own attempts and accepted result. The parent
+is not dispatched; it completes only when all children complete, or
+immediately for an empty dataset. Recovery loads the committed plan rather
+than re-expanding mutable source data.
+
 ### Task attempt
 
 Every dispatch creates a task attempt. It stores:

@@ -95,6 +95,41 @@ func TestRuntimeGrantResolverPersistsPolicyAndRunContext(t *testing.T) {
 	}
 }
 
+func TestIterationChildUsesParentCapabilityPolicy(t *testing.T) {
+	m := &config.Mission{
+		Name: "iteration", Models: []string{"fast", "strong"}, Tools: []string{"builtins.http.get"},
+		Tasks: []config.Task{{
+			Name: "work", RawObjective: "Process an item", Models: []string{"fast"},
+			Tools:    []string{"mcp.files.read"},
+			Iterator: &config.TaskIterator{Dataset: "items", Parallel: true, ConcurrencyLimit: 2, StartDelay: 50},
+		}},
+	}
+	definitions, err := RuntimeTaskDefinitions(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definitions[0].Iterator == nil || definitions[0].Iterator.StartDelayMS != 50 || definitions[0].Iterator.ConcurrencyLimit != 2 {
+		t.Fatalf("runtime iterator policy = %#v", definitions[0].Iterator)
+	}
+	resolver, err := NewRuntimeGrantResolver(m, ExecutionGrantContext{RunAs: "user:one", ConfigurationVersion: "v1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{TaskName: "work[0]", Model: "fast", Tools: []string{"builtins.http.get"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if grant.TaskName != "work[0]" || len(grant.Tools) != 2 || grant.Tools[0] != "mcp.files.read" {
+		t.Fatalf("child grant = %#v", grant)
+	}
+	if _, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{TaskName: "work[1]", Model: "strong"}); err == nil {
+		t.Fatal("child escaped parent model policy")
+	}
+	if _, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{TaskName: "work[-1]", Model: "fast"}); err == nil {
+		t.Fatal("noncanonical child index was accepted")
+	}
+}
+
 func TestCommanderControlSurfaceContainsOnlyIntrinsicOperations(t *testing.T) {
 	t.Parallel()
 

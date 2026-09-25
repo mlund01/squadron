@@ -60,6 +60,28 @@ func TestModelTaskSessionRunsGrantedToolsInFreshProviderSession(t *testing.T) {
 	}
 }
 
+func TestIterationChildPromptReceivesOnlyItsFrozenItem(t *testing.T) {
+	modelSession := &fakeTaskModelSession{responses: []*llm.ChatResponse{{Content: "done"}}}
+	factory, err := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: modelSession}, []TaskObjective{{Name: "work", Objective: "Process one item"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := Dispatch{RunID: "run-iteration", TaskName: "work[1]", AttemptID: "run-iteration:work[1]:1", Grant: ExecutionGrant{
+		TaskName: "work[1]", Model: "fast", InputsJSON: `{"mission":"input"}`,
+		Iteration: &IterationInput{ParentTask: "work", Index: 1, Item: json.RawMessage(`{"name":"second"}`)},
+	}}
+	session, err := factory.NewTaskSession(context.Background(), dispatch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(modelSession.prompts) != 1 || !strings.Contains(modelSession.prompts[0], `"name":"second"`) || !strings.Contains(modelSession.prompts[0], `"parentTask":"work"`) {
+		t.Fatalf("iteration prompt = %v", modelSession.prompts)
+	}
+}
+
 func TestModelTaskSessionRequestsAndReturnsTypedData(t *testing.T) {
 	t.Parallel()
 

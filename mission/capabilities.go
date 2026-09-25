@@ -3,6 +3,8 @@ package mission
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"squadron/config"
 	missionruntime "squadron/mission/runtime"
@@ -65,7 +67,13 @@ func NewRuntimeGrantResolver(m *config.Mission, context ExecutionGrantContext) (
 }
 
 func (r *RuntimeGrantResolver) ResolveExecutionGrant(request missionruntime.GrantRequest) (missionruntime.ExecutionGrant, error) {
-	grant, err := r.policy.ResolveGrant(request.TaskName, request.Model, request.Tools)
+	policyTaskName := request.TaskName
+	if parent, _, ok := iterationParentAndIndex(request.TaskName); ok && r.policy.mission.GetTaskByName(request.TaskName) == nil {
+		if task := r.policy.mission.GetTaskByName(parent); task != nil && task.Iterator != nil {
+			policyTaskName = parent
+		}
+	}
+	grant, err := r.policy.ResolveGrant(policyTaskName, request.Model, request.Tools)
 	if err != nil {
 		return missionruntime.ExecutionGrant{}, err
 	}
@@ -74,10 +82,22 @@ func (r *RuntimeGrantResolver) ResolveExecutionGrant(request missionruntime.Gran
 		return missionruntime.ExecutionGrant{}, fmt.Errorf("encode execution policy: %w", err)
 	}
 	return missionruntime.ExecutionGrant{
-		TaskName: grant.TaskName, Model: grant.Model, Tools: append([]string(nil), grant.Tools...),
+		TaskName: request.TaskName, Model: grant.Model, Tools: append([]string(nil), grant.Tools...),
 		RunAs: r.context.RunAs, InputsJSON: r.context.InputsJSON, PolicyJSON: string(policyJSON),
 		ConfigurationVersion: r.context.ConfigurationVersion,
 	}, nil
+}
+
+func iterationParentAndIndex(name string) (string, int, bool) {
+	open := strings.LastIndexByte(name, '[')
+	if open <= 0 || !strings.HasSuffix(name, "]") {
+		return "", 0, false
+	}
+	index, err := strconv.Atoi(name[open+1 : len(name)-1])
+	if err != nil || index < 0 || strconv.Itoa(index) != name[open+1:len(name)-1] {
+		return "", 0, false
+	}
+	return name[:open], index, true
 }
 
 // RuntimeTaskDefinitions translates the declarative task graph and optional
@@ -104,6 +124,13 @@ func RuntimeTaskDefinitionsWithMissions(m *config.Mission, missions []config.Mis
 			DependsOn:  append([]string(nil), task.DependsOn...),
 			SendTo:     append([]string(nil), task.SendTo...),
 			MaxRetries: task.MaxRetries,
+		}
+		if task.Iterator != nil {
+			definition.Iterator = &missionruntime.IterationPolicy{
+				Dataset: task.Iterator.Dataset, Parallel: task.Iterator.Parallel,
+				MaxRetries: task.Iterator.MaxRetries, ConcurrencyLimit: task.Iterator.ConcurrencyLimit,
+				StartDelayMS: task.Iterator.StartDelay, Smoketest: task.Iterator.Smoketest,
+			}
 		}
 		if task.Router != nil {
 			for _, route := range task.Router.Routes {

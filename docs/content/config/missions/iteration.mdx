@@ -4,289 +4,37 @@ title: Iteration
 
 # Iteration
 
-Tasks can iterate over datasets to process multiple items.
-
-## Basic Iteration
-
-```hcl
-task "process_city" {
-  objective = "Get weather for ${item.name}, ${item.state}"
-
-  iterator {
-    dataset  = datasets.city_list
-    parallel = true
-  }
-}
-```
-
-## Iterator Attributes
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `dataset` | string | Dataset to iterate over |
-| `parallel` | bool | Run iterations in parallel (default: false) |
-| `max_retries` | int | Max retry attempts per iteration on failure (default: 0) |
-| `concurrency_limit` | int | Max concurrent iterations when parallel=true (default: 5). Only valid with `parallel = true`. |
-| `start_delay` | int | Milliseconds delay between starts in first concurrent batch (default: 0). Only valid with `parallel = true`. |
-| `smoketest` | bool | Run first iteration completely before starting others; skip remaining if first fails (default: false). Only valid with `parallel = true`. |
-
-## The `item` Variable (Parallel Only)
-
-In **parallel** iterated tasks, `item` refers to the current dataset item and can be used in the objective:
-
-```hcl
-task "send_notification" {
-  objective = "Send notification to ${item.email} about ${item.topic}"
-
-  iterator {
-    dataset  = datasets.notifications
-    parallel = true
-  }
-}
-```
-
-If items are objects with fields, access them as `item.field_name`.
-
-> **Note:** Sequential tasks (`parallel = false`) cannot use `item` in their objective. The commander receives each item via the `dataset_next` tool instead. See [Sequential Mode](#sequential-default) below.
-
-## Sequential vs Parallel
-
-### Sequential (Default)
-
-A single commander processes all items in one session. The commander calls `dataset_next` to fetch each item, processes it, calls `submit_output`, and repeats until the dataset is exhausted.
-
-```hcl
-task "process_items" {
-  objective = "Process each item: calculate the total and flag any anomalies"
-
-  iterator {
-    dataset  = datasets.items
-    parallel = false  # Default
-  }
-
-  output {
-    field "total" {
-      type     = "number"
-      required = true
-    }
-    field "flagged" {
-      type = "boolean"
-    }
-  }
-}
-```
-
-**How it works:**
-
-1. The commander receives the task objective once at the start
-2. It calls `dataset_next` to get the first item
-3. It defines subtasks for that item using `set_subtasks`
-4. It works through the subtasks, calling `complete_subtask` after each
-5. It calls `submit_output` with the structured output for that item
-6. It calls `dataset_next` to get the next item (repeating steps 3-5)
-7. When `dataset_next` returns `"exhausted"`, it calls `task_complete`
-
-**Key characteristics:**
-
-- Single commander session maintains context across all items
-- Predictable processing order
-- The objective should describe the work generically, not reference specific item fields
-- Fail-fast on first error (after retries exhausted)
-
-### Parallel
-
-Each item gets its own independent commander:
+An iterated task applies the same task policy to each item in a mission dataset. Squadron has one commander for the mission run. The harness freezes the dataset into numbered child task instances when the parent task becomes ready; it never creates a commander per item.
 
 ```hcl
 task "get_weather" {
-  objective = "Get current weather for ${item.name}, ${item.state}"
+  objective  = "Get the current weather for the supplied city"
+  depends_on = [tasks.load_cities]
+  models     = [models.fast]
+  tools      = [builtins.http.get]
 
   iterator {
-    dataset  = datasets.city_list
-    parallel = true
+    dataset           = datasets.city_list
+    parallel          = true
+    concurrency_limit = 5
+    smoketest         = true
+    max_retries       = 2
   }
 }
 ```
 
-- Faster for independent operations
-- All iterations run simultaneously
-- Each iteration retries independently before overall failure
-- The `item` variable is resolved into the objective for each iteration
+Each child receives its own item and index in the task-worker prompt. For example, `get_weather[2]` receives item 2 from the frozen dataset. The commander sees child task names and bounded result summaries, chooses an allowed model and any relevant mission-level tools, and can inspect a child's accepted output when needed. The task's declared tools are always granted to its children. The commander cannot call those tools directly.
 
-#### Parallel Options
+The dataset is locked before expansion. Its ordered items and digest are persisted with the mission checkpoint, so restarting a run does not reread a changed dataset or generate different child identities. A dataset may be populated by an earlier task using a declared `builtins.dataset.set` capability.
 
-Control parallel execution behavior with these options:
+## Scheduling
 
-```hcl
-iterator {
-  dataset           = datasets.items
-  parallel          = true
-  concurrency_limit = 5     # Max 5 iterations running at once
-  start_delay       = 500   # 500ms delay between starts in first batch
-  smoketest         = true  # Run first iteration before starting others
-}
-```
+By default, children run sequentially: `task[1]` becomes eligible only after `task[0]` succeeds. With `parallel = true`, independent children can run concurrently, bounded by both the iterator's `concurrency_limit` (default 5) and the mission's maximum parallelism. `smoketest = true` makes every later child wait until child 0 succeeds. Each child has its own attempts and `max_retries` policy.
 
-**concurrency_limit**: Limits how many iterations run simultaneously. Useful for rate-limited APIs or resource constraints.
+`start_delay` is parsed as milliseconds between initial parallel starts. Enforcement in the mission-scoped scheduler is still pending; do not rely on it for rate limiting. Use `concurrency_limit` and the downstream service's own limits for now.
 
-**start_delay**: Staggers the start of iterations in the first concurrent batch. For example, with `start_delay = 500` and `concurrency_limit = 5`:
-- Iteration 0 starts immediately
-- Iteration 1 starts at +500ms
-- Iteration 2 starts at +1000ms
-- etc.
+An empty dataset completes the parent task without launching a worker. Once every child succeeds, the parent completes and downstream dependencies become eligible. If an attempt exhausts its retries, the mission fails rather than treating a partial set of children as a successful parent.
 
-This helps when iterations need to populate shared caches before others start.
+## Results
 
-**smoketest**: Runs the first iteration completely before starting the rest. If the first iteration fails (after retries), the remaining iterations are skipped. Useful for catching configuration errors early without wasting resources on doomed iterations.
-
-## Example: Weather Report
-
-```hcl
-mission "midwest_weather" {
-  commander {
-    model = models.anthropic.claude_sonnet_4
-  }
-  agents = [agents.assistant]
-
-  dataset "city_list" {
-    description = "Midwest cities to check"
-    schema {
-      field "name" {
-        type     = "string"
-        required = true
-      }
-      field "state" {
-        type = "string"
-      }
-    }
-  }
-
-  task "load_cities" {
-    objective = "Read cities from data.json and populate the city_list dataset"
-  }
-
-  task "get_weather" {
-    objective  = "Get current weather for ${item.name}, ${item.state}"
-    depends_on = [tasks.load_cities]
-
-    iterator {
-      dataset     = datasets.city_list
-      parallel    = true
-      max_retries = 2  # Retry failed iterations up to 2 times
-    }
-
-    output {
-      field "temperature" {
-        type     = "number"
-        required = true
-      }
-      field "conditions" {
-        type     = "string"
-        required = true
-      }
-    }
-  }
-
-  task "analyze" {
-    objective  = "Compare temperatures and find the coldest city"
-    depends_on = [tasks.get_weather]
-  }
-}
-```
-
-## Error Handling
-
-### Output Validation
-
-When a task has an `output` schema with required fields, each iteration is validated:
-
-- If required output fields are missing, the iteration is marked as failed
-- This enables automatic retry without commander intervention
-
-### Retry Behavior
-
-Configure retries per iteration with `max_retries`:
-
-```hcl
-iterator {
-  dataset     = datasets.items
-  max_retries = 3  # Retry each iteration up to 3 times on failure
-}
-```
-
-When an iteration fails:
-
-1. If retries remain, the iteration is automatically retried
-2. If all retries are exhausted, fail-fast behavior kicks in
-3. Remaining iterations are cancelled (parallel) or skipped (sequential)
-4. The task fails with the first unrecoverable error
-
-### Empty Datasets
-
-If a dataset is empty, the task completes immediately.
-
-## Iteration Results
-
-Each iteration is a distinct task-executor attempt with its own validated
-result, transcript, artifacts, and index. Dependent tasks receive the collected
-iteration results as dependency context.
-
-### Getting Iteration Results
-
-Each structured iteration result includes an `index` field:
-
-```json
-{
-  "task": "get_weather",
-  "filters": [{"field": "conditions", "op": "eq", "value": "snowy"}]
-}
-// Returns: [{"city": "Chicago", "temperature": 28, "index": 0}, ...]
-```
-
-### Example: Character Crossover
-
-```hcl
-task "create_backstories" {
-  objective = "Create a backstory for ${item.name}, who is a ${item.role}"
-
-  iterator {
-    dataset  = datasets.characters
-    parallel = true
-  }
-
-  output {
-    field "origin" {
-      type     = "string"
-      required = true
-    }
-    field "secret_talent" {
-      type     = "string"
-      required = true
-    }
-  }
-}
-
-task "character_crossover" {
-  depends_on = ["create_backstories"]
-
-  objective = <<-EOT
-    Review all validated backstory results, choose two interesting characters,
-    and write a crossover scene consistent with both result records.
-  EOT
-}
-```
-
-## Streaming Output
-
-During iteration, the CLI shows progress:
-
-```
-[2/3] get_weather (5 iterations, parallel)
-  -> [0] Processing Chicago, IL...
-  -> [1] Processing Detroit, MI...
-  -> [2] Processing Milwaukee, WI...
-  ✓ [0] Complete
-  ✓ [1] Complete
-  ✓ [2] Complete
-  ✓ Complete
-```
+If the task declares an output schema, the harness validates each child against that schema before accepting it. Child outputs, artifacts, transcripts, and telemetry remain separately attributable. The parent's result is a bounded completion summary; it is not a fabricated merge of all child outputs. The commander can inspect individual child results when deciding a subsequent route or task.

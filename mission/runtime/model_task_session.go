@@ -69,6 +69,9 @@ func NewModelTaskSessionFactory(builder TaskModelSessionBuilder, objectives []Ta
 
 func (f *ModelTaskSessionFactory) NewTaskSession(ctx context.Context, dispatch Dispatch, tools map[string]aitools.Tool) (TaskSession, error) {
 	objective, ok := f.objectives[dispatch.TaskName]
+	if !ok && dispatch.Grant.Iteration != nil {
+		objective, ok = f.objectives[dispatch.Grant.Iteration.ParentTask]
+	}
 	if !ok {
 		return nil, fmt.Errorf("task objective %q not found", dispatch.TaskName)
 	}
@@ -101,7 +104,11 @@ func (f *ModelTaskSessionFactory) Clarify(ctx context.Context, dispatch Dispatch
 	if strings.TrimSpace(question) == "" {
 		return TaskClarificationResult{}, fmt.Errorf("clarification question is required")
 	}
-	if _, ok := f.objectives[dispatch.TaskName]; !ok {
+	_, ok := f.objectives[dispatch.TaskName]
+	if !ok && dispatch.Grant.Iteration != nil {
+		_, ok = f.objectives[dispatch.Grant.Iteration.ParentTask]
+	}
+	if !ok {
 		return TaskClarificationResult{}, fmt.Errorf("task objective %q not found", dispatch.TaskName)
 	}
 	messages, err := taskSessionMessagesToLLM(transcript)
@@ -199,12 +206,13 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 		Task            string            `json:"task"`
 		Objective       string            `json:"objective"`
 		Inputs          json.RawMessage   `json:"inputs"`
+		Iteration       *IterationInput   `json:"iteration,omitempty"`
 		OutputContract  []ResultField     `json:"outputContract,omitempty"`
 		OutputRule      string            `json:"outputRule,omitempty"`
 		RoutingCriteria []RouteDefinition `json:"routingCriteria,omitempty"`
 		RoutingRule     string            `json:"routingRule,omitempty"`
 	}{
-		Task: s.dispatch.TaskName, Objective: s.objective, Inputs: inputJSON,
+		Task: s.dispatch.TaskName, Objective: s.objective, Inputs: inputJSON, Iteration: s.dispatch.Grant.Iteration,
 		OutputContract:  s.resultPolicy.Fields,
 		OutputRule:      outputRule(s.resultPolicy),
 		RoutingCriteria: s.routes,

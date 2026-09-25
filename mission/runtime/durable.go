@@ -28,6 +28,7 @@ const (
 	EventTaskRecoveryResolved        EventType = "task.recovery_resolved"
 	EventMissionRecoveryWaiting      EventType = "mission.recovery_waiting"
 	EventTaskCompleted               EventType = "task.completed"
+	EventIterationExpanded           EventType = "iteration.expanded"
 	EventTaskAttemptFailed           EventType = "task.attempt_failed"
 	EventTaskRetryScheduled          EventType = "task.retry_scheduled"
 	EventTaskFailed                  EventType = "task.failed"
@@ -59,6 +60,7 @@ type Event struct {
 	Recovery      *RecoveryBlock
 	Launch        *CrossMissionLaunch
 	Turns         []ModelTurnTelemetry
+	IterationPlan *IterationPlan
 }
 
 // BeginCommanderClarification atomically records the commander's control
@@ -719,6 +721,41 @@ func (h *DurableHarness) Start() error {
 	return nil
 }
 
+// ExpandIteration atomically commits the frozen plan, child definitions, and
+// ready set. A replay of the same plan performs no second write.
+func (h *DurableHarness) ExpandIteration(plan IterationPlan) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	before := h.inner.Checkpoint()
+	candidate, err := RestoreHarness(before)
+	if err != nil {
+		return err
+	}
+	if err := candidate.ExpandIteration(plan); err != nil {
+		return err
+	}
+	after := candidate.Checkpoint()
+	if after.Revision == before.Revision {
+		return nil
+	}
+	frozen := cloneIterationPlan(after.IterationPlans[plan.ParentTask])
+	events := []Event{
+		{RunID: after.RunID, Revision: after.Revision, Type: EventIterationExpanded, OccurredAt: time.Now().UTC(), TaskName: plan.ParentTask, IterationPlan: &frozen},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventReadySetPublished, OccurredAt: time.Now().UTC()},
+	}
+	if accepted, completed := after.Results[plan.ParentTask]; completed {
+		events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventTaskCompleted, OccurredAt: time.Now().UTC(), TaskName: plan.ParentTask, Result: &accepted})
+	}
+	if after.RunState == RunCompleted {
+		events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventMissionCompleted, OccurredAt: time.Now().UTC()})
+	}
+	if err := h.commit(before.Revision, after, events); err != nil {
+		return fmt.Errorf("persisting iteration expansion: %w", err)
+	}
+	h.inner = candidate
+	return nil
+}
+
 // DispatchTask durably accepts one commander dispatch request.
 func (h *DurableHarness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 	h.mu.Lock()
@@ -782,6 +819,13 @@ func (h *DurableHarness) CompleteTaskWithLease(taskName, attemptID string, resul
 		{RunID: after.RunID, Revision: after.Revision, Type: EventTaskCompleted, OccurredAt: time.Now().UTC(), TaskName: taskName, AttemptID: attemptID, Result: &accepted},
 		{RunID: after.RunID, Revision: after.Revision, Type: EventReadySetPublished, OccurredAt: time.Now().UTC()},
 	}
+	if parent := checkpointDefinitionParent(after, taskName); parent != "" {
+		if _, wasCompleted := before.Results[parent]; !wasCompleted {
+			if parentResult, completed := after.Results[parent]; completed {
+				events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventTaskCompleted, OccurredAt: time.Now().UTC(), TaskName: parent, Result: &parentResult})
+			}
+		}
+	}
 	if after.RunState == RunCompleted {
 		events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventMissionCompleted, OccurredAt: time.Now().UTC()})
 	}
@@ -790,6 +834,15 @@ func (h *DurableHarness) CompleteTaskWithLease(taskName, attemptID string, resul
 	}
 	h.inner = candidate
 	return nil
+}
+
+func checkpointDefinitionParent(checkpoint Checkpoint, taskName string) string {
+	for _, definition := range checkpoint.Definitions {
+		if definition.Name == taskName {
+			return definition.ParentTask
+		}
+	}
+	return ""
 }
 
 // ApplyCommanderRoute atomically records the commander's route-control turn

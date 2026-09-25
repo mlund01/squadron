@@ -114,6 +114,21 @@ var _ = Describe("Resolve", func() {
 		Expect(lis.snapshot()).To(BeEmpty())
 	})
 
+	It("does not wake a worker or publish an answer after the deadline", func() {
+		deadline := time.Now().UTC().Add(-time.Minute)
+		Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+			ToolCallID: "tc-expired", Question: "Approve?", DeadlineAt: &deadline,
+		})).To(Succeed())
+		ch, cancel := notif.Subscribe()
+		defer cancel()
+		out, err := Resolve(bundle, lis, notif, "tc-expired", "late", "alice")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(out.AlreadyExpired).To(BeTrue())
+		Expect(out.Record.Response).To(BeNil())
+		Expect(lis.snapshot()).To(BeEmpty())
+		Consistently(ch, 50*time.Millisecond).ShouldNot(Receive())
+	})
+
 	It("does not fire the listener or notifier when no listener/notifier is supplied", func() {
 		createOpen("tc-1", "m1")
 		out, err := Resolve(bundle, nil, nil, "tc-1", "ok", "")

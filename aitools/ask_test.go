@@ -81,6 +81,7 @@ var _ = Describe("HumanInputTool", func() {
 
 		out := tool.Call(context.Background(), `{"question":"are you there?","timeout_seconds":0.05}`)
 		Expect(out).To(ContainSubstring("no human response within"))
+		Expect(br.got.DeadlineAt).NotTo(BeNil())
 	})
 
 	It("does not reset a durable timeout after restart", func() {
@@ -93,6 +94,14 @@ var _ = Describe("HumanInputTool", func() {
 		out := tool.Call(ctx, `{"question":"are you there?","timeout_seconds":0.5}`)
 		Expect(out).To(ContainSubstring("no human response within"))
 		Expect(time.Since(started)).To(BeNumerically("<", 100*time.Millisecond))
+		Expect(*br.got.DeadlineAt).To(BeTemporally("~", started.Add(-500*time.Millisecond), 100*time.Millisecond))
+	})
+
+	It("rejects invalid timeout durations before creating a request", func() {
+		br := &fakeBridge{}
+		tool := &aitools.HumanInputTool{Bridge: br}
+		Expect(tool.Call(context.Background(), `{"question":"hi","timeout_seconds":-1}`)).To(ContainSubstring("non-negative"))
+		Expect(br.got.ToolCallID).To(BeEmpty())
 	})
 
 	It("returns a cancellation observation when the outer ctx is cancelled", func() {

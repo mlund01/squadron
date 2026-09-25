@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	gwsdk "github.com/mlund01/squadron-gateway-sdk"
 
@@ -37,6 +38,9 @@ func (a *squadronAPI) ResolveHumanInput(ctx context.Context, toolCallID, respons
 	out, err := humaninput.Resolve(a.stores, a.listener, a.notifier, toolCallID, response, responderUserID)
 	if err != nil {
 		return gwsdk.ResolveResult{}, err
+	}
+	if out.AlreadyExpired {
+		return gwsdk.ResolveResult{}, fmt.Errorf("human input request %q expired", toolCallID)
 	}
 	return gwsdk.ResolveResult{
 		Record:          storeRecordToSDK(out.Record),

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/mlund01/squadron-wire/protocol"
 
@@ -83,6 +84,7 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 		AdditionalContext: req.AdditionalContext,
 		Choices:           req.Choices,
 		MultiSelect:       req.MultiSelect,
+		DeadlineAt:        req.DeadlineAt,
 	}
 	if err := c.stores.HumanInputs.CreateRequest(record); err != nil {
 		return "", fmt.Errorf("ask: persist open request: %w", err)
@@ -100,6 +102,18 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 	if stored.State == store.HumanInputStateResolved && stored.Response != nil {
 		return *stored.Response, nil
 	}
+	if stored.DeadlineAt != nil {
+		stored, err = c.stores.HumanInputs.ExpireRequest(req.ToolCallID, time.Now().UTC())
+		if err != nil {
+			return "", fmt.Errorf("ask: expire persisted request: %w", err)
+		}
+		if stored.State == store.HumanInputStateExpired {
+			return "", context.DeadlineExceeded
+		}
+		if stored.State == store.HumanInputStateResolved && stored.Response != nil {
+			return *stored.Response, nil
+		}
+	}
 
 	c.emitHumanInputRequested(req)
 
@@ -115,6 +129,15 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 	case resp := <-ch:
 		return resp.Response, nil
 	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) && stored.DeadlineAt != nil {
+			closed, err := c.stores.HumanInputs.ExpireRequest(req.ToolCallID, time.Now().UTC())
+			if err != nil {
+				return "", fmt.Errorf("ask: expire request after deadline: %w", err)
+			}
+			if closed.State == store.HumanInputStateResolved && closed.Response != nil {
+				return *closed.Response, nil
+			}
+		}
 		return "", ctx.Err()
 	}
 }
@@ -219,6 +242,11 @@ func (c *Client) handleResolveHumanInput(env *protocol.Envelope) (*protocol.Enve
 	if out.NotFound {
 		return protocol.NewResponse(env.RequestID, protocol.TypeResolveHumanInputResult, &protocol.ResolveHumanInputResultPayload{
 			Accepted: false, Reason: "not found",
+		})
+	}
+	if out.AlreadyExpired {
+		return protocol.NewResponse(env.RequestID, protocol.TypeResolveHumanInputResult, &protocol.ResolveHumanInputResultPayload{
+			Accepted: false, Reason: "expired", HumanInput: recordToProtocol(out.Record),
 		})
 	}
 	if out.AlreadyResolved {

@@ -34,12 +34,12 @@ func (s *SQLiteHumanInputStore) CreateRequest(req *HumanInputRequestRecord) erro
 	_, err = s.db.Exec(
 		`INSERT INTO human_input_requests
 		    (id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
-		     state, requested_at, resolved_at, response, responder_user_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		     state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tool_call_id) DO NOTHING`,
 		req.ID, nullIfEmpty(req.MissionID), nullIfEmpty(req.TaskID),
 		req.ToolCallID, req.Question, nullIfEmpty(req.ShortSummary), nullIfEmpty(req.AdditionalContext), choicesJSON, boolToInt(req.MultiSelect), req.State,
-		tsFrom(req.RequestedAt), tsFromPtr(req.ResolvedAt),
+		tsFrom(req.RequestedAt), tsFromPtr(req.DeadlineAt), tsFromPtr(req.ResolvedAt), tsFromPtr(req.ExpiredAt),
 		req.Response, req.ResponderUserID,
 	)
 	if err != nil {
@@ -51,7 +51,7 @@ func (s *SQLiteHumanInputStore) CreateRequest(req *HumanInputRequestRecord) erro
 func (s *SQLiteHumanInputStore) GetByToolCallID(toolCallID string) (*HumanInputRequestRecord, error) {
 	row := s.db.QueryRow(
 		`SELECT id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
-		        state, requested_at, resolved_at, response, responder_user_id
+		        state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id
 		 FROM human_input_requests WHERE tool_call_id = ?`,
 		toolCallID,
 	)
@@ -60,20 +60,33 @@ func (s *SQLiteHumanInputStore) GetByToolCallID(toolCallID string) (*HumanInputR
 
 func (s *SQLiteHumanInputStore) ResolveRequest(toolCallID, response, responderUserID string) (*HumanInputRequestRecord, error) {
 	now := time.Now().UTC()
-	result, err := s.db.Exec(
+	if _, err := s.ExpireRequest(toolCallID, now); err != nil {
+		return nil, err
+	}
+	_, err := s.db.Exec(
 		`UPDATE human_input_requests
 		    SET state = ?, resolved_at = ?, response = ?, responder_user_id = ?
-		  WHERE tool_call_id = ? AND state = ?`,
+		  WHERE tool_call_id = ? AND state = ? AND (deadline_at IS NULL OR deadline_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
 		HumanInputStateResolved, tsFrom(now), response, responderUserID,
 		toolCallID, HumanInputStateOpen,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("resolve human input request: %w", err)
 	}
-	// On miss (already resolved or not found) read back so the caller
-	// sees the canonical state; GetByToolCallID returns sql.ErrNoRows
-	// for a truly missing row.
-	_ = result
+	// On miss (already resolved, expired, or not found) return the canonical
+	// state. The final expiration handles a deadline crossed during the update.
+	return s.ExpireRequest(toolCallID, time.Now().UTC())
+}
+
+func (s *SQLiteHumanInputStore) ExpireRequest(toolCallID string, now time.Time) (*HumanInputRequestRecord, error) {
+	_, err := s.db.Exec(
+		`UPDATE human_input_requests SET state = ?, expired_at = ?
+		 WHERE tool_call_id = ? AND state = ? AND deadline_at IS NOT NULL AND deadline_at <= ?`,
+		HumanInputStateExpired, tsFrom(now), toolCallID, HumanInputStateOpen, tsFrom(now),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("expire human input request: %w", err)
+	}
 	return s.GetByToolCallID(toolCallID)
 }
 
@@ -100,7 +113,7 @@ func (s *SQLiteHumanInputStore) ListRequests(filter HumanInputFilter) ([]HumanIn
 		order = " ORDER BY requested_at ASC"
 	}
 	q := `SELECT id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
-	              state, requested_at, resolved_at, response, responder_user_id
+	              state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id
 	       FROM human_input_requests WHERE 1=1` + where + order
 	listArgs := append([]any{}, args...)
 	if filter.Limit > 0 {
@@ -131,15 +144,15 @@ type humanInputRowScanner interface {
 
 func scanHumanInputRequest(r humanInputRowScanner) (*HumanInputRequestRecord, error) {
 	var (
-		rec                                                              HumanInputRequestRecord
-		missionID, taskID, shortSummary, additionalContext, choicesJSON sql.NullString
-		resolvedAtStr, response, responderUserID                         sql.NullString
-		requestedAtStr                                                   string
-		multiSelectInt                                                   int
+		rec                                                                   HumanInputRequestRecord
+		missionID, taskID, shortSummary, additionalContext, choicesJSON       sql.NullString
+		deadlineAtStr, resolvedAtStr, expiredAtStr, response, responderUserID sql.NullString
+		requestedAtStr                                                        string
+		multiSelectInt                                                        int
 	)
 	err := r.Scan(
 		&rec.ID, &missionID, &taskID, &rec.ToolCallID, &rec.Question, &shortSummary, &additionalContext, &choicesJSON, &multiSelectInt,
-		&rec.State, &requestedAtStr, &resolvedAtStr, &response, &responderUserID,
+		&rec.State, &requestedAtStr, &deadlineAtStr, &resolvedAtStr, &expiredAtStr, &response, &responderUserID,
 	)
 	rec.MultiSelect = multiSelectInt != 0
 	if err != nil {
@@ -167,9 +180,17 @@ func scanHumanInputRequest(r humanInputRowScanner) (*HumanInputRequestRecord, er
 		return nil, fmt.Errorf("parse requested_at: %w", err)
 	}
 	rec.RequestedAt = t
+	rec.DeadlineAt, err = tsParseNull(deadlineAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse deadline_at: %w", err)
+	}
 	rec.ResolvedAt, err = tsParseNull(resolvedAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse resolved_at: %w", err)
+	}
+	rec.ExpiredAt, err = tsParseNull(expiredAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse expired_at: %w", err)
 	}
 	if response.Valid {
 		s := response.String

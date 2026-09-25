@@ -374,6 +374,10 @@ The persisted tool-operation record includes its original start time. Duration-
 based built-ins use that timestamp when replaying: `builtins.time.sleep` waits
 only for the remaining duration, and `builtins.human.ask` preserves the
 original timeout deadline. Restart never grants a fresh full timeout.
+The human-input row stores that absolute deadline. Once it has passed, the
+store atomically marks the request `expired`; a late answer cannot change it,
+and replay returns the same terminal state. Canceling a worker context for a
+restart does not itself expire the request.
 
 A cross-mission route validates the destination's non-secret typed inputs and
 commits their canonical representation as part of the parent's route

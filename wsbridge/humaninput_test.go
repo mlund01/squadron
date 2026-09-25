@@ -78,6 +78,28 @@ var _ = Describe("humanInputListeners", func() {
 })
 
 var _ = Describe("Client.AskHuman", func() {
+	It("expires a persisted request at its original deadline and rejects late answers", func() {
+		c := newBareClient()
+		deadline := time.Now().UTC().Add(-time.Minute)
+		_, err := c.AskHuman(context.Background(), aitools.HumanInputRequest{
+			ToolCallID: "timed-out-call", Question: "Approve?", DeadlineAt: &deadline,
+		})
+		Expect(err).To(MatchError(context.DeadlineExceeded))
+		record, err := c.stores.HumanInputs.GetByToolCallID("timed-out-call")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(record.State).To(Equal(store.HumanInputStateExpired))
+		env, err := protocol.NewRequest(protocol.TypeResolveHumanInput, &protocol.ResolveHumanInputPayload{
+			ToolCallID: "timed-out-call", Response: "late", ResponderUserID: "alice",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		ack, err := c.handleResolveHumanInput(env)
+		Expect(err).NotTo(HaveOccurred())
+		var result protocol.ResolveHumanInputResultPayload
+		Expect(protocol.DecodePayload(ack, &result)).To(Succeed())
+		Expect(result.Accepted).To(BeFalse())
+		Expect(result.Reason).To(Equal("expired"))
+	})
+
 	It("returns an already-resolved durable request immediately after restart", func() {
 		c := newBareClient()
 		Expect(c.stores.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
@@ -176,6 +198,9 @@ var _ = Describe("Client.AskHuman", func() {
 		case <-time.After(time.Second):
 			Fail("AskHuman did not return after cancel")
 		}
+		open, err := c.stores.HumanInputs.GetByToolCallID("call-x")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(open.State).To(Equal(store.HumanInputStateOpen), "worker shutdown must preserve the request for restart")
 	})
 
 	It("errors immediately when tool_call_id is empty", func() {

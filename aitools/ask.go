@@ -3,7 +3,9 @@ package aitools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +41,9 @@ type HumanInputRequest struct {
 	// MultiSelect=true → response is a JSON-encoded string array
 	// (`["A","C"]`). Forced false when Choices is empty.
 	MultiSelect bool
+	// DeadlineAt is derived from the first durable tool-operation start, so
+	// replay cannot grant a fresh timeout window.
+	DeadlineAt *time.Time
 }
 
 // HumanInputTool backs builtins.human.ask. Pauses the agent's ReAct
@@ -123,6 +128,9 @@ func (t *HumanInputTool) Call(ctx context.Context, params string) string {
 	if p.Question == "" {
 		return "Error: question is required"
 	}
+	if p.TimeoutSeconds != nil && (math.IsNaN(*p.TimeoutSeconds) || math.IsInf(*p.TimeoutSeconds, 0) || *p.TimeoutSeconds < 0 || *p.TimeoutSeconds > float64((1<<63-1)/int64(time.Second))) {
+		return "Error: timeout_seconds must be a finite, non-negative duration"
+	}
 	if t.Bridge == nil {
 		return NoCommanderObservation
 	}
@@ -147,14 +155,14 @@ func (t *HumanInputTool) Call(ctx context.Context, params string) string {
 	callCtx := ctx
 	if p.TimeoutSeconds != nil && *p.TimeoutSeconds > 0 {
 		timeout := time.Duration(*p.TimeoutSeconds * float64(time.Second))
+		startedAt := time.Now().UTC()
 		if invocation, ok := InvocationMetadataFromContext(ctx); ok && !invocation.StartedAt.IsZero() {
-			timeout -= time.Since(invocation.StartedAt)
-			if timeout < 0 {
-				timeout = 0
-			}
+			startedAt = invocation.StartedAt.UTC()
 		}
+		deadline := startedAt.Add(timeout).Truncate(time.Millisecond)
+		req.DeadlineAt = &deadline
 		var cancel context.CancelFunc
-		callCtx, cancel = context.WithTimeout(ctx, timeout)
+		callCtx, cancel = context.WithDeadline(ctx, deadline)
 		defer cancel()
 	}
 
@@ -175,5 +183,5 @@ func errIsTimeout(err error, ctx context.Context) bool {
 	if err == nil {
 		return false
 	}
-	return ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled
+	return errors.Is(err, context.DeadlineExceeded) || ctx.Err() == context.DeadlineExceeded || ctx.Err() == context.Canceled
 }

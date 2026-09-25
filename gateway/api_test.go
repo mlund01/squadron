@@ -201,4 +201,19 @@ var _ = Describe("squadronAPI.ResolveHumanInput", func() {
 			"NotFound is a non-error outcome — gateways should treat it as a stale event, not a retry trigger")
 		Expect(out.NotFound).To(BeTrue())
 	})
+
+	It("rejects a late gateway answer for an expired request", func() {
+		bundle := newAPITestBundle()
+		api, _ := newSquadronAPI(bundle, nil)
+		deadline := time.Now().UTC().Add(-time.Minute)
+		Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+			ToolCallID: "expired", Question: "Approve?", DeadlineAt: &deadline,
+		})).To(Succeed())
+		_, err := api.ResolveHumanInput(context.Background(), "expired", "late", "alice")
+		Expect(err).To(MatchError(ContainSubstring("expired")))
+		record, err := bundle.HumanInputs.GetByToolCallID("expired")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(record.State).To(Equal(store.HumanInputStateExpired))
+		Expect(record.Response).To(BeNil())
+	})
 })

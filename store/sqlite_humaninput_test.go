@@ -118,6 +118,41 @@ var _ = Describe("HumanInputStore (SQLite)", func() {
 				"already-resolved rows must keep their original answer — the UPDATE's WHERE state=open clause guards this")
 			Expect(*second.ResponderUserID).To(Equal("alice"))
 		})
+
+		It("persists the original deadline and rejects an answer after expiry", func() {
+			deadline := time.Now().UTC().Add(-time.Minute)
+			Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+				ToolCallID: "tc-expired", Question: "Approve?", DeadlineAt: &deadline,
+			})).To(Succeed())
+			// Replaying the same tool call cannot move its deadline forward.
+			later := deadline.Add(time.Hour)
+			Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+				ToolCallID: "tc-expired", Question: "Approve?", DeadlineAt: &later,
+			})).To(Succeed())
+
+			record, err := bundle.HumanInputs.ResolveRequest("tc-expired", "late", "alice")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(record.State).To(Equal(store.HumanInputStateExpired))
+			Expect(*record.DeadlineAt).To(BeTemporally("~", deadline, time.Millisecond))
+			Expect(record.ExpiredAt).NotTo(BeNil())
+			Expect(record.Response).To(BeNil())
+			replayed, err := bundle.HumanInputs.ExpireRequest("tc-expired", time.Now().UTC())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replayed.ExpiredAt).To(Equal(record.ExpiredAt))
+		})
+
+		It("keeps a response accepted before its deadline when expiration replays", func() {
+			deadline := time.Now().UTC().Add(time.Hour)
+			Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+				ToolCallID: "tc-answered", Question: "Approve?", DeadlineAt: &deadline,
+			})).To(Succeed())
+			resolved, err := bundle.HumanInputs.ResolveRequest("tc-answered", "yes", "alice")
+			Expect(err).NotTo(HaveOccurred())
+			replayed, err := bundle.HumanInputs.ExpireRequest("tc-answered", deadline.Add(time.Second))
+			Expect(err).NotTo(HaveOccurred())
+			Expect(replayed.State).To(Equal(store.HumanInputStateResolved))
+			Expect(replayed.ResolvedAt).To(Equal(resolved.ResolvedAt))
+		})
 	})
 
 	Describe("ListRequests filters", func() {

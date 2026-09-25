@@ -350,8 +350,8 @@ type DateFieldCostRow struct {
 
 // HumanInputStore persists human-input requests and their resolutions so
 // they survive restarts and can be proxied to command center on demand.
-// States are "open" (waiting for a human) and "resolved" (a human has
-// answered). CreateRequest is idempotent on tool_call_id so a squadron
+// States are "open" (waiting for a human), "resolved" (answered), and
+// "expired" (the original deadline passed). CreateRequest is idempotent on tool_call_id so a squadron
 // re-requesting during recovery doesn't create duplicates.
 type HumanInputStore interface {
 	CreateRequest(req *HumanInputRequestRecord) error
@@ -361,12 +361,16 @@ type HumanInputStore interface {
 	// (idempotent). Returns a not-found-sentinel error if no matching
 	// row exists.
 	ResolveRequest(toolCallID, response, responderUserID string) (*HumanInputRequestRecord, error)
+	// ExpireRequest atomically expires an open request only if its persisted
+	// deadline is due. Replaying the transition returns the canonical row.
+	ExpireRequest(toolCallID string, now time.Time) (*HumanInputRequestRecord, error)
 	ListRequests(filter HumanInputFilter) ([]HumanInputRequestRecord, int, error)
 }
 
 const (
 	HumanInputStateOpen     = "open"
 	HumanInputStateResolved = "resolved"
+	HumanInputStateExpired  = "expired"
 )
 
 // HumanInputRequestRecord is one human-input request row.
@@ -392,7 +396,9 @@ type HumanInputRequestRecord struct {
 	MultiSelect     bool       `json:"multiSelect,omitempty"`
 	State           string     `json:"state"`
 	RequestedAt     time.Time  `json:"requestedAt"`
+	DeadlineAt      *time.Time `json:"deadlineAt,omitempty"`
 	ResolvedAt      *time.Time `json:"resolvedAt,omitempty"`
+	ExpiredAt       *time.Time `json:"expiredAt,omitempty"`
 	Response        *string    `json:"response,omitempty"`
 	ResponderUserID *string    `json:"responderUserId,omitempty"`
 }

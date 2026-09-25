@@ -210,6 +210,49 @@ var _ = Describe("Client.AskHuman", func() {
 	})
 })
 
+var _ = Describe("Client.BeginAskHuman", func() {
+	It("starts once, reconnects without another prompt, and returns the persisted answer", func() {
+		c := newBareClient()
+		notifier := humaninput.New()
+		c.humanInputNotifier = notifier
+		events, cancel := notifier.Subscribe()
+		defer cancel()
+		deadline := time.Now().UTC().Add(time.Minute).Truncate(time.Millisecond)
+		req := aitools.HumanInputRequest{
+			MissionID: "mission-1", ToolCallID: "stable-deferred", Question: "Proceed?", DeadlineAt: &deadline,
+		}
+		first, err := c.BeginAskHuman(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(first.Pending).To(BeTrue())
+		Expect(first.RequestedAt).NotTo(BeZero())
+		Expect((<-events).Kind).To(Equal(humaninput.EventKindCreated))
+		second, err := c.BeginAskHuman(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(second.Pending).To(BeTrue())
+		Expect(second.RequestedAt).To(Equal(first.RequestedAt))
+		Consistently(events, 50*time.Millisecond).ShouldNot(Receive())
+		_, err = c.stores.HumanInputs.ResolveRequest(req.ToolCallID, "yes", "user-1")
+		Expect(err).NotTo(HaveOccurred())
+		answered, err := c.BeginAskHuman(context.Background(), req)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(answered.Pending).To(BeFalse())
+		Expect(answered.Response).To(Equal("yes"))
+	})
+
+	It("expires the original deadline without reopening the prompt", func() {
+		c := newBareClient()
+		deadline := time.Now().UTC().Add(-time.Second).Truncate(time.Millisecond)
+		req := aitools.HumanInputRequest{ToolCallID: "expired-deferred", Question: "Proceed?", DeadlineAt: &deadline}
+		_, err := c.BeginAskHuman(context.Background(), req)
+		Expect(err).To(MatchError(context.DeadlineExceeded))
+		_, err = c.BeginAskHuman(context.Background(), req)
+		Expect(err).To(MatchError(context.DeadlineExceeded))
+		record, err := c.stores.HumanInputs.GetByToolCallID(req.ToolCallID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(record.State).To(Equal(store.HumanInputStateExpired))
+	})
+})
+
 var _ = Describe("Client.handleGetHumanInputs", func() {
 	It("returns the stored rows filtered by state", func() {
 		c := newBareClient()

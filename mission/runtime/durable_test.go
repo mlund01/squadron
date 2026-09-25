@@ -321,6 +321,102 @@ func TestDurableRecoveryBlockWaitsAndResumesOriginalAttempt(t *testing.T) {
 	}
 }
 
+func TestDurableHumanInputWaitReleasesLeaseAndResumesSameAttempt(t *testing.T) {
+	runtimeStore := persistence.NewMemoryRuntimeStore()
+	harness, err := CreateDurableHarness(runtimeStore, "run-human-wait", "commander-human-wait", []TaskDefinition{{Name: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := harness.DispatchTask(DispatchRequest{
+		RequestID: "dispatch-work", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("work"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	startedAt := time.Now().UTC().Truncate(time.Millisecond)
+	if _, err := harness.AcquireExecutionLease(dispatch.AttemptID, "worker", "lease-token", startedAt, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	progress := TaskAttemptProgress{AttemptID: dispatch.AttemptID, Phase: "tool_calls_received", Tools: map[string]ToolOperation{
+		"tool-use-1": {ToolUseID: "tool-use-1", ToolName: "builtins.human.ask", InputJSON: `{"question":"Proceed?"}`, Status: ToolOperationInFlight, StartedAt: startedAt},
+	}}
+	if err := harness.SaveTaskProgressWithLease(dispatch, progress, "lease-token"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := startedAt.Add(time.Hour)
+	wait := HumanInputWait{
+		AttemptID: dispatch.AttemptID, TaskName: "work", ToolUseID: "tool-use-1", ToolName: "builtins.human.ask",
+		ToolCallID: "stable-human-call", Question: "Proceed?", Choices: []string{"yes", "no"},
+		RequestedAt: startedAt, DeadlineAt: &deadline,
+	}
+	if err := harness.WaitTaskForHumanInputWithLease(dispatch, wait, "lease-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.EnterRecoveryWaiting(); err != nil {
+		t.Fatal(err)
+	}
+	restored, events, err := RestoreDurableHarness(runtimeStore, "run-human-wait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := restored.Snapshot()
+	if snapshot.RunState != RunWaiting || snapshot.Tasks["work"].State != TaskWaiting || len(snapshot.Active) != 0 {
+		t.Fatalf("waiting snapshot = %#v", snapshot)
+	}
+	if !reflect.DeepEqual(snapshot.HumanInputWaits[dispatch.AttemptID], wait) {
+		t.Fatalf("restored wait = %#v", snapshot.HumanInputWaits[dispatch.AttemptID])
+	}
+	snapshot.HumanInputWaits[dispatch.AttemptID].Choices[0] = "tampered"
+	if restored.Snapshot().HumanInputWaits[dispatch.AttemptID].Choices[0] != "yes" {
+		t.Fatal("snapshot mutated durable human input choices")
+	}
+	if err := restored.SaveTaskProgressWithLease(dispatch, progress, "lease-token"); err == nil {
+		t.Fatal("released lease still allowed a stale worker write")
+	}
+	if err := restored.Stop(); err != nil {
+		t.Fatalf("stop waiting run: %v", err)
+	}
+	if restored.Snapshot().RunState != RunStopped {
+		t.Fatal("waiting run did not stop durably")
+	}
+	if err := restored.Resume(); err != nil {
+		t.Fatalf("resume stopped human-input run: %v", err)
+	}
+	answeredAt := startedAt.Add(time.Minute)
+	if err := restored.ResolveHumanInputWait(dispatch.AttemptID, wait.ToolCallID, "yes", "user-1", false, answeredAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.ResolveHumanInputWait(dispatch.AttemptID, wait.ToolCallID, "yes", "user-1", false, answeredAt); err != nil {
+		t.Fatalf("same answer was not idempotent: %v", err)
+	}
+	if err := restored.ResolveHumanInputWait(dispatch.AttemptID, wait.ToolCallID, "no", "user-2", false, answeredAt); err == nil {
+		t.Fatal("conflicting second answer was accepted")
+	}
+	resumed, _, err := RestoreDurableHarness(runtimeStore, "run-human-wait")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot = resumed.Snapshot()
+	if snapshot.RunState != RunRunning || snapshot.Tasks["work"].State != TaskRunning || len(snapshot.Active) != 1 || snapshot.Active[0].AttemptID != dispatch.AttemptID {
+		t.Fatalf("resumed snapshot = %#v", snapshot)
+	}
+	resolved, _ := resumed.TaskProgress(dispatch.AttemptID)
+	if operation := resolved.Tools[wait.ToolUseID]; operation.Status != ToolOperationCompleted || operation.Result != "yes" {
+		t.Fatalf("resolved tool operation = %#v", operation)
+	}
+	var requested, waiting bool
+	for _, event := range events {
+		requested = requested || event.Type == EventHumanInputRequested
+		waiting = waiting || event.Type == EventMissionHumanInputWaiting
+	}
+	if !requested || !waiting {
+		t.Fatalf("human input events missing: %#v", events)
+	}
+}
+
 func TestCommanderMessagePersistenceFailureDoesNotChangeTranscript(t *testing.T) {
 	t.Parallel()
 

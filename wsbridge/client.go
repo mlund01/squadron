@@ -73,6 +73,7 @@ type Client struct {
 	// Running missions (for stop/cancel)
 	missionMu       sync.Mutex
 	runningMissions map[string]*runningMission // missionID → mission handle
+	resumingWaits   map[string]bool            // missionID → auto-resume in progress
 
 	// Event subscriptions — controls what gets sent to commander
 	subscriptions *SubscriptionManager
@@ -141,6 +142,7 @@ func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath st
 		chatSessions:    make(map[string]*chatSession),
 		conversations:   make(map[string]*agentConversation),
 		runningMissions: make(map[string]*runningMission),
+		resumingWaits:   make(map[string]bool),
 		subscriptions:   NewSubscriptionManager(),
 		concurrency:     noopConcurrency{},
 		humanInputs:     newHumanInputListeners(),
@@ -177,6 +179,7 @@ func (c *Client) SetHumanInputNotifier(n *humaninput.Notifier) {
 				}
 				if ev.Kind == humaninput.EventKindResolved {
 					c.emitHumanInputResolved(ev.Record)
+					go c.resumeReadyHumanInputMission(ev.Record.MissionID)
 				}
 			}
 		}

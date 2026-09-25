@@ -148,6 +148,9 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		}
 	case RunRunning:
 	case RunWaiting:
+		if len(snapshot.HumanInputWaits) > 0 {
+			return &MissionHumanInputWaitingError{Waits: sortedHumanInputWaits(snapshot.HumanInputWaits)}
+		}
 		return &MissionRecoveryWaitingError{Blocks: sortedRecoveryBlocks(snapshot.RecoveryBlocks)}
 	case RunCompleted:
 		return nil
@@ -242,6 +245,15 @@ func (c *Coordinator) Run(ctx context.Context) error {
 			}
 			continue
 		}
+		if len(snapshot.HumanInputWaits) > 0 || len(snapshot.RecoveryBlocks) > 0 {
+			if err := c.harness.EnterRecoveryWaiting(); err != nil {
+				return fmt.Errorf("persist mission waiting state: %w", err)
+			}
+			if len(snapshot.HumanInputWaits) > 0 {
+				return &MissionHumanInputWaitingError{Waits: sortedHumanInputWaits(snapshot.HumanInputWaits)}
+			}
+			return &MissionRecoveryWaitingError{Blocks: sortedRecoveryBlocks(snapshot.RecoveryBlocks)}
+		}
 		return fmt.Errorf("mission is running without an active or ready task")
 	}
 }
@@ -289,11 +301,22 @@ func (c *Coordinator) executeConcurrent(ctx context.Context, dispatches []Dispat
 	}
 	wg.Wait()
 	snapshot := c.harness.Snapshot()
-	if len(snapshot.RecoveryBlocks) > 0 && snapshot.RunState == RunRunning {
+	if (len(snapshot.RecoveryBlocks) > 0 || len(snapshot.HumanInputWaits) > 0) && snapshot.RunState == RunRunning {
+		if len(snapshot.Active) > 0 {
+			return firstErr
+		}
+		// One paused branch must not stall unrelated ready work or a route
+		// decision. Only park the run once no executable path remains.
+		if len(snapshot.Active) == 0 && (len(snapshot.Ready) > 0 || len(snapshot.PendingRoutes) > 0 || len(snapshot.PendingClarifications) > 0) {
+			return nil
+		}
 		if err := c.harness.EnterRecoveryWaiting(); err != nil {
-			return fmt.Errorf("persist recovery waiting state: %w", err)
+			return fmt.Errorf("persist mission waiting state: %w", err)
 		}
 		snapshot = c.harness.Snapshot()
+		if len(snapshot.HumanInputWaits) > 0 {
+			return &MissionHumanInputWaitingError{Waits: sortedHumanInputWaits(snapshot.HumanInputWaits)}
+		}
 		return &MissionRecoveryWaitingError{Blocks: sortedRecoveryBlocks(snapshot.RecoveryBlocks)}
 	}
 	return firstErr
@@ -306,6 +329,15 @@ func sortedRecoveryBlocks(source map[string]RecoveryBlock) []RecoveryBlock {
 	}
 	sort.Slice(blocks, func(i, j int) bool { return blocks[i].AttemptID < blocks[j].AttemptID })
 	return blocks
+}
+
+func sortedHumanInputWaits(source map[string]HumanInputWait) []HumanInputWait {
+	waits := make([]HumanInputWait, 0, len(source))
+	for _, wait := range source {
+		waits = append(waits, cloneHumanInputWait(wait))
+	}
+	sort.Slice(waits, func(i, j int) bool { return waits[i].AttemptID < waits[j].AttemptID })
+	return waits
 }
 
 func (c *Coordinator) execute(ctx context.Context, dispatch Dispatch) error {
@@ -367,6 +399,13 @@ func (c *Coordinator) execute(ctx context.Context, dispatch Dispatch) error {
 		var lost *ExecutionLeaseLostError
 		if errors.As(err, &lost) {
 			return lost
+		}
+		var humanWait *TaskHumanInputWaitingError
+		if errors.As(err, &humanWait) {
+			if persistErr := c.harness.WaitTaskForHumanInputWithLease(dispatch, humanWait.Wait, leaseToken); persistErr != nil {
+				return fmt.Errorf("persist human input wait for task %q: %w", dispatch.TaskName, persistErr)
+			}
+			return &MissionHumanInputWaitingError{Waits: []HumanInputWait{humanWait.Wait}}
 		}
 		var blocked *TaskRecoveryBlockedError
 		if errors.As(err, &blocked) {

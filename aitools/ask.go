@@ -26,6 +26,31 @@ type ReplaySafeHumanInputBridge interface {
 	HumanInputReplaySafe() bool
 }
 
+// DeferredHumanInputBridge starts or reconnects to a persisted request
+// without keeping the task worker alive while a person decides.
+type DeferredHumanInputBridge interface {
+	BeginAskHuman(context.Context, HumanInputRequest) (DeferredHumanInputResult, error)
+}
+
+type DeferredHumanInputResult struct {
+	Pending     bool
+	Response    string
+	RequestedAt time.Time
+}
+
+// DeferredToolResult is consumed by durable task sessions. A pending result
+// is not a model-visible tool response; it parks the logical attempt instead.
+type DeferredToolResult struct {
+	Pending     bool
+	Result      string
+	Request     HumanInputRequest
+	RequestedAt time.Time
+}
+
+type DeferredTool interface {
+	CallDeferred(context.Context, string) (DeferredToolResult, bool)
+}
+
 // HumanInputRequest is the payload the bridge needs to deliver one
 // ask. ToolCallID is generated here; mission/task ids come from ctx
 // (see WithMissionContext) so callers don't have to thread mission
@@ -121,48 +146,18 @@ type askParams struct {
 const NoCommanderObservation = "[no human available]"
 
 func (t *HumanInputTool) Call(ctx context.Context, params string) string {
-	var p askParams
-	if err := json.Unmarshal([]byte(params), &p); err != nil {
-		return "Error: invalid parameters - " + err.Error()
-	}
-	if p.Question == "" {
-		return "Error: question is required"
-	}
-	if p.TimeoutSeconds != nil && (math.IsNaN(*p.TimeoutSeconds) || math.IsInf(*p.TimeoutSeconds, 0) || *p.TimeoutSeconds < 0 || *p.TimeoutSeconds > float64((1<<63-1)/int64(time.Second))) {
-		return "Error: timeout_seconds must be a finite, non-negative duration"
+	p, req, inputError := prepareHumanInputRequest(ctx, params)
+	if inputError != "" {
+		return inputError
 	}
 	if t.Bridge == nil {
 		return NoCommanderObservation
 	}
 
-	missionID, taskID := MissionContextFromContext(ctx)
-	toolCallID := uuid.NewString()
-	if invocation, ok := InvocationMetadataFromContext(ctx); ok && invocation.IdempotencyKey != "" {
-		toolCallID = invocation.IdempotencyKey
-	}
-	req := HumanInputRequest{
-		ToolCallID:        toolCallID,
-		MissionID:         missionID,
-		TaskID:            taskID,
-		Question:          p.Question,
-		ShortSummary:      p.ShortSummary,
-		AdditionalContext: p.AdditionalContext,
-		Choices:           p.Choices,
-		// Multi-select without choices is meaningless.
-		MultiSelect: p.MultiSelect && len(p.Choices) > 0,
-	}
-
 	callCtx := ctx
-	if p.TimeoutSeconds != nil && *p.TimeoutSeconds > 0 {
-		timeout := time.Duration(*p.TimeoutSeconds * float64(time.Second))
-		startedAt := time.Now().UTC()
-		if invocation, ok := InvocationMetadataFromContext(ctx); ok && !invocation.StartedAt.IsZero() {
-			startedAt = invocation.StartedAt.UTC()
-		}
-		deadline := startedAt.Add(timeout).Truncate(time.Millisecond)
-		req.DeadlineAt = &deadline
+	if req.DeadlineAt != nil {
 		var cancel context.CancelFunc
-		callCtx, cancel = context.WithDeadline(ctx, deadline)
+		callCtx, cancel = context.WithDeadline(ctx, *req.DeadlineAt)
 		defer cancel()
 	}
 
@@ -177,6 +172,64 @@ func (t *HumanInputTool) Call(ctx context.Context, params string) string {
 		return fmt.Sprintf("Error: %s", err.Error())
 	}
 	return resp
+}
+
+// CallDeferred is used only by mission task sessions. Managed agent sessions
+// keep the ordinary blocking Call behavior.
+func (t *HumanInputTool) CallDeferred(ctx context.Context, params string) (DeferredToolResult, bool) {
+	bridge, ok := t.Bridge.(DeferredHumanInputBridge)
+	if !ok {
+		return DeferredToolResult{}, false
+	}
+	p, req, inputError := prepareHumanInputRequest(ctx, params)
+	if inputError != "" {
+		return DeferredToolResult{Result: inputError}, true
+	}
+	out, err := bridge.BeginAskHuman(ctx, req)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			if p.TimeoutSeconds != nil {
+				return DeferredToolResult{Result: fmt.Sprintf("[no human response within %.0fs]", *p.TimeoutSeconds)}, true
+			}
+			return DeferredToolResult{Result: "[no human response: timed out]"}, true
+		}
+		return DeferredToolResult{Result: fmt.Sprintf("Error: %s", err.Error())}, true
+	}
+	return DeferredToolResult{Pending: out.Pending, Result: out.Response, Request: req, RequestedAt: out.RequestedAt}, true
+}
+
+func prepareHumanInputRequest(ctx context.Context, params string) (askParams, HumanInputRequest, string) {
+	var p askParams
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return p, HumanInputRequest{}, "Error: invalid parameters - " + err.Error()
+	}
+	if p.Question == "" {
+		return p, HumanInputRequest{}, "Error: question is required"
+	}
+	if p.TimeoutSeconds != nil && (math.IsNaN(*p.TimeoutSeconds) || math.IsInf(*p.TimeoutSeconds, 0) || *p.TimeoutSeconds < 0 || *p.TimeoutSeconds > float64((1<<63-1)/int64(time.Second))) {
+		return p, HumanInputRequest{}, "Error: timeout_seconds must be a finite, non-negative duration"
+	}
+	missionID, taskID := MissionContextFromContext(ctx)
+	toolCallID := uuid.NewString()
+	startedAt := time.Now().UTC()
+	if invocation, ok := InvocationMetadataFromContext(ctx); ok {
+		if invocation.IdempotencyKey != "" {
+			toolCallID = invocation.IdempotencyKey
+		}
+		if !invocation.StartedAt.IsZero() {
+			startedAt = invocation.StartedAt.UTC()
+		}
+	}
+	req := HumanInputRequest{
+		ToolCallID: toolCallID, MissionID: missionID, TaskID: taskID,
+		Question: p.Question, ShortSummary: p.ShortSummary, AdditionalContext: p.AdditionalContext,
+		Choices: p.Choices, MultiSelect: p.MultiSelect && len(p.Choices) > 0,
+	}
+	if p.TimeoutSeconds != nil && *p.TimeoutSeconds > 0 {
+		deadline := startedAt.Add(time.Duration(*p.TimeoutSeconds * float64(time.Second))).Truncate(time.Millisecond)
+		req.DeadlineAt = &deadline
+	}
+	return p, req, ""
 }
 
 func errIsTimeout(err error, ctx context.Context) bool {

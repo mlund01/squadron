@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"squadron/agent"
 	"squadron/aitools"
@@ -58,6 +60,81 @@ func TestModelTaskSessionRunsGrantedToolsInFreshProviderSession(t *testing.T) {
 	if builder.dispatch.Grant.Model != "fast" || builder.dispatch.Grant.RunAs != "user:one" {
 		t.Fatalf("builder dispatch = %#v", builder.dispatch)
 	}
+}
+
+func TestModelTaskSessionParksHumanInputAndReplaysOriginalToolCall(t *testing.T) {
+	toolUse := &llm.ChatResponse{ContentBlocks: []llm.ContentBlock{{Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{
+		ID: "ask-1", Name: "builtins_human_ask", Input: json.RawMessage(`{"question":"Proceed?","timeout_seconds":120}`),
+	}}}}
+	bridge := &deferredHumanBridge{pending: true}
+	tool := &aitools.HumanInputTool{Bridge: bridge}
+	dispatch := Dispatch{
+		RunID: "run-human", TaskName: "work", AttemptID: "run-human:work:1",
+		Grant: ExecutionGrant{TaskName: "work", Model: "fast", Tools: []string{"builtins.human.ask"}, InputsJSON: `{}`},
+	}
+	firstModel := &fakeTaskModelSession{responses: []*llm.ChatResponse{toolUse}}
+	factory, err := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: firstModel}, []TaskObjective{{Name: "work", Objective: "Ask first"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := factory.NewTaskSession(context.Background(), dispatch, map[string]aitools.Tool{"builtins.human.ask": tool})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint TaskAttemptProgress
+	_, err = first.(ResumableTaskSession).RunResumable(context.Background(), TaskAttemptProgress{
+		AttemptID: dispatch.AttemptID, Phase: "dispatched", Tools: map[string]ToolOperation{},
+	}, func(next TaskAttemptProgress) error {
+		checkpoint = cloneTaskProgress(next)
+		return nil
+	})
+	var waiting *TaskHumanInputWaitingError
+	if !errors.As(err, &waiting) {
+		t.Fatalf("RunResumable() error = %v, want human input wait", err)
+	}
+	wait := waiting.Wait
+	wantID := aitools.StableIdempotencyKey(dispatch.RunID, dispatch.AttemptID, "ask-1")
+	if wait.ToolCallID != wantID || wait.Question != "Proceed?" || wait.DeadlineAt == nil || wait.RequestedAt.IsZero() {
+		t.Fatalf("wait = %#v", wait)
+	}
+	if checkpoint.Tools["ask-1"].Status != ToolOperationInFlight || len(firstModel.results) != 0 {
+		t.Fatalf("pending tool leaked model result: progress=%#v results=%#v", checkpoint, firstModel.results)
+	}
+	if bridge.request.MissionID != dispatch.RunID || bridge.request.ToolCallID != wantID {
+		t.Fatalf("bridge request = %#v", bridge.request)
+	}
+	bridge.pending = false
+	secondModel := &fakeTaskModelSession{responses: []*llm.ChatResponse{{Content: "work finished"}}}
+	resumeFactory, _ := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: secondModel}, []TaskObjective{{Name: "work", Objective: "Ask first"}})
+	second, _ := resumeFactory.NewTaskSession(context.Background(), dispatch, map[string]aitools.Tool{"builtins.human.ask": tool})
+	result, err := second.(ResumableTaskSession).RunResumable(context.Background(), checkpoint, func(next TaskAttemptProgress) error {
+		checkpoint = cloneTaskProgress(next)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("resumed RunResumable() error = %v", err)
+	}
+	if result.Summary != "work finished" || bridge.calls != 2 || bridge.request.ToolCallID != wantID || checkpoint.Tools["ask-1"].Result != "yes" {
+		t.Fatalf("resumed result/checkpoint/bridge = %#v / %#v / %#v", result, checkpoint, bridge)
+	}
+}
+
+type deferredHumanBridge struct {
+	pending bool
+	calls   int
+	request aitools.HumanInputRequest
+}
+
+func (*deferredHumanBridge) AskHuman(context.Context, aitools.HumanInputRequest) (string, error) {
+	return "", fmt.Errorf("blocking AskHuman must not be called by a mission task")
+}
+
+func (*deferredHumanBridge) HumanInputReplaySafe() bool { return true }
+
+func (b *deferredHumanBridge) BeginAskHuman(_ context.Context, request aitools.HumanInputRequest) (aitools.DeferredHumanInputResult, error) {
+	b.calls++
+	b.request = request
+	return aitools.DeferredHumanInputResult{Pending: b.pending, Response: "yes", RequestedAt: time.Now().UTC()}, nil
 }
 
 func TestIterationChildPromptReceivesOnlyItsFrozenItem(t *testing.T) {

@@ -46,6 +46,101 @@ func TestCoordinatorPersistsRecoveryWaitAndResumesSameAttempt(t *testing.T) {
 	}
 }
 
+func TestCoordinatorParksHumanInputWithoutHoldingExecutionLease(t *testing.T) {
+	runtimeStore := store.NewMemoryRuntimeStore()
+	harness, err := CreateDurableHarness(runtimeStore, "run-human-coordinator", "commander-human", []TaskDefinition{{Name: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &humanWaitingExecutor{}
+	coordinator, err := NewCoordinator(harness, &readyCommander{}, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = coordinator.Run(context.Background())
+	var waiting *MissionHumanInputWaitingError
+	if !errors.As(err, &waiting) || len(waiting.Waits) != 1 {
+		t.Fatalf("Run() error = %v, want one human input wait", err)
+	}
+	wait := waiting.Waits[0]
+	if snapshot := harness.Snapshot(); snapshot.RunState != RunWaiting || snapshot.Tasks["work"].State != TaskWaiting || len(snapshot.Active) != 0 {
+		t.Fatalf("waiting snapshot = %#v", snapshot)
+	}
+	if _, leased := harness.inner.Checkpoint().ExecutionLeases[wait.AttemptID]; leased {
+		t.Fatal("human input wait retained execution lease")
+	}
+	restored, _, err := RestoreDurableHarness(runtimeStore, "run-human-coordinator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.ResolveHumanInputWait(wait.AttemptID, wait.ToolCallID, "yes", "user-1", false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := NewCoordinator(restored, &readyCommander{}, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := restored.Snapshot(); snapshot.RunState != RunCompleted || snapshot.Tasks["work"].Attempt != 1 || executor.calls != 2 {
+		t.Fatalf("completed snapshot/calls = %#v / %d", snapshot, executor.calls)
+	}
+}
+
+func TestHumanInputWaitDoesNotConsumeParallelTaskCapacity(t *testing.T) {
+	harness, err := CreateDurableHarnessWithMaxParallel(store.NewMemoryRuntimeStore(), "run-parallel-human", "commander", []TaskDefinition{
+		{Name: "ask"}, {Name: "other"},
+	}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(harness, &readyCommander{}, &humanWaitingExecutor{waitTask: "ask"}, staticGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = coordinator.Run(context.Background())
+	var waiting *MissionHumanInputWaitingError
+	if !errors.As(err, &waiting) {
+		t.Fatalf("Run() error = %v, want human input wait", err)
+	}
+	snapshot := harness.Snapshot()
+	if snapshot.Tasks["ask"].State != TaskWaiting || snapshot.Tasks["other"].State != TaskCompleted || snapshot.RunState != RunWaiting {
+		t.Fatalf("unrelated task was blocked by human input: %#v", snapshot)
+	}
+}
+
+type humanWaitingExecutor struct {
+	calls    int
+	waitTask string
+}
+
+func (*humanWaitingExecutor) Execute(context.Context, Dispatch) (TaskResultEnvelope, error) {
+	return TaskResultEnvelope{}, fmt.Errorf("unexpected non-resumable execution")
+}
+
+func (e *humanWaitingExecutor) ExecuteResumable(_ context.Context, dispatch Dispatch, progress TaskAttemptProgress, commit func(TaskAttemptProgress) error) (TaskResultEnvelope, error) {
+	e.calls++
+	if e.waitTask != "" && dispatch.TaskName != e.waitTask {
+		return testResult(dispatch), nil
+	}
+	if operation, ok := progress.Tools["call-1"]; ok && operation.Status == ToolOperationCompleted {
+		return testResult(dispatch), nil
+	}
+	progress.Phase = "tool_calls_received"
+	progress.Tools = map[string]ToolOperation{"call-1": {
+		ToolUseID: "call-1", ToolName: "builtins.human.ask", InputJSON: `{"question":"Proceed?"}`,
+		Status: ToolOperationInFlight, StartedAt: time.Now().UTC(),
+	}}
+	if err := commit(progress); err != nil {
+		return TaskResultEnvelope{}, err
+	}
+	return TaskResultEnvelope{}, &TaskHumanInputWaitingError{Wait: HumanInputWait{
+		AttemptID: dispatch.AttemptID, TaskName: dispatch.TaskName, ToolUseID: "call-1", ToolName: "builtins.human.ask",
+		ToolCallID: "stable-call", Question: "Proceed?", RequestedAt: time.Now().UTC(),
+	}}
+}
+
 func TestCoordinatorReclaimsExpiredLeaseAndResumesSameAttempt(t *testing.T) {
 	runtimeStore := store.NewMemoryRuntimeStore()
 	harness, err := CreateDurableHarness(runtimeStore, "run-crash-recovery", "commander-crash-recovery", []TaskDefinition{{Name: "work"}})

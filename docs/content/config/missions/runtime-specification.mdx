@@ -339,8 +339,8 @@ reason. Waiting attempts are excluded from the executable active set but retain
 their original dispatch identity. A resolution must atomically append
 `task.recovery_resolved`, commit the verified tool result, and move the same
 attempt back to running. Resolving a block never creates a retry attempt or asks
-the model to reconstruct the result. The run returns to running only after all
-recovery blocks have been resolved.
+the model to reconstruct the result. Other blocked attempts may remain waiting
+while the resolved attempt makes progress.
 
 An interrupted provider stream has one unavoidable boundary: unless the model
 provider supports resumable requests, Squadron may reissue the incomplete
@@ -364,11 +364,14 @@ same checkpoint transaction. Cooperative cancellation releases it without
 marking the attempt failed.
 
 `builtins.human.ask` uses the runtime's stable invocation key as its persisted
-request identity. Its bridge creates requests idempotently, reconnects to an
-existing open request after restart, and immediately returns an answer that was
-resolved while Squadron was offline. Cancellation is never committed as a
-synthetic tool result: the operation remains in flight and the restored worker
-reattaches to the same request.
+request identity. A mission task creates or reconnects to the request without
+blocking its worker. The runtime checkpoints a typed human-input wait and
+releases the attempt's execution lease. The inbox row is the delivery surface;
+an accepted answer is reconciled into a typed runtime response and the same
+logical attempt resumes with the original tool result. Reconnecting to an open
+request does not publish a second prompt. Managed agent sessions retain the
+blocking tool behavior. Cancellation is never committed as a synthetic tool
+result: the operation remains in flight for recovery.
 
 The persisted tool-operation record includes its original start time. Duration-
 based built-ins use that timestamp when replaying: `builtins.time.sleep` waits

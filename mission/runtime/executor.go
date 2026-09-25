@@ -38,6 +38,20 @@ func (e *MissionRecoveryWaitingError) Error() string {
 	return fmt.Sprintf("mission is waiting for reconciliation of %d tool call(s)", len(e.Blocks))
 }
 
+// TaskHumanInputWaitingError is returned after a task tool has durably
+// established a human request but before a model-visible tool result exists.
+type TaskHumanInputWaitingError struct{ Wait HumanInputWait }
+
+func (e *TaskHumanInputWaitingError) Error() string {
+	return fmt.Sprintf("task %q is waiting for human input %q", e.Wait.TaskName, e.Wait.ToolCallID)
+}
+
+type MissionHumanInputWaitingError struct{ Waits []HumanInputWait }
+
+func (e *MissionHumanInputWaitingError) Error() string {
+	return fmt.Sprintf("mission is waiting for %d human input response(s)", len(e.Waits))
+}
+
 // TaskSessionFactory creates a fresh session from an immutable dispatch and
 // its already-filtered capability map.
 type TaskSessionFactory interface {
@@ -169,6 +183,7 @@ type authorizedTool struct {
 
 func (t *authorizedTool) ToolName() string        { return t.tool.ToolName() }
 func (t *authorizedTool) ToolDescription() string { return t.tool.ToolDescription() }
+func (t *authorizedTool) ToolReplaySafe() bool    { return aitools.IsReplaySafe(t.tool) }
 func (t *authorizedTool) ToolPayloadSchema() aitools.Schema {
 	return t.tool.ToolPayloadSchema()
 }
@@ -187,4 +202,22 @@ func (t *authorizedTool) Call(ctx context.Context, input string) string {
 		return fmt.Sprintf("Error: tool authorization failed: %v", err)
 	}
 	return t.tool.Call(ctx, authorizedInput)
+}
+
+func (t *authorizedTool) CallDeferred(ctx context.Context, input string) (aitools.DeferredToolResult, bool) {
+	deferred, ok := t.tool.(aitools.DeferredTool)
+	if !ok {
+		return aitools.DeferredToolResult{}, false
+	}
+	request := t.authorization
+	if metadata, ok := aitools.InvocationMetadataFromContext(ctx); ok {
+		request.ToolUseID = metadata.ToolUseID
+		request.IdempotencyKey = metadata.IdempotencyKey
+	}
+	request.InputJSON = input
+	authorizedInput, err := t.broker.AuthorizeToolInput(ctx, request)
+	if err != nil {
+		return aitools.DeferredToolResult{Result: fmt.Sprintf("Error: tool authorization failed: %v", err)}, true
+	}
+	return deferred.CallDeferred(ctx, authorizedInput)
 }

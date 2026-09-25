@@ -199,6 +199,8 @@ type Snapshot struct {
 	PendingClarifications []ClarifyTaskRequest
 	Clarifications        map[string][]TaskClarification
 	RecoveryBlocks        map[string]RecoveryBlock
+	HumanInputWaits       map[string]HumanInputWait
+	HumanInputResponses   map[string]HumanInputResponse
 	ModelTurns            map[string]ModelTurnTelemetry
 	IterationPlans        map[string]IterationPlan
 	MaxParallel           int
@@ -319,6 +321,34 @@ type RecoveryBlock struct {
 	Reason         string `json:"reason"`
 }
 
+// HumanInputWait is a typed, durable pause for one in-flight tool operation.
+// The request identity and absolute deadline survive worker replacement.
+type HumanInputWait struct {
+	AttemptID    string     `json:"attemptId"`
+	TaskName     string     `json:"taskName"`
+	ToolUseID    string     `json:"toolUseId"`
+	ToolName     string     `json:"toolName"`
+	ToolCallID   string     `json:"toolCallId"`
+	Question     string     `json:"question"`
+	ShortSummary string     `json:"shortSummary,omitempty"`
+	Context      string     `json:"context,omitempty"`
+	Choices      []string   `json:"choices,omitempty"`
+	MultiSelect  bool       `json:"multiSelect,omitempty"`
+	RequestedAt  time.Time  `json:"requestedAt"`
+	DeadlineAt   *time.Time `json:"deadlineAt,omitempty"`
+}
+
+// HumanInputResponse is the accepted outcome, retained after the wait is
+// removed so duplicate delivery cannot alter the original tool result.
+type HumanInputResponse struct {
+	AttemptID  string    `json:"attemptId"`
+	ToolCallID string    `json:"toolCallId"`
+	Response   string    `json:"response"`
+	IsError    bool      `json:"isError,omitempty"`
+	Responder  string    `json:"responder,omitempty"`
+	ResolvedAt time.Time `json:"resolvedAt"`
+}
+
 // ExecutionLease is the persisted ownership fence for one active attempt.
 // Token changes on every takeover, so a delayed worker from an older process
 // cannot commit progress or a terminal transition to the same attempt.
@@ -363,6 +393,8 @@ type Checkpoint struct {
 	TaskProgress          map[string]TaskAttemptProgress
 	ExecutionLeases       map[string]ExecutionLease
 	RecoveryBlocks        map[string]RecoveryBlock
+	HumanInputWaits       map[string]HumanInputWait
+	HumanInputResponses   map[string]HumanInputResponse
 	Results               map[string]AcceptedTaskResult
 	Failures              map[string]TaskFailure
 	Activations           map[string][]string
@@ -394,6 +426,8 @@ type Harness struct {
 	taskProgress          map[string]TaskAttemptProgress
 	executionLeases       map[string]ExecutionLease
 	recoveryBlocks        map[string]RecoveryBlock
+	humanInputWaits       map[string]HumanInputWait
+	humanInputResponses   map[string]HumanInputResponse
 	results               map[string]AcceptedTaskResult
 	failures              map[string]TaskFailure
 	activations           map[string][]string
@@ -503,6 +537,8 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 		taskProgress:          make(map[string]TaskAttemptProgress),
 		executionLeases:       make(map[string]ExecutionLease),
 		recoveryBlocks:        make(map[string]RecoveryBlock),
+		humanInputWaits:       make(map[string]HumanInputWait),
+		humanInputResponses:   make(map[string]HumanInputResponse),
 		results:               make(map[string]AcceptedTaskResult),
 		failures:              make(map[string]TaskFailure),
 		activations:           make(map[string][]string),
@@ -655,11 +691,14 @@ func (h *Harness) Stop() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.runState != RunRunning || h.commander.State != CommanderActive {
+	if (h.runState != RunRunning && h.runState != RunWaiting) ||
+		(h.commander.State != CommanderActive && h.commander.State != CommanderWaiting) {
 		return fmt.Errorf("run is not active")
 	}
-	if len(h.activeByTask) != 0 {
-		return fmt.Errorf("cannot stop run with active task attempts")
+	for taskName := range h.activeByTask {
+		if h.taskStates[taskName] == TaskRunning || h.taskStates[taskName] == TaskDispatching {
+			return fmt.Errorf("cannot stop run with executable task attempts")
+		}
 	}
 	if !CanTransitionRun(h.runState, RunStopping) || !CanTransitionRun(RunStopping, RunStopped) {
 		return fmt.Errorf("run cannot transition to stopped")
@@ -892,11 +931,99 @@ func (h *Harness) BlockTaskRecoveryWithLease(dispatch Dispatch, block RecoveryBl
 	return nil
 }
 
+// WaitTaskForHumanInputWithLease parks one logical attempt and releases its
+// execution lease. The in-flight tool intent must already be checkpointed.
+func (h *Harness) WaitTaskForHumanInputWithLease(dispatch Dispatch, wait HumanInputWait, leaseToken string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if err := h.requireExecutionLeaseLocked(dispatch.AttemptID, leaseToken); err != nil {
+		return err
+	}
+	active, ok := h.activeByTask[dispatch.TaskName]
+	if !ok || active.AttemptID != dispatch.AttemptID || wait.AttemptID != dispatch.AttemptID || wait.TaskName != dispatch.TaskName {
+		return fmt.Errorf("attempt %q is not active for task %q", dispatch.AttemptID, dispatch.TaskName)
+	}
+	if wait.ToolUseID == "" || wait.ToolName == "" || wait.ToolCallID == "" || wait.Question == "" || wait.RequestedAt.IsZero() {
+		return fmt.Errorf("human input wait requires tool identity, question, and request time")
+	}
+	if wait.DeadlineAt != nil && !wait.DeadlineAt.After(wait.RequestedAt) {
+		return fmt.Errorf("human input deadline must follow request time")
+	}
+	progress := h.taskProgress[dispatch.AttemptID]
+	operation, ok := progress.Tools[wait.ToolUseID]
+	if !ok || operation.Status != ToolOperationInFlight || operation.ToolName != wait.ToolName {
+		return fmt.Errorf("human input tool operation %q is not in flight", wait.ToolUseID)
+	}
+	if _, exists := h.recoveryBlocks[dispatch.AttemptID]; exists {
+		return fmt.Errorf("attempt %q is already blocked for recovery", dispatch.AttemptID)
+	}
+	if previous, exists := h.humanInputWaits[dispatch.AttemptID]; exists {
+		if reflect.DeepEqual(previous, wait) {
+			return nil
+		}
+		return fmt.Errorf("attempt %q already has a different human input wait", dispatch.AttemptID)
+	}
+	if h.taskStates[dispatch.TaskName] != TaskRunning || !CanTransitionTask(TaskRunning, TaskWaiting) {
+		return fmt.Errorf("task %q cannot wait for human input from %q", dispatch.TaskName, h.taskStates[dispatch.TaskName])
+	}
+	h.taskStates[dispatch.TaskName] = TaskWaiting
+	h.humanInputWaits[dispatch.AttemptID] = cloneHumanInputWait(wait)
+	delete(h.executionLeases, dispatch.AttemptID)
+	h.revision++
+	return nil
+}
+
+// ResolveHumanInputWait accepts the first response and resumes the original
+// attempt; redelivery is idempotent, while a different response is rejected.
+func (h *Harness) ResolveHumanInputWait(attemptID, toolCallID, response, responder string, isError bool, resolvedAt time.Time) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if previous, ok := h.humanInputResponses[toolCallID]; ok {
+		if previous.AttemptID == attemptID && previous.Response == response && previous.IsError == isError && previous.Responder == responder {
+			return nil
+		}
+		return fmt.Errorf("human input %q already has a different response", toolCallID)
+	}
+	wait, ok := h.humanInputWaits[attemptID]
+	if !ok || wait.ToolCallID != toolCallID {
+		return fmt.Errorf("attempt %q has no human input wait %q", attemptID, toolCallID)
+	}
+	if resolvedAt.IsZero() {
+		return fmt.Errorf("human input resolution time is required")
+	}
+	if wait.DeadlineAt != nil && !resolvedAt.Before(*wait.DeadlineAt) && !isError {
+		return fmt.Errorf("human input %q was answered after its deadline", toolCallID)
+	}
+	progress := h.taskProgress[attemptID]
+	operation, ok := progress.Tools[wait.ToolUseID]
+	if !ok || operation.Status != ToolOperationInFlight {
+		return fmt.Errorf("human input tool operation %q is not in flight", wait.ToolUseID)
+	}
+	if h.taskStates[wait.TaskName] != TaskWaiting || !CanTransitionTask(TaskWaiting, TaskRunning) {
+		return fmt.Errorf("task %q cannot resume from %q", wait.TaskName, h.taskStates[wait.TaskName])
+	}
+	operation.Status, operation.Result, operation.IsError = ToolOperationCompleted, response, isError
+	progress.Tools[wait.ToolUseID] = operation
+	h.taskProgress[attemptID] = progress
+	h.humanInputResponses[toolCallID] = HumanInputResponse{
+		AttemptID: attemptID, ToolCallID: toolCallID, Response: response, IsError: isError,
+		Responder: responder, ResolvedAt: resolvedAt,
+	}
+	delete(h.humanInputWaits, attemptID)
+	h.taskStates[wait.TaskName] = TaskRunning
+	if h.runState == RunWaiting {
+		h.runState = RunRunning
+		h.commander.State = CommanderActive
+	}
+	h.revision++
+	return nil
+}
+
 func (h *Harness) EnterRecoveryWaiting() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if len(h.recoveryBlocks) == 0 {
-		return fmt.Errorf("run has no recovery blocks")
+	if len(h.recoveryBlocks) == 0 && len(h.humanInputWaits) == 0 {
+		return fmt.Errorf("run has no waiting operations")
 	}
 	for _, state := range h.taskStates {
 		if state == TaskRunning || state == TaskDispatching {
@@ -937,7 +1064,7 @@ func (h *Harness) ResolveRecoveryBlock(attemptID, result string, isError bool) e
 	}
 	h.taskStates[block.TaskName] = TaskRunning
 	delete(h.recoveryBlocks, attemptID)
-	if len(h.recoveryBlocks) == 0 && h.runState == RunWaiting {
+	if h.runState == RunWaiting {
 		if !CanTransitionRun(RunWaiting, RunRunning) || !CanTransitionCommander(CommanderWaiting, CommanderActive) {
 			return fmt.Errorf("run cannot resume after reconciliation")
 		}
@@ -1188,6 +1315,8 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 		taskProgress:          cloneTaskProgressMap(checkpoint.TaskProgress),
 		executionLeases:       cloneMap(checkpoint.ExecutionLeases),
 		recoveryBlocks:        cloneMap(checkpoint.RecoveryBlocks),
+		humanInputWaits:       cloneHumanInputWaits(checkpoint.HumanInputWaits),
+		humanInputResponses:   cloneMap(checkpoint.HumanInputResponses),
 		results:               cloneAcceptedResults(checkpoint.Results),
 		failures:              cloneMap(checkpoint.Failures),
 		activations:           cloneStringSliceMap(checkpoint.Activations),
@@ -1228,7 +1357,7 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 	if state != TaskReady {
 		return Dispatch{}, fmt.Errorf("task %q is not ready", request.TaskName)
 	}
-	if len(h.activeByTask) >= h.maxParallel {
+	if h.executableAttemptCountLocked() >= h.maxParallel {
 		return Dispatch{}, fmt.Errorf("run has reached its maximum of %d parallel tasks", h.maxParallel)
 	}
 	definition := h.tasks[request.TaskName]
@@ -1681,6 +1810,8 @@ func (h *Harness) snapshotLocked() Snapshot {
 		PendingClarifications: pendingClarifications,
 		Clarifications:        cloneClarifications(h.clarifications),
 		RecoveryBlocks:        cloneMap(h.recoveryBlocks),
+		HumanInputWaits:       cloneHumanInputWaits(h.humanInputWaits),
+		HumanInputResponses:   cloneMap(h.humanInputResponses),
 		ModelTurns:            cloneMap(h.modelTurns),
 		IterationPlans:        cloneIterationPlans(h.iterationPlans),
 		MaxParallel:           h.maxParallel,
@@ -1691,7 +1822,17 @@ func (h *Harness) snapshotLocked() Snapshot {
 func (h *Harness) activeIterationChildrenLocked(parent string) int {
 	count := 0
 	for name := range h.activeByTask {
-		if h.tasks[name].ParentTask == parent {
+		if h.tasks[name].ParentTask == parent && (h.taskStates[name] == TaskRunning || h.taskStates[name] == TaskDispatching) {
+			count++
+		}
+	}
+	return count
+}
+
+func (h *Harness) executableAttemptCountLocked() int {
+	count := 0
+	for name := range h.activeByTask {
+		if h.taskStates[name] == TaskRunning || h.taskStates[name] == TaskDispatching {
 			count++
 		}
 	}
@@ -1726,6 +1867,8 @@ func (h *Harness) checkpointLocked() Checkpoint {
 		TaskProgress:          cloneTaskProgressMap(h.taskProgress),
 		ExecutionLeases:       cloneMap(h.executionLeases),
 		RecoveryBlocks:        cloneMap(h.recoveryBlocks),
+		HumanInputWaits:       cloneHumanInputWaits(h.humanInputWaits),
+		HumanInputResponses:   cloneMap(h.humanInputResponses),
 		Results:               cloneAcceptedResults(h.results),
 		Failures:              cloneMap(h.failures),
 		Activations:           cloneStringSliceMap(h.activations),
@@ -1779,6 +1922,23 @@ func cloneIterationPlan(plan IterationPlan) IterationPlan {
 	}
 	plan.Children = children
 	return plan
+}
+
+func cloneHumanInputWait(wait HumanInputWait) HumanInputWait {
+	wait.Choices = append([]string(nil), wait.Choices...)
+	if wait.DeadlineAt != nil {
+		deadline := *wait.DeadlineAt
+		wait.DeadlineAt = &deadline
+	}
+	return wait
+}
+
+func cloneHumanInputWaits(source map[string]HumanInputWait) map[string]HumanInputWait {
+	result := make(map[string]HumanInputWait, len(source))
+	for attemptID, wait := range source {
+		result[attemptID] = cloneHumanInputWait(wait)
+	}
+	return result
 }
 
 func cloneIterationPlans(source map[string]IterationPlan) map[string]IterationPlan {

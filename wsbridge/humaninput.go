@@ -13,6 +13,7 @@ import (
 
 	"squadron/aitools"
 	"squadron/humaninput"
+	missionruntime "squadron/mission/runtime"
 	"squadron/store"
 )
 
@@ -142,6 +143,170 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 	}
 }
 
+// BeginAskHuman is the nonblocking mission-runtime path. The persisted
+// request is created before the task lease is released; reconnecting to the
+// same tool-call ID does not publish a second prompt.
+func (c *Client) BeginAskHuman(ctx context.Context, req aitools.HumanInputRequest) (aitools.DeferredHumanInputResult, error) {
+	if err := ctx.Err(); err != nil {
+		return aitools.DeferredHumanInputResult{}, err
+	}
+	if req.ToolCallID == "" || req.Question == "" {
+		return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: tool call ID and question are required")
+	}
+	if c.stores == nil || c.stores.HumanInputs == nil {
+		return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: no store configured")
+	}
+	prior, err := c.stores.HumanInputs.GetByToolCallID(req.ToolCallID)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: load request: %w", err)
+	}
+	created := errors.Is(err, sql.ErrNoRows)
+	if created {
+		record := &store.HumanInputRequestRecord{
+			MissionID: req.MissionID, TaskID: req.TaskID, ToolCallID: req.ToolCallID,
+			Question: req.Question, ShortSummary: req.ShortSummary, AdditionalContext: req.AdditionalContext,
+			Choices: req.Choices, MultiSelect: req.MultiSelect, DeadlineAt: req.DeadlineAt,
+		}
+		if err := c.stores.HumanInputs.CreateRequest(record); err != nil {
+			return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: persist request: %w", err)
+		}
+		prior, err = c.stores.HumanInputs.GetByToolCallID(req.ToolCallID)
+		if err != nil {
+			return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: reload request: %w", err)
+		}
+	}
+	if prior.Question != req.Question || prior.MissionID != req.MissionID || prior.TaskID != req.TaskID || !sameHumanInputDeadline(prior.DeadlineAt, req.DeadlineAt) {
+		return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: tool call %q conflicts with its persisted request", req.ToolCallID)
+	}
+	if prior.DeadlineAt != nil && prior.State == store.HumanInputStateOpen {
+		prior, err = c.stores.HumanInputs.ExpireRequest(req.ToolCallID, time.Now().UTC())
+		if err != nil {
+			return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: expire request: %w", err)
+		}
+	}
+	if created && prior.State == store.HumanInputStateOpen {
+		c.emitHumanInputRequested(req)
+		if c.humanInputNotifier != nil {
+			humaninput.PublishCreated(c.humanInputNotifier, *prior)
+		}
+	}
+	switch prior.State {
+	case store.HumanInputStateOpen:
+		return aitools.DeferredHumanInputResult{Pending: true, RequestedAt: prior.RequestedAt}, nil
+	case store.HumanInputStateResolved:
+		if prior.Response == nil {
+			return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: resolved request has no response")
+		}
+		return aitools.DeferredHumanInputResult{Response: *prior.Response, RequestedAt: prior.RequestedAt}, nil
+	case store.HumanInputStateExpired:
+		return aitools.DeferredHumanInputResult{}, context.DeadlineExceeded
+	default:
+		return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: unsupported request state %q", prior.State)
+	}
+}
+
+func sameHumanInputDeadline(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return a.Equal(*b)
+}
+
+// resumeReadyHumanInputMission is driven by an accepted answer or a persisted
+// deadline. It checks the runtime wait before resuming, so agent-session
+// questions and unrelated inbox rows cannot start a mission.
+func (c *Client) resumeReadyHumanInputMission(missionID string) {
+	if c.ctx != nil && c.ctx.Err() != nil {
+		return
+	}
+	if missionID == "" || c.stores == nil || c.stores.Runtime == nil || c.stores.Missions == nil || c.stores.HumanInputs == nil {
+		return
+	}
+	record, err := c.stores.Missions.GetMission(missionID)
+	if err != nil || record.Status != "waiting" {
+		return
+	}
+	harness, _, err := missionruntime.RestoreDurableHarness(c.stores.Runtime, missionID)
+	if err != nil {
+		log.Printf("human input resume: restore mission %q: %v", missionID, err)
+		return
+	}
+	ready := false
+	for _, wait := range harness.Snapshot().HumanInputWaits {
+		input, err := c.stores.HumanInputs.GetByToolCallID(wait.ToolCallID)
+		if err != nil {
+			log.Printf("human input resume: load request %q: %v", wait.ToolCallID, err)
+			return
+		}
+		if input.State == store.HumanInputStateResolved || input.State == store.HumanInputStateExpired ||
+			(input.State == store.HumanInputStateOpen && input.DeadlineAt != nil && !input.DeadlineAt.After(time.Now().UTC())) {
+			ready = true
+			break
+		}
+	}
+	if !ready {
+		return
+	}
+	c.missionMu.Lock()
+	if c.resumingWaits == nil {
+		c.resumingWaits = make(map[string]bool)
+	}
+	if c.resumingWaits[missionID] || c.runningMissions[missionID] != nil {
+		c.missionMu.Unlock()
+		return
+	}
+	c.resumingWaits[missionID] = true
+	c.missionMu.Unlock()
+	defer func() {
+		c.missionMu.Lock()
+		delete(c.resumingWaits, missionID)
+		c.missionMu.Unlock()
+	}()
+	request, err := protocol.NewRequest(protocol.TypeResumeMission, &protocol.ResumeMissionPayload{
+		MissionID: missionID, MissionName: record.MissionName,
+	})
+	if err != nil {
+		log.Printf("human input resume: create request for %q: %v", missionID, err)
+		return
+	}
+	ack, err := c.handleResumeMission(request)
+	if err != nil {
+		log.Printf("human input resume: mission %q: %v", missionID, err)
+		return
+	}
+	var result protocol.ResumeMissionAckPayload
+	if err := protocol.DecodePayload(ack, &result); err != nil || !result.Accepted {
+		log.Printf("human input resume: mission %q was not accepted: %v %s", missionID, err, result.Reason)
+	}
+}
+
+func (c *Client) scheduleWaitingHumanInputMission(missionID string) {
+	if missionID == "" || c.stores == nil || c.stores.Runtime == nil {
+		return
+	}
+	harness, _, err := missionruntime.RestoreDurableHarness(c.stores.Runtime, missionID)
+	if err != nil {
+		return
+	}
+	var earliest *time.Time
+	for _, wait := range harness.Snapshot().HumanInputWaits {
+		if wait.DeadlineAt != nil && (earliest == nil || wait.DeadlineAt.Before(*earliest)) {
+			deadline := *wait.DeadlineAt
+			earliest = &deadline
+		}
+	}
+	if earliest != nil {
+		delay := time.Until(*earliest)
+		if delay < 0 {
+			delay = 0
+		}
+		// Wake just after the stored deadline so a sub-millisecond clock
+		// difference cannot turn this into an early no-op.
+		delay += time.Millisecond
+		time.AfterFunc(delay, func() { c.resumeReadyHumanInputMission(missionID) })
+	}
+}
+
 // HumanInputReplaySafe declares the persisted tool-call ID contract used by
 // the mission runtime after restart.
 func (c *Client) HumanInputReplaySafe() bool {
@@ -251,6 +416,8 @@ func (c *Client) handleResolveHumanInput(env *protocol.Envelope) (*protocol.Enve
 	}
 	if out.AlreadyResolved {
 		log.Printf("resolve_human_input for %s arrived after a prior resolution — replaying existing record", payload.ToolCallID)
+	} else if c.humanInputNotifier == nil {
+		go c.resumeReadyHumanInputMission(out.Record.MissionID)
 	}
 	return protocol.NewResponse(env.RequestID, protocol.TypeResolveHumanInputResult, &protocol.ResolveHumanInputResultPayload{
 		Accepted:   true,

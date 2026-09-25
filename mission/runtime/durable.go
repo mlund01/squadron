@@ -26,6 +26,9 @@ const (
 	EventTaskProgressed              EventType = "task.progressed"
 	EventTaskRecoveryBlocked         EventType = "task.recovery_blocked"
 	EventTaskRecoveryResolved        EventType = "task.recovery_resolved"
+	EventHumanInputRequested         EventType = "human_input.requested"
+	EventHumanInputResolved          EventType = "human_input.resolved"
+	EventMissionHumanInputWaiting    EventType = "mission.human_input_waiting"
 	EventMissionRecoveryWaiting      EventType = "mission.recovery_waiting"
 	EventTaskCompleted               EventType = "task.completed"
 	EventIterationExpanded           EventType = "iteration.expanded"
@@ -58,6 +61,8 @@ type Event struct {
 	Route         *RouteSelection
 	ProgressPhase string
 	Recovery      *RecoveryBlock
+	HumanInput    *HumanInputWait
+	HumanAnswer   *HumanInputResponse
 	Launch        *CrossMissionLaunch
 	Turns         []ModelTurnTelemetry
 	IterationPlan *IterationPlan
@@ -406,6 +411,60 @@ func (h *DurableHarness) BlockTaskRecoveryWithLease(dispatch Dispatch, block Rec
 	return nil
 }
 
+func (h *DurableHarness) WaitTaskForHumanInputWithLease(dispatch Dispatch, wait HumanInputWait, leaseToken string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	before := h.inner.Checkpoint()
+	candidate, err := RestoreHarness(before)
+	if err != nil {
+		return err
+	}
+	if err := candidate.WaitTaskForHumanInputWithLease(dispatch, wait, leaseToken); err != nil {
+		return err
+	}
+	after := candidate.Checkpoint()
+	if after.Revision == before.Revision {
+		return nil
+	}
+	committed := after.HumanInputWaits[dispatch.AttemptID]
+	events := []Event{{
+		RunID: after.RunID, Revision: after.Revision, Type: EventHumanInputRequested, OccurredAt: time.Now().UTC(),
+		TaskName: dispatch.TaskName, AttemptID: dispatch.AttemptID, CorrelationID: wait.ToolCallID, HumanInput: &committed,
+	}}
+	if err := h.commit(before.Revision, after, events); err != nil {
+		return fmt.Errorf("persisting human input wait: %w", err)
+	}
+	h.inner = candidate
+	return nil
+}
+
+func (h *DurableHarness) ResolveHumanInputWait(attemptID, toolCallID, response, responder string, isError bool, resolvedAt time.Time) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	before := h.inner.Checkpoint()
+	candidate, err := RestoreHarness(before)
+	if err != nil {
+		return err
+	}
+	if err := candidate.ResolveHumanInputWait(attemptID, toolCallID, response, responder, isError, resolvedAt); err != nil {
+		return err
+	}
+	after := candidate.Checkpoint()
+	if after.Revision == before.Revision {
+		return nil
+	}
+	answer := after.HumanInputResponses[toolCallID]
+	events := []Event{{
+		RunID: after.RunID, Revision: after.Revision, Type: EventHumanInputResolved, OccurredAt: resolvedAt,
+		AttemptID: attemptID, CorrelationID: toolCallID, HumanAnswer: &answer,
+	}}
+	if err := h.commit(before.Revision, after, events); err != nil {
+		return fmt.Errorf("persisting human input resolution: %w", err)
+	}
+	h.inner = candidate
+	return nil
+}
+
 func (h *DurableHarness) EnterRecoveryWaiting() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -421,7 +480,11 @@ func (h *DurableHarness) EnterRecoveryWaiting() error {
 	if after.Revision == before.Revision {
 		return nil
 	}
-	events := []Event{{RunID: after.RunID, Revision: after.Revision, Type: EventMissionRecoveryWaiting, OccurredAt: time.Now().UTC()}}
+	eventType := EventMissionRecoveryWaiting
+	if len(after.HumanInputWaits) > 0 && len(after.RecoveryBlocks) == 0 {
+		eventType = EventMissionHumanInputWaiting
+	}
+	events := []Event{{RunID: after.RunID, Revision: after.Revision, Type: eventType, OccurredAt: time.Now().UTC()}}
 	if err := h.commit(before.Revision, after, events); err != nil {
 		return fmt.Errorf("persisting mission recovery wait: %w", err)
 	}

@@ -3,6 +3,7 @@ package wsbridge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -61,6 +62,12 @@ func (c *Client) registerHandlers() {
 	c.handlers[protocol.TypeResolveHumanInput] = c.handleResolveHumanInput
 	c.handlers["sync_variables"] = c.handleSyncVariables
 	c.handlers["sync_model_connections"] = c.handleSyncModelConnections
+}
+
+func isMissionWaiting(err error) bool {
+	var human *missionruntime.MissionHumanInputWaitingError
+	var recovery *missionruntime.MissionRecoveryWaitingError
+	return errors.As(err, &human) || errors.As(err, &recovery)
 }
 
 type syncModelConnectionsPayload struct {
@@ -214,13 +221,25 @@ func (c *Client) handleStopMission(env *protocol.Envelope) (*protocol.Envelope, 
 	c.missionMu.Unlock()
 
 	if !exists {
-		// Mission not running in this process — update DB status directly for stale runs
+		// A human-input wait has no live worker. Stop its durable runtime
+		// before changing the directory status, then close the open prompts.
+		if record, err := c.stores.Missions.GetMission(payload.MissionID); err == nil && record.Status == "waiting" {
+			harness, _, restoreErr := missionruntime.RestoreDurableHarness(c.stores.Runtime, payload.MissionID)
+			if restoreErr != nil {
+				return nil, fmt.Errorf("restore waiting mission before stop: %w", restoreErr)
+			}
+			if stopErr := harness.Stop(); stopErr != nil {
+				return nil, fmt.Errorf("stop waiting mission: %w", stopErr)
+			}
+		}
+		// Mission not running in this process — update DB status directly.
 		if err := c.stores.Missions.UpdateMissionStatus(payload.MissionID, "stopped"); err != nil {
 			return protocol.NewResponse(env.RequestID, protocol.TypeStopMissionAck, &protocol.StopMissionAckPayload{
 				Accepted: false,
 				Reason:   fmt.Sprintf("mission %q not running and failed to update status: %v", payload.MissionID, err),
 			})
 		}
+		c.cancelOpenHumanInputsForMission(payload.MissionID, "[cancelled: mission stopped]")
 		c.emitMissionLifecycleEvent(payload.MissionID, protocol.EventMissionStopped, protocol.MissionStoppedData{
 			MissionID: payload.MissionID,
 		})
@@ -300,8 +319,15 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 			status := "failed"
 			if missionCtx.Err() != nil {
 				status = "stopped"
+			} else if isMissionWaiting(err) {
+				status = "waiting"
 			}
-			c.cancelOpenHumanInputsForMission(mid, "[cancelled: mission "+status+"]")
+			if status != "waiting" {
+				c.cancelOpenHumanInputsForMission(mid, "[cancelled: mission "+status+"]")
+			} else {
+				c.scheduleWaitingHumanInputMission(mid)
+				go c.resumeReadyHumanInputMission(mid)
+			}
 			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
 				MissionID: mid,
 				Status:    status,
@@ -1194,12 +1220,19 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		c.concurrency.NotifyMissionDone(missionName)
 
 		if err != nil {
-			log.Printf("Mission %q failed: %v", missionName, err)
+			log.Printf("Mission %q stopped execution: %v", missionName, err)
 			status := "failed"
 			if ctx.Err() != nil {
 				status = "stopped"
+			} else if isMissionWaiting(err) {
+				status = "waiting"
 			}
-			c.cancelOpenHumanInputsForMission(mid, "[cancelled: mission "+status+"]")
+			if status != "waiting" {
+				c.cancelOpenHumanInputsForMission(mid, "[cancelled: mission "+status+"]")
+			} else {
+				c.scheduleWaitingHumanInputMission(mid)
+				go c.resumeReadyHumanInputMission(mid)
+			}
 			completeEnv, _ := protocol.NewEvent(protocol.TypeMissionComplete, &protocol.MissionCompletePayload{
 				MissionID: mid,
 				Status:    status,
@@ -1365,6 +1398,11 @@ func (c *Client) ResumeOrphanedMissions() {
 
 	for _, r := range records {
 		if childrenWithoutRuntime[r.ID] {
+			continue
+		}
+		if r.Status == "waiting" {
+			c.scheduleWaitingHumanInputMission(r.ID)
+			go c.resumeReadyHumanInputMission(r.ID)
 			continue
 		}
 		if r.Status != "running" {

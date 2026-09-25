@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/zclconf/go-cty/cty"
 
@@ -59,6 +60,9 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		return fmt.Errorf("initialize mission runtime: %w", err)
 	}
 	r.missionID = runID
+	if err := r.reconcileHumanInputWaits(harness); err != nil {
+		return fmt.Errorf("reconcile human input: %w", err)
+	}
 	if err := r.initializeRuntimeDatasets(harness.Snapshot().RunState == missionruntime.RunPending); err != nil {
 		return fmt.Errorf("initialize runtime datasets: %w", err)
 	}
@@ -131,7 +135,8 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 			status = "stopped"
 		} else {
 			var waiting *missionruntime.MissionRecoveryWaitingError
-			if errors.As(runErr, &waiting) {
+			var humanWaiting *missionruntime.MissionHumanInputWaitingError
+			if errors.As(runErr, &waiting) || errors.As(runErr, &humanWaiting) {
 				status = "waiting"
 			}
 		}
@@ -162,6 +167,50 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		return fmt.Errorf("project completed mission: %w", err)
 	}
 	streamer.MissionCompleted(r.mission.Name)
+	return nil
+}
+
+// Inbox rows carry external answers, but only the runtime checkpoint may
+// resume an attempt. Reconcile them before the commander or any worker runs.
+func (r *Runner) reconcileHumanInputWaits(harness *missionruntime.DurableHarness) error {
+	for _, wait := range harness.Snapshot().HumanInputWaits {
+		record, err := r.stores.HumanInputs.GetByToolCallID(wait.ToolCallID)
+		if err != nil {
+			return fmt.Errorf("load request %q: %w", wait.ToolCallID, err)
+		}
+		if record.State == store.HumanInputStateOpen && record.DeadlineAt != nil {
+			record, err = r.stores.HumanInputs.ExpireRequest(wait.ToolCallID, time.Now().UTC())
+			if err != nil {
+				return fmt.Errorf("expire request %q: %w", wait.ToolCallID, err)
+			}
+		}
+		switch record.State {
+		case store.HumanInputStateOpen:
+			continue
+		case store.HumanInputStateResolved:
+			if record.Response == nil || record.ResolvedAt == nil {
+				return fmt.Errorf("resolved request %q has no response or timestamp", wait.ToolCallID)
+			}
+			responder := ""
+			if record.ResponderUserID != nil {
+				responder = *record.ResponderUserID
+			}
+			if err := harness.ResolveHumanInputWait(wait.AttemptID, wait.ToolCallID, *record.Response, responder, false, *record.ResolvedAt); err != nil {
+				return err
+			}
+		case store.HumanInputStateExpired:
+			if record.ExpiredAt == nil || wait.DeadlineAt == nil {
+				return fmt.Errorf("expired request %q has no deadline or timestamp", wait.ToolCallID)
+			}
+			seconds := wait.DeadlineAt.Sub(wait.RequestedAt).Seconds()
+			answer := fmt.Sprintf("[no human response within %.0fs]", seconds)
+			if err := harness.ResolveHumanInputWait(wait.AttemptID, wait.ToolCallID, answer, "", true, *record.ExpiredAt); err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("request %q has unsupported state %q", wait.ToolCallID, record.State)
+		}
+	}
 	return nil
 }
 

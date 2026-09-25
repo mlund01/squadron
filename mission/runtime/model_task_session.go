@@ -320,7 +320,34 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 					StartedAt: operation.StartedAt,
 				}
 				toolCtx := aitools.WithInvocationMetadata(ctx, metadata)
-				toolResult = llm.ToolResultBlock{ToolUseID: call.ID, Content: tool.Call(toolCtx, string(call.Input))}
+				// Mission-scoped worker sessions are not managed agents, so
+				// attach their run identity here for human-input delivery.
+				toolCtx = aitools.WithMissionContext(toolCtx, s.dispatch.RunID, "")
+				if deferred, ok := tool.(aitools.DeferredTool); ok {
+					out, handled := deferred.CallDeferred(toolCtx, string(call.Input))
+					if handled {
+						if out.Pending {
+							if err := ctx.Err(); err != nil {
+								return TaskResultEnvelope{}, err
+							}
+							if out.RequestedAt.IsZero() {
+								return TaskResultEnvelope{}, fmt.Errorf("human input bridge returned a pending request without a request time")
+							}
+							return TaskResultEnvelope{}, &TaskHumanInputWaitingError{Wait: HumanInputWait{
+								AttemptID: s.dispatch.AttemptID, TaskName: s.dispatch.TaskName,
+								ToolUseID: call.ID, ToolName: call.Name, ToolCallID: out.Request.ToolCallID,
+								Question: out.Request.Question, ShortSummary: out.Request.ShortSummary,
+								Context: out.Request.AdditionalContext, Choices: append([]string(nil), out.Request.Choices...),
+								MultiSelect: out.Request.MultiSelect, RequestedAt: out.RequestedAt, DeadlineAt: out.Request.DeadlineAt,
+							}}
+						}
+						toolResult = llm.ToolResultBlock{ToolUseID: call.ID, Content: out.Result}
+					} else {
+						toolResult = llm.ToolResultBlock{ToolUseID: call.ID, Content: tool.Call(toolCtx, string(call.Input))}
+					}
+				} else {
+					toolResult = llm.ToolResultBlock{ToolUseID: call.ID, Content: tool.Call(toolCtx, string(call.Input))}
+				}
 			}
 			// Cancellation is not a tool result. Preserve the in-flight record so
 			// recovery can reconnect/replay a declared-safe operation or visibly

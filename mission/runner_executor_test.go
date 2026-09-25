@@ -194,7 +194,7 @@ func TestMissionScopedRunnerRestartsIterationChildWithoutDuplicatingAttemptOrUsa
 	if err := resumed.Run(context.Background(), newMockMissionStreamer()); err != nil {
 		t.Fatal(err)
 	}
-	restored, _, err := missionruntime.RestoreDurableHarness(resumed.stores.Runtime, runID)
+	restored, eventsAfterResume, err := missionruntime.RestoreDurableHarness(resumed.stores.Runtime, runID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -236,6 +236,13 @@ func TestMissionScopedRunnerRestartsIterationChildWithoutDuplicatingAttemptOrUsa
 	}
 	if provider.callCount() != 3 || len(costs) != 2 {
 		t.Fatalf("second replay duplicated provider work or usage: calls=%d costs=%#v", provider.callCount(), costs)
+	}
+	_, eventsAfterReplay, err := missionruntime.RestoreDurableHarness(replayed.stores.Runtime, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eventsAfterReplay) != len(eventsAfterResume) {
+		t.Fatalf("second replay appended events: before=%d after=%d", len(eventsAfterResume), len(eventsAfterReplay))
 	}
 }
 

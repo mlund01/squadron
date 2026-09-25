@@ -99,6 +99,7 @@ type restartTestProvider struct {
 	mu          sync.Mutex
 	calls       int
 	taskStarted chan struct{}
+	taskName    string
 }
 
 func (p *restartTestProvider) next() int {
@@ -142,7 +143,11 @@ func (p *restartTestProvider) ChatStream(ctx context.Context, _ *llm.ChatRequest
 		defer close(ch)
 		switch call {
 		case 1:
-			response := mockToolCall("start_task", json.RawMessage(`{"task_name":"work","model":"fast"}`))
+			taskName := p.taskName
+			if taskName == "" {
+				taskName = "work"
+			}
+			response := mockToolCall("start_task", json.RawMessage(fmt.Sprintf(`{"task_name":%q,"model":"fast"}`, taskName)))
 			ch <- llm.StreamChunk{Done: true, ContentBlocks: response.ContentBlocks, Usage: &llm.Usage{InputTokens: 7, OutputTokens: 2}}
 		case 2:
 			close(p.taskStarted)
@@ -153,6 +158,85 @@ func (p *restartTestProvider) ChatStream(ctx context.Context, _ *llm.ChatRequest
 		}
 	}()
 	return ch, nil
+}
+
+func TestMissionScopedRunnerRestartsIterationChildWithoutDuplicatingAttemptOrUsage(t *testing.T) {
+	provider := &restartTestProvider{taskStarted: make(chan struct{}), taskName: "work[0]"}
+	storagePath := filepath.Join(t.TempDir(), "iteration-restart.db")
+	cfg := &config.Config{
+		Storage: &config.StorageConfig{Backend: "sqlite", Path: storagePath},
+		Models:  []config.Model{{Name: "test", Provider: config.ProviderOpenAICompatible, BaseURL: "http://localhost", Aliases: map[string]string{"fast": "fast"}}},
+		Missions: []config.Mission{{
+			Name: "iteration_restart", Commander: &config.MissionCommander{Model: "fast"}, Models: []string{"fast"},
+			Datasets: []config.Dataset{{Name: "items", Items: []cty.Value{cty.StringVal("only")}}},
+			Tasks:    []config.Task{{Name: "work", RawObjective: "Process item", Iterator: &config.TaskIterator{Dataset: "items"}}},
+		}},
+	}
+	first, err := NewRunner(cfg, "", "iteration_restart", nil, WithProviderFactory(func() llm.Provider { return provider }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- first.Run(ctx, newMockMissionStreamer()) }()
+	<-provider.taskStarted
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted iteration run = %v", err)
+	}
+	runID := first.missionID
+	first.CloseStores()
+
+	resumed, err := NewRunner(cfg, "", "iteration_restart", nil, WithResume(runID), WithProviderFactory(func() llm.Provider { return provider }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.Run(context.Background(), newMockMissionStreamer()); err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := missionruntime.RestoreDurableHarness(resumed.stores.Runtime, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := restored.Snapshot()
+	if snapshot.RunState != missionruntime.RunCompleted || snapshot.Tasks["work[0]"].Attempt != 1 || len(snapshot.IterationPlans["work"].Children) != 1 {
+		t.Fatalf("resumed iteration state = %#v", snapshot)
+	}
+	parent, ok := restored.TaskResult("work")
+	if !ok {
+		t.Fatal("accepted parent result missing after resume")
+	}
+	var aggregate missionruntime.IterationAggregate
+	if err := json.Unmarshal(parent.Envelope.Data, &aggregate); err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.Total != 1 || len(aggregate.Items) != 1 || aggregate.Items[0].TaskName != "work[0]" {
+		t.Fatalf("resumed parent aggregate = %#v", aggregate)
+	}
+	costs, err := resumed.stores.Costs.GetCostsByMission(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.callCount() != 3 || len(costs) != 2 {
+		t.Fatalf("restart duplicated provider work or usage: calls=%d costs=%#v", provider.callCount(), costs)
+	}
+	resumed.CloseStores()
+
+	replayed, err := NewRunner(cfg, "", "iteration_restart", nil, WithResume(runID), WithProviderFactory(func() llm.Provider { return provider }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer replayed.CloseStores()
+	if err := replayed.Run(context.Background(), newMockMissionStreamer()); err != nil {
+		t.Fatal(err)
+	}
+	costs, err = replayed.stores.Costs.GetCostsByMission(runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if provider.callCount() != 3 || len(costs) != 2 {
+		t.Fatalf("second replay duplicated provider work or usage: calls=%d costs=%#v", provider.callCount(), costs)
+	}
 }
 
 func TestTaskExecutorMissionSelectsMissionScopedRunner(t *testing.T) {

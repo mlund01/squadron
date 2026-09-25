@@ -59,7 +59,7 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		return fmt.Errorf("initialize mission runtime: %w", err)
 	}
 	r.missionID = runID
-	if err := r.initializeRuntimeDatasets(); err != nil {
+	if err := r.initializeRuntimeDatasets(harness.Snapshot().RunState == missionruntime.RunPending); err != nil {
 		return fmt.Errorf("initialize runtime datasets: %w", err)
 	}
 
@@ -186,6 +186,11 @@ func (r *Runner) restoreRuntimeInputs() error {
 	}
 	r.rawInputs = rawInputs
 	r.inputValues = values
+	datasets, err := resolveDatasets(r.mission, values)
+	if err != nil {
+		return fmt.Errorf("resolve resumed datasets: %w", err)
+	}
+	r.resolvedDatasets = datasets
 	r.secretValues = make(map[string]string)
 	for _, input := range r.mission.Inputs {
 		if input.Protected && input.Value != nil && input.Value.Type() == cty.String {
@@ -195,19 +200,25 @@ func (r *Runner) restoreRuntimeInputs() error {
 	return nil
 }
 
-func (r *Runner) initializeRuntimeDatasets() error {
+func (r *Runner) initializeRuntimeDatasets(beforeStart bool) error {
 	for _, dataset := range r.mission.Datasets {
 		id, err := r.stores.Datasets.GetDatasetByName(r.missionID, dataset.Name)
 		if err != nil {
-			if r.resumeMissionID != "" || !errors.Is(err, sql.ErrNoRows) {
+			if !beforeStart || !errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("restore dataset %q: %w", dataset.Name, err)
 			}
 			id, err = r.stores.Datasets.CreateDataset(r.missionID, dataset.Name, dataset.Description)
 			if err != nil {
 				return fmt.Errorf("create dataset %q: %w", dataset.Name, err)
 			}
-			if items := r.resolvedDatasets[dataset.Name]; len(items) > 0 {
-				if err := r.stores.Datasets.AddItems(id, items); err != nil {
+		}
+		if beforeStart && len(r.resolvedDatasets[dataset.Name]) > 0 {
+			count, err := r.stores.Datasets.GetItemCount(id)
+			if err != nil {
+				return fmt.Errorf("count initial dataset %q: %w", dataset.Name, err)
+			}
+			if count == 0 {
+				if err := r.stores.Datasets.AddItems(id, r.resolvedDatasets[dataset.Name]); err != nil {
 					return fmt.Errorf("populate dataset %q: %w", dataset.Name, err)
 				}
 			}

@@ -31,7 +31,7 @@ The dataset is locked before expansion. Its ordered items and digest are persist
 
 By default, children run sequentially: `task[1]` becomes eligible only after `task[0]` succeeds. With `parallel = true`, independent children can run concurrently, bounded by both the iterator's `concurrency_limit` (default 5) and the mission's maximum parallelism. `smoketest = true` makes every later child wait until child 0 succeeds. Each child has its own attempts and `max_retries` policy.
 
-`start_delay` is parsed as milliseconds between initial parallel starts. Enforcement in the mission-scoped scheduler is still pending; do not rely on it for rate limiting. Use `concurrency_limit` and the downstream service's own limits for now.
+`start_delay` sets the milliseconds between worker starts in the first parallel batch. The harness persists each child's earliest start time with its dispatch, so a restart preserves the stagger without rerunning an attempt. It does not replace a downstream service's own rate limit.
 
 An empty dataset completes the parent task without launching a worker. Once every child succeeds, the parent completes and downstream dependencies become eligible. If an attempt exhausts its retries, the mission fails rather than treating a partial set of children as a successful parent.
 

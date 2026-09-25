@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	"github.com/zclconf/go-cty/cty"
 
 	"squadron/config"
 	"squadron/llm"
@@ -213,6 +216,150 @@ func TestMissionScopedRunnerCompletesThroughOneCommander(t *testing.T) {
 	}
 	if result, ok := restored.TaskResult("work"); !ok || result.Envelope.Summary != "Work completed" {
 		t.Fatalf("task result = %#v, %v", result, ok)
+	}
+}
+
+func TestMissionScopedRunnerExecutesInlineIteration(t *testing.T) {
+	provider := newMockProvider(
+		mockToolCall("start_task", json.RawMessage(`{"task_name":"work[0]","model":"fast"}`)),
+		mockResponse{Content: "First item complete"},
+		mockToolCall("start_task", json.RawMessage(`{"task_name":"work[1]","model":"fast"}`)),
+		mockResponse{Content: "Second item complete"},
+	)
+	cfg := &config.Config{
+		Storage: &config.StorageConfig{Backend: "sqlite", Path: ":memory:"},
+		Models:  []config.Model{{Name: "test", Provider: config.ProviderOpenAICompatible, BaseURL: "http://localhost", Aliases: map[string]string{"fast": "fast"}}},
+		Missions: []config.Mission{{
+			Name: "iterate_inline", Commander: &config.MissionCommander{Model: "fast"}, Models: []string{"fast"},
+			Datasets: []config.Dataset{{Name: "items", Items: []cty.Value{cty.StringVal("first"), cty.StringVal("second")}}},
+			Tasks:    []config.Task{{Name: "work", RawObjective: "Process the supplied item", Iterator: &config.TaskIterator{Dataset: "items"}}},
+		}},
+	}
+	runner, err := NewRunner(cfg, "", "iterate_inline", nil, WithProviderFactory(func() llm.Provider { return provider }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.CloseStores()
+	if err := runner.Run(context.Background(), newMockMissionStreamer()); err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := missionruntime.RestoreDurableHarness(runner.stores.Runtime, runner.missionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := restored.Snapshot()
+	if snapshot.RunState != missionruntime.RunCompleted || snapshot.Tasks["work"].State != missionruntime.TaskCompleted || len(snapshot.IterationPlans["work"].Children) != 2 {
+		t.Fatalf("iterated mission snapshot = %#v", snapshot)
+	}
+	if len(snapshot.Active) != 0 {
+		t.Fatalf("active tasks after completion = %#v", snapshot.Active)
+	}
+	for index, want := range []string{`"first"`, `"second"`} {
+		name := fmt.Sprintf("work[%d]", index)
+		result, ok := restored.TaskResult(name)
+		if !ok || result.Envelope.Status != missionruntime.ResultSucceeded {
+			t.Fatalf("child %s result = %#v, %v", name, result, ok)
+		}
+		if got := string(snapshot.IterationPlans["work"].Children[index].Item); got != want {
+			t.Fatalf("child %s frozen item = %s, want %s", name, got, want)
+		}
+	}
+}
+
+func TestMissionScopedRunnerIteratesDatasetProducedByTaskWorker(t *testing.T) {
+	provider := newMockProvider(
+		mockToolCall("start_task", json.RawMessage(`{"task_name":"load","model":"fast"}`)),
+		mockToolCall("builtins_dataset_set", json.RawMessage(`{"name":"items","items":[{"label":"alpha"},{"label":"beta"}]}`)),
+		mockResponse{Content: "Dataset populated"},
+		mockToolCall("start_task", json.RawMessage(`{"task_name":"work[0]","model":"fast"}`)),
+		mockResponse{Content: "Processed alpha"},
+		mockToolCall("start_task", json.RawMessage(`{"task_name":"work[1]","model":"fast"}`)),
+		mockResponse{Content: "Processed beta"},
+	)
+	cfg := &config.Config{
+		Storage: &config.StorageConfig{Backend: "sqlite", Path: ":memory:"},
+		Models:  []config.Model{{Name: "test", Provider: config.ProviderOpenAICompatible, BaseURL: "http://localhost", Aliases: map[string]string{"fast": "fast"}}},
+		Missions: []config.Mission{{
+			Name: "iterate_produced", Commander: &config.MissionCommander{Model: "fast"}, Models: []string{"fast"},
+			Datasets: []config.Dataset{{Name: "items"}},
+			Tasks: []config.Task{
+				{Name: "load", RawObjective: "Populate the items dataset", Tools: []string{"builtins.dataset.set"}},
+				{Name: "work", RawObjective: "Process the supplied item", DependsOn: []string{"load"}, Iterator: &config.TaskIterator{Dataset: "items"}},
+			},
+		}},
+	}
+	runner, err := NewRunner(cfg, "", "iterate_produced", nil, WithProviderFactory(func() llm.Provider { return provider }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runner.CloseStores()
+	if err := runner.Run(context.Background(), newMockMissionStreamer()); err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := missionruntime.RestoreDurableHarness(runner.stores.Runtime, runner.missionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(restored.Snapshot().IterationPlans["work"].Children); got != 2 {
+		t.Fatalf("frozen children after dataset tool = %d, want 2", got)
+	}
+	if state := restored.Snapshot().RunState; state != missionruntime.RunCompleted {
+		t.Fatalf("run state = %q", state)
+	}
+}
+
+func TestRuntimeDatasetInitializationRepairsPendingRunAfterRestart(t *testing.T) {
+	storagePath := filepath.Join(t.TempDir(), "pending-iteration.db")
+	cfg := &config.Config{
+		Storage: &config.StorageConfig{Backend: "sqlite", Path: storagePath},
+		Models:  []config.Model{{Name: "test", Provider: config.ProviderOpenAICompatible, BaseURL: "http://localhost", Aliases: map[string]string{"fast": "fast"}}},
+		Missions: []config.Mission{{
+			Name: "pending_iteration", Commander: &config.MissionCommander{Model: "fast"}, Models: []string{"fast"},
+			Datasets: []config.Dataset{{Name: "items", Items: []cty.Value{cty.StringVal("first"), cty.StringVal("second")}}},
+			Tasks:    []config.Task{{Name: "work", RawObjective: "Process item", Iterator: &config.TaskIterator{Dataset: "items"}}},
+		}},
+	}
+	first, err := NewRunner(cfg, "", "pending_iteration", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runID, err := first.createMissionRecord(`{}`, `{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions, err := RuntimeTaskDefinitions(first.mission)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := missionruntime.CreateDurableHarness(first.stores.Runtime, runID, runID+":commander", definitions); err != nil {
+		t.Fatal(err)
+	}
+	first.CloseStores() // Simulate a crash before any dataset was created.
+
+	resumed, err := NewRunner(cfg, "", "pending_iteration", nil, WithResume(runID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resumed.CloseStores()
+	if err := resumed.restoreRuntimeInputs(); err != nil {
+		t.Fatal(err)
+	}
+	resumed.missionID = runID
+	if err := resumed.initializeRuntimeDatasets(true); err != nil {
+		t.Fatal(err)
+	}
+	id := resumed.datasetIDs["items"]
+	count, err := resumed.stores.Datasets.GetItemCount(id)
+	if err != nil || count != 2 {
+		t.Fatalf("repaired dataset count = %d, %v", count, err)
+	}
+	// A second startup cannot duplicate the initial items.
+	if err := resumed.initializeRuntimeDatasets(true); err != nil {
+		t.Fatal(err)
+	}
+	count, err = resumed.stores.Datasets.GetItemCount(id)
+	if err != nil || count != 2 {
+		t.Fatalf("replayed initialization count = %d, %v", count, err)
 	}
 }
 

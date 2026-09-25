@@ -309,6 +309,18 @@ func sortedRecoveryBlocks(source map[string]RecoveryBlock) []RecoveryBlock {
 }
 
 func (c *Coordinator) execute(ctx context.Context, dispatch Dispatch) error {
+	if delay := time.Until(dispatch.StartNotBefore); !dispatch.StartNotBefore.IsZero() && delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if c.harness.Snapshot().RunState != RunRunning {
+		return nil
+	}
 	leaseToken := uuid.NewString()
 	if err := c.acquireExecutionLease(ctx, dispatch.AttemptID, leaseToken); err != nil {
 		return err

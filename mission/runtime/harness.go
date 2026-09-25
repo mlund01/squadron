@@ -237,14 +237,16 @@ type IterationInput struct {
 
 // Dispatch is the accepted immutable identity for one task attempt.
 type Dispatch struct {
-	RunID         string
-	RequestID     string
-	AttemptID     string
-	TaskName      string
-	Attempt       int
-	CommanderID   string
-	StartRevision uint64
-	Grant         ExecutionGrant
+	RunID          string
+	RequestID      string
+	AttemptID      string
+	TaskName       string
+	Attempt        int
+	CommanderID    string
+	StartRevision  uint64
+	DispatchedAt   time.Time
+	StartNotBefore time.Time
+	Grant          ExecutionGrant
 }
 
 type ToolOperationStatus string
@@ -1205,6 +1207,7 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 	h.taskStates[request.TaskName] = TaskDispatching
 	h.attempts[request.TaskName]++
 	attempt := h.attempts[request.TaskName]
+	dispatchedAt := time.Now().UTC()
 	dispatch := Dispatch{
 		RunID:         h.runID,
 		RequestID:     request.RequestID,
@@ -1213,7 +1216,11 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 		Attempt:       attempt,
 		CommanderID:   h.commander.ID,
 		StartRevision: h.revision,
+		DispatchedAt:  dispatchedAt,
 		Grant:         cloneExecutionGrant(request.Grant),
+	}
+	if definition.ParentTask != "" && attempt == 1 {
+		dispatch.StartNotBefore = h.iterationStartNotBeforeLocked(definition.ParentTask, request.TaskName, dispatchedAt)
 	}
 	h.taskStates[request.TaskName] = TaskRunning
 	h.dispatches[request.RequestID] = dispatch
@@ -1221,6 +1228,40 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 	h.taskProgress[dispatch.AttemptID] = TaskAttemptProgress{AttemptID: dispatch.AttemptID, Phase: "dispatched", Tools: make(map[string]ToolOperation)}
 	h.publishReadySetLocked()
 	return cloneDispatch(dispatch), nil
+}
+
+func (h *Harness) iterationStartNotBeforeLocked(parent, childName string, now time.Time) time.Time {
+	plan := h.iterationPlans[parent]
+	if !plan.Policy.Parallel || plan.Policy.StartDelayMS <= 0 {
+		return time.Time{}
+	}
+	if plan.Policy.Smoketest && len(plan.Children) > 0 && childName == plan.Children[0].Name {
+		return time.Time{}
+	}
+	batchSize := min(plan.Policy.ConcurrencyLimit, h.maxParallel)
+	if batchSize <= 1 {
+		return time.Time{}
+	}
+	position := 0
+	base := now
+	for _, child := range plan.Children {
+		if plan.Policy.Smoketest && child.Index == 0 {
+			continue
+		}
+		if h.attempts[child.Name] == 0 || child.Name == childName {
+			continue
+		}
+		position++
+		for _, prior := range h.dispatches {
+			if prior.TaskName == child.Name && !prior.DispatchedAt.IsZero() && prior.DispatchedAt.Before(base) {
+				base = prior.DispatchedAt
+			}
+		}
+	}
+	if position >= batchSize {
+		return time.Time{}
+	}
+	return base.Add(time.Duration(position*plan.Policy.StartDelayMS) * time.Millisecond)
 }
 
 func validateExecutionGrant(taskName string, grant ExecutionGrant) error {

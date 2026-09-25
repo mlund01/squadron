@@ -7,7 +7,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	persistence "squadron/store"
 )
@@ -201,5 +203,104 @@ func TestSQLiteIterationPlanAndChildAttemptSurviveRestart(t *testing.T) {
 	snapshot = restored.Snapshot()
 	if !reflect.DeepEqual(snapshot.Ready, []string{"work[1]"}) {
 		t.Fatalf("smoketest did not release second item: %v", snapshot.Ready)
+	}
+}
+
+type timedIterationExecutor struct {
+	mu     sync.Mutex
+	starts map[string]time.Time
+}
+
+func (e *timedIterationExecutor) Execute(_ context.Context, dispatch Dispatch) (TaskResultEnvelope, error) {
+	e.mu.Lock()
+	e.starts[dispatch.TaskName] = time.Now()
+	e.mu.Unlock()
+	return testResult(dispatch), nil
+}
+
+func TestIterationStartDelayIsPersistedAndEnforcedAfterRestore(t *testing.T) {
+	policy := IterationPolicy{Dataset: "items", Parallel: true, ConcurrencyLimit: 3, StartDelayMS: 60}
+	runtimeStore := persistence.NewMemoryRuntimeStore()
+	h, err := CreateDurableHarnessWithMaxParallel(runtimeStore, "run-stagger", "commander", []TaskDefinition{{Name: "work", Iterator: &policy}}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ExpandIteration(iterationTestPlan(t, policy, `1`, `2`, `3`)); err != nil {
+		t.Fatal(err)
+	}
+	for index := range 3 {
+		name := fmt.Sprintf("work[%d]", index)
+		if _, err := h.DispatchTask(DispatchRequest{RequestID: name, TaskName: name, ReadySetRevision: h.Snapshot().Revision, Grant: testGrant(name)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restored, _, err := RestoreDurableHarness(runtimeStore, "run-stagger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active := restored.Snapshot().Active
+	for index := 1; index < len(active); index++ {
+		if delay := active[index].StartNotBefore.Sub(active[index-1].StartNotBefore); delay < 50*time.Millisecond {
+			t.Fatalf("persisted start spacing %d = %v", index, delay)
+		}
+	}
+	executor := &timedIterationExecutor{starts: make(map[string]time.Time)}
+	coordinator, err := NewCoordinator(restored, &readyCommander{}, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.executeConcurrent(context.Background(), active); err != nil {
+		t.Fatal(err)
+	}
+	for index := 1; index < 3; index++ {
+		previous, current := fmt.Sprintf("work[%d]", index-1), fmt.Sprintf("work[%d]", index)
+		if gap := executor.starts[current].Sub(executor.starts[previous]); gap < 40*time.Millisecond {
+			t.Fatalf("actual start gap %s -> %s = %v", previous, current, gap)
+		}
+	}
+}
+
+func TestIterationChildRetryKeepsFrozenItemAndCompletesParent(t *testing.T) {
+	policy := IterationPolicy{Dataset: "items", MaxRetries: 1}
+	runtimeStore := persistence.NewMemoryRuntimeStore()
+	h, err := CreateDurableHarness(runtimeStore, "run-iteration-retry", "commander", []TaskDefinition{{Name: "work", Iterator: &policy}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := h.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.ExpandIteration(iterationTestPlan(t, policy, `{"id":"stable"}`)); err != nil {
+		t.Fatal(err)
+	}
+	first, err := h.DispatchTask(DispatchRequest{RequestID: "first", TaskName: "work[0]", ReadySetRevision: h.Snapshot().Revision, Grant: testGrant("work[0]")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := h.FailTask("work[0]", first.AttemptID, fmt.Errorf("transient")); err != nil || !retry {
+		t.Fatalf("FailTask() = %v, %v", retry, err)
+	}
+	restored, _, err := RestoreDurableHarness(runtimeStore, "run-iteration-retry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Snapshot().Tasks["work"].State != TaskWaiting {
+		t.Fatal("parent completed before child retry")
+	}
+	second, err := restored.DispatchTask(DispatchRequest{RequestID: "second", TaskName: "work[0]", ReadySetRevision: restored.Snapshot().Revision, Grant: testGrant("work[0]")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Attempt != 2 || second.Grant.Iteration == nil || string(second.Grant.Iteration.Item) != `{"id":"stable"}` {
+		t.Fatalf("retried child = %#v", second)
+	}
+	if err := restored.CompleteTask("work[0]", second.AttemptID, testResult(second)); err != nil {
+		t.Fatal(err)
+	}
+	if restored.Snapshot().RunState != RunCompleted || restored.Snapshot().Tasks["work"].State != TaskCompleted {
+		t.Fatalf("retry completion = %#v", restored.Snapshot())
 	}
 }

@@ -88,6 +88,49 @@ func TestCoordinatorParksHumanInputWithoutHoldingExecutionLease(t *testing.T) {
 	}
 }
 
+func TestStoppedHumanInputWaitResumesOriginalAttemptWithCancellationResponse(t *testing.T) {
+	t.Parallel()
+	runtimeStore := store.NewMemoryRuntimeStore()
+	harness, err := CreateDurableHarness(runtimeStore, "run-stopped-human", "commander-human", []TaskDefinition{{Name: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &humanWaitingExecutor{}
+	coordinator, err := NewCoordinator(harness, &readyCommander{}, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var waiting *MissionHumanInputWaitingError
+	if err := coordinator.Run(context.Background()); !errors.As(err, &waiting) || len(waiting.Waits) != 1 {
+		t.Fatalf("Run() error = %v, want human input wait", err)
+	}
+	wait := waiting.Waits[0]
+	if err := harness.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := RestoreDurableHarness(runtimeStore, "run-stopped-human")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const cancellation = "[cancelled: mission stopped]"
+	if err := restored.ResolveHumanInputWait(wait.AttemptID, wait.ToolCallID, cancellation, "system", false, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot := restored.Snapshot(); snapshot.RunState != RunStopped || snapshot.Tasks["work"].State != TaskRunning || len(snapshot.Active) != 1 || snapshot.Active[0].AttemptID != wait.AttemptID {
+		t.Fatalf("stopped snapshot = %#v", snapshot)
+	}
+	resumed, err := NewCoordinator(restored, &readyCommander{}, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resumed.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run() error = %v", err)
+	}
+	if snapshot := restored.Snapshot(); snapshot.RunState != RunCompleted || snapshot.Tasks["work"].Attempt != 1 || executor.calls != 2 {
+		t.Fatalf("completed snapshot/calls = %#v / %d", snapshot, executor.calls)
+	}
+}
+
 func TestHumanInputWaitDoesNotConsumeParallelTaskCapacity(t *testing.T) {
 	harness, err := CreateDurableHarnessWithMaxParallel(store.NewMemoryRuntimeStore(), "run-parallel-human", "commander", []TaskDefinition{
 		{Name: "ask"}, {Name: "other"},

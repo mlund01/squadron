@@ -60,6 +60,165 @@ func TestSQLiteHumanInputBoundarySurvivesRestarts(t *testing.T) {
 	}
 }
 
+func TestSQLiteHumanInputWaitSurvivesAbruptProcessDeath(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "human-wait.db")
+	command := exec.Command(os.Args[0], "-test.run=^TestSQLiteHumanInputWaitCrashHelper$", "-test.count=1")
+	command.Env = append(os.Environ(), "SQUADRON_HUMAN_WAIT_CRASH_HELPER=1", "SQUADRON_HUMAN_WAIT_CRASH_DB="+dbPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("human wait crash helper failed: %v\n%s", err, output)
+	}
+
+	const runID = "run-human-abrupt-death"
+	bundle, harness, _ := reopenSQLiteHarness(t, dbPath, runID)
+	defer closeSQLiteBundle(t, bundle)
+	snapshot := harness.Snapshot()
+	if snapshot.RunState != RunWaiting || len(snapshot.HumanInputWaits) != 1 || len(snapshot.Active) != 0 {
+		t.Fatalf("restored human wait = %#v", snapshot)
+	}
+	var wait HumanInputWait
+	for _, pending := range snapshot.HumanInputWaits {
+		wait = pending
+	}
+	requests, total, err := bundle.HumanInputs.ListRequests(persistence.HumanInputFilter{MissionID: runID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(requests) != 1 || requests[0].State != persistence.HumanInputStateOpen {
+		t.Fatalf("restored human requests = %#v, total=%d", requests, total)
+	}
+	answer, err := bundle.HumanInputs.ResolveRequest(wait.ToolCallID, "yes", "user-1")
+	if err != nil || answer.ResolvedAt == nil {
+		t.Fatalf("ResolveRequest() = %#v, %v", answer, err)
+	}
+	if err := harness.ResolveHumanInputWait(wait.AttemptID, wait.ToolCallID, "yes", "user-1", false, *answer.ResolvedAt); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.ResolveHumanInputWait(wait.AttemptID, wait.ToolCallID, "yes", "user-1", false, *answer.ResolvedAt); err != nil {
+		t.Fatalf("duplicate answer was not idempotent: %v", err)
+	}
+	if err := harness.ResolveHumanInputWait(wait.AttemptID, wait.ToolCallID, "different", "user-2", false, *answer.ResolvedAt); err == nil {
+		t.Fatal("conflicting answer changed the accepted response")
+	}
+	executor := &humanWaitingExecutor{}
+	coordinator, err := NewCoordinator(harness, &readyCommander{}, executor, staticGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Run(context.Background()); err != nil {
+		t.Fatalf("resumed Run() error = %v", err)
+	}
+	if final := harness.Snapshot(); final.RunState != RunCompleted || final.Tasks["work"].Attempt != 1 || executor.calls != 1 {
+		t.Fatalf("final snapshot/calls = %#v / %d", final, executor.calls)
+	}
+	_, total, err = bundle.HumanInputs.ListRequests(persistence.HumanInputFilter{MissionID: runID})
+	if err != nil || total != 1 {
+		t.Fatalf("human request count after resume = %d, %v", total, err)
+	}
+}
+
+func TestSQLiteHumanInputWaitCrashHelper(t *testing.T) {
+	if os.Getenv("SQUADRON_HUMAN_WAIT_CRASH_HELPER") != "1" {
+		t.Skip("subprocess helper")
+	}
+	bundle := openSQLiteBundle(t, os.Getenv("SQUADRON_HUMAN_WAIT_CRASH_DB"))
+	const runID = "run-human-abrupt-death"
+	harness, err := CreateDurableHarness(bundle.Runtime, runID, "commander-human", []TaskDefinition{{Name: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := harness.DispatchTask(DispatchRequest{RequestID: "dispatch-work", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("work")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if _, err := harness.AcquireExecutionLease(dispatch.AttemptID, "worker", "lease", now, time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	progress := TaskAttemptProgress{AttemptID: dispatch.AttemptID, Phase: "tool_calls_received", Tools: map[string]ToolOperation{
+		"call-1": {ToolUseID: "call-1", ToolName: "builtins.human.ask", InputJSON: `{"question":"Proceed?"}`, Status: ToolOperationInFlight, StartedAt: now},
+	}}
+	if err := harness.SaveTaskProgressWithLease(dispatch, progress, "lease"); err != nil {
+		t.Fatal(err)
+	}
+	wait := HumanInputWait{AttemptID: dispatch.AttemptID, TaskName: "work", ToolUseID: "call-1", ToolName: "builtins.human.ask", ToolCallID: "stable-call", Question: "Proceed?", RequestedAt: now}
+	if err := bundle.HumanInputs.CreateRequest(&persistence.HumanInputRequestRecord{MissionID: runID, ToolCallID: wait.ToolCallID, Question: wait.Question}); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.WaitTaskForHumanInputWithLease(dispatch, wait, "lease"); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.EnterRecoveryWaiting(); err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately skip Bundle.Close and every cleanup hook at the waiting
+	// boundary, exactly as an abruptly terminated worker would.
+	os.Exit(0)
+}
+
+func TestSQLiteRetryDeadlineSurvivesRestartAndFiresOnce(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "retry.db")
+	bundle := openSQLiteBundle(t, dbPath)
+	const runID = "run-sqlite-retry"
+	harness, err := CreateDurableHarness(bundle.Runtime, runID, "commander-retry", []TaskDefinition{{Name: "work", MaxRetries: 1, RetryDelaySeconds: 60}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := harness.DispatchTask(DispatchRequest{RequestID: "first-dispatch", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("work")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retry, err := harness.FailTask("work", dispatch.AttemptID, errors.New("transient")); err != nil || !retry {
+		t.Fatalf("FailTask() = %v, %v", retry, err)
+	}
+	deadline := harness.Snapshot().RetryDeadlines["work"]
+	if deadline.IsZero() {
+		t.Fatal("failed task has no persisted retry deadline")
+	}
+	if err := harness.EnterRecoveryWaiting(); err != nil {
+		t.Fatal(err)
+	}
+	closeSQLiteBundle(t, bundle)
+
+	bundle, harness, beforeEvents := reopenSQLiteHarness(t, dbPath, runID)
+	defer closeSQLiteBundle(t, bundle)
+	if ready, err := harness.PromoteDueRetries(deadline.Add(-time.Nanosecond)); err != nil || len(ready) != 0 {
+		t.Fatalf("early promotion = %v, %v", ready, err)
+	}
+	if harness.Snapshot().RunState != RunWaiting {
+		t.Fatal("retry woke before its persisted deadline")
+	}
+	if ready, err := harness.PromoteDueRetries(deadline); err != nil || !reflect.DeepEqual(ready, []string{"work"}) {
+		t.Fatalf("due promotion = %v, %v", ready, err)
+	}
+	if ready, err := harness.PromoteDueRetries(deadline.Add(time.Second)); err != nil || len(ready) != 0 {
+		t.Fatalf("duplicate promotion = %v, %v", ready, err)
+	}
+	_, afterEvents, err := RestoreDurableHarness(bundle.Runtime, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(afterEvents) != len(beforeEvents)+3 {
+		t.Fatalf("retry promotion events = %d, want %d", len(afterEvents), len(beforeEvents)+3)
+	}
+	coordinator, err := NewCoordinator(harness, &retryCommander{}, &failOnceExecutor{attempts: 1}, staticGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator.now = func() time.Time { return deadline }
+	if err := coordinator.Run(context.Background()); err != nil {
+		t.Fatalf("Run() after retry deadline = %v", err)
+	}
+	if final := harness.Snapshot(); final.RunState != RunCompleted || final.Tasks["work"].Attempt != 2 {
+		t.Fatalf("final retry state = %#v", final)
+	}
+}
+
 func TestSQLiteRecoveryAfterAbruptProcessDeath(t *testing.T) {
 	directory := t.TempDir()
 	dbPath := filepath.Join(directory, "runtime.db")

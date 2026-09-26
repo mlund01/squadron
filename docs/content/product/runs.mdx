@@ -45,6 +45,9 @@ tool calls from the persisted transcript; tool inputs, results, and attachments
 remain inside their expandable call. Trace shows persisted state transitions and
 attempt details. A waiting task displays its human-input request or retry
 deadline so the operator can distinguish waiting from active work.
+When a route launches another mission, the parent run links directly to the
+separately recorded child run. The child has its own commander, inputs, identity,
+and execution timeline.
 
 Only actual runtime records appear in these views. A newly started run may show
 ready tasks before its first commander turn has finished. While a commander or

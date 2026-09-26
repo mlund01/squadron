@@ -223,6 +223,11 @@ func (p *CapabilityPolicy) ResolveGrant(taskName, model string, selectedMissionT
 	}
 
 	for _, toolRef := range selectedMissionTools {
+		// Task tools are mandatory. A commander may redundantly name one in
+		// its optional selection; deduplication below still grants it once.
+		if containsString(task.Tools, toolRef) {
+			continue
+		}
 		if !containsString(p.mission.Tools, toolRef) {
 			return TaskCapabilityGrant{}, fmt.Errorf("tool '%s' is not in the mission capability pool", toolRef)
 		}

@@ -1,6 +1,7 @@
 package mission
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -114,6 +115,15 @@ func TestRuntimeGrantResolverPersistsPolicyAndRunContext(t *testing.T) {
 	}
 	if !strings.Contains(grant.PolicyJSON, "mcp.files.read") || !strings.Contains(grant.PolicyJSON, "plugins.search.all") {
 		t.Fatalf("policy snapshot = %s", grant.PolicyJSON)
+	}
+	redundant, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{
+		TaskName: "collect", Model: "fast", Tools: []string{"mcp.files.read", "plugins.search.all"},
+	})
+	if err != nil {
+		t.Fatalf("redundant task tool was rejected: %v", err)
+	}
+	if !reflect.DeepEqual(redundant.Tools, []string{"mcp.files.read", "plugins.search.all"}) {
+		t.Fatalf("redundant task tool was not deduplicated: %q", redundant.Tools)
 	}
 	if _, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{
 		TaskName: "collect", Model: "fast", Tools: []string{"start_task"},

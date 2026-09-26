@@ -69,7 +69,7 @@ func TestCommanderSystemPromptDefinesGraphWithoutTaskCapabilities(t *testing.T) 
 			{Name: "write", Objective: "Write report", DependsOn: []string{"collect"}},
 		},
 		VisibleInputs:        map[string]any{"topic": "durability"},
-		Policies: map[string]any{"task_allowed_models": map[string][]string{"collect": {"claude_haiku_4_5"}}},
+		Policies:             map[string]any{"task_allowed_models": map[string][]string{"collect": {"claude_haiku_4_5"}}},
 		ConfigurationVersion: "sha256:abc",
 	})
 	if err != nil {
@@ -82,6 +82,36 @@ func TestCommanderSystemPromptDefinesGraphWithoutTaskCapabilities(t *testing.T) 
 	}
 	if !strings.Contains(prompt, "cannot execute mission or task capabilities") {
 		t.Fatalf("prompt does not state capability boundary: %s", prompt)
+	}
+}
+
+func TestModelCommanderRetriesParallelControlCallsWithoutPersistingRejectedTurn(t *testing.T) {
+	t.Parallel()
+	session := &fakeCommanderSession{responses: []*llm.ChatResponse{
+		{ID: "parallel", Usage: llm.Usage{InputTokens: 10, OutputTokens: 5}, ContentBlocks: []llm.ContentBlock{
+			{Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "first", Name: "start_task", Input: json.RawMessage(`{"task_name":"audience","model":"fast"}`)}},
+			{Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "second", Name: "start_task", Input: json.RawMessage(`{"task_name":"benefit","model":"fast"}`)}},
+		}},
+		{ID: "single", Usage: llm.Usage{InputTokens: 12, OutputTokens: 3}, ContentBlocks: []llm.ContentBlock{
+			{Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "one", Name: "start_task", Input: json.RawMessage(`{"task_name":"audience","model":"fast"}`)}},
+		}},
+	}}
+	commander, err := NewModelCommander(session, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := commander.Decide(context.Background(), Snapshot{RunID: "run-1", Revision: 1, Ready: []string{"audience", "benefit"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Dispatch.TaskName != "audience" || decision.Message.ID != "single" || len(decision.Message.Parts) != 1 {
+		t.Fatalf("unexpected accepted decision: %#v", decision)
+	}
+	if decision.Message.Telemetry.InputTokens != 22 || decision.Message.Telemetry.OutputTokens != 8 {
+		t.Fatalf("retry token accounting = %#v", decision.Message.Telemetry)
+	}
+	if len(session.prompts) != 2 || !strings.Contains(session.prompts[1], "exactly ONE") || session.loadCount != 2 {
+		t.Fatalf("retry prompts = %#v, restored %d times", session.prompts, session.loadCount)
 	}
 }
 
@@ -210,17 +240,29 @@ func TestModelCommanderRequestsFocusedTaskClarification(t *testing.T) {
 }
 
 type fakeCommanderSession struct {
-	tools    []llm.ToolDefinition
-	loaded   []llm.Message
-	results  []llm.ToolResultBlock
-	response *llm.ChatResponse
+	tools     []llm.ToolDefinition
+	loaded    []llm.Message
+	results   []llm.ToolResultBlock
+	response  *llm.ChatResponse
+	responses []*llm.ChatResponse
+	prompts   []string
+	loadCount int
 }
 
 func (s *fakeCommanderSession) SetTools(tools []llm.ToolDefinition) { s.tools = tools }
-func (s *fakeCommanderSession) LoadMessages(messages []llm.Message) { s.loaded = messages }
+func (s *fakeCommanderSession) LoadMessages(messages []llm.Message) {
+	s.loaded = messages
+	s.loadCount++
+}
 func (s *fakeCommanderSession) AddToolResults(results []llm.ToolResultBlock) {
 	s.results = append(s.results, results...)
 }
-func (s *fakeCommanderSession) SendMessageStream(context.Context, llm.Message, func(llm.StreamChunk)) (*llm.ChatResponse, error) {
+func (s *fakeCommanderSession) SendMessageStream(_ context.Context, prompt llm.Message, _ func(llm.StreamChunk)) (*llm.ChatResponse, error) {
+	s.prompts = append(s.prompts, prompt.GetTextContent())
+	if len(s.responses) > 0 {
+		response := s.responses[0]
+		s.responses = s.responses[1:]
+		return response, nil
+	}
 	return s.response, nil
 }

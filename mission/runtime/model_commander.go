@@ -84,7 +84,7 @@ func commanderSystemPrompt(bootstrap CommanderBootstrap) (string, error) {
 	}
 	return `You are the single commander for this mission run.
 
-Follow the declared mission graph. The harness is the sole authority for task eligibility and state transitions. An iterated task expands into ready child task instances named parent[index]; start only those children, never the parent. Each child worker receives its own frozen dataset item. When pending_routes is non-empty, use the bounded result summary when it is sufficient. Call inspect_task when you need the complete accepted output. If that output still lacks one specific fact needed to route, call clarify_task_result with a focused question; this restores the same task session without tools. Then call select_route with one declared target or "none". Otherwise select exactly one task from ready_tasks and call start_task. Never claim that a task started or a route was selected until the harness accepts it.
+Follow the declared mission graph. The harness is the sole authority for task eligibility and state transitions. An iterated task expands into ready child task instances named parent[index]; start only those children, never the parent. Each child worker receives its own frozen dataset item. When pending_routes is non-empty, use the bounded result summary when it is sufficient. Call inspect_task when you need the complete accepted output. If that output still lacks one specific fact needed to route, call clarify_task_result with a focused question; this restores the same task session without tools. Then call select_route with one declared target or "none". Otherwise select exactly one task from ready_tasks and call start_task. Emit exactly ONE orchestration tool call per response, even when multiple tasks are ready; you will be called again to start the next one. Never claim that a task started or a route was selected until the harness accepts it.
 
 When calling start_task, choose model from policies.task_allowed_models for that task. Use the exact model key shown there, not a provider's API model name or a model from your prior knowledge. Task tools are mandatory. You may select additional tools only from policies.optional_mission_tools; they are granted to the executor, not to you.
 
@@ -122,7 +122,7 @@ func NewModelCommander(session CommanderModelSession, restored []CommanderMessag
 	return &ModelCommander{session: session, turns: turns}, nil
 }
 
-func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, _ []CommanderMessage) (CommanderDecision, error) {
+func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history []CommanderMessage) (CommanderDecision, error) {
 	promptJSON, err := json.Marshal(struct {
 		RunID         string                       `json:"run_id"`
 		Revision      uint64                       `json:"ready_set_revision"`
@@ -137,24 +137,53 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, _ []Comm
 	if err != nil {
 		return CommanderDecision{}, fmt.Errorf("encode commander snapshot: %w", err)
 	}
-	prompt := llm.NewTextMessage(llm.RoleUser, string(promptJSON))
-	response, err := c.session.SendMessageStream(ctx, prompt, nil)
-	if err != nil {
-		return CommanderDecision{}, err
-	}
-
+	var prompt llm.Message
+	var response *llm.ChatResponse
 	var requested *llm.ToolUseBlock
-	for _, block := range response.ContentBlocks {
-		if block.Type != llm.ContentTypeToolUse || block.ToolUse == nil {
-			continue
+	var usage llm.Usage
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			// The rejected turn never changed the harness. Reset the provider
+			// session to durable history so only the accepted decision survives
+			// a restart; keep its token usage in the accepted turn's accounting.
+			if err := restoreCommanderHistory(c.session, history); err != nil {
+				return CommanderDecision{}, err
+			}
 		}
-		if requested != nil {
+		promptText := string(promptJSON)
+		if attempt > 0 {
+			promptText += "\n\nYour previous response contained multiple control calls. Request exactly ONE control call now. The harness will ask you again for remaining ready tasks."
+		}
+		prompt = llm.NewTextMessage(llm.RoleUser, promptText)
+		response, err = c.session.SendMessageStream(ctx, prompt, nil)
+		if err != nil {
+			return CommanderDecision{}, err
+		}
+		usage.InputTokens += response.Usage.InputTokens
+		usage.OutputTokens += response.Usage.OutputTokens
+		usage.CacheWriteTokens += response.Usage.CacheWriteTokens
+		usage.CacheReadTokens += response.Usage.CacheReadTokens
+		requested = nil
+		multiple := false
+		for _, block := range response.ContentBlocks {
+			if block.Type != llm.ContentTypeToolUse || block.ToolUse == nil {
+				continue
+			}
+			if requested != nil {
+				multiple = true
+				break
+			}
+			if block.ToolUse.Name != "start_task" && block.ToolUse.Name != "select_route" && block.ToolUse.Name != "inspect_task" && block.ToolUse.Name != "clarify_task_result" {
+				return CommanderDecision{}, fmt.Errorf("commander requested unsupported control %q", block.ToolUse.Name)
+			}
+			requested = block.ToolUse
+		}
+		if !multiple {
+			break
+		}
+		if attempt == 2 {
 			return CommanderDecision{}, fmt.Errorf("commander returned multiple control calls")
 		}
-		if block.ToolUse.Name != "start_task" && block.ToolUse.Name != "select_route" && block.ToolUse.Name != "inspect_task" && block.ToolUse.Name != "clarify_task_result" {
-			return CommanderDecision{}, fmt.Errorf("commander requested unsupported control %q", block.ToolUse.Name)
-		}
-		requested = block.ToolUse
 	}
 	if requested == nil {
 		return CommanderDecision{}, fmt.Errorf("commander must request an orchestration control")
@@ -179,8 +208,8 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, _ []Comm
 	decision.Message.Telemetry = &ModelTurnTelemetry{
 		ID:        "commander:turn:" + fmt.Sprint(c.turns) + ":" + messageID,
 		SessionID: "commander", Entity: "commander", Model: c.model, FinishReason: response.FinishReason,
-		InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens,
-		CacheWriteTokens: response.Usage.CacheWriteTokens, CacheReadTokens: response.Usage.CacheReadTokens,
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+		CacheWriteTokens: usage.CacheWriteTokens, CacheReadTokens: usage.CacheReadTokens,
 	}
 	if requested.Name == "clarify_task_result" {
 		var input struct {
@@ -246,6 +275,19 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, _ []Comm
 	decision.Dispatch = DispatchRequest{RequestID: requested.ID, TaskName: input.TaskName, ReadySetRevision: snapshot.Revision}
 	decision.Grant = GrantRequest{TaskName: input.TaskName, Model: input.Model, Tools: append([]string(nil), input.Tools...)}
 	return decision, nil
+}
+
+func restoreCommanderHistory(session CommanderModelSession, history []CommanderMessage) error {
+	messages := make([]llm.Message, 0, len(history))
+	for _, message := range history {
+		converted, err := agent.MessageFromStored(store.StructuredMessage{Role: message.Role, Parts: message.Parts})
+		if err != nil {
+			return fmt.Errorf("restore commander message %q: %w", message.ID, err)
+		}
+		messages = append(messages, converted)
+	}
+	session.LoadMessages(messages)
+	return nil
 }
 
 func (c *ModelCommander) DispatchAccepted(dispatch Dispatch) {

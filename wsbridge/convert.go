@@ -110,6 +110,8 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Name:        m.Name,
 			Description: m.Directive,
 			Commander:   m.Commander.Model,
+			Models:      append([]string(nil), m.Models...),
+			Tools:       append([]string(nil), m.Tools...),
 			Agents:      m.Agents,
 		}
 		if m.Source != nil {
@@ -143,10 +145,14 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		}
 		for _, t := range m.Tasks {
 			ti := protocol.TaskInfo{
-				Name:      t.Name,
-				Objective: t.RawObjective,
-				DependsOn: t.DependsOn,
-				SendTo:    t.SendTo,
+				Name:              t.Name,
+				Objective:         t.RawObjective,
+				Models:            append([]string(nil), t.Models...),
+				Tools:             append([]string(nil), t.Tools...),
+				MaxRetries:        t.MaxRetries,
+				RetryDelaySeconds: t.RetryDelaySeconds,
+				DependsOn:         t.DependsOn,
+				SendTo:            t.SendTo,
 			}
 			if len(t.Agents) > 0 {
 				ti.Agent = t.Agents[0]

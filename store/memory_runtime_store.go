@@ -54,7 +54,7 @@ func (s *MemoryRuntimeStore) LoadRuntime(runID string) (RuntimeCheckpointRecord,
 	defer s.mu.RUnlock()
 	checkpoint, exists := s.checkpoints[runID]
 	if !exists {
-		return RuntimeCheckpointRecord{}, nil, fmt.Errorf("run %q not found", runID)
+		return RuntimeCheckpointRecord{}, nil, fmt.Errorf("run %q: %w", runID, ErrRuntimeNotFound)
 	}
 	events := append([]RuntimeEventRecord(nil), s.events[runID]...)
 	return checkpoint, events, nil

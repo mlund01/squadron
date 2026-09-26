@@ -26,11 +26,26 @@ The run page is organized from high-level context to deeper telemetry:
 1. Mission inputs and run state
 2. The execution canvas
 3. The task execution timeline
-4. Aggregate time, outcome, model, tool, and cost telemetry
+4. Aggregate model, tool, time, and cost telemetry when available
 
-Selecting a task opens its conversation-style execution view. Commander turns, reasoning, tools, and delegated agents are distinct. Delegated agent work can be opened as a complete agent session rather than only the portion overlapping a commander turn.
+One commander session coordinates the whole run. **Commander conversation** opens
+that session; selecting a task on the canvas or timeline opens its separate task
+executor session. A task executor is mission-owned work, not a managed agent.
+Its drill-in includes the task objective, granted model and tools, persisted
+conversation, accepted result, and any attempts or retry state.
 
-The trace view shows execution spans on a shared task clock. Tool calls are nested under their model turn, while delegated agents remain a separate span that can be drilled into.
+The execution timeline uses a shared mission clock: overlapping task bars
+represent parallel work, while multiple bars on one task represent retries.
+The floating session panel has **Chat** and **Trace** tabs and can expand while
+keeping the selected session and tab. Chat renders commander decisions and task
+tool calls from the persisted transcript; tool inputs, results, and attachments
+remain inside their expandable call. Trace shows persisted state transitions and
+attempt details. A waiting task displays its human-input request or retry
+deadline so the operator can distinguish waiting from active work.
+
+Only actual runtime records appear in these views. A newly started run may show
+ready tasks before its first commander turn has finished; the page updates as
+checkpointed work becomes available.
 
 ## Stop and resume
 

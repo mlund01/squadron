@@ -120,7 +120,7 @@ func loadRuntime(db *sql.DB, dialect Dialect, runID string) (RuntimeCheckpointRe
 	var updatedAt string
 	if err := db.QueryRow(checkpointSQL, runID).Scan(&checkpoint.RunID, &checkpoint.Revision, &checkpoint.PayloadJSON, &updatedAt); err != nil {
 		if err == sql.ErrNoRows {
-			return RuntimeCheckpointRecord{}, nil, fmt.Errorf("run %q not found", runID)
+			return RuntimeCheckpointRecord{}, nil, fmt.Errorf("run %q: %w", runID, ErrRuntimeNotFound)
 		}
 		return RuntimeCheckpointRecord{}, nil, fmt.Errorf("load runtime checkpoint: %w", err)
 	}

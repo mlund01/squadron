@@ -1,10 +1,15 @@
 package store
 
 import (
+	"errors"
 	"time"
 
 	"github.com/zclconf/go-cty/cty"
 )
+
+// ErrRuntimeNotFound distinguishes older runs without a mission-scoped
+// checkpoint from a failure to read an existing checkpoint.
+var ErrRuntimeNotFound = errors.New("runtime not found")
 
 // Bundle holds all stores for tracking mission execution.
 // Note: ResultStore and KnowledgeStore remain in their original packages

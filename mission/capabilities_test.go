@@ -63,6 +63,33 @@ func TestCapabilityPolicyResolveGrant(t *testing.T) {
 	}
 }
 
+func TestRuntimeCommanderPoliciesExposeExactGrantKeys(t *testing.T) {
+	t.Parallel()
+	m := &config.Mission{
+		Models: []string{"claude_haiku_4_5", "gpt_5"},
+		Tools: []string{"plugins.search.all"},
+		Tasks: []config.Task{
+			{Name: "draft", Tools: []string{"mcp.files.read"}},
+			{Name: "polish", Models: []string{"gpt_5"}},
+		},
+	}
+	policies := runtimeCommanderPolicies(m)
+	models := policies["task_allowed_models"].(map[string][]string)
+	if got := strings.Join(models["draft"], ","); got != "claude_haiku_4_5,gpt_5" {
+		t.Fatalf("inherited model keys = %q", got)
+	}
+	if got := strings.Join(models["polish"], ","); got != "gpt_5" {
+		t.Fatalf("task model keys = %q", got)
+	}
+	tools := policies["task_tools"].(map[string][]string)
+	if got := strings.Join(tools["draft"], ","); got != "mcp.files.read" {
+		t.Fatalf("mandatory task tools = %q", got)
+	}
+	if got := strings.Join(policies["optional_mission_tools"].([]string), ","); got != "plugins.search.all" {
+		t.Fatalf("optional mission tools = %q", got)
+	}
+}
+
 func TestRuntimeGrantResolverPersistsPolicyAndRunContext(t *testing.T) {
 	t.Parallel()
 

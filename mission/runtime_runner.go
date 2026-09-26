@@ -73,7 +73,7 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	}
 	commander, commanderSession, err := missionruntime.NewModelCommanderWithProvider(commanderProvider, commanderModel, missionruntime.CommanderBootstrap{
 		MissionName: r.mission.Name, Directive: r.mission.Directive, Tasks: definitions,
-		VisibleInputs: visibleInputs, ConfigurationVersion: configurationVersion,
+		VisibleInputs: visibleInputs, Policies: runtimeCommanderPolicies(r.mission), ConfigurationVersion: configurationVersion,
 	}, r.mission.Commander.Reasoning, harness.CommanderMessages())
 	if err != nil {
 		return err
@@ -169,6 +169,27 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	}
 	streamer.MissionCompleted(r.mission.Name)
 	return nil
+}
+
+// runtimeCommanderPolicies exposes only capability *names* to the commander.
+// The harness still resolves every requested grant against the configuration;
+// this context merely lets the model choose from the actual allowed pool.
+func runtimeCommanderPolicies(m *config.Mission) map[string]any {
+	taskModels := make(map[string][]string, len(m.Tasks))
+	taskTools := make(map[string][]string, len(m.Tasks))
+	for _, task := range m.Tasks {
+		models := m.Models
+		if len(task.Models) > 0 {
+			models = task.Models
+		}
+		taskModels[task.Name] = append([]string(nil), models...)
+		taskTools[task.Name] = append([]string(nil), task.Tools...)
+	}
+	return map[string]any{
+		"task_allowed_models": taskModels,
+		"task_tools":          taskTools,
+		"optional_mission_tools": append([]string(nil), m.Tools...),
+	}
 }
 
 // Inbox rows carry external answers, but only the runtime checkpoint may

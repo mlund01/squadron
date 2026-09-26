@@ -173,6 +173,39 @@ func TestHarnessRejectsStaleFailureWithoutChangingActiveAttempt(t *testing.T) {
 	}
 }
 
+func TestFailedAttemptRetainsTranscriptForInspectionAcrossRetry(t *testing.T) {
+	t.Parallel()
+	harness, err := NewHarness("run-failed-transcript", "commander", []TaskDefinition{{Name: "work", MaxRetries: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	first, err := harness.DispatchTask(DispatchRequest{RequestID: "work-1", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("work")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := TaskAttemptProgress{AttemptID: first.AttemptID, Phase: "model_turn", Transcript: []TaskSessionMessage{{Role: "assistant", Parts: []store.MessagePart{{Type: "text", Text: "Partial work"}}}}}
+	if err := harness.SaveTaskProgress(first, progress); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := harness.FailTask("work", first.AttemptID, fmt.Errorf("provider disconnected")); err != nil {
+		t.Fatal(err)
+	}
+	retained := harness.Checkpoint().TaskProgress[first.AttemptID]
+	if retained.Phase != "failed" || len(retained.Transcript) != 1 || retained.Transcript[0].Parts[0].Text != "Partial work" {
+		t.Fatalf("failed attempt transcript = %#v", retained)
+	}
+	second, err := harness.DispatchTask(DispatchRequest{RequestID: "work-2", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("work")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.AttemptID == first.AttemptID || harness.Checkpoint().TaskProgress[first.AttemptID].Phase != "failed" {
+		t.Fatal("retry replaced the failed attempt's transcript")
+	}
+}
+
 func TestHarnessSelectsDeclaredRouteAndIgnoresUnchosenBranch(t *testing.T) {
 	t.Parallel()
 

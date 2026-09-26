@@ -69,12 +69,13 @@ func TestCommanderSystemPromptDefinesGraphWithoutTaskCapabilities(t *testing.T) 
 			{Name: "write", Objective: "Write report", DependsOn: []string{"collect"}},
 		},
 		VisibleInputs:        map[string]any{"topic": "durability"},
+		Policies: map[string]any{"task_allowed_models": map[string][]string{"collect": {"claude_haiku_4_5"}}},
 		ConfigurationVersion: "sha256:abc",
 	})
 	if err != nil {
 		t.Fatalf("commanderSystemPrompt() error = %v", err)
 	}
-	for _, required := range []string{"single commander", "start_task", "collect", "write", "sha256:abc", "durability"} {
+	for _, required := range []string{"single commander", "start_task", "collect", "write", "sha256:abc", "durability", "claude_haiku_4_5", "exact model key"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt does not contain %q: %s", required, prompt)
 		}

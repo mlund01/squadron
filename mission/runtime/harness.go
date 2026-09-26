@@ -305,8 +305,9 @@ type ToolOperation struct {
 	IsError   bool                `json:"isError,omitempty"`
 }
 
-// TaskAttemptProgress is the complete restart projection for one active
-// logical worker session.
+// TaskAttemptProgress is the complete restart projection for a worker session.
+// Failed attempts retain their transcript for operator inspection and retry
+// history; completed attempts retain their transcript in AcceptedTaskResult.
 type TaskAttemptProgress struct {
 	AttemptID  string                   `json:"attemptId"`
 	Phase      string                   `json:"phase"`
@@ -1723,7 +1724,14 @@ func (h *Harness) FailTaskWithLease(taskName, attemptID string, cause error, lea
 	}
 	h.failures[taskName] = failure
 	delete(h.activeByTask, taskName)
-	delete(h.taskProgress, attemptID)
+	if progress, ok := h.taskProgress[attemptID]; ok {
+		progress.Phase = "failed"
+		// Tool operation state is not needed after the attempt closes. The
+		// transcript preserves the model-visible call and result without
+		// retaining operational inputs in an inactive checkpoint entry.
+		progress.Tools = nil
+		h.taskProgress[attemptID] = progress
+	}
 	delete(h.executionLeases, attemptID)
 
 	if h.runState == RunRunning && active.Attempt <= h.tasks[taskName].MaxRetries {

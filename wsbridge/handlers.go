@@ -498,10 +498,15 @@ func (c *Client) handleGetMission(env *protocol.Envelope) (*protocol.Envelope, e
 		}
 		taskInfos[i] = ti
 	}
+	runtimeInfo, _, err := missionRuntimeProjection(c.stores.Runtime, payload.MissionID)
+	if err != nil {
+		return nil, err
+	}
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetMissionResult, &protocol.GetMissionResultPayload{
 		Mission: missionInfo,
 		Tasks:   taskInfos,
+		Runtime: runtimeInfo,
 	})
 }
 
@@ -904,6 +909,32 @@ func (c *Client) handleGetEvents(env *protocol.Envelope) (*protocol.Envelope, er
 	limit := payload.Limit
 	if limit <= 0 {
 		limit = 100
+	}
+	runtimeInfo, runtimeEvents, err := missionRuntimeProjection(c.stores.Runtime, payload.MissionID)
+	if err != nil {
+		return nil, err
+	}
+	if runtimeInfo != nil {
+		start := payload.Offset
+		if start < 0 {
+			start = 0
+		}
+		if start > len(runtimeEvents) {
+			start = len(runtimeEvents)
+		}
+		end := start + limit
+		if end > len(runtimeEvents) {
+			end = len(runtimeEvents)
+		}
+		infos := make([]protocol.MissionEventInfo, 0, end-start)
+		for _, event := range runtimeEvents[start:end] {
+			infos = append(infos, protocol.MissionEventInfo{
+				ID: fmt.Sprintf("runtime:%d", event.Sequence), MissionID: payload.MissionID,
+				EventType: event.EventType, DataJSON: event.PayloadJSON,
+				CreatedAt: event.OccurredAt.UTC().Format(time.RFC3339Nano),
+			})
+		}
+		return protocol.NewResponse(env.RequestID, protocol.TypeGetEventsResult, &protocol.GetEventsResultPayload{Events: infos})
 	}
 
 	events, err := c.stores.Events.GetEventsByMission(payload.MissionID, limit, payload.Offset)

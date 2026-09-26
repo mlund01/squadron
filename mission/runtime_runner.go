@@ -128,7 +128,6 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 
 	streamer.MissionStarted(r.mission.Name, runID, len(definitions))
 	runErr := coordinator.Run(ctx)
-	telemetryErr := r.projectRuntimeModelTurns(harness.Snapshot())
 	if runErr != nil {
 		status := "failed"
 		if errors.Is(runErr, context.Canceled) || errors.Is(runErr, context.DeadlineExceeded) {
@@ -141,12 +140,21 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 				status = "waiting"
 			}
 		}
-		_ = r.stores.Missions.UpdateMissionStatus(runID, status)
+		if status == "failed" {
+			if err := harness.FailRun(runErr); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("persist mission failure: %w", err))
+			}
+		}
+		telemetryErr := r.projectRuntimeModelTurns(harness.Snapshot())
+		if err := r.stores.Missions.UpdateMissionStatus(runID, status); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("project mission status: %w", err))
+		}
 		if telemetryErr != nil {
 			return errors.Join(runErr, fmt.Errorf("project runtime model telemetry: %w", telemetryErr))
 		}
 		return runErr
 	}
+	telemetryErr := r.projectRuntimeModelTurns(harness.Snapshot())
 	if telemetryErr != nil {
 		return fmt.Errorf("project runtime model telemetry: %w", telemetryErr)
 	}

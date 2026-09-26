@@ -60,6 +60,7 @@ type Event struct {
 	RequestID     string
 	Result        *AcceptedTaskResult
 	Failure       *TaskFailure
+	Error         string
 	Route         *RouteSelection
 	ProgressPhase string
 	Recovery      *RecoveryBlock
@@ -579,6 +580,34 @@ func (h *DurableHarness) Stop() error {
 	events := []Event{{RunID: after.RunID, Revision: after.Revision, Type: EventMissionStopped, OccurredAt: time.Now().UTC()}}
 	if err := h.commit(before.Revision, after, events); err != nil {
 		return fmt.Errorf("persisting mission stop: %w", err)
+	}
+	h.inner = candidate
+	return nil
+}
+
+// FailRun durably closes a run when orchestration itself fails, outside the
+// task-attempt retry path. The cause is retained in the append-only event.
+func (h *DurableHarness) FailRun(cause error) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	before := h.inner.Checkpoint()
+	if before.RunState == RunFailed {
+		return nil
+	}
+	candidate, err := RestoreHarness(before)
+	if err != nil {
+		return err
+	}
+	if err := candidate.FailRun(); err != nil {
+		return err
+	}
+	after := candidate.Checkpoint()
+	failure := Event{RunID: after.RunID, Revision: after.Revision, Type: EventMissionFailed, OccurredAt: time.Now().UTC()}
+	if cause != nil {
+		failure.Error = cause.Error()
+	}
+	if err := h.commit(before.Revision, after, []Event{failure}); err != nil {
+		return fmt.Errorf("persisting mission failure: %w", err)
 	}
 	h.inner = candidate
 	return nil

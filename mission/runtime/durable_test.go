@@ -50,6 +50,42 @@ func TestExecutionLeaseTakeoverFencesStaleWorkerWrites(t *testing.T) {
 	}
 }
 
+func TestDurableHarnessPersistsOrchestrationFailure(t *testing.T) {
+	t.Parallel()
+	runtimeStore := persistence.NewMemoryRuntimeStore()
+	harness, err := CreateDurableHarness(runtimeStore, "run-commander-failed", "commander-failed", []TaskDefinition{{Name: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.FailRun(errors.New("commander provider unavailable")); err != nil {
+		t.Fatal(err)
+	}
+	restored, events, err := RestoreDurableHarness(runtimeStore, "run-commander-failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.Snapshot(); got.RunState != RunFailed || got.Commander.State != CommanderFailed {
+		t.Fatalf("restored failure state = %#v", got)
+	}
+	last := events[len(events)-1]
+	if last.Type != EventMissionFailed || last.Error != "commander provider unavailable" {
+		t.Fatalf("failure event = %#v", last)
+	}
+	if err := restored.FailRun(errors.New("duplicate")); err != nil {
+		t.Fatal(err)
+	}
+	_, repeatedEvents, err := RestoreDurableHarness(runtimeStore, "run-commander-failed")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repeatedEvents) != len(events) {
+		t.Fatalf("duplicate failure appended events: %d, want %d", len(repeatedEvents), len(events))
+	}
+}
+
 func TestDurableHarnessRestoresCommanderAndDispatchHistory(t *testing.T) {
 	t.Parallel()
 

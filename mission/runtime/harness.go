@@ -722,6 +722,21 @@ func (h *Harness) Stop() error {
 	return nil
 }
 
+// FailRun records an execution failure that did not belong to a task attempt,
+// such as a commander or provider error. Task-attempt failures use FailTask so
+// their retry policy remains authoritative.
+func (h *Harness) FailRun() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !CanTransitionRun(h.runState, RunFailed) || !CanTransitionCommander(h.commander.State, CommanderFailed) {
+		return fmt.Errorf("run cannot fail from %q with commander %q", h.runState, h.commander.State)
+	}
+	h.runState = RunFailed
+	h.commander.State = CommanderFailed
+	h.revision++
+	return nil
+}
+
 // Resume reactivates the same stopped run and commander session.
 func (h *Harness) Resume() error {
 	h.mu.Lock()

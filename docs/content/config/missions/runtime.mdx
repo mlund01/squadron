@@ -113,6 +113,11 @@ After the final allowed attempt fails, the task and mission become terminally
 failed. Late completion or failure messages from an older attempt are rejected
 by attempt ID and cannot overwrite the current state.
 
+Failures outside a task attempt (for example, a commander/provider error) also
+close the mission with a persisted `mission.failed` event and its error. They do
+not consume or bypass a task's retry budget. A stopped run is different: its
+last checkpoint is retained for an explicit resume.
+
 For conditional branches, accepting a router task's result does not activate a
 branch by itself. The harness publishes the declared options to the commander,
 which must call `select_route` with one target or `none`. The selection and its

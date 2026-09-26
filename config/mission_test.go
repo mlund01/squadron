@@ -243,6 +243,35 @@ mission "parallel" {
 			Expect(iter.MaxRetries).To(Equal(3))
 		})
 
+		It("defaults sequential and parallel iterator limits to their scheduling modes", func() {
+			hcl := fullBaseHCL() + `
+mission "iterator_defaults" {
+  commander {
+    model = models.anthropic.claude_sonnet_4
+  }
+  dataset "items" { description = "Items" }
+  task "sequential" {
+    objective = "Process items in order"
+    iterator {
+      dataset = datasets.items
+    }
+  }
+  task "parallel" {
+    objective = "Process items concurrently"
+    iterator {
+      dataset  = datasets.items
+      parallel = true
+    }
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Missions[0].Tasks[0].Iterator.ConcurrencyLimit).To(Equal(1))
+			Expect(cfg.Missions[0].Tasks[1].Iterator.ConcurrencyLimit).To(Equal(5))
+		})
+
 		It("parses bounded retries for a task worker", func() {
 			hcl := fullBaseHCL() + `
 mission "retryable" {

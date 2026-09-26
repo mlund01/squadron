@@ -2747,7 +2747,7 @@ func parseIteratorBlock(block *hcl.Block, ctx *hcl.EvalContext) (*TaskIterator, 
 		Dataset:          datasetVal.AsString(),
 		Parallel:         false, // Default to sequential
 		MaxRetries:       0,     // Default to no retries
-		ConcurrencyLimit: 5,     // Default to 5 concurrent iterations
+		ConcurrencyLimit: 1,     // Sequential iterations run one child at a time.
 	}
 
 	// Get optional parallel flag
@@ -2757,6 +2757,9 @@ func parseIteratorBlock(block *hcl.Block, ctx *hcl.EvalContext) (*TaskIterator, 
 			return nil, diags
 		}
 		iterator.Parallel = parallelVal.True()
+	}
+	if iterator.Parallel {
+		iterator.ConcurrencyLimit = 5 // Default parallel limit.
 	}
 
 	// Get optional max_retries

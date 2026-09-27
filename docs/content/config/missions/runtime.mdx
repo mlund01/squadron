@@ -194,7 +194,7 @@ to the operator. Restart reconnects the original tool call to that request; an
 answer submitted while the worker was offline is returned immediately. A
 cancellation message is not recorded as though it were the human's answer.
 
-Waits retain their original clock. A restarted `builtins.time.sleep` waits only
+Waits retain their original clock. A restarted `builtins.utils.sleep` waits only
 for the remaining duration, and a restarted human question keeps its original
 timeout instead of beginning the timeout again.
 

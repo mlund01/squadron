@@ -377,7 +377,7 @@ blocking tool behavior. Cancellation is never committed as a synthetic tool
 result: the operation remains in flight for recovery.
 
 The persisted tool-operation record includes its original start time. Duration-
-based built-ins use that timestamp when replaying: `builtins.time.sleep` waits
+based built-ins use that timestamp when replaying: `builtins.utils.sleep` waits
 only for the remaining duration, and `builtins.human.ask` preserves the
 original timeout deadline. Restart never grants a fresh full timeout.
 The human-input row stores that absolute deadline. Once it has passed, the

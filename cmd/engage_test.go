@@ -4,7 +4,32 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
+
+func TestStartOrphanRecoveryOnce(t *testing.T) {
+	started := make(chan struct{}, 2)
+	trigger := startOrphanRecoveryOnce(func() { started <- struct{}{} })
+	select {
+	case <-started:
+		t.Fatal("recovery started before a valid config was available")
+	default:
+	}
+
+	for range 3 {
+		trigger()
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("recovery did not start after the config became valid")
+	}
+	select {
+	case <-started:
+		t.Fatal("recovery started more than once")
+	default:
+	}
+}
 
 func TestHasHCLFiles(t *testing.T) {
 	t.Run("empty dir", func(t *testing.T) {

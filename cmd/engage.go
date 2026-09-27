@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -316,10 +317,14 @@ func runEngage(cmd *cobra.Command, args []string) {
 
 	concurrency := wsbridge.NewMissionConcurrencyTracker(cfg)
 	client.SetConcurrencyTracker(concurrency)
+	// Command Center may supply model connections after startup. When the
+	// initial config is incomplete, recover as soon as a reload succeeds.
+	recoverOrphans := startOrphanRecoveryOnce(client.ResumeOrphanedMissions)
 
 	client.OnConfigLoaded = func(newCfg *config.Config) {
 		concurrency.UpdateConfig(newCfg)
 		daemon.SignalReady(engageConfigPath, 0)
+		recoverOrphans()
 	}
 
 	// Wire deferred deps now that client + stores exist. The MCP host is
@@ -383,7 +388,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 		// fall through to shutdown below (the select at <-shutdown returns immediately)
 	default:
 		if cfgErr == nil {
-			client.ResumeOrphanedMissions()
+			recoverOrphans()
 		} else {
 			// Watch for files to appear/change so we can retry the load.
 			go watchForConfigChanges(client, engageConfigPath)
@@ -436,6 +441,13 @@ func runEngage(cmd *cobra.Command, args []string) {
 	squadronmcp.CloseAll() // close MCP clients before stopping the host
 	if mcpServer != nil {
 		mcpServer.Shutdown()
+	}
+}
+
+func startOrphanRecoveryOnce(recoverMissions func()) func() {
+	var once sync.Once
+	return func() {
+		once.Do(func() { go recoverMissions() })
 	}
 }
 

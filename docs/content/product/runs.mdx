@@ -31,8 +31,11 @@ The run page is organized from high-level context to deeper telemetry:
 One commander session coordinates the whole run. **Commander conversation** opens
 that session; selecting a task on the canvas or timeline opens its separate task
 executor session. A task executor is mission-owned work, not a managed agent.
-Its drill-in includes the task objective, granted model and tools, persisted
-conversation, accepted result, and any attempts or retry state.
+Its drill-in includes the task objective, granted model and tools, run-as
+identity, persisted conversation, accepted result, and any attempts or retry
+state. Each attempt shows its elapsed time and recorded model-turn and token
+usage when available. These are attempt-specific facts, not an estimate of
+the entire mission's cost.
 
 The execution timeline uses a shared mission clock: overlapping task bars
 represent parallel work, while multiple bars on one task represent retries.

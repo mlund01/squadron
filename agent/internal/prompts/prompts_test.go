@@ -43,6 +43,17 @@ var _ = Describe("FormatMemoryContext", func() {
 		Expect(got).To(ContainSubstring("**memory**"))
 	})
 
+	It("labels managed-agent memory by its actual lifetime", func() {
+		for _, tc := range []struct{ kind, label string }{
+			{"managed_agent_session", "private to this conversation"},
+			{"managed_agent_persistent", "shared only across your sessions with this agent"},
+		} {
+			got := prompts.FormatMemoryContext(&fakeStore{infos: []aitools.MemoryInfo{{Name: aitools.MemorySlotName, Kind: tc.kind}}})
+			Expect(got).To(ContainSubstring(tc.label))
+			Expect(got).NotTo(ContainSubstring("mission memory"))
+		}
+	})
+
 	It("labels the scratchpad slot specially", func() {
 		got := prompts.FormatMemoryContext(&fakeStore{infos: []aitools.MemoryInfo{
 			{Name: aitools.ScratchpadSlotName},

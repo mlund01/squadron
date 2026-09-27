@@ -28,6 +28,38 @@ agent "assistant" {
 | `tools` | list | Tools available to the agent (optional) |
 | `reasoning` | string | Native reasoning level: `"low"`, `"medium"`, or `"high"` (optional) |
 
+## File memory
+
+Managed agents have no file memory by default. A `memory` block can give an
+agent a writable `memory` slot for an independent session:
+
+```hcl
+agent "researcher" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Careful researcher"
+
+  memory {
+    mode           = "persistent"
+    scope          = "owner"
+    retention_days = 30
+  }
+}
+```
+
+| Mode | Lifetime and access |
+|------|---------------------|
+| `disabled` | No file-memory tools or slot. This is the default. |
+| `session` | Available only to one agent conversation. Requires `retention_days` (1–365). A resumed conversation reopens its own slot. |
+| `persistent` | Shared across sessions of the **same agent and owner**, never across owners or agents. Requires `scope = "owner"` and `retention_days` (1–3650). |
+
+The retention period is measured from the most recent file access. Expired
+memory is removed when its scope is next opened or by the connected worker's
+hourly cleanup sweep. File memory is
+distinct from the conversation transcript: disabling file memory does not
+erase messages in the current session. The authoring assistant does not inherit
+the target agent's memory. Managed-agent memory is never attached to a mission
+task executor or mission memory slot.
+
 ## Tools
 
 Agents can use three types of tools:

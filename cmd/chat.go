@@ -2,16 +2,20 @@ package cmd
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
+	"os/user"
 	"path/filepath"
 	"time"
 
 	"squadron/agent"
 	"squadron/config"
-	"squadron/streamers/cli"
+	"squadron/internal/paths"
 	"squadron/mission"
+	"squadron/streamers/cli"
 
 	"github.com/spf13/cobra"
 )
@@ -44,6 +48,43 @@ var chatCmd = &cobra.Command{
 		opts := agent.Options{
 			ConfigPath: configPath,
 			AgentName:  agentName,
+		}
+		cfg, err := config.LoadAndValidate(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error loading config: %v\n", err)
+			os.Exit(1)
+		}
+		opts.Config = cfg
+		for i := range cfg.Agents {
+			definition := &cfg.Agents[i]
+			if definition.Name != agentName || definition.Memory == nil || definition.Memory.Mode == "disabled" {
+				continue
+			}
+			currentUser, err := user.Current()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error identifying local user: %v\n", err)
+				os.Exit(1)
+			}
+			home, err := paths.SquadronHome()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error locating Squadron state: %v\n", err)
+				os.Exit(1)
+			}
+			key := "persistent"
+			if definition.Memory.Mode == "session" {
+				bytes := make([]byte, 16)
+				if _, err := rand.Read(bytes); err != nil {
+					fmt.Fprintf(os.Stderr, "Error creating session identity: %v\n", err)
+					os.Exit(1)
+				}
+				key = hex.EncodeToString(bytes)
+			}
+			opts.MemoryStore, err = agent.NewManagedMemoryStore(home, definition.Memory, "cli:"+currentUser.Uid, agentName, key)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error opening agent memory: %v\n", err)
+				os.Exit(1)
+			}
+			break
 		}
 
 		if missionMode {

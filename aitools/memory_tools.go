@@ -89,6 +89,9 @@ type MemoryStore interface {
 type MemoryInfo struct {
 	Name        string
 	Description string
+	// Kind refines prompt wording for a slot whose name is shared by mission
+	// and managed-agent memory. Empty keeps the mission default.
+	Kind string
 }
 
 // validateRelPath ensures a path is relative and doesn't escape the slot root.
@@ -115,7 +118,7 @@ func resolveSlotPath(store MemoryStore, name, relPath string) (string, error) {
 
 // slotParamDescription is reused across every file tool's `slot` parameter
 // so the agent sees a consistent description.
-const slotParamDescription = "Slot to operate in. Use \"memory\" for the mission's persistent memory, \"scratchpad\" for its ephemeral per-run scratchpad, or a shared memory name."
+const slotParamDescription = "Slot to operate in. Use \"memory\" for the available mission or managed-agent memory, \"scratchpad\" for a mission's ephemeral per-run scratchpad, or a shared memory name."
 
 // =============================================================================
 // file_list — List files and directories

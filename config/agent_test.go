@@ -44,6 +44,37 @@ agent "clock" {
 	})
 
 	Describe("parsing", func() {
+		It("parses an explicit managed-agent memory policy", func() {
+			hcl := minimalVarsHCL() + minimalModelHCL() + `
+agent "helper" {
+  model       = models.anthropic.claude_sonnet_4
+  personality = "Helpful"
+  memory {
+    mode           = "persistent"
+    scope          = "owner"
+    retention_days = 30
+  }
+}
+`
+			_, path := writeFixture("agent.hcl", hcl)
+			cfg, err := config.LoadFile(path)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(cfg.Validate()).To(Succeed())
+			Expect(cfg.Agents[0].Memory).To(Equal(&config.AgentMemoryPolicy{Mode: "persistent", Scope: "owner", RetentionDays: 30}))
+		})
+
+		It("rejects unsafe managed-agent memory policies", func() {
+			for _, policy := range []config.AgentMemoryPolicy{
+				{Mode: "persistent", RetentionDays: 30},
+				{Mode: "persistent", Scope: "owner"},
+				{Mode: "session", RetentionDays: 0},
+				{Mode: "disabled", Scope: "owner"},
+				{Mode: "unknown"},
+			} {
+				Expect(policy.Validate()).NotTo(Succeed())
+			}
+		})
+
 		It("retains the exact source from the loaded file even after disk changes", func() {
 			rawAgent := `agent "helper" {
   model       = models.anthropic.claude_sonnet_4
@@ -264,9 +295,9 @@ agent "all_http" {
 			agent := config.Agent{Model: "claude_sonnet_4"}
 			models := []config.Model{
 				{
-					Name:          "anthropic",
-					Provider:      config.ProviderAnthropic,
-					APIKey:        "k",
+					Name:     "anthropic",
+					Provider: config.ProviderAnthropic,
+					APIKey:   "k",
 				},
 			}
 			m, actualModel, err := agent.ResolveModel(models)
@@ -279,9 +310,9 @@ agent "all_http" {
 			agent := config.Agent{Model: "nonexistent"}
 			models := []config.Model{
 				{
-					Name:          "anthropic",
-					Provider:      config.ProviderAnthropic,
-					APIKey:        "k",
+					Name:     "anthropic",
+					Provider: config.ProviderAnthropic,
+					APIKey:   "k",
 				},
 			}
 			_, _, err := agent.ResolveModel(models)

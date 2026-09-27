@@ -41,6 +41,24 @@ func TestConversationAgentScope(t *testing.T) {
 	}
 }
 
+func TestConversationMemoryIdentityStaysOwnerScoped(t *testing.T) {
+	p := conversationRequest{Owner: "user-1", AgentName: "reviewer", Purpose: "session", Mode: "interactive"}
+	identity := p.identity()
+	identity.MemoryKey = "opaque-session-memory-key"
+	if !identity.matches(p) {
+		t.Fatal("stored memory key prevented its own conversation from resuming")
+	}
+	p.Owner = "user-2"
+	if identity.matches(p) {
+		t.Fatal("conversation memory became accessible to another owner")
+	}
+	source := &config.Agent{Name: "reviewer", Memory: &config.AgentMemoryPolicy{Mode: "persistent", Scope: "owner", RetentionDays: 30}}
+	authoring, _ := conversationAgentConfig(source, "authoring", "interactive")
+	if authoring.Memory != nil {
+		t.Fatal("authoring assistant inherited the target agent's memory")
+	}
+}
+
 func TestAgentDefinitionIncludesScopedSource(t *testing.T) {
 	source := &config.ConfigSource{Path: "missions/release.hcl", StartLine: 8, EndLine: 12, Content: `agent "reviewer" { personality = "Release" }`, FileRevision: "snapshot"}
 	cfg := &config.Config{

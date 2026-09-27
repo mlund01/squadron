@@ -16,10 +16,12 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
+	"squadron/agent"
 	"squadron/config"
 	"squadron/gateway"
 	"squadron/humaninput"
 	"squadron/internal/daemon"
+	"squadron/internal/paths"
 	squadronmcp "squadron/mcp"
 	"squadron/mcphost"
 	"squadron/mission"
@@ -675,6 +677,11 @@ func runScratchpadCleanupLoop(shutdown <-chan struct{}) {
 		}
 		if _, err := mission.SweepExpiredInputs(); err != nil {
 			log.Printf("file-input cleanup: %v", err)
+		}
+		if home, err := paths.SquadronHome(); err != nil {
+			log.Printf("managed-agent memory cleanup: %v", err)
+		} else if _, err := agent.SweepExpiredManagedMemory(home); err != nil {
+			log.Printf("managed-agent memory cleanup: %v", err)
 		}
 	}
 

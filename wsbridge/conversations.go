@@ -2,6 +2,8 @@ package wsbridge
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -10,7 +12,9 @@ import (
 
 	"github.com/mlund01/squadron-wire/protocol"
 	"squadron/agent"
+	"squadron/aitools"
 	"squadron/config"
+	"squadron/internal/paths"
 	"squadron/llm"
 )
 
@@ -38,6 +42,7 @@ type conversationIdentity struct {
 	Mission   string `json:"mission,omitempty"`
 	Purpose   string `json:"purpose"`
 	Mode      string `json:"mode"`
+	MemoryKey string `json:"memoryKey,omitempty"`
 }
 
 type agentConversation struct {
@@ -52,6 +57,11 @@ type agentConversation struct {
 
 func (p conversationRequest) identity() conversationIdentity {
 	return conversationIdentity{Version: 1, Owner: p.Owner, AgentName: p.AgentName, Mission: p.Mission, Purpose: p.Purpose, Mode: p.Mode}
+}
+
+func (i conversationIdentity) matches(p conversationRequest) bool {
+	return i.Version == 1 && i.Owner == p.Owner && i.AgentName == p.AgentName &&
+		i.Mission == p.Mission && i.Purpose == p.Purpose && i.Mode == p.Mode
 }
 
 func isConversationMetadata(content string) bool {
@@ -144,7 +154,7 @@ func (c *Client) handleAgentDefinition(env *protocol.Envelope) (*protocol.Envelo
 	return protocol.NewResponse(env.RequestID, "agent_definition_result", map[string]any{
 		"name": a.Name, "mission": p.Mission, "model": a.Model, "role": a.Role, "description": a.Personality,
 		"tools": a.Tools, "skills": a.Skills, "localSkills": a.LocalSkills,
-		"reasoning": a.Reasoning, "pruning": a.Pruning, "compaction": a.Compaction, "toolResponse": a.ToolResponse,
+		"reasoning": a.Reasoning, "pruning": a.Pruning, "compaction": a.Compaction, "toolResponse": a.ToolResponse, "memory": a.Memory,
 		"source": a.Source, "lineage": buildAgentLineage(cfg, p.AgentName, p.Mission),
 	})
 }
@@ -193,14 +203,14 @@ func (c *Client) handleAgentConversation(env *protocol.Envelope) (*protocol.Enve
 	sess := c.conversations[p.SessionID]
 	var transcript []protocol.ChatMessageInfo
 	var history []llm.Message
+	var storedIdentity conversationIdentity
 	if p.SessionID != "" {
 		if !strings.HasPrefix(p.SessionID, "cc_") {
 			c.conversationMu.Unlock()
 			return nil, fmt.Errorf("conversation not found")
 		}
 		rows, err := c.stores.Sessions.GetMessages(strings.TrimPrefix(p.SessionID, "cc_"))
-		var identity conversationIdentity
-		if err != nil || len(rows) == 0 || json.Unmarshal([]byte(rows[0].Content), &identity) != nil || identity != p.identity() {
+		if err != nil || len(rows) == 0 || json.Unmarshal([]byte(rows[0].Content), &storedIdentity) != nil || !storedIdentity.matches(p) {
 			c.conversationMu.Unlock()
 			return nil, fmt.Errorf("conversation not found in this user, agent, scope and mode")
 		}
@@ -238,7 +248,33 @@ func (c *Client) handleAgentConversation(env *protocol.Envelope) (*protocol.Enve
 			return nil, err
 		}
 		definition, mode := conversationAgentConfig(source, p.Purpose, p.Mode)
-		a, err := agent.New(c.ctx, agent.Options{Config: cfg, ConfigPath: c.configPath, AgentName: p.AgentName, AgentConfig: &definition, Mode: &mode, GatewayBridge: c.gatewayBridge})
+		var memoryStore aitools.MemoryStore
+		memoryKey := storedIdentity.MemoryKey
+		if p.Purpose == "session" && definition.Memory != nil && definition.Memory.Mode != "disabled" {
+			if memoryKey == "" {
+				if p.SessionID != "" {
+					memoryKey = p.SessionID // Sessions created before memory policy was enabled.
+				} else {
+					bytes := make([]byte, 16)
+					if _, err := rand.Read(bytes); err != nil {
+						c.conversationMu.Unlock()
+						return nil, fmt.Errorf("create memory identity: %w", err)
+					}
+					memoryKey = hex.EncodeToString(bytes)
+				}
+			}
+			home, err := paths.SquadronHome()
+			if err != nil {
+				c.conversationMu.Unlock()
+				return nil, err
+			}
+			memoryStore, err = agent.NewManagedMemoryStore(home, definition.Memory, p.Owner, definition.Name, memoryKey)
+			if err != nil {
+				c.conversationMu.Unlock()
+				return nil, err
+			}
+		}
+		a, err := agent.New(c.ctx, agent.Options{Config: cfg, ConfigPath: c.configPath, AgentName: p.AgentName, AgentConfig: &definition, Mode: &mode, MemoryStore: memoryStore, GatewayBridge: c.gatewayBridge})
 		if err != nil {
 			c.conversationMu.Unlock()
 			return nil, err
@@ -251,7 +287,9 @@ func (c *Client) handleAgentConversation(env *protocol.Envelope) (*protocol.Enve
 				return nil, err
 			}
 			p.SessionID = "cc_" + id
-			metadata, _ := json.Marshal(p.identity())
+			identity := p.identity()
+			identity.MemoryKey = memoryKey
+			metadata, _ := json.Marshal(identity)
 			now := time.Now()
 			if err := c.stores.Sessions.AppendMessage(id, "system", string(metadata), now, now); err != nil {
 				a.Close()

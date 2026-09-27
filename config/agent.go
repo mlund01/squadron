@@ -112,6 +112,9 @@ type Agent struct {
 
 	// Agent-scoped skills (parsed manually)
 	LocalSkills []Skill `hcl:"-" json:"localSkills,omitempty"`
+	// Memory governs file memory for independent managed-agent sessions.
+	// Mission executors never inherit this policy.
+	Memory *AgentMemoryPolicy `hcl:"-" json:"memory,omitempty"`
 
 	// Pruning settings (optional block)
 	Pruning *Pruning `hcl:"pruning,block"`
@@ -127,6 +130,44 @@ type Agent struct {
 	// Valid values: "", "low", "medium", "high". Silently no-op on models
 	// that don't support native reasoning.
 	Reasoning string `hcl:"reasoning,optional"`
+}
+
+// AgentMemoryPolicy controls managed-agent file memory. Session memory belongs
+// to one conversation; persistent memory is shared only by sessions of the
+// same agent owned by the same user. The default is disabled.
+type AgentMemoryPolicy struct {
+	Mode          string `hcl:"mode" json:"mode"`
+	Scope         string `hcl:"scope,optional" json:"scope,omitempty"`
+	RetentionDays int    `hcl:"retention_days,optional" json:"retentionDays,omitempty"`
+}
+
+func (p *AgentMemoryPolicy) Validate() error {
+	if p == nil {
+		return nil
+	}
+	switch p.Mode {
+	case "disabled":
+		if p.Scope != "" || p.RetentionDays != 0 {
+			return fmt.Errorf("disabled memory cannot declare scope or retention_days")
+		}
+	case "session":
+		if p.Scope != "" {
+			return fmt.Errorf("session memory cannot declare scope")
+		}
+		if p.RetentionDays < 1 || p.RetentionDays > 365 {
+			return fmt.Errorf("session memory retention_days must be between 1 and 365")
+		}
+	case "persistent":
+		if p.Scope != "owner" {
+			return fmt.Errorf("persistent memory requires scope = \"owner\"")
+		}
+		if p.RetentionDays < 1 || p.RetentionDays > 3650 {
+			return fmt.Errorf("persistent memory retention_days must be between 1 and 3650")
+		}
+	default:
+		return fmt.Errorf("memory mode must be disabled, session, or persistent")
+	}
+	return nil
 }
 
 // ToolResponseConfig configures how large tool call responses are handled.
@@ -173,6 +214,9 @@ func (a *Agent) GetPruneTo() int {
 // Validate checks that the agent configuration is valid
 // Note: Toolbox tools are validated in Config.Validate() since we need access to custom tool definitions
 func (a *Agent) Validate() error {
+	if err := a.Memory.Validate(); err != nil {
+		return fmt.Errorf("agent %q memory: %w", a.Name, err)
+	}
 	normalized, err := NormalizeReasoning(a.Reasoning)
 	if err != nil {
 		return fmt.Errorf("agent %q: %w", a.Name, err)

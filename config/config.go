@@ -1960,6 +1960,7 @@ func parseAgentBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Agent, error) {
 			{Type: "pruning"},
 			{Type: "compaction"},
 			{Type: "tool_response"},
+			{Type: "memory"},
 		},
 	})
 	if diags.HasErrors() {
@@ -2078,6 +2079,16 @@ func parseAgentBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Agent, error) {
 				return nil, fmt.Errorf("agent '%s' tool_response: %w", a.Name, d)
 			}
 			a.ToolResponse = &tr
+		case "memory":
+			if a.Memory != nil {
+				return nil, fmt.Errorf("agent '%s': only one memory block is allowed", a.Name)
+			}
+			var policy AgentMemoryPolicy
+			d := gohcl.DecodeBody(b.Body, agentCtx, &policy)
+			if d.HasErrors() {
+				return nil, fmt.Errorf("agent '%s' memory: %w", a.Name, d)
+			}
+			a.Memory = &policy
 		}
 	}
 

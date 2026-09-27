@@ -249,6 +249,10 @@ func FormatMemoryContext(store aitools.MemoryStore) string {
 	for _, info := range infos {
 		label := ""
 		switch {
+		case info.Kind == "managed_agent_session":
+			label = " (managed-agent memory — private to this conversation)"
+		case info.Kind == "managed_agent_persistent":
+			label = " (managed-agent memory — shared only across your sessions with this agent)"
 		case info.Name == aitools.MemorySlotName:
 			label = " (persistent mission memory — survives across runs)"
 		case info.Name == aitools.ScratchpadSlotName:

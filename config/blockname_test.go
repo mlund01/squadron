@@ -184,7 +184,7 @@ mission "pipeline_v2" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.agent_2]
+  models = [models.anthropic.claude_sonnet_4]
 
   task "step_1" {
     objective = "First step"

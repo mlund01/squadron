@@ -74,37 +74,6 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 		}
 	}
 
-	// Add mission-scoped agents and their local skills
-	for _, m := range cfg.Missions {
-		for _, a := range m.LocalAgents {
-			var mSkillNames []string
-			for _, ref := range a.Skills {
-				mSkillNames = append(mSkillNames, strings.TrimPrefix(ref, "skills."))
-			}
-			for _, ls := range a.LocalSkills {
-				mSkillNames = append(mSkillNames, ls.Name)
-			}
-			ic.Agents = append(ic.Agents, protocol.AgentInfo{
-				Name:        a.Name,
-				Description: a.Personality,
-				Role:        a.Role,
-				Model:       a.Model,
-				Tools:       a.Tools,
-				Skills:      mSkillNames,
-				Mission:     m.Name,
-			})
-			for _, s := range a.LocalSkills {
-				ic.Skills = append(ic.Skills, protocol.SkillInfo{
-					Name:         s.Name,
-					Description:  s.Description,
-					Instructions: s.Instructions,
-					Tools:        s.Tools,
-					Agent:        a.Name,
-				})
-			}
-		}
-	}
-
 	for _, m := range cfg.Missions {
 		mi := protocol.MissionInfo{
 			Name:        m.Name,
@@ -112,7 +81,6 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 			Commander:   m.Commander.Model,
 			Models:      append([]string(nil), m.Models...),
 			Tools:       append([]string(nil), m.Tools...),
-			Agents:      m.Agents,
 		}
 		if m.Source != nil {
 			mi.Source = &protocol.ConfigSourceInfo{
@@ -153,9 +121,6 @@ func ConfigToInstanceConfig(cfg *config.Config) protocol.InstanceConfig {
 				RetryDelaySeconds: t.RetryDelaySeconds,
 				DependsOn:         t.DependsOn,
 				SendTo:            t.SendTo,
-			}
-			if len(t.Agents) > 0 {
-				ti.Agent = t.Agents[0]
 			}
 			if t.Iterator != nil {
 				ti.Iterator = &protocol.TaskIteratorInfo{

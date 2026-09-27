@@ -16,7 +16,7 @@ mission "test_mission" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models    = [models.anthropic.claude_sonnet_4]
 
   task "first" {
     objective = "Do something"
@@ -44,7 +44,7 @@ mission "pipeline" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models    = [models.anthropic.claude_sonnet_4]
 
   task "step_one" {
     objective = "First step"
@@ -107,7 +107,7 @@ mission "cycled" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models    = [models.anthropic.claude_sonnet_4]
 
   task "a" {
     objective  = "A"
@@ -213,7 +213,7 @@ mission "research_pipeline" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.researcher]
+  models    = [models.anthropic.claude_sonnet_4]
 
   input "city" {
     type        = "string"

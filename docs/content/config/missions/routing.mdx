@@ -259,7 +259,7 @@ mission "escalation_mission" {
   commander {
     model = models.anthropic.claude_haiku_4_5
   }
-  agents = [agents.assistant]
+  models = [models.anthropic.claude_haiku_4_5]
 
   input "complaint_summary" {
     type        = "string"
@@ -287,7 +287,7 @@ mission "support_triage" {
   commander {
     model = models.anthropic.claude_haiku_4_5
   }
-  agents = [agents.assistant]
+  models = [models.anthropic.claude_haiku_4_5]
 
   input "customer_message" {
     type        = "string"

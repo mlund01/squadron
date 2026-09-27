@@ -20,24 +20,17 @@ import (
 
 func TestConversationAgentScope(t *testing.T) {
 	cfg := &config.Config{
-		Agents: []config.Agent{{Name: "reviewer", Role: "global"}},
+		Agents: []config.Agent{{Name: "reviewer", Role: "managed"}},
 		Missions: []config.Mission{
 			{Name: "release", LocalAgents: []config.Agent{{Name: "reviewer", Role: "release"}}},
-			{Name: "audit", LocalAgents: []config.Agent{{Name: "reviewer", Role: "audit"}}},
 		},
 	}
-	for _, scope := range []string{"", "release", "audit"} {
-		agent, err := resolveConversationAgent(cfg, "reviewer", scope)
-		want := scope
-		if want == "" {
-			want = "global"
-		}
-		if err != nil || agent.Role != want {
-			t.Fatalf("scope %q: got %v, %v", scope, agent, err)
-		}
+	agent, err := resolveConversationAgent(cfg, "reviewer", "")
+	if err != nil || agent.Role != "managed" {
+		t.Fatalf("managed agent: got %v, %v", agent, err)
 	}
-	if _, err := resolveConversationAgent(cfg, "reviewer", "missing"); err == nil {
-		t.Fatal("missing mission fell back to global agent")
+	if _, err := resolveConversationAgent(cfg, "reviewer", "release"); err == nil {
+		t.Fatal("mission-scoped agent was exposed as a managed agent")
 	}
 }
 
@@ -59,15 +52,14 @@ func TestConversationMemoryIdentityStaysOwnerScoped(t *testing.T) {
 	}
 }
 
-func TestAgentDefinitionIncludesScopedSource(t *testing.T) {
-	source := &config.ConfigSource{Path: "missions/release.hcl", StartLine: 8, EndLine: 12, Content: `agent "reviewer" { personality = "Release" }`, FileRevision: "snapshot"}
+func TestAgentDefinitionIncludesManagedSource(t *testing.T) {
+	source := &config.ConfigSource{Path: "agents/reviewer.hcl", StartLine: 8, EndLine: 12, Content: `agent "reviewer" { personality = "Release" }`, FileRevision: "snapshot"}
 	cfg := &config.Config{
-		Agents:   []config.Agent{{Name: "reviewer", Source: &config.ConfigSource{Path: "agents.hcl"}}},
-		Missions: []config.Mission{{Name: "release", LocalAgents: []config.Agent{{Name: "reviewer", Source: source}}}},
+		Agents: []config.Agent{{Name: "reviewer", Source: source}},
 	}
 	client := NewClient(cfg, true, "", "", nil, "test")
 	defer client.Close()
-	request, _ := protocol.NewRequest("get_agent_definition", conversationRequest{AgentName: "reviewer", Mission: "release"})
+	request, _ := protocol.NewRequest("get_agent_definition", conversationRequest{AgentName: "reviewer"})
 	response, err := client.handleAgentDefinition(request)
 	if err != nil {
 		t.Fatal(err)
@@ -253,11 +245,11 @@ func TestConversationRoundTrip(t *testing.T) {
 			defer provider.Close()
 			client, _ := storedConversation(t)
 			cfg := &config.Config{
-				Models:   []config.Model{{Name: "test", Provider: config.ProviderOllama, BaseURL: provider.URL, Aliases: map[string]string{"small": "synthetic"}}},
-				Missions: []config.Mission{{Name: "release", LocalAgents: []config.Agent{{Name: "reviewer", Model: "small", Personality: "A helpful reviewer"}}}},
+				Models: []config.Model{{Name: "test", Provider: config.ProviderOllama, BaseURL: provider.URL, Aliases: map[string]string{"small": "synthetic"}}},
+				Agents: []config.Agent{{Name: "reviewer", Model: "small", Personality: "A helpful reviewer"}},
 			}
 			client.SetConfig(cfg)
-			request := conversationRequest{Operation: "send", Owner: "user-1", AgentName: "reviewer", Mission: "release", Purpose: tc.purpose, Mode: tc.mode, Content: "first turn"}
+			request := conversationRequest{Operation: "send", Owner: "user-1", AgentName: "reviewer", Purpose: tc.purpose, Mode: tc.mode, Content: "first turn"}
 			response, err := client.handleAgentConversation(conversationEnvelope(t, request))
 			if err != nil {
 				t.Fatal(err)
@@ -335,7 +327,7 @@ func storedConversation(t *testing.T) (*Client, conversationRequest) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	p := conversationRequest{Operation: "read", Owner: "user-1", AgentName: "reviewer", Mission: "release", Purpose: "session", Mode: "interactive", SessionID: "cc_" + id}
+	p := conversationRequest{Operation: "read", Owner: "user-1", AgentName: "reviewer", Purpose: "session", Mode: "interactive", SessionID: "cc_" + id}
 	metadata, _ := json.Marshal(p.identity())
 	for _, row := range []struct{ role, content string }{{"system", string(metadata)}, {"user", "hello"}, {"assistant", "answer"}} {
 		if err := bundle.Sessions.AppendMessage(id, row.role, row.content, time.Now(), time.Now()); err != nil {

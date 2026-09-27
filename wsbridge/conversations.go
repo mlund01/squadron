@@ -73,6 +73,9 @@ func (p conversationRequest) validate() error {
 	if p.Owner == "" || p.AgentName == "" {
 		return fmt.Errorf("user and agent are required")
 	}
+	if p.Mission != "" {
+		return fmt.Errorf("managed agents are not scoped to missions")
+	}
 	if p.Purpose != "authoring" && p.Purpose != "session" {
 		return fmt.Errorf("invalid conversation purpose")
 	}
@@ -99,20 +102,11 @@ func resolveConversationAgent(cfg *config.Config, name, mission string) (*config
 		return nil, fmt.Errorf("runner configuration unavailable")
 	}
 	if mission != "" {
-		for _, m := range cfg.Missions {
-			if m.Name == mission {
-				for i := range m.LocalAgents {
-					if m.LocalAgents[i].Name == name {
-						return &m.LocalAgents[i], nil
-					}
-				}
-			}
-		}
-	} else {
-		for i := range cfg.Agents {
-			if cfg.Agents[i].Name == name {
-				return &cfg.Agents[i], nil
-			}
+		return nil, fmt.Errorf("managed agents are not scoped to missions")
+	}
+	for i := range cfg.Agents {
+		if cfg.Agents[i].Name == name {
+			return &cfg.Agents[i], nil
 		}
 	}
 	return nil, fmt.Errorf("agent not found in this scope")
@@ -155,7 +149,7 @@ func (c *Client) handleAgentDefinition(env *protocol.Envelope) (*protocol.Envelo
 		"name": a.Name, "mission": p.Mission, "model": a.Model, "role": a.Role, "description": a.Personality,
 		"tools": a.Tools, "skills": a.Skills, "localSkills": a.LocalSkills,
 		"reasoning": a.Reasoning, "pruning": a.Pruning, "compaction": a.Compaction, "toolResponse": a.ToolResponse, "memory": a.Memory,
-		"source": a.Source, "lineage": buildAgentLineage(cfg, p.AgentName, p.Mission),
+		"source": a.Source,
 	})
 }
 
@@ -329,7 +323,7 @@ func (c *Client) handleAgentConversation(env *protocol.Envelope) (*protocol.Enve
 }
 
 func (c *Client) listAgentConversations(env *protocol.Envelope, p conversationRequest) (*protocol.Envelope, error) {
-	if p.Owner == "" || p.AgentName == "" || (p.Purpose != "authoring" && p.Purpose != "session") {
+	if p.Owner == "" || p.AgentName == "" || p.Mission != "" || (p.Purpose != "authoring" && p.Purpose != "session") {
 		return nil, fmt.Errorf("invalid conversation history request")
 	}
 	sessions, err := c.stores.Sessions.ListAgentConversations("cc_conversation:"+p.Purpose+":"+p.AgentName, 100)

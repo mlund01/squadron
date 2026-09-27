@@ -447,6 +447,34 @@ mission "huge_limits" {
 
 	Describe("Validate", func() {
 		Context("mission-level", func() {
+			It("requires executor models even when no managed agent is referenced", func() {
+				hcl := minimalVarsHCL() + minimalModelHCL() + `
+mission "missing_executor" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  task "t" { objective = "Do work" }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).To(MatchError(ContainSubstring("must declare task-executor models")))
+			})
+
+			It("rejects managed agents assigned directly to a task", func() {
+				hcl := fullBaseHCL() + `
+mission "bad_task_agent" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  models = [models.anthropic.claude_sonnet_4]
+  task "t" {
+    objective = "Do work"
+    agents = [agents.test_agent]
+  }
+}
+`
+				_, f := writeFixture("config.hcl", hcl)
+				_, err := config.LoadAndValidate(f)
+				Expect(err).To(MatchError(ContainSubstring("cannot reference managed agents")))
+			})
+
 			It("rejects mixing managed agents with mission task executors", func() {
 				hcl := fullBaseHCL() + `
 mission "mixed" {
@@ -495,15 +523,14 @@ mission "no_commander" {
 			})
 
 			It("rejects mission with zero tasks", func() {
-				m := config.Mission{Name: "empty", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Agents: []string{"a"}}
+				m := config.Mission{Name: "empty", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Models: []string{"claude_sonnet_4"}}
 				models := []config.Model{{Provider: "anthropic", APIKey: "k"}}
-				agents := []config.Agent{{Name: "a"}}
-				err := m.Validate(models, agents, nil, nil, nil)
+				err := m.Validate(models, nil, nil, nil)
 				Expect(err).To(HaveOccurred())
 				Expect(err.Error()).To(ContainSubstring("at least one task"))
 			})
 
-			It("rejects mission with unknown agent reference", func() {
+			It("rejects mission references to managed agents", func() {
 				hcl := fullBaseHCL() + `
 mission "bad_agent" {
   commander {
@@ -516,12 +543,9 @@ mission "bad_agent" {
 				_, f := writeFixture("config.hcl", hcl)
 				cfg, err := config.LoadFile(f)
 				Expect(err).NotTo(HaveOccurred())
-				// Manually modify to add a bad agent ref for validation
-				cfg.Missions[0].Agents = append(cfg.Missions[0].Agents, "ghost_agent")
 				err = cfg.Validate()
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("ghost_agent"))
-				Expect(err.Error()).To(ContainSubstring("not found"))
+				Expect(err.Error()).To(ContainSubstring("cannot reference managed agents"))
 			})
 
 			It("rejects duplicate task names", func() {
@@ -530,7 +554,7 @@ mission "dup_tasks" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "same_name" { objective = "First" }
   task "same_name" { objective = "Second" }
 }
@@ -549,7 +573,7 @@ mission "valid" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" { objective = "Task A" }
   task "b" {
     objective  = "Task B"
@@ -665,7 +689,7 @@ mission "self_dep" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "loop" {
     objective  = "I depend on myself"
     depends_on = [tasks.loop]
@@ -695,7 +719,7 @@ mission "bad_iter" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   dataset "items" { description = "Items" }
   task "work" {
     objective = "Do work"
@@ -719,7 +743,7 @@ mission "bad_iter2" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   dataset "items" { description = "Items" }
   task "work" {
     objective = "Do work"
@@ -743,7 +767,7 @@ mission "bad_iter3" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   dataset "items" { description = "Items" }
   task "work" {
     objective = "Do work"
@@ -767,7 +791,7 @@ mission "good_iter" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   dataset "items" { description = "Items" }
   task "work" {
     objective = "Do work"
@@ -795,7 +819,7 @@ mission "linear" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" {
     objective = "A"
   }
@@ -820,7 +844,7 @@ mission "cycle" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" {
     objective  = "Task A"
     depends_on = [tasks.b]
@@ -845,7 +869,7 @@ mission "long_cycle" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" {
     objective  = "Task A"
     depends_on = [tasks.c]
@@ -874,7 +898,7 @@ mission "diamond" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents    = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "root" { objective = "Root" }
   task "left" {
     objective  = "Left"
@@ -903,7 +927,7 @@ mission "transitive" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" { objective = "A" }
   task "b" {
     objective  = "B"
@@ -929,7 +953,7 @@ mission "deep_transitive" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" { objective = "A" }
   task "b" {
     objective  = "B"
@@ -957,7 +981,7 @@ mission "diamond_ok" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "root" { objective = "Root" }
   task "left" {
     objective  = "Left"
@@ -984,7 +1008,7 @@ mission "fan_in" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" { objective = "A" }
   task "b" { objective = "B" }
   task "c" { objective = "C" }
@@ -1007,7 +1031,7 @@ mission "valid_router" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "classify" {
     objective = "Classify input"
     router {
@@ -1036,7 +1060,7 @@ mission "bad_router" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "start" { objective = "Start" }
   task "classify" {
     objective  = "Classify"
@@ -1068,7 +1092,7 @@ mission "dep_on_dynamic" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "classify" {
     objective = "Classify"
     router {
@@ -1100,7 +1124,7 @@ mission "router_cycle" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" {
     objective = "A"
     router {
@@ -1135,7 +1159,7 @@ mission "self_route" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "loop" {
     objective = "Loop"
     router {
@@ -1161,7 +1185,7 @@ mission "par_router" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   dataset "items" { description = "Items" }
   task "work" {
     objective = "Work"
@@ -1193,7 +1217,7 @@ mission "multi_router" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "classify_a" {
     objective = "Classify A"
     router {
@@ -1228,7 +1252,7 @@ mission "valid_sendto" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "start" {
     objective = "Start"
     send_to   = [tasks.next_a, tasks.next_b]
@@ -1248,7 +1272,7 @@ mission "self_send" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "loop" {
     objective = "Loop"
     send_to   = [tasks.loop]
@@ -1269,7 +1293,7 @@ mission "both" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "start" {
     objective = "Start"
     send_to   = [tasks.next]
@@ -1298,7 +1322,7 @@ mission "sendto_dep" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "first"  { objective = "First" }
   task "sender" {
     objective  = "Sender"
@@ -1325,7 +1349,7 @@ mission "dep_on_sendto" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "sender" {
     objective = "Send"
     send_to   = [tasks.dynamic]
@@ -1352,7 +1376,7 @@ mission "sendto_cycle" {
   commander {
     model = models.anthropic.claude_sonnet_4
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "a" {
     objective = "A"
     send_to   = [tasks.b]
@@ -1484,7 +1508,7 @@ mission "beta" {
 		})
 
 		Context("validation", func() {
-			It("rejects scoped agent that conflicts with a global agent name", func() {
+			It("rejects mission-scoped agent definitions", func() {
 				hcl := fullBaseHCL() + `
 mission "conflict" {
   commander {
@@ -1505,7 +1529,7 @@ mission "conflict" {
 				Expect(err).NotTo(HaveOccurred())
 				err = cfg.Validate()
 				Expect(err).To(HaveOccurred())
-				Expect(err.Error()).To(ContainSubstring("conflicts with global agent"))
+				Expect(err.Error()).To(ContainSubstring("cannot reference managed agents"))
 			})
 
 			It("rejects scoped agent with unknown tool reference", func() {
@@ -1530,7 +1554,7 @@ mission "bad_tools" {
 				Expect(err).To(HaveOccurred())
 			})
 
-			It("validates scoped agent tool references at config level", func() {
+			It("rejects scoped agents even when their tools are otherwise valid", func() {
 				hcl := fullBaseHCL() + `
 mission "valid_tools" {
   commander {
@@ -1549,7 +1573,7 @@ mission "valid_tools" {
 `
 				_, f := writeFixture("config.hcl", hcl)
 				_, err := config.LoadAndValidate(f)
-				Expect(err).NotTo(HaveOccurred())
+				Expect(err).To(MatchError(ContainSubstring("cannot reference managed agents")))
 			})
 		})
 

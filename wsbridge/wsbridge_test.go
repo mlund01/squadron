@@ -138,9 +138,9 @@ func (mc *mockCommander) sendEnvelope(env *protocol.Envelope) {
 func testConfig(wsURL string) *config.Config {
 	return &config.Config{
 		CommandCenter: &config.CommandCenterConfig{
-			URL:                wsURL,
-			InstanceName:       "test-instance",
-			ReconnectInterval:  1,
+			URL:               wsURL,
+			InstanceName:      "test-instance",
+			ReconnectInterval: 1,
 		},
 		Models: []config.Model{
 			{Name: "my-model", Provider: "openai", APIKey: "k"},
@@ -161,7 +161,6 @@ func TestClientConnectAndRegister(t *testing.T) {
 	mc := newMockCommander(t)
 	cfg := testConfig(mc.wsURL())
 	stores := newTestBundle(t)
-
 
 	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
 
@@ -297,7 +296,6 @@ func TestClientHandlesGetConfig(t *testing.T) {
 	cfg := testConfig(mc.wsURL())
 	stores := newTestBundle(t)
 
-
 	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
 
 	// Handle registration
@@ -350,7 +348,6 @@ func TestClientHandlesHeartbeat(t *testing.T) {
 	cfg := testConfig(mc.wsURL())
 	stores := newTestBundle(t)
 
-
 	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
 
 	go func() {
@@ -382,7 +379,6 @@ func TestClientHandlesGetMissions(t *testing.T) {
 	mc := newMockCommander(t)
 	cfg := testConfig(mc.wsURL())
 	stores := newTestBundle(t)
-
 
 	// Create some mission records in the store
 	stores.Missions.CreateMission("search-mission", `{"query": "test"}`, `{}`)
@@ -444,12 +440,12 @@ func TestConfigConversion(t *testing.T) {
 			{
 				Name:      "mission1",
 				Commander: &config.MissionCommander{Model: "m1"},
-				Agents:    []string{"agent1"},
+				Models:    []string{"claude_sonnet_4"},
 				Inputs: []config.MissionInput{
 					{Name: "query", Type: "string", Description: "Search query"},
 				},
 				Tasks: []config.Task{
-					{Name: "task1", Agents: []string{"agent1"}, DependsOn: []string{}},
+					{Name: "task1", Models: []string{"claude_sonnet_4"}, DependsOn: []string{}},
 					{Name: "task2", DependsOn: []string{"task1"}},
 				},
 			},
@@ -488,8 +484,8 @@ func TestConfigConversion(t *testing.T) {
 	if len(ic.Missions[0].Tasks) != 2 {
 		t.Errorf("expected 2 tasks, got %d", len(ic.Missions[0].Tasks))
 	}
-	if ic.Missions[0].Tasks[0].Agent != "agent1" {
-		t.Errorf("expected agent 'agent1', got %q", ic.Missions[0].Tasks[0].Agent)
+	if ic.Missions[0].Tasks[0].Agent != "" || len(ic.Missions[0].Tasks[0].Models) != 1 {
+		t.Errorf("task should expose executor models without a managed agent: %#v", ic.Missions[0].Tasks[0])
 	}
 
 	// 3 builtin tool namespaces (http, utils, human) + 1 external plugin

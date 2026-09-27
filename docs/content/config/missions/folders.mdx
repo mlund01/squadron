@@ -136,7 +136,7 @@ memory "reference" {
 
 mission "research" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.researcher]
+  models    = [models.anthropic.claude_sonnet_4]
 
   memories   = [memories.reference]
   memory     { description = "Finished reports, one per run" }

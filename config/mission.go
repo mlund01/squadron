@@ -206,7 +206,7 @@ type TaskRoute struct {
 }
 
 // Validate checks that the mission configuration is valid
-func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, packets []Packet, allMissionNames map[string]bool) error {
+func (w *Mission) Validate(models []Model, memories []Memory, packets []Packet, allMissionNames map[string]bool) error {
 	if err := validateSlotName(w.Name); err != nil {
 		return fmt.Errorf("mission name: %w", err)
 	}
@@ -220,15 +220,21 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, pa
 		return fmt.Errorf("commander '%s' not found in models", w.Commander.Model)
 	}
 
-	hasExecutorPolicy := w.HasExecutorPolicy()
-	if hasExecutorPolicy {
-		if len(w.Agents) > 0 || len(w.LocalAgents) > 0 {
-			return fmt.Errorf("missions cannot reference managed agents; declare executor models and tools on the mission or task")
+	if len(w.Agents) > 0 || len(w.LocalAgents) > 0 {
+		return fmt.Errorf("missions cannot reference managed agents; declare executor models and tools on the mission or task")
+	}
+	for _, task := range w.Tasks {
+		if len(task.Agents) > 0 {
+			return fmt.Errorf("mission task %q cannot reference managed agents", task.Name)
 		}
-		for _, modelRef := range w.Models {
-			if !isValidModelRef(modelRef, models) {
-				return fmt.Errorf("executor model '%s' not found in models", modelRef)
-			}
+	}
+	hasExecutorPolicy := w.HasExecutorPolicy()
+	if !hasExecutorPolicy {
+		return fmt.Errorf("mission must declare task-executor models")
+	}
+	for _, modelRef := range w.Models {
+		if !isValidModelRef(modelRef, models) {
+			return fmt.Errorf("executor model '%s' not found in models", modelRef)
 		}
 	}
 
@@ -257,15 +263,6 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, pa
 		return fmt.Errorf("commander: %w", err)
 	} else {
 		w.Commander.Reasoning = normalized
-	}
-
-	// Managed agents are a separate product primitive and are not task executors.
-	if !hasExecutorPolicy {
-		for i := range w.LocalAgents {
-			if err := w.LocalAgents[i].Validate(); err != nil {
-				return err
-			}
-		}
 	}
 
 	if len(w.Tasks) == 0 {
@@ -316,29 +313,6 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, pa
 		taskNames[t.Name] = true
 	}
 
-	// Build map of agent names for validation (global + local)
-	agentNames := make(map[string]bool)
-	for _, a := range agents {
-		agentNames[a.Name] = true
-	}
-
-	// Check for name conflicts between local and global agents
-	for _, la := range w.LocalAgents {
-		for _, ga := range agents {
-			if la.Name == ga.Name {
-				return fmt.Errorf("mission-scoped agent '%s' conflicts with global agent of the same name", la.Name)
-			}
-		}
-		agentNames[la.Name] = true
-	}
-
-	// Validate mission-level agents
-	for _, agentRef := range w.Agents {
-		if !agentNames[agentRef] {
-			return fmt.Errorf("agent '%s' not found", agentRef)
-		}
-	}
-
 	// Validate shared memory references
 	memoryNames := make(map[string]bool)
 	for _, m := range memories {
@@ -377,7 +351,7 @@ func (w *Mission) Validate(models []Model, agents []Agent, memories []Memory, pa
 
 	// Validate each task
 	for _, t := range w.Tasks {
-		if err := t.Validate(taskNames, agentNames, datasetNames, w.Agents, w.Models, models, hasExecutorPolicy, allMissionNames); err != nil {
+		if err := t.Validate(taskNames, datasetNames, w.Models, models, allMissionNames); err != nil {
 			return fmt.Errorf("task '%s': %w", t.Name, err)
 		}
 	}
@@ -730,8 +704,7 @@ func isValidModelRef(modelRef string, models []Model) bool {
 }
 
 // Validate checks that the task configuration is valid
-// missionAgents are the agents defined at the mission level
-func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, datasetNames map[string]bool, missionAgents []string, missionModels []string, configuredModels []Model, hasExecutorPolicy bool, allMissionNames map[string]bool) error {
+func (t *Task) Validate(taskNames map[string]bool, datasetNames map[string]bool, missionModels []string, configuredModels []Model, allMissionNames map[string]bool) error {
 	if t.Name == "" {
 		return fmt.Errorf("task name is required")
 	}
@@ -740,38 +713,23 @@ func (t *Task) Validate(taskNames map[string]bool, agentNames map[string]bool, d
 		return fmt.Errorf("objective is required")
 	}
 
-	if hasExecutorPolicy {
-		if len(t.Agents) > 0 {
-			return fmt.Errorf("mission tasks cannot reference managed agents")
+	allowedModels := missionModels
+	if len(t.Models) > 0 {
+		allowedModels = t.Models
+	}
+	if len(allowedModels) == 0 {
+		return fmt.Errorf("no executor models specified (neither at task nor mission level)")
+	}
+	missionModelSet := make(map[string]bool, len(missionModels))
+	for _, modelRef := range missionModels {
+		missionModelSet[modelRef] = true
+	}
+	for _, modelRef := range t.Models {
+		if !isValidModelRef(modelRef, configuredModels) {
+			return fmt.Errorf("executor model '%s' not found in models", modelRef)
 		}
-		allowedModels := missionModels
-		if len(t.Models) > 0 {
-			allowedModels = t.Models
-		}
-		if len(allowedModels) == 0 {
-			return fmt.Errorf("no executor models specified (neither at task nor mission level)")
-		}
-		missionModelSet := make(map[string]bool, len(missionModels))
-		for _, modelRef := range missionModels {
-			missionModelSet[modelRef] = true
-		}
-		for _, modelRef := range t.Models {
-			if !isValidModelRef(modelRef, configuredModels) {
-				return fmt.Errorf("executor model '%s' not found in models", modelRef)
-			}
-			if len(missionModelSet) > 0 && !missionModelSet[modelRef] {
-				return fmt.Errorf("executor model '%s' is not in the mission model pool", modelRef)
-			}
-		}
-	} else {
-		// Legacy missions require agents either at task or mission scope.
-		if len(t.Agents) == 0 && len(missionAgents) == 0 {
-			return fmt.Errorf("no agents specified (neither at task nor mission level)")
-		}
-		for _, agentRef := range t.Agents {
-			if !agentNames[agentRef] {
-				return fmt.Errorf("agent '%s' not found", agentRef)
-			}
+		if len(missionModelSet) > 0 && !missionModelSet[modelRef] {
+			return fmt.Errorf("executor model '%s' is not in the mission model pool", modelRef)
 		}
 	}
 

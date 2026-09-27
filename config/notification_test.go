@@ -12,7 +12,7 @@ var _ = Describe("Notification Config", func() {
 		return fullBaseHCL() + extra + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
 ` + notificationBlock + `
   task "run" { objective = "do the thing" }
 }

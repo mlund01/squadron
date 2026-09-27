@@ -145,20 +145,15 @@ var verifyCmd = &cobra.Command{
 func printMissionSummary(w io.Writer, missions []config.Mission) {
 	fmt.Fprintf(w, "Found %d mission(s)\n", len(missions))
 	for _, mission := range missions {
-		hasExecutorPolicy := mission.HasExecutorPolicy()
 		fmt.Fprintf(w, "  - %s (commander: %s, tasks: %d)\n", mission.Name, mission.Commander.Model, len(mission.Tasks))
-		if hasExecutorPolicy {
-			fmt.Fprintf(w, "    Executor model pool: %v; optional tool pool: %v\n", mission.Models, mission.Tools)
-		}
+		fmt.Fprintf(w, "    Executor model pool: %v; optional tool pool: %v\n", mission.Models, mission.Tools)
 		for _, task := range mission.Tasks {
 			fmt.Fprintf(w, "      • %s", task.Name)
-			if hasExecutorPolicy {
-				models := "mission pool"
-				if len(task.Models) > 0 {
-					models = fmt.Sprintf("%v", task.Models)
-				}
-				fmt.Fprintf(w, " (models: %s; required tools: %v)", models, task.Tools)
+			models := "mission pool"
+			if len(task.Models) > 0 {
+				models = fmt.Sprintf("%v", task.Models)
 			}
+			fmt.Fprintf(w, " (models: %s; required tools: %v)", models, task.Tools)
 			if len(task.DependsOn) > 0 {
 				fmt.Fprintf(w, " [depends_on: %v]", task.DependsOn)
 			}

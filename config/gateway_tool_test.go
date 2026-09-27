@@ -18,7 +18,8 @@ agent "poster" {
 }
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents = [agents.poster]
+  models = [models.anthropic.claude_sonnet_4]
+  tools = [builtins.gateway.post]
   task "run" { objective = "post a message" }
 }
 `

@@ -111,24 +111,15 @@ func TestConfigToInstanceConfig_AgentMetadata(t *testing.T) {
 			Name:      "report",
 			Commander: &config.MissionCommander{Model: "claude_sonnet_4"},
 			Source:    &config.ConfigSource{Path: "missions/report.hcl", StartLine: 7, EndLine: 19, Content: `mission "report" {}`, FileRevision: "abc123"},
-			LocalAgents: []config.Agent{{
-				Name:        "editor",
-				Model:       "gpt_5",
-				Personality: "Exacting and concise.",
-				Role:        "Polishes the final report.",
-			}},
 		}},
 	}
 
 	ic := wsbridge.ConfigToInstanceConfig(cfg)
-	if len(ic.Agents) != 2 {
-		t.Fatalf("got %d agents, want 2", len(ic.Agents))
+	if len(ic.Agents) != 1 {
+		t.Fatalf("got %d agents, want 1 managed agent", len(ic.Agents))
 	}
 	if got := ic.Agents[0]; got.Description != "Curious and rigorous." || got.Role != "Investigates difficult questions." {
 		t.Errorf("global agent metadata = %#v", got)
-	}
-	if got := ic.Agents[1]; got.Description != "Exacting and concise." || got.Role != "Polishes the final report." || got.Mission != "report" {
-		t.Errorf("mission agent metadata = %#v", got)
 	}
 	if got := ic.Missions[0].Source; got == nil || got.Path != "missions/report.hcl" || got.StartLine != 7 || got.Content != `mission "report" {}` || got.FileRevision != "abc123" {
 		t.Errorf("mission source metadata = %#v", got)

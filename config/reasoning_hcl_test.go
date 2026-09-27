@@ -71,7 +71,7 @@ mission "test_mission" {
     model     = models.anthropic.claude_sonnet_4
     reasoning = "high"
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "only_task" {
     objective = "Do something"
   }
@@ -91,7 +91,7 @@ mission "test_mission" {
     model     = models.anthropic.claude_sonnet_4
     reasoning = "extreme"
   }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   task "only_task" {
     objective = "Do something"
   }

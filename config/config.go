@@ -717,7 +717,7 @@ func (c *Config) Validate() error {
 
 	// Validate missions
 	for i := range c.Missions {
-		if err := c.Missions[i].Validate(c.Models, c.Agents, c.Memories, c.Packets, allMissionNames); err != nil {
+		if err := c.Missions[i].Validate(c.Models, c.Memories, c.Packets, allMissionNames); err != nil {
 			return fmt.Errorf("mission '%s': %w", c.Missions[i].Name, err)
 		}
 	}

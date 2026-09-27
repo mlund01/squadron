@@ -25,7 +25,7 @@ mission "nightly_ingest" {
   }
 
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents = [agents.worker]
+  models = [models.anthropic.claude_sonnet_4]
   task "ingest" { objective = "Pull and normalize today's data" }
 }
 ```

@@ -141,7 +141,7 @@ packet "tone_guide" {
 
 mission "support_reply" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.support_writer]
+  models    = [models.anthropic.claude_sonnet_4]
   packets   = [packets.playbooks, packets.tone_guide]
 
   scratchpad = true

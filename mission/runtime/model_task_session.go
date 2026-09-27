@@ -297,6 +297,13 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 						IdempotencyKey: aitools.StableIdempotencyKey(s.dispatch.RunID, s.dispatch.AttemptID, call.ID),
 					}
 				}
+				// Persist the replay decision before invoking the tool again so
+				// recovery telemetry remains factual even if this worker dies.
+				operation.ReplayCount++
+				progress.Tools[call.ID] = operation
+				if err := commit(progress); err != nil {
+					return TaskResultEnvelope{}, &TaskRecoveryBlockedError{Err: fmt.Errorf("checkpoint tool replay %q before invocation: %w", call.ID, err)}
+				}
 			case ToolOperationIntended:
 			default:
 				return TaskResultEnvelope{}, fmt.Errorf("tool call %q has invalid durable status %q", call.ID, operation.Status)

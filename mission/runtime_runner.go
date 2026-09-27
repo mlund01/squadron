@@ -60,6 +60,11 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		return fmt.Errorf("initialize mission runtime: %w", err)
 	}
 	r.missionID = runID
+	if r.automaticRecovery {
+		if err := harness.RecordAutomaticRecovery(); err != nil {
+			return fmt.Errorf("record automatic mission recovery: %w", err)
+		}
+	}
 	if err := r.reconcileHumanInputWaits(harness); err != nil {
 		return fmt.Errorf("reconcile human input: %w", err)
 	}
@@ -194,8 +199,8 @@ func runtimeCommanderPolicies(m *config.Mission) map[string]any {
 		taskTools[task.Name] = append([]string(nil), task.Tools...)
 	}
 	return map[string]any{
-		"task_allowed_models": taskModels,
-		"task_tools":          taskTools,
+		"task_allowed_models":    taskModels,
+		"task_tools":             taskTools,
 		"optional_mission_tools": append([]string(nil), m.Tools...),
 	}
 }

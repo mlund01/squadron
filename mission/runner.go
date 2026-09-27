@@ -62,6 +62,7 @@ type Runner struct {
 
 	// Resume support
 	resumeMissionID       string            // Non-empty when resuming a prior mission
+	automaticRecovery     bool              // Record a worker-restart boundary in the durable runtime
 	launchParentMissionID string            // Parent run for idempotent cross-mission creation
 	launchRequestID       string            // Durable parent launch request
 	rawInputs             map[string]string // Raw input strings for persistence/resume
@@ -137,6 +138,12 @@ func WithResume(missionID string) RunnerOption {
 	return func(r *Runner) {
 		r.resumeMissionID = missionID
 	}
+}
+
+// WithAutomaticRecovery distinguishes orphan recovery from an operator's
+// explicit resume so the run timeline does not conflate the two events.
+func WithAutomaticRecovery() RunnerOption {
+	return func(r *Runner) { r.automaticRecovery = true }
 }
 
 // WithCrossMissionLaunch binds a fresh child runner to one durable parent

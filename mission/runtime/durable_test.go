@@ -86,6 +86,68 @@ func TestDurableHarnessPersistsOrchestrationFailure(t *testing.T) {
 	}
 }
 
+func TestAutomaticRecoveryAndToolReplayArePersistedWithoutNewAttempt(t *testing.T) {
+	t.Parallel()
+	runtimeStore := persistence.NewMemoryRuntimeStore()
+	harness, err := CreateDurableHarness(runtimeStore, "run-recovery-events", "commander", []TaskDefinition{{Name: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := harness.DispatchTask(DispatchRequest{RequestID: "start", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: testGrant("work")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := TaskAttemptProgress{AttemptID: dispatch.AttemptID, Phase: "tool_calls_received", Tools: map[string]ToolOperation{
+		"call-1": {ToolUseID: "call-1", ToolName: "lookup", InputJSON: `{}`, Status: ToolOperationInFlight},
+	}}
+	if err := harness.SaveTaskProgress(dispatch, progress); err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := RestoreDurableHarness(runtimeStore, "run-recovery-events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checkpointBefore, _, err := runtimeStore.LoadRuntime("run-recovery-events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := restored.RecordAutomaticRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	if active := restored.Snapshot().Active; len(active) != 1 || active[0].AttemptID != dispatch.AttemptID {
+		t.Fatalf("recovery changed active attempt: %#v", active)
+	}
+	progress.Tools["call-1"] = ToolOperation{ToolUseID: "call-1", ToolName: "lookup", InputJSON: `{}`, Status: ToolOperationInFlight, ReplayCount: 1}
+	if err := restored.SaveTaskProgress(dispatch, progress); err != nil {
+		t.Fatal(err)
+	}
+	progress.Tools["call-1"] = ToolOperation{ToolUseID: "call-1", ToolName: "lookup", InputJSON: `{}`, Status: ToolOperationCompleted, ReplayCount: 1, Result: "ok"}
+	if err := restored.SaveTaskProgress(dispatch, progress); err != nil {
+		t.Fatal(err)
+	}
+	_, events, err := RestoreDurableHarness(runtimeStore, "run-recovery-events")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovered, replayStarted, replayCompleted bool
+	for _, event := range events {
+		switch event.Type {
+		case EventMissionRecovered:
+			recovered = event.Restart != nil && event.Restart.LastCheckpointAt.Equal(checkpointBefore.UpdatedAt) && len(event.Restart.Attempts) == 1 && event.Restart.Attempts[0].AttemptID == dispatch.AttemptID && len(event.Restart.Attempts[0].InFlight) == 1
+		case EventTaskToolReplayStarted:
+			replayStarted = event.AttemptID == dispatch.AttemptID && event.ToolReplay != nil && event.ToolReplay.ReplayCount == 1
+		case EventTaskToolReplayCompleted:
+			replayCompleted = event.AttemptID == dispatch.AttemptID && event.ToolReplay != nil && event.ToolReplay.ToolName == "lookup"
+		}
+	}
+	if !recovered || !replayStarted || !replayCompleted {
+		t.Fatalf("missing recovery facts: recovered=%t replayStarted=%t replayCompleted=%t", recovered, replayStarted, replayCompleted)
+	}
+}
+
 func TestDurableHarnessRestoresCommanderAndDispatchHistory(t *testing.T) {
 	t.Parallel()
 

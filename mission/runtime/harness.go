@@ -298,13 +298,14 @@ const (
 // An in-flight operation has an unknown outcome after a crash and must be
 // reconciled rather than invoked again blindly.
 type ToolOperation struct {
-	ToolUseID string              `json:"toolUseId"`
-	ToolName  string              `json:"toolName"`
-	InputJSON string              `json:"inputJson"`
-	Status    ToolOperationStatus `json:"status"`
-	StartedAt time.Time           `json:"startedAt,omitempty"`
-	Result    string              `json:"result,omitempty"`
-	IsError   bool                `json:"isError,omitempty"`
+	ToolUseID   string              `json:"toolUseId"`
+	ToolName    string              `json:"toolName"`
+	InputJSON   string              `json:"inputJson"`
+	Status      ToolOperationStatus `json:"status"`
+	ReplayCount int                 `json:"replayCount,omitempty"`
+	StartedAt   time.Time           `json:"startedAt,omitempty"`
+	Result      string              `json:"result,omitempty"`
+	IsError     bool                `json:"isError,omitempty"`
 }
 
 // TaskAttemptProgress is the complete restart projection for a worker session.
@@ -898,6 +899,9 @@ func (h *Harness) SaveTaskProgressWithLease(dispatch Dispatch, progress TaskAtte
 		}
 		prior, exists := previous.Tools[id]
 		if !exists {
+			if operation.ReplayCount != 0 {
+				return fmt.Errorf("new tool operation %q cannot start with a replay", id)
+			}
 			continue
 		}
 		if prior.ToolName != operation.ToolName || prior.InputJSON != operation.InputJSON {
@@ -908,6 +912,12 @@ func (h *Harness) SaveTaskProgressWithLease(dispatch Dispatch, progress TaskAtte
 		}
 		if toolStatusRank(operation.Status) < toolStatusRank(prior.Status) {
 			return fmt.Errorf("tool operation %q moved backwards", id)
+		}
+		if operation.ReplayCount < prior.ReplayCount {
+			return fmt.Errorf("tool operation %q replay count moved backwards", id)
+		}
+		if operation.ReplayCount > prior.ReplayCount && (operation.ReplayCount != prior.ReplayCount+1 || prior.Status != ToolOperationInFlight || operation.Status != ToolOperationInFlight) {
+			return fmt.Errorf("tool operation %q has an invalid replay transition", id)
 		}
 		if prior.Status == ToolOperationCompleted && !reflect.DeepEqual(prior, operation) {
 			return fmt.Errorf("completed tool operation %q is immutable", id)

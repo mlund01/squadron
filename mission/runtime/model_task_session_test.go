@@ -388,14 +388,20 @@ func TestModelTaskSessionReplaysDeclaredIdempotentInFlightTool(t *testing.T) {
 	factory, _ := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: modelSession}, []TaskObjective{{Name: "collect", Objective: "Collect evidence"}})
 	dispatch := Dispatch{RunID: "run-safe", TaskName: "collect", AttemptID: "attempt-safe", Grant: ExecutionGrant{TaskName: "collect"}}
 	session, _ := factory.NewTaskSession(context.Background(), dispatch, map[string]aitools.Tool{"lookup": tool})
+	var replayCommitted bool
 	result, err := session.(ResumableTaskSession).RunResumable(context.Background(), TaskAttemptProgress{
 		AttemptID: dispatch.AttemptID, Phase: "tool_calls_received", Transcript: transcript,
 		Tools: map[string]ToolOperation{"call-safe": {ToolUseID: "call-safe", ToolName: "lookup", InputJSON: `{"id":"one"}`, Status: ToolOperationInFlight}},
-	}, func(TaskAttemptProgress) error { return nil })
+	}, func(progress TaskAttemptProgress) error {
+		if operation := progress.Tools["call-safe"]; operation.Status == ToolOperationInFlight && operation.ReplayCount == 1 && tool.calls == 0 {
+			replayCommitted = true
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("RunResumable() error = %v", err)
 	}
-	if result.Summary != "done" || tool.calls != 1 {
+	if result.Summary != "done" || tool.calls != 1 || !replayCommitted {
 		t.Fatalf("result/calls = %#v/%d", result, tool.calls)
 	}
 	if tool.metadata.IdempotencyKey != aitools.StableIdempotencyKey("run-safe", "attempt-safe", "call-safe") {

@@ -1464,6 +1464,7 @@ func (c *Client) ResumeOrphanedMissions() {
 		runner, err := mission.NewRunner(cfg, c.configPath, r.MissionName, nil,
 			mission.WithDebugLogger(debugLogger),
 			mission.WithResume(r.ID),
+			mission.WithAutomaticRecovery(),
 			mission.WithHumanBridge(c),
 			mission.WithGatewayBridge(c.gatewayBridge))
 		if err != nil {

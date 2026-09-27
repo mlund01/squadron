@@ -39,6 +39,12 @@ represent parallel work, while multiple bars on one task represent retries.
 For an iterated task, the canvas card reports how many child executions have
 finished. Open that card to choose a specific child session; the timeline shows
 one row per child execution rather than counting the iteration parent as work.
+If a worker restarts during a run, a recovery marker appears in the timeline.
+Expand its details to see the last checkpoint time, affected task attempt, and
+any in-flight tool. The task Trace records a safe replay or a recovery block
+when one actually occurs. Recovery keeps the original attempt; a retry is a
+separate attempt with its own timeline bar. Uninterrupted runs have no recovery
+marker.
 The floating session panel has **Chat** and **Trace** tabs and can expand while
 keeping the selected session and tab. Chat renders commander decisions and task
 tool calls from the persisted transcript; tool inputs, results, and attachments

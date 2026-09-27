@@ -18,12 +18,15 @@ const (
 	EventMissionStarted              EventType = "mission.started"
 	EventMissionStopped              EventType = "mission.stopped"
 	EventMissionResumed              EventType = "mission.resumed"
+	EventMissionRecovered            EventType = "mission.recovered"
 	EventMissionCompleted            EventType = "mission.completed"
 	EventReadySetPublished           EventType = "ready_set.published"
 	EventTaskDispatched              EventType = "task.dispatched"
 	EventTaskLeaseAcquired           EventType = "task.lease_acquired"
 	EventTaskLeaseReleased           EventType = "task.lease_released"
 	EventTaskProgressed              EventType = "task.progressed"
+	EventTaskToolReplayStarted       EventType = "task.tool_replay_started"
+	EventTaskToolReplayCompleted     EventType = "task.tool_replay_completed"
 	EventTaskRecoveryBlocked         EventType = "task.recovery_blocked"
 	EventTaskRecoveryResolved        EventType = "task.recovery_resolved"
 	EventHumanInputRequested         EventType = "human_input.requested"
@@ -64,12 +67,38 @@ type Event struct {
 	Route         *RouteSelection
 	ProgressPhase string
 	Recovery      *RecoveryBlock
+	Restart       *RuntimeRestart
+	ToolReplay    *ToolReplay
 	HumanInput    *HumanInputWait
 	HumanAnswer   *HumanInputResponse
 	RetryReadyAt  *time.Time
 	Launch        *CrossMissionLaunch
 	Turns         []ModelTurnTelemetry
 	IterationPlan *IterationPlan
+}
+
+// RuntimeRestart records only checkpointed facts at automatic worker recovery.
+// It does not claim that an in-flight external operation completed or replayed.
+type RuntimeRestart struct {
+	LastCheckpointAt time.Time        `json:"lastCheckpointAt"`
+	Attempts         []RestartAttempt `json:"attempts,omitempty"`
+}
+
+type RestartAttempt struct {
+	TaskName  string        `json:"taskName"`
+	AttemptID string        `json:"attemptId"`
+	InFlight  []RestartTool `json:"inFlightTools,omitempty"`
+}
+
+type RestartTool struct {
+	ToolUseID string `json:"toolUseId"`
+	ToolName  string `json:"toolName"`
+}
+
+type ToolReplay struct {
+	ToolUseID   string `json:"toolUseId"`
+	ToolName    string `json:"toolName"`
+	ReplayCount int    `json:"replayCount"`
 }
 
 // BeginCommanderClarification atomically records the commander's control
@@ -404,11 +433,32 @@ func (h *DurableHarness) SaveTaskProgressWithLease(dispatch Dispatch, progress T
 		return nil
 	}
 	committed := after.TaskProgress[dispatch.AttemptID]
+	now := time.Now().UTC()
 	events := []Event{{
 		RunID: after.RunID, Revision: after.Revision, Type: EventTaskProgressed,
-		OccurredAt: time.Now().UTC(), TaskName: dispatch.TaskName, AttemptID: dispatch.AttemptID,
+		OccurredAt: now, TaskName: dispatch.TaskName, AttemptID: dispatch.AttemptID,
 		CorrelationID: dispatch.AttemptID, ProgressPhase: committed.Phase, Turns: newModelTurns(before.ModelTurns, after.ModelTurns),
 	}}
+	previous := before.TaskProgress[dispatch.AttemptID]
+	toolIDs := make([]string, 0, len(committed.Tools))
+	for id := range committed.Tools {
+		toolIDs = append(toolIDs, id)
+	}
+	sort.Strings(toolIDs)
+	for _, id := range toolIDs {
+		operation := committed.Tools[id]
+		prior := previous.Tools[id]
+		if operation.ReplayCount > prior.ReplayCount {
+			replay := &ToolReplay{ToolUseID: id, ToolName: operation.ToolName, ReplayCount: operation.ReplayCount}
+			events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventTaskToolReplayStarted,
+				OccurredAt: now, TaskName: dispatch.TaskName, AttemptID: dispatch.AttemptID, CorrelationID: id, ToolReplay: replay})
+		}
+		if operation.ReplayCount > 0 && prior.Status == ToolOperationInFlight && operation.Status == ToolOperationCompleted {
+			replay := &ToolReplay{ToolUseID: id, ToolName: operation.ToolName, ReplayCount: operation.ReplayCount}
+			events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventTaskToolReplayCompleted,
+				OccurredAt: now, TaskName: dispatch.TaskName, AttemptID: dispatch.AttemptID, CorrelationID: id, ToolReplay: replay})
+		}
+	}
 	if err := h.commit(before.Revision, after, events); err != nil {
 		return fmt.Errorf("persisting task progress: %w", err)
 	}
@@ -634,6 +684,57 @@ func (h *DurableHarness) Resume() error {
 	}
 	if err := h.commit(before.Revision, after, events); err != nil {
 		return fmt.Errorf("persisting mission resume: %w", err)
+	}
+	h.inner = candidate
+	return nil
+}
+
+// RecordAutomaticRecovery marks a worker restart without changing any task or
+// commander state. It records the previous checkpoint timestamp and the
+// original active attempt IDs before resumed work can modify them.
+func (h *DurableHarness) RecordAutomaticRecovery() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	before := h.inner.Checkpoint()
+	if before.RunState != RunRunning {
+		return nil
+	}
+	record, _, err := h.store.LoadRuntime(before.RunID)
+	if err != nil {
+		return fmt.Errorf("load pre-recovery checkpoint: %w", err)
+	}
+	if record.Revision != before.Revision {
+		return fmt.Errorf("recovery checkpoint revision changed from %d to %d", before.Revision, record.Revision)
+	}
+	candidate, err := RestoreHarness(before)
+	if err != nil {
+		return err
+	}
+	candidate.revision++
+	after := candidate.Checkpoint()
+	restart := &RuntimeRestart{LastCheckpointAt: record.UpdatedAt}
+	taskNames := make([]string, 0, len(before.ActiveByTask))
+	for name := range before.ActiveByTask {
+		taskNames = append(taskNames, name)
+	}
+	sort.Strings(taskNames)
+	for _, name := range taskNames {
+		dispatch := before.ActiveByTask[name]
+		attempt := RestartAttempt{TaskName: name, AttemptID: dispatch.AttemptID}
+		for _, operation := range before.TaskProgress[dispatch.AttemptID].Tools {
+			if operation.Status == ToolOperationInFlight {
+				attempt.InFlight = append(attempt.InFlight, RestartTool{ToolUseID: operation.ToolUseID, ToolName: operation.ToolName})
+			}
+		}
+		sort.Slice(attempt.InFlight, func(i, j int) bool { return attempt.InFlight[i].ToolUseID < attempt.InFlight[j].ToolUseID })
+		restart.Attempts = append(restart.Attempts, attempt)
+	}
+	now := time.Now().UTC()
+	if err := h.commit(before.Revision, after, []Event{{
+		RunID: after.RunID, Revision: after.Revision, Type: EventMissionRecovered,
+		OccurredAt: now, Restart: restart,
+	}}); err != nil {
+		return fmt.Errorf("persisting automatic mission recovery: %w", err)
 	}
 	h.inner = candidate
 	return nil

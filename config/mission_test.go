@@ -283,6 +283,7 @@ mission "retryable" {
     objective   = "Perform retryable work"
     max_retries = 2
     retry_delay_seconds = 30
+    timeout_seconds = 45
   }
 }
 `
@@ -291,6 +292,22 @@ mission "retryable" {
 			Expect(err).NotTo(HaveOccurred())
 			Expect(cfg.Missions[0].Tasks[0].MaxRetries).To(Equal(2))
 			Expect(cfg.Missions[0].Tasks[0].RetryDelaySeconds).To(Equal(30))
+			Expect(cfg.Missions[0].Tasks[0].TimeoutSeconds).To(Equal(45))
+		})
+
+		It("rejects a non-positive task timeout", func() {
+			hcl := fullBaseHCL() + `
+mission "invalid_timeout" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  task "work" {
+    objective = "Perform work"
+    timeout_seconds = 0
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(MatchError(ContainSubstring("timeout_seconds must be a positive whole number of seconds")))
 		})
 
 		It("rejects a negative retry delay", func() {

@@ -229,6 +229,12 @@ func prepareHumanInputRequest(ctx context.Context, params string) (askParams, Hu
 		deadline := startedAt.Add(time.Duration(*p.TimeoutSeconds * float64(time.Second))).Truncate(time.Millisecond)
 		req.DeadlineAt = &deadline
 	}
+	if taskDeadline, ok := ctx.Deadline(); ok && (req.DeadlineAt == nil || taskDeadline.Before(*req.DeadlineAt)) {
+		// Human-input deadlines are stored with millisecond precision. Match
+		// that canonical value before an idempotent request is reloaded.
+		deadline := taskDeadline.UTC().Truncate(time.Millisecond)
+		req.DeadlineAt = &deadline
+	}
 	return p, req, ""
 }
 

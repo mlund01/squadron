@@ -230,6 +230,14 @@ delay. Once the budget is exhausted, it commits terminal task and mission
 failure instead. Completion or failure for any non-active attempt ID is
 rejected without changing state.
 
+`timeout_seconds` on a task sets an absolute wall-clock deadline for each
+attempt at dispatch time (or at its declared delayed start). The deadline is
+part of the persisted dispatch, so restoring an active attempt does not renew
+it. An expired attempt fails without entering the executor; a timed-out
+executor result cannot commit as success. Timeouts follow the declared retry
+ceiling, except that an in-flight non-replay-safe tool with an uncertain
+outcome is parked for reconciliation rather than retried automatically.
+
 ## Intrinsic commander controls
 
 | Control | Harness validation |

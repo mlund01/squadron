@@ -101,6 +101,7 @@ task "collect" {
   objective   = "Collect relevant source material"
   max_retries = 2
   retry_delay_seconds = 30
+  timeout_seconds = 120
 }
 ```
 
@@ -108,6 +109,13 @@ The delay is optional; omitted or zero means the next attempt is immediately
 eligible. A delayed retry stores an absolute deadline in the run checkpoint.
 The mission waits when no other work is ready, and restarting the worker does
 not restart the delay.
+
+`timeout_seconds` is an optional wall-clock limit for each task attempt. The
+attempt's absolute deadline is committed with its dispatch; a worker restart
+does not grant another full timeout. A new retry gets its own deadline. If a
+timeout interrupts a tool whose external result is uncertain and cannot be
+replayed safely, the run waits for reconciliation instead of silently retrying
+that side effect. Human-input requests are capped at the attempt deadline.
 
 After the final allowed attempt fails, the task and mission become terminally
 failed. Late completion or failure messages from an older attempt are rejected

@@ -169,6 +169,7 @@ type Task struct {
 	Tools             []string      `json:"tools,omitempty"`
 	MaxRetries        int           `json:"maxRetries,omitempty"`
 	RetryDelaySeconds int           `json:"retryDelaySeconds,omitempty"`
+	TimeoutSeconds    int           `json:"timeoutSeconds,omitempty"`
 	Packets           []string      `json:"packets,omitempty"` // task-scoped declared packet references (parsed manually)
 	DependsOn         []string      `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
 	Iterator          *TaskIterator `json:"iterator,omitempty"`

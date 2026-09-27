@@ -119,6 +119,47 @@ func TestModelTaskSessionParksHumanInputAndReplaysOriginalToolCall(t *testing.T)
 	}
 }
 
+func TestTaskDeadlineBlocksUncertainNonReplaySafeTool(t *testing.T) {
+	modelSession := &fakeTaskModelSession{responses: []*llm.ChatResponse{{ContentBlocks: []llm.ContentBlock{{Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{
+		ID: "charge-1", Name: "charge", Input: json.RawMessage(`{}`),
+	}}}}}}
+	factory, err := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: modelSession}, []TaskObjective{{Name: "work", Objective: "Charge once"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := Dispatch{RunID: "run-charge", TaskName: "work", AttemptID: "run-charge:work:1", Grant: ExecutionGrant{TaskName: "work", Model: "fast"}}
+	session, err := factory.NewTaskSession(context.Background(), dispatch, map[string]aitools.Tool{"charge": &deadlineBlockingTool{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	var checkpoint TaskAttemptProgress
+	_, err = session.(ResumableTaskSession).RunResumable(ctx, TaskAttemptProgress{AttemptID: dispatch.AttemptID, Phase: "dispatched"}, func(next TaskAttemptProgress) error {
+		checkpoint = cloneTaskProgress(next)
+		return nil
+	})
+	var blocked *TaskRecoveryBlockedError
+	if !errors.As(err, &blocked) || blocked.ToolUseID != "charge-1" || blocked.IdempotencyKey == "" {
+		t.Fatalf("RunResumable() error = %v, want uncertain external outcome", err)
+	}
+	if checkpoint.Tools["charge-1"].Status != ToolOperationInFlight || len(modelSession.results) != 0 {
+		t.Fatalf("timed-out tool became a model-visible result: progress=%#v results=%#v", checkpoint, modelSession.results)
+	}
+}
+
+type deadlineBlockingTool struct{}
+
+func (*deadlineBlockingTool) ToolName() string        { return "charge" }
+func (*deadlineBlockingTool) ToolDescription() string { return "charge" }
+func (*deadlineBlockingTool) ToolPayloadSchema() aitools.Schema {
+	return aitools.Schema{Type: aitools.TypeObject}
+}
+func (*deadlineBlockingTool) Call(ctx context.Context, _ string) string {
+	<-ctx.Done()
+	return "unknown external outcome"
+}
+
 type deferredHumanBridge struct {
 	pending bool
 	calls   int

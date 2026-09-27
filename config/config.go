@@ -2839,6 +2839,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			{Name: "tools"},               // Optional - capabilities always granted to this executor
 			{Name: "max_retries"},         // Optional - bounded task-attempt retries
 			{Name: "retry_delay_seconds"}, // Optional - persisted delay before a retry
+			{Name: "timeout_seconds"},     // Optional - wall-clock limit per task attempt
 			{Name: "packets"},             // Optional - task-scoped declared packet references
 			{Name: "depends_on"},
 			{Name: "send_to"},
@@ -2932,6 +2933,21 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			return nil, fmt.Errorf("task '%s' retry_delay_seconds must be a non-negative whole number of seconds", taskName)
 		}
 		retryDelaySeconds = int(value)
+	}
+	timeoutSeconds := 0
+	if timeoutAttr, ok := taskContent.Attributes["timeout_seconds"]; ok {
+		timeoutVal, diags := timeoutAttr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s' timeout_seconds: %w", taskName, diags)
+		}
+		if !timeoutVal.IsKnown() || timeoutVal.IsNull() || timeoutVal.Type() != cty.Number {
+			return nil, fmt.Errorf("task '%s' timeout_seconds must be a number", taskName)
+		}
+		value, accuracy := timeoutVal.AsBigFloat().Int64()
+		if accuracy != big.Exact || value <= 0 || value > int64((1<<63-1)/time.Second) {
+			return nil, fmt.Errorf("task '%s' timeout_seconds must be a positive whole number of seconds", taskName)
+		}
+		timeoutSeconds = int(value)
 	}
 
 	// Get packets (optional array of packet names)
@@ -3061,6 +3077,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		Tools:             taskTools,
 		MaxRetries:        maxRetries,
 		RetryDelaySeconds: retryDelaySeconds,
+		TimeoutSeconds:    timeoutSeconds,
 		Packets:           taskPackets,
 		DependsOn:         dependsOn,
 		SendTo:            sendTo,

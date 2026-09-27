@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -354,6 +355,13 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 			// reconcile an uncertain one instead of feeding a synthetic answer to
 			// the model.
 			if err := ctx.Err(); err != nil {
+				if errors.Is(err, context.DeadlineExceeded) && tool != nil && !aitools.IsReplaySafe(tool) {
+					return TaskResultEnvelope{}, &TaskRecoveryBlockedError{
+						Err:       fmt.Errorf("tool call %q may have completed after its task deadline", call.ID),
+						ToolUseID: call.ID, ToolName: call.Name,
+						IdempotencyKey: aitools.StableIdempotencyKey(s.dispatch.RunID, s.dispatch.AttemptID, call.ID),
+					}
+				}
 				return TaskResultEnvelope{}, err
 			}
 			operation.Status = ToolOperationCompleted

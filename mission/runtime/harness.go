@@ -23,6 +23,7 @@ type TaskDefinition struct {
 	Routes            []RouteDefinition
 	MaxRetries        int
 	RetryDelaySeconds int
+	TimeoutSeconds    int
 	ResultPolicy      ResultPolicy
 	Iterator          *IterationPolicy
 	ParentTask        string
@@ -281,6 +282,7 @@ type Dispatch struct {
 	StartRevision  uint64
 	DispatchedAt   time.Time
 	StartNotBefore time.Time
+	DeadlineAt     time.Time
 	Grant          ExecutionGrant
 }
 
@@ -479,7 +481,7 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 		if definition.MaxRetries < 0 {
 			return nil, fmt.Errorf("task %q max retries cannot be negative", definition.Name)
 		}
-		if err := validateRetryDelay(definition); err != nil {
+		if err := validateAttemptTiming(definition); err != nil {
 			return nil, err
 		}
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
@@ -623,6 +625,7 @@ func (h *Harness) ExpandIteration(plan IterationPlan) error {
 			DependsOn:         append([]string(nil), child.DependsOn...),
 			MaxRetries:        plan.Policy.MaxRetries,
 			RetryDelaySeconds: parent.RetryDelaySeconds,
+			TimeoutSeconds:    parent.TimeoutSeconds,
 			ResultPolicy:      cloneResultPolicy(parent.ResultPolicy),
 			ParentTask:        plan.ParentTask,
 		}
@@ -1304,7 +1307,7 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 		definition.SendTo = append([]string(nil), definition.SendTo...)
 		definition.Routes = append([]RouteDefinition(nil), definition.Routes...)
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
-		if err := validateRetryDelay(definition); err != nil {
+		if err := validateAttemptTiming(definition); err != nil {
 			return nil, err
 		}
 		if definition.Iterator != nil {
@@ -1455,6 +1458,13 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 	}
 	if definition.ParentTask != "" && attempt == 1 {
 		dispatch.StartNotBefore = h.iterationStartNotBeforeLocked(definition.ParentTask, request.TaskName, dispatchedAt)
+	}
+	if definition.TimeoutSeconds > 0 {
+		start := dispatchedAt
+		if dispatch.StartNotBefore.After(start) {
+			start = dispatch.StartNotBefore
+		}
+		dispatch.DeadlineAt = start.Add(time.Duration(definition.TimeoutSeconds) * time.Second)
 	}
 	h.taskStates[request.TaskName] = TaskRunning
 	h.dispatches[request.RequestID] = dispatch
@@ -1767,9 +1777,12 @@ func (h *Harness) FailTaskWithLease(taskName, attemptID string, cause error, lea
 	return false, nil
 }
 
-func validateRetryDelay(definition TaskDefinition) error {
+func validateAttemptTiming(definition TaskDefinition) error {
 	if definition.RetryDelaySeconds < 0 || int64(definition.RetryDelaySeconds) > int64((1<<63-1)/time.Second) {
 		return fmt.Errorf("task %q retry delay must be a non-negative whole number of seconds", definition.Name)
+	}
+	if definition.TimeoutSeconds < 0 || int64(definition.TimeoutSeconds) > int64((1<<63-1)/time.Second) {
+		return fmt.Errorf("task %q timeout must be a non-negative whole number of seconds", definition.Name)
 	}
 	return nil
 }

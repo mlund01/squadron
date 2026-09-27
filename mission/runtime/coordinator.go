@@ -378,13 +378,22 @@ func (c *Coordinator) execute(ctx context.Context, dispatch Dispatch) error {
 	if c.observer != nil {
 		c.observer.TaskStarted(dispatch)
 	}
-	execCtx, cancelExecution := context.WithCancel(ctx)
+	attemptCtx := ctx
+	cancelDeadline := func() {}
+	if !dispatch.DeadlineAt.IsZero() {
+		attemptCtx, cancelDeadline = context.WithDeadline(ctx, dispatch.DeadlineAt)
+	}
+	defer cancelDeadline()
+	execCtx, cancelExecution := context.WithCancel(attemptCtx)
 	stopHeartbeat := make(chan struct{})
 	heartbeatDone := make(chan error, 1)
 	go c.renewExecutionLease(execCtx, dispatch.AttemptID, leaseToken, stopHeartbeat, heartbeatDone, cancelExecution)
 	var result TaskResultEnvelope
 	var err error
-	if executor, ok := c.executor.(ResumableTaskExecutor); ok {
+	if err = execCtx.Err(); err != nil {
+		// The absolute attempt deadline may have passed while the worker was
+		// offline. Do not enter an executor that has no time left.
+	} else if executor, ok := c.executor.(ResumableTaskExecutor); ok {
 		progress, exists := c.harness.TaskProgress(dispatch.AttemptID)
 		if !exists {
 			close(stopHeartbeat)
@@ -400,6 +409,7 @@ func (c *Coordinator) execute(ctx context.Context, dispatch Dispatch) error {
 	}
 	close(stopHeartbeat)
 	heartbeatErr := <-heartbeatDone
+	timedOut := errors.Is(attemptCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil
 	cancelExecution()
 	if heartbeatErr != nil {
 		return heartbeatErr
@@ -412,6 +422,12 @@ func (c *Coordinator) execute(ctx context.Context, dispatch Dispatch) error {
 			}
 		}
 		return ctx.Err()
+	}
+	if timedOut {
+		var blocked *TaskRecoveryBlockedError
+		if !errors.As(err, &blocked) {
+			err = &TaskAttemptTimeoutError{TaskName: dispatch.TaskName, DeadlineAt: dispatch.DeadlineAt}
+		}
 	}
 	if err != nil {
 		var lost *ExecutionLeaseLostError

@@ -59,6 +59,18 @@ func (e *MissionRetryWaitingError) Error() string {
 	return fmt.Sprintf("mission is waiting for %d retry deadline(s)", len(e.Deadlines))
 }
 
+// TaskAttemptTimeoutError is a task failure, not a request to stop the run.
+// In particular it must not wrap context.DeadlineExceeded, which callers use
+// to classify cancellation of the entire mission.
+type TaskAttemptTimeoutError struct {
+	TaskName   string
+	DeadlineAt time.Time
+}
+
+func (e *TaskAttemptTimeoutError) Error() string {
+	return fmt.Sprintf("task %q exceeded its attempt deadline at %s", e.TaskName, e.DeadlineAt.Format(time.RFC3339Nano))
+}
+
 // TaskSessionFactory creates a fresh session from an immutable dispatch and
 // its already-filtered capability map.
 type TaskSessionFactory interface {

@@ -97,6 +97,17 @@ var _ = Describe("HumanInputTool", func() {
 		Expect(*br.got.DeadlineAt).To(BeTemporally("~", started.Add(-500*time.Millisecond), 100*time.Millisecond))
 	})
 
+	It("caps the human request deadline at the enclosing task deadline", func() {
+		br := &fakeBridge{reply: "ok"}
+		tool := &aitools.HumanInputTool{Bridge: br}
+		deadline := time.Now().Add(time.Minute).UTC()
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		defer cancel()
+		Expect(tool.Call(ctx, `{"question":"Proceed?","timeout_seconds":120}`)).To(Equal("ok"))
+		Expect(br.got.DeadlineAt).NotTo(BeNil())
+		Expect(*br.got.DeadlineAt).To(Equal(deadline.Truncate(time.Millisecond)))
+	})
+
 	It("rejects invalid timeout durations before creating a request", func() {
 		br := &fakeBridge{}
 		tool := &aitools.HumanInputTool{Bridge: br}

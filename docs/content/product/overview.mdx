@@ -19,11 +19,11 @@ A workspace is the access and configuration boundary for one Squadron project. I
 
 ### Mission
 
-A mission is a configured workflow. Its canvas shows task dependencies, routing, and parallel execution. A run captures the supplied inputs, task state, model activity, tool calls, delegated agent sessions, timing, and cost telemetry.
+A mission is a configured workflow with one commander and bounded task executors. Its canvas shows task dependencies, routing, and parallel execution. A run captures supplied inputs, task state, model activity, tool calls, timing, and cost telemetry.
 
 ### Agent
 
-An agent is a configured AI capability used by missions or direct sessions. The product shows its effective configuration, lineage to missions, raw source, and session history.
+An agent is a configured AI capability for independent sessions, separate from mission task executors. Its model, tools, skills, and memory policy are configured for those sessions.
 
 ### Principal
 

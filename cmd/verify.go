@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"squadron/config"
@@ -130,21 +131,7 @@ var verifyCmd = &cobra.Command{
 		if cfg.Gateway != nil {
 			fmt.Printf("  - %s (source: %s, version: %s, installed at %s)\n", cfg.Gateway.Name, cfg.Gateway.Source, cfg.Gateway.Version, gatewayBinaryPath)
 		}
-		fmt.Printf("Found %d mission(s)\n", len(cfg.Missions))
-		for _, w := range cfg.Missions {
-			fmt.Printf("  - %s (commander: %s, agents: %v, tasks: %d)\n", w.Name, w.Commander.Model, w.Agents, len(w.Tasks))
-			for _, t := range w.Tasks {
-				deps := ""
-				if len(t.DependsOn) > 0 {
-					deps = fmt.Sprintf(" [depends_on: %v]", t.DependsOn)
-				}
-				taskAgents := "inherits mission agents"
-				if len(t.Agents) > 0 {
-					taskAgents = fmt.Sprintf("%v", t.Agents)
-				}
-				fmt.Printf("      • %s (agents: %s)%s\n", t.Name, taskAgents, deps)
-			}
-		}
+		printMissionSummary(os.Stdout, cfg.Missions)
 
 		if len(warnings) > 0 {
 			fmt.Printf("\nWarnings:\n")
@@ -153,6 +140,31 @@ var verifyCmd = &cobra.Command{
 			}
 		}
 	},
+}
+
+func printMissionSummary(w io.Writer, missions []config.Mission) {
+	fmt.Fprintf(w, "Found %d mission(s)\n", len(missions))
+	for _, mission := range missions {
+		hasExecutorPolicy := mission.HasExecutorPolicy()
+		fmt.Fprintf(w, "  - %s (commander: %s, tasks: %d)\n", mission.Name, mission.Commander.Model, len(mission.Tasks))
+		if hasExecutorPolicy {
+			fmt.Fprintf(w, "    Executor model pool: %v; optional tool pool: %v\n", mission.Models, mission.Tools)
+		}
+		for _, task := range mission.Tasks {
+			fmt.Fprintf(w, "      • %s", task.Name)
+			if hasExecutorPolicy {
+				models := "mission pool"
+				if len(task.Models) > 0 {
+					models = fmt.Sprintf("%v", task.Models)
+				}
+				fmt.Fprintf(w, " (models: %s; required tools: %v)", models, task.Tools)
+			}
+			if len(task.DependsOn) > 0 {
+				fmt.Fprintf(w, " [depends_on: %v]", task.DependsOn)
+			}
+			fmt.Fprintln(w)
+		}
+	}
 }
 
 func init() {

@@ -6,6 +6,8 @@ title: Configuration Overview
 
 Configuration pages document the HCL contract: what you can declare and how Squadron evaluates it. For workspace setup, identity management, access control, and operating mission runs, see the [Squadron Product](/product/overview) documentation.
 
+Updating an existing mission? Use the [mission migration guide](/guides/migrating-missions) and validate the result with `squadron verify`.
+
 Squadron uses HCL (HashiCorp Configuration Language) for all configuration.
 
 ## File Structure
@@ -43,7 +45,7 @@ model_provider "anthropic" {
 }
 
 agent "assistant" {
-  model = models.anthropic.claude_sonnet_4  # Reference a model
+  model = models.anthropic.claude_sonnet_4_6  # Reference an allowed model
   tools = [tools.weather]
 }
 ```

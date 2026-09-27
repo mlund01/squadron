@@ -26,25 +26,30 @@ squadron verify ./my-config
 
 ## Output
 
-On success:
+On success (paths and counts depend on your workspace):
 
 ```
 Configuration is valid!
-Found 2 model provider(s)
-  - openai (models: [gpt_5 gpt_5_mini])
-  - anthropic (models: [claude_sonnet_4_6])
-Found 1 variable(s)
-  - environment (set)
-Found 1 agent(s)
-  - assistant (tools: [builtins.http.get])
+Storage: sqlite (/path/to/config/.squadron/store.db)
+Found 1 model(s)
+  - anthropic (provider: anthropic, models: [claude_haiku_4_5])
+Found 0 variable(s)
+Found 0 agent(s)
+Found 0 custom tool(s)
+Found 0 plugin(s)
+Found 0 mcp server(s)
+Found 0 gateway(s)
 Found 1 mission(s)
-  - data_pipeline (commander: claude_sonnet_4, agents: [assistant], tasks: 3)
+  - brief (commander: claude_haiku_4_5, tasks: 2)
+    Executor model pool: [claude_haiku_4_5]; optional tool pool: []
+      • collect (models: mission pool; required tools: [builtins.http.get])
+      • write (models: mission pool; required tools: []) [depends_on: [collect]]
 ```
 
-On error:
+On error, for example:
 
 ```
-Error: agent 'assistant': model 'invalid_model' not found
+Error: task 'collect' timeout_seconds must be a positive whole number of seconds
 ```
 
 ## What Gets Validated
@@ -57,3 +62,7 @@ Error: agent 'assistant': model 'invalid_model' not found
 - Dataset schemas and bindings
 - Plugin install (download + checksum verify)
 - Gateway install (download + checksum verify; `version = "local"` requires the binary to already exist at the cached path)
+
+The model allow-list requires its matching connection in Command Center before
+verification. To convert existing mission files, follow [Migrating Existing
+Missions](/guides/migrating-missions).

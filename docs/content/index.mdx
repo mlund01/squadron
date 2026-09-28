@@ -1,28 +1,26 @@
 ---
 title: Introduction
-description: Squadron is a declarative framework for building and running multi-agent AI workflows in HCL configuration. Agents, tools, models, and missions defined as config — not code. Open source, single Go binary, supports Anthropic, OpenAI, Gemini, and Ollama, and speaks Model Context Protocol both directions.
+description: Squadron defines durable AI missions in HCL and runs them through one commander and bounded task executors. Managed agents are independent assistants with their own sessions.
 ---
 
 # Squadron
 
-**Squadron is a declarative framework for building and running multi-agent AI workflows.** You describe agents, tools, models, and the task graph entirely in HCL configuration — Squadron's runtime handles orchestration, state, dependency resolution, conditional routing, persistence, and resume. No Python glue code, no LangChain-style call chains, no hand-rolled state machines.
+**Squadron is a declarative framework for durable AI workflows.** You describe missions, task-executor model and tool policies, and the task graph in HCL. One commander coordinates each run while the harness enforces dependencies, routing, capability grants, persistence, and recovery. Managed agents are a separate way to run independent assistant sessions.
 
 It ships as a single Go binary, runs on macOS / Linux / Windows, and is MIT-licensed.
 
 ```hcl
 mission "research" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.researcher, agents.analyst]
+  models    = [models.anthropic.claude_sonnet_4]
 
   task "gather" {
     objective = "Find the top 5 papers on ${inputs.topic}"
-    agents    = [agents.researcher]
   }
 
   task "analyze" {
     depends_on = [tasks.gather]
     objective  = "Read each paper and extract the key findings"
-    agents     = [agents.analyst]
   }
 }
 ```
@@ -43,24 +41,24 @@ The result:
 
 - **Code-reviewable workflows.** Workflow changes show up as a config diff, not buried in imperative orchestration logic.
 - **Resilient by default.** State is persisted to SQLite (or Postgres) as missions run. Process crashes resume from the last completed step, including mid-flight LLM tool calls.
-- **Composable.** Agents, tools, models, and tasks are reusable across missions. Mix Anthropic, OpenAI, Gemini, and Ollama in the same run.
-- **Typed data flow.** Tasks declare structured output schemas. Downstream tasks query that data with filters and aggregations instead of replaying conversation history into the next prompt.
+- **Policy-bound execution.** Missions grant task executors only declared models and tools. Managed-agent sessions remain independent.
+- **Explicit data flow.** Tasks return accepted summaries; add typed output schemas where downstream consumers need a validated contract.
 
 ## How it works
 
 Two tiers of LLMs, doing different jobs:
 
-- **Commanders** orchestrate. They break tasks into subtasks, delegate to agents, interpret results, and decide which branch to take next at runtime.
-- **Agents** execute. They pick up an objective and use their tools (via native function calling) until the job is done.
-- **Missions** wire it together: a graph of tasks, structured outputs flowing between them, and conditional branches the commander chooses on the fly.
+- **Commanders** coordinate one complete mission run. They dispatch eligible tasks and choose among declared routes, but cannot call task tools.
+- **Task executors** do mission work with a bounded model and tool grant. Their results are validated and persisted by the harness.
+- **Managed agents** are independent assistants for user or application sessions, with their own tools and configurable memory.
 
-Use a fast model for routing, a capable one for the hard stuff. Each role can use a different provider in the same mission. See [The Harness](/config/missions/harness) for the full execution model.
+The commander and task executors can use different models. See [Mission Runtime](/config/missions/runtime) for the execution model.
 
 ## What's included
 
-- **Model providers** out of the box: [Anthropic, OpenAI, Google Gemini, Ollama](/config/supported-models). Mix per agent or per task.
+- **Model providers** out of the box: [Anthropic, OpenAI, Google Gemini, Ollama](/config/supported-models). Choose a commander model and an executor pool per mission.
 - **[Plugins](/config/plugins)** — fast, typed, native Go *and* Python plugins for browser automation, shell access, HTTP APIs, or anything custom. Run as subprocesses over gRPC; auto-built from local source with content-hash caching.
-- **[MCP tools](/config/mcp_tools)** — declare any [Model Context Protocol](https://modelcontextprotocol.io) server (npm, GitHub release, HTTP, local binary). Squadron auto-installs and proxies tools to your agents.
+- **[MCP tools](/config/mcp_tools)** — declare [Model Context Protocol](https://modelcontextprotocol.io) servers and grant their tools to managed agents or mission task executors.
 - **[MCP host](/config/mcp_host)** — Squadron itself runs as an MCP server, so Claude Desktop / Claude Code / Cursor can see your missions and kick off runs.
 - **[Schedules & webhooks](/product/schedules)** — centrally managed cron runs and configured HTTP triggers.
 - **[Squadron product](/product/overview)** — workspaces, live mission visualization, run history, and access control.
@@ -70,13 +68,13 @@ Use a fast model for routing, a capable one for the hard stuff. Each role can us
 
 Squadron is a strong fit if you want to:
 
-- Define agent workflows the same way you define infrastructure (Terraform-style HCL).
+- Define AI workflows the same way you define infrastructure (Terraform-style HCL).
 - Have non-Python teammates author and review agent logic.
 - Run scheduled or webhook-triggered agent pipelines with built-in retry, resume, and budget enforcement.
 - Mix model providers across roles to control cost and latency.
 - Plug Squadron into an existing MCP ecosystem without writing adapters.
 
-Squadron is *not* the right tool if you need a conversational chat UX with multi-turn user input across many sessions (it can chat, but that's not the core focus), or if you need a deeply custom runtime loop that doesn't fit a task-graph model.
+Missions are not the right tool for an open-ended assistant conversation; use a managed agent for that. A deeply custom runtime loop may also be better expressed in code.
 
 ## How does it compare to other frameworks?
 
@@ -99,7 +97,7 @@ See the detailed comparison pages for honest tradeoffs.
 **Building with it?**
 - [Missions](/config/missions/overview) — the workflow model
 - [Configuration](/config/overview) — every block, every field
-- [No-Code walkthrough](/guides/no-code-multi-agent-workflow) — full daily-brief pipeline in HCL
+- [Mission walkthrough](/guides/build-a-mission) — build a routed mission in HCL
 
 **Evaluating it?**
 - [Squadron vs LangGraph](/compare/langgraph) · [vs CrewAI](/compare/crewai) · [vs AutoGen](/compare/autogen) · [vs n8n](/compare/n8n)

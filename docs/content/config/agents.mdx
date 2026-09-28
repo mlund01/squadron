@@ -210,7 +210,7 @@ mission "complex_orchestration" {
     model     = models.anthropic.claude_sonnet_4_6
     reasoning = "medium"
   }
-  agents = [agents.researcher]
+  models = [models.anthropic.claude_sonnet_4_6]
   task "investigate" { objective = "Find the root cause" }
 }
 ```

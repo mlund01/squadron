@@ -5,11 +5,11 @@ description: A declarative agent framework lets you describe multi-agent workflo
 
 # Declarative Agent Framework
 
-A **declarative agent framework** is one where you describe the *what* of a multi-agent workflow — which agents exist, what tools they have, how tasks depend on each other, when to branch — as configuration, and let a runtime decide the *how* (when to call which LLM, how to pass data between steps, how to retry, how to resume after a crash). It's the AI-agent equivalent of Terraform or Kubernetes manifests: state the goal in a file, let the engine reconcile it.
+A **declarative agent framework** lets you describe the *what* of an AI workflow — its task graph, model and tool policy, and routes — as configuration. The runtime handles the *how*: dispatch, state transitions, retries, and recovery. Squadron also supports managed agents as a separate assistant primitive for independent sessions.
 
 The alternative is an **imperative** framework, where you write orchestration code by hand: Python loops, conditional branches, retry decorators, state checkpointing. Most agent frameworks today are imperative: LangGraph, CrewAI, AutoGen, Semantic Kernel, AutoChain. You write code that *runs*; the framework provides primitives.
 
-[Squadron](/) is a declarative agent framework: agents, tools, models, missions, budgets, and routing are HCL config, while operational state such as schedules and access control is managed by the Squadron product.
+[Squadron](/) defines missions, task-executor policy, managed agents, budgets, and routing in HCL, while operational state such as schedules and access control is managed by the Squadron product. Missions never launch managed-agent sessions.
 
 ## What "declarative" means here
 
@@ -48,6 +48,8 @@ In a declarative framework, the plumbing is in the runtime and the file is mostl
 
 ```hcl
 mission "research" {
+  commander { model = models.anthropic.claude_haiku_4_5 }
+  models = [models.anthropic.claude_haiku_4_5]
   task "gather"  { objective = "Find the top 5 papers on ${inputs.topic}" }
   task "analyze" { depends_on = [tasks.gather]; objective = "Extract key findings" }
 }
@@ -61,7 +63,7 @@ Declarative models trade flexibility for legibility. If your workflow genuinely 
 
 The escape hatches in a well-designed declarative framework cover most of those cases:
 
-- **Plugins.** Squadron supports [Go and Python plugins](/config/plugins) that run as subprocesses and expose tools to agents. The plugin's internals are whatever code you want.
+- **Plugins.** Squadron supports [Go and Python plugins](/config/plugins) that run as subprocesses. Their tools can be granted to managed agents or task executors.
 - **MCP.** Any [Model Context Protocol server](/config/mcp_tools) can be a tool source — `pip`, `npm`, GitHub releases, HTTP endpoints, or local binaries.
 - **Functions in HCL.** Built-in functions for schema shaping, interpolation, and references handle most static-config-time logic without dropping to a programming language.
 
@@ -77,8 +79,8 @@ If you're evaluating frameworks against this category, the things to look for:
 4. **Reviewable diffs.** A teammate can read a config diff and understand the workflow change without context-switching to runtime semantics.
 5. **Typed data flow.** Tasks declare their outputs as schemas; downstream tasks pull structured data, not conversation transcripts.
 6. **First-class concurrency primitives.** Parallel iteration over datasets, fan-out via `send_to`, conditional routing — all declarative, all with concurrency controls.
-7. **First-class scheduling.** Cron and webhook triggers as config blocks, not external orchestrator setup.
-8. **Provider-agnostic.** Mix model providers (Anthropic, OpenAI, Gemini, Ollama) per agent or per task without writing adapter code.
+7. **First-class scheduling.** Schedules are managed by the Squadron product; webhook triggers are declared on missions.
+8. **Provider-agnostic.** Choose a commander model and task-executor pool without writing provider adapters.
 9. **Tool ecosystem.** Built-in tools, native plugins, and an open tool protocol (MCP) so you don't get stuck with one framework's tool format.
 
 Squadron satisfies all nine. Compare against [LangGraph](/compare/langgraph), [CrewAI](/compare/crewai), [AutoGen](/compare/autogen), and [n8n](/compare/n8n) for how other frameworks stack up.
@@ -86,6 +88,6 @@ Squadron satisfies all nine. Compare against [LangGraph](/compare/langgraph), [C
 ## See also
 
 - [What is Squadron?](/) — the introductory page
-- [The Harness](/config/missions/harness) — the runtime model behind Squadron's declarative workflows
+- [Mission Runtime](/config/missions/runtime) — the runtime model behind Squadron's declarative workflows
 - [Missions overview](/config/missions/overview) — every block, every field
 - [FAQ](/faq) — pricing, providers, deployment, and more

@@ -1,0 +1,94 @@
+---
+title: Build a Mission Without Code
+description: Define a routed, durable Squadron mission in HCL with one commander and bounded task executors.
+---
+
+# Build a Mission Without Code
+
+This guide builds a small support-triage mission. A task executor classifies a
+request; the mission commander then chooses one of two declared routes. The
+harness enforces that choice and persists the result. No managed agent is
+needed: agents are independent assistants for interactive or application
+sessions, not mission workers.
+
+## 1. Connect a workspace and model provider
+
+Create a workspace in Squadron, connect its worker, and configure an Anthropic
+model connection in workspace Settings. Then allow a model key in the worker's
+configuration:
+
+```hcl
+model_provider "anthropic" {
+  models = ["claude_haiku_4_5"]
+}
+```
+
+The connection holds provider credentials. The HCL block is an allow-list; it
+does not contain a provider API key.
+
+## 2. Declare the mission
+
+Add this mission to a `.hcl` file in the same configuration directory:
+
+```hcl
+mission "triage" {
+  commander { model = models.anthropic.claude_haiku_4_5 }
+  models = [models.anthropic.claude_haiku_4_5]
+
+  inputs = {
+    request = string("Customer request")
+  }
+
+  task "classify" {
+    objective = "Classify this request as billing or product support: ${inputs.request}. Include the evidence for your choice."
+
+    router {
+      route {
+        target    = tasks.billing
+        condition = "The request concerns a charge, payment, or invoice."
+      }
+      route {
+        target    = tasks.support
+        condition = "The request concerns product behavior or a technical problem."
+      }
+    }
+  }
+
+  task "billing" {
+    objective = "Draft a concise billing response using the accepted classification."
+  }
+
+  task "support" {
+    objective = "Draft a concise product-support response using the accepted classification."
+  }
+}
+```
+
+The commander coordinates the run. It can start eligible tasks and select one
+of the declared routes after `classify` returns, but it cannot call task tools
+or invent a new branch. Each task executor receives a bounded model and tool
+grant. For this example, no task tools are required. Add task `tools` when a
+capability must always be present, or a mission `tools` pool when the commander
+may choose which capabilities to grant at dispatch.
+
+## 3. Verify and run
+
+Validate the configuration with `squadron verify`. In the Squadron product,
+open the mission definition, inspect the graph, then select **Run mission** and
+provide a customer request. The run page shows the accepted task results,
+route decision, model activity, and task execution timeline.
+
+Squadron persists the commander's and executors' progress. If the connected
+worker restarts, the run resumes from durable state; the harness does not
+silently create a new task attempt simply because the process restarted.
+
+For a recurring run, use **Add schedule** on the mission definition and choose
+a permitted run-as user or service principal. Schedules are managed by the
+Squadron product, not by a cron process in the worker.
+
+## Next steps
+
+- [Mission Runtime](/config/missions/runtime) explains the authority boundary.
+- [Tasks](/config/missions/tasks) covers model and tool policy, results, and dependencies.
+- [Routing](/config/missions/routing) covers conditional branches and fan-out.
+- [Scheduling Missions](/product/schedules) covers run identity and recurrence.

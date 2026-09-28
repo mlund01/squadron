@@ -1,5 +1,5 @@
 export default {
   'migrating-missions': 'Migrating Existing Missions',
-  'no-code-multi-agent-workflow': 'No-Code Multi-Agent Workflow',
+  'build-a-mission': 'Build a Mission Without Code',
   'distributing-plugins': 'Distributing Plugins',
 }

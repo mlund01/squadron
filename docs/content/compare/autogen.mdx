@@ -14,7 +14,7 @@ description: Honest comparison of Squadron and Microsoft AutoGen for multi-agent
 | **Worldview** | Tasks in a DAG with typed outputs | Agents in a conversation |
 | **Style** | Declarative HCL config | Imperative Python |
 | **Runtime** | Standalone Go binary | Python library |
-| **Primary primitive** | `mission` → `task` → `agent` | `GroupChat` / `ConversableAgent` |
+| **Primary primitive** | `mission` → `task` → task executor | `GroupChat` / `ConversableAgent` |
 | **Branching** | First-class `router` / `send_to` blocks | Conversation flow, custom speaker selection |
 | **Determinism** | High — explicit DAG, structured outputs | Lower — emergent from agent dialogue |
 | **State persistence** | Built-in, auto-resume | Manual |
@@ -31,7 +31,7 @@ AutoGen is research-forward and has produced influential patterns for agent coll
 
 ## What is Squadron?
 
-[Squadron](/) is a declarative framework for multi-agent AI *workflows*. You don't write a conversation; you write a task graph. The runtime — a single Go binary — executes the graph, assigning tasks to agents, collecting structured outputs, and routing dynamically when the commander LLM decides which branch to take next.
+[Squadron](/) is a declarative framework for AI *workflows*. You don't write a conversation; you write a task graph. The runtime executes that graph with one commander for the mission and bounded task executors. The commander chooses among declared routes after inspecting accepted task results.
 
 ## The core difference: conversation vs workflow
 
@@ -66,10 +66,10 @@ The same in **Squadron**:
 ```hcl
 mission "research" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.researcher, agents.analyst]
+  models    = [models.anthropic.claude_sonnet_4]
 
-  task "gather"  { objective = "Find the top 5 papers on ${inputs.topic}"; agents = [agents.researcher] }
-  task "analyze" { depends_on = [tasks.gather]; objective = "Extract key findings"; agents = [agents.analyst] }
+  task "gather"  { objective = "Find the top 5 papers on ${inputs.topic}" }
+  task "analyze" { depends_on = [tasks.gather]; objective = "Extract key findings" }
 }
 ```
 

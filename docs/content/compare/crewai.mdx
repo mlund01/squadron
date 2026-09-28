@@ -30,7 +30,7 @@ CrewAI's strengths are a clean Python API, a popular tools library, and a thrivi
 
 ## What is Squadron?
 
-[Squadron](/) is a declarative framework for multi-agent workflows where agents, tools, models, the task graph, conditional branches, and budgets are defined in HCL. The product adds durable schedules, access control, and run operations around the worker runtime.
+[Squadron](/) is a declarative framework for AI workflows where task-executor models and tools, the graph, conditional branches, and budgets are defined in HCL. Managed agents are separate assistants for independent sessions. The product adds durable schedules, access control, and run operations around the worker runtime.
 
 ## Side-by-side
 
@@ -58,21 +58,12 @@ crew.kickoff(inputs={"topic": "post-quantum cryptography"})
 The same in **Squadron**:
 
 ```hcl
-agent "researcher" {
-  model = models.anthropic.claude_sonnet_4
-  goal  = "Find the top 5 papers on the given topic"
-}
-
-agent "analyst" {
-  model = models.anthropic.claude_sonnet_4
-}
-
 mission "research" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.researcher, agents.analyst]
+  models    = [models.anthropic.claude_sonnet_4]
 
-  task "gather"   { objective = "Find papers on ${inputs.topic}"; agents = [agents.researcher] }
-  task "analyze"  { depends_on = [tasks.gather]; objective = "Extract key findings"; agents = [agents.analyst] }
+  task "gather"   { objective = "Find papers on ${inputs.topic}" }
+  task "analyze"  { depends_on = [tasks.gather]; objective = "Extract key findings" }
 }
 ```
 
@@ -132,7 +123,7 @@ Compared to CrewAI's tool model — where tools are Python classes (`BaseTool` s
 ## What Squadron does better
 
 - **Diff-able workflows.** Your entire mission graph is one HCL file. Reviewers see exactly what changed.
-- **Resume.** Squadron persists every commander session, every agent session, every route decision. A crashed mission resumes from the last completed tool call.
+- **Resume.** Squadron persists the mission commander, task-executor attempts, and route decisions. Recovery follows each in-flight tool's replay-safety policy.
 - **Routing as a first-class block.** `router { route { target = tasks.x; condition = "..." } }` is declarative — the commander decides at runtime which branch to take.
 - **Budgets.** A `budget { tokens = 5000000; dollars = 25 }` block halts the mission cleanly when reached. No `try`/`except` wrapper required.
 - **MCP everywhere.** Two-line block pulls in any MCP server; one block exposes Squadron as an MCP server to AI assistants.

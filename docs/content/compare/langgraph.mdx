@@ -13,10 +13,10 @@ Both Squadron and **LangGraph** orchestrate multi-agent AI workflows, but they s
 |---|---|---|
 | **Style** | Declarative HCL config | Imperative Python code |
 | **Runtime** | Standalone Go binary | Python library inside your app |
-| **Mental model** | Tasks in a DAG, commander/agent split | Graph nodes + state, hand-written transitions |
+| **Mental model** | Tasks in a DAG, one commander and bounded task executors | Graph nodes + state, hand-written transitions |
 | **State persistence** | Built-in (SQLite or Postgres), auto-resume | Pluggable checkpointer, manual wiring |
 | **Branching** | Declarative `router` / `send_to` blocks | Conditional edges in Python |
-| **LLM-provider mixing** | Per-agent or per-task, all four major providers built in | Whatever LangChain supports |
+| **LLM-provider mixing** | Commander and task-executor model pools | Whatever LangChain supports |
 | **Extension model** | Native Go/Python plugins (gRPC subprocess, auto-built) + MCP servers + built-in tools | LangChain tools (Python functions) + custom Python |
 | **Reviewability** | Workflow is one HCL file you diff in a PR | Workflow is Python control flow spread across files |
 | **Deployment** | Single binary, no runtime deps | Python app + dependency tree |
@@ -30,7 +30,7 @@ LangGraph is widely adopted in the Python AI ecosystem and integrates tightly wi
 
 ## What is Squadron?
 
-[Squadron](/) is a declarative framework for multi-agent workflows where the entire pipeline — agents, tools, models, task dependencies, branching, retry, budgets — lives in HCL config files. The runtime is a standalone Go binary that reads the config, orchestrates LLM calls and tool invocations, and persists state to SQLite or Postgres. Resume after a crash is automatic.
+[Squadron](/) is a declarative framework for AI workflows where task-executor policies, task dependencies, branching, retries, and budgets live in HCL. One commander coordinates a mission; bounded task executors do its work. The worker persists run state to SQLite or Postgres for recovery.
 
 ## The core difference: imperative vs declarative
 
@@ -63,17 +63,15 @@ The same workflow in Squadron is **HCL config that the runtime reads**:
 ```hcl
 mission "research" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents    = [agents.researcher, agents.analyst]
+  models    = [models.anthropic.claude_sonnet_4]
 
   task "gather" {
     objective = "Find the top 5 papers on ${inputs.topic}"
-    agents    = [agents.researcher]
   }
 
   task "analyze" {
     depends_on = [tasks.gather]
     objective  = "Read each paper and extract the key findings"
-    agents     = [agents.analyst]
     router {
       route { target = tasks.deep_dive; condition = "Findings warrant deeper investigation" }
       route { target = tasks.summarize; condition = "Findings are routine" }
@@ -147,13 +145,13 @@ In most cases, yes — multi-agent workflows fit a task-DAG model cleanly. The t
 | Conditional edge | `router { route { ... } }` |
 | Tool function | Built-in tool, plugin, or MCP server |
 | Checkpointer | Built-in, automatic |
-| `chat_models.*` | `model { provider = "..." }` |
+| `chat_models.*` | A workspace model connection plus an HCL `model_provider` allow-list |
 
 Custom Python inside a node has no direct equivalent — you'd move that logic into a Squadron [plugin](/config/plugins) (Go or Python, runs as a subprocess) or an [MCP server](/config/mcp_tools).
 
 ## See also
 
 - [What is Squadron?](/) — full overview
-- [The Harness](/config/missions/harness) — the commander/agent execution model
+- [The Harness](/config/missions/harness) — the commander/task-executor execution model
 - [Squadron vs CrewAI](/compare/crewai)
 - [Squadron vs AutoGen](/compare/autogen)

@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -55,6 +57,66 @@ func TestModelCommanderExposesOnlyStartTaskAndRestoresTranscript(t *testing.T) {
 	commander.DispatchAccepted(Dispatch{RequestID: "tool-1", AttemptID: "run-1:collect:1", TaskName: "collect"})
 	if len(session.results) != 1 || session.results[0].ToolUseID != "tool-1" {
 		t.Fatalf("tool results = %#v", session.results)
+	}
+	nextHistory := append(append(append([]CommanderMessage(nil), restored...), decision.Prompt, decision.Message),
+		CommanderMessage{ID: "response-1:result", Role: "user", Parts: []store.MessagePart{{Type: "tool_result", ToolUseID: "tool-1", Text: `{"status":"started"}`}}})
+	if _, err := commander.Decide(context.Background(), Snapshot{
+		RunID: "run-1", Revision: 5, Ready: []string{"collect"},
+		Tasks: map[string]TaskSnapshot{"collect": {Name: "collect", State: TaskReady}},
+	}, nextHistory); err != nil {
+		t.Fatalf("next Decide() error = %v", err)
+	}
+	if len(session.loaded) != len(nextHistory) || session.loaded[len(session.loaded)-1].Role != llm.RoleUser {
+		t.Fatalf("accepted tool result was not restored before the next turn: %#v", session.loaded)
+	}
+}
+
+func TestCommanderContextWindowPreservesWholeRecentExchangesAcrossRestart(t *testing.T) {
+	t.Parallel()
+	var history []CommanderMessage
+	for i := 0; i < 15; i++ {
+		prefix := fmt.Sprintf("turn-%02d", i)
+		history = append(history,
+			CommanderMessage{ID: prefix + ":prompt", Role: "user", Parts: []store.MessagePart{{Type: "text", Text: prefix}}},
+			CommanderMessage{ID: prefix, Role: "assistant", Parts: []store.MessagePart{{Type: "tool_use", ToolUseID: prefix, ToolName: "start_task", ToolInputJSON: `{}`}}},
+			CommanderMessage{ID: prefix + ":result", Role: "user", Parts: []store.MessagePart{{Type: "tool_result", ToolUseID: prefix, Text: `{}`}}},
+		)
+	}
+	window := commanderContextWindow(history)
+	if len(window) != commanderHistoryMaxMessages || window[0].ID != "turn-07:prompt" || window[len(window)-1].ID != "turn-14:result" {
+		t.Fatalf("window selected incomplete exchanges: first=%q last=%q count=%d", window[0].ID, window[len(window)-1].ID, len(window))
+	}
+	first := &fakeCommanderSession{}
+	if _, err := NewModelCommander(first, history); err != nil {
+		t.Fatal(err)
+	}
+	restarted := &fakeCommanderSession{}
+	if _, err := NewModelCommander(restarted, history); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(first.loaded, restarted.loaded) || len(first.loaded) != len(window) {
+		t.Fatal("commander context changed after rehydration")
+	}
+}
+
+func TestCommanderContextWindowLimitsOlderLargeResults(t *testing.T) {
+	t.Parallel()
+	var history []CommanderMessage
+	for i := 0; i < 10; i++ {
+		prefix := fmt.Sprintf("turn-%02d", i)
+		history = append(history,
+			CommanderMessage{ID: prefix + ":prompt", Role: "user", Parts: []store.MessagePart{{Type: "text", Text: prefix}}},
+			CommanderMessage{ID: prefix, Role: "assistant", Parts: []store.MessagePart{{Type: "tool_use", ToolUseID: prefix, ToolName: "inspect_task", ToolInputJSON: `{}`}}},
+			CommanderMessage{ID: prefix + ":result", Role: "user", Parts: []store.MessagePart{{Type: "tool_result", ToolUseID: prefix, Text: strings.Repeat("x", 20*1024)}}},
+		)
+	}
+	window := commanderContextWindow(history)
+	encoded, err := json.Marshal(window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(encoded) > commanderHistoryMaxBytes || len(window) == len(history) || !strings.HasSuffix(window[0].ID, ":prompt") || window[len(window)-1].ID != "turn-09:result" {
+		t.Fatalf("large-result context was not bounded at exchange boundaries: bytes=%d count=%d", len(encoded), len(window))
 	}
 }
 
@@ -110,7 +172,7 @@ func TestModelCommanderRetriesParallelControlCallsWithoutPersistingRejectedTurn(
 	if decision.Message.Telemetry.InputTokens != 22 || decision.Message.Telemetry.OutputTokens != 8 {
 		t.Fatalf("retry token accounting = %#v", decision.Message.Telemetry)
 	}
-	if len(session.prompts) != 2 || !strings.Contains(session.prompts[1], "exactly ONE") || session.loadCount != 2 {
+	if len(session.prompts) != 2 || !strings.Contains(session.prompts[1], "exactly ONE") || session.loadCount != 3 {
 		t.Fatalf("retry prompts = %#v, restored %d times", session.prompts, session.loadCount)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"squadron/agent"
 	"squadron/llm"
@@ -26,6 +27,11 @@ type ModelCommander struct {
 	model   string
 	turns   int
 }
+
+const (
+	commanderHistoryMaxMessages = 24
+	commanderHistoryMaxBytes    = 96 * 1024
+)
 
 // CommanderBootstrap is the immutable, model-visible run context. Callers
 // must place only non-secret values in VisibleInputs; credentials and secret
@@ -98,15 +104,9 @@ func NewModelCommander(session CommanderModelSession, restored []CommanderMessag
 	if session == nil {
 		return nil, fmt.Errorf("commander model session is required")
 	}
-	messages := make([]llm.Message, 0, len(restored))
-	for _, message := range restored {
-		converted, err := agent.MessageFromStored(store.StructuredMessage{Role: message.Role, Parts: message.Parts})
-		if err != nil {
-			return nil, fmt.Errorf("restore commander message %q: %w", message.ID, err)
-		}
-		messages = append(messages, converted)
+	if err := restoreCommanderHistory(session, commanderContextWindow(restored)); err != nil {
+		return nil, err
 	}
-	session.LoadMessages(messages)
 	session.SetTools([]llm.ToolDefinition{
 		{Name: "start_task", Description: "Request that the mission harness start one task from the current ready set.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"model":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}}},"required":["task_name","model"],"additionalProperties":false}`)},
 		{Name: "select_route", Description: "Choose one declared target for a completed router task, or none when no condition applies. For a mission target, include its declared non-secret inputs using their native JSON types.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"target":{"type":"string"},"inputs":{"type":"object","additionalProperties":true}},"required":["task_name","target"],"additionalProperties":false}`)},
@@ -123,6 +123,13 @@ func NewModelCommander(session CommanderModelSession, restored []CommanderMessag
 }
 
 func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history []CommanderMessage) (CommanderDecision, error) {
+	window := commanderContextWindow(history)
+	// The durable transcript is authoritative. Reload it before every decision
+	// so the provider sees the last accepted tool result even when its previous
+	// in-memory turn was interrupted or did not receive that result directly.
+	if err := restoreCommanderHistory(c.session, window); err != nil {
+		return CommanderDecision{}, err
+	}
 	promptJSON, err := json.Marshal(struct {
 		RunID         string                       `json:"run_id"`
 		Revision      uint64                       `json:"ready_set_revision"`
@@ -146,7 +153,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 			// The rejected turn never changed the harness. Reset the provider
 			// session to durable history so only the accepted decision survives
 			// a restart; keep its token usage in the accepted turn's accounting.
-			if err := restoreCommanderHistory(c.session, history); err != nil {
+			if err := restoreCommanderHistory(c.session, window); err != nil {
 				return CommanderDecision{}, err
 			}
 		}
@@ -275,6 +282,40 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 	decision.Dispatch = DispatchRequest{RequestID: requested.ID, TaskName: input.TaskName, ReadySetRevision: snapshot.Revision}
 	decision.Grant = GrantRequest{TaskName: input.TaskName, Model: input.Model, Tools: append([]string(nil), input.Tools...)}
 	return decision, nil
+}
+
+// commanderContextWindow keeps complete, most-recent orchestration exchanges
+// in the provider prompt. The harness retains every message durably; current
+// task state and accepted result summaries arrive in each new snapshot.
+func commanderContextWindow(history []CommanderMessage) []CommanderMessage {
+	start := 0
+	if len(history) > commanderHistoryMaxMessages {
+		start = nextCommanderPrompt(history, len(history)-commanderHistoryMaxMessages)
+		if start == len(history) {
+			start = len(history) - commanderHistoryMaxMessages
+		}
+	}
+	for start < len(history) {
+		encoded, err := json.Marshal(history[start:])
+		if err != nil || len(encoded) <= commanderHistoryMaxBytes {
+			break
+		}
+		next := nextCommanderPrompt(history, start+1)
+		if next >= len(history) {
+			// A single large inspection remains available to the commander;
+			// do not split its tool-use/result exchange.
+			break
+		}
+		start = next
+	}
+	return history[start:]
+}
+
+func nextCommanderPrompt(history []CommanderMessage, from int) int {
+	for from < len(history) && !strings.HasSuffix(history[from].ID, ":prompt") {
+		from++
+	}
+	return from
 }
 
 func restoreCommanderHistory(session CommanderModelSession, history []CommanderMessage) error {

@@ -107,7 +107,7 @@ If you're not sure which to use, this is the rule:
 | Should the *next* run of this mission see this file? | `memory { }` |
 | Is this a working draft, intermediate result, or temp file? | `scratchpad = true` |
 | Will multiple missions need to read this? | top-level `memory "name" { ... }` |
-| Does this need to survive across runs *and* be writable by agents? | `memory { }` (every memory is writable) |
+| Does this need to survive across runs *and* be writable by task executors? | `memory { }` (every memory is writable) |
 
 A mission can declare both — the persistent `memory { }` for things worth keeping, and `scratchpad = true` for everything else.
 

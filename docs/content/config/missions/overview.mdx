@@ -116,7 +116,7 @@ Marking an input as `protected` (via `{ protected = true }` in shorthand or `pro
 
 - The supplied run value is treated as sensitive and is never written to HCL
 - It is **masked in logs and the Squadron app** (displayed as `********`)
-- It **cannot be interpolated** in objective strings — agents access it through tool/plugin settings, not directly in task objectives
+- It **cannot be interpolated** in objective strings — authorized task tools receive it through their settings, not through task prompts
 
 ```hcl
 inputs = {

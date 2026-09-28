@@ -88,7 +88,7 @@ Both mission-level and task-level references are validated at load time; an unkn
 
 ## Reading from a packet
 
-Once a packet is attached, agents access it through the same file tools as memory slots. The `slot` parameter takes the **prefixed name** `packet.<name>` so packets cannot be confused with writable slots:
+Once a packet is attached, granted task executors access it through the same file tools as memory slots. The `slot` parameter takes the **prefixed name** `packet.<name>` so packets cannot be confused with writable slots:
 
 ```json
 {
@@ -111,7 +111,7 @@ The file tools apply the following policy for packet slots:
 
 ## File types
 
-Packets are designed for UTF-8 text: Markdown, source code, JSON/YAML, prose, transcripts, anything an LLM can read directly via `file_read`. Images (PNG/JPEG/GIF/WebP), SVGs, and PDFs are also supported — agents perceive them with `file_view` (SVGs are rasterized to PNG; PDFs are sent as native document blocks). `file_read` still rejects binary content up front so agents don't get a wall of garbled bytes.
+Packets are designed for UTF-8 text: Markdown, source code, JSON/YAML, prose, transcripts, anything an LLM can read directly via `file_read`. Images (PNG/JPEG/GIF/WebP), SVGs, and PDFs are also supported — task executors perceive them with `file_view` (SVGs are rasterized to PNG; PDFs are sent as native document blocks). `file_read` still rejects binary content up front so executors don't get a wall of garbled bytes.
 
 Other binary payloads (audio, video, archives, compiled binaries) and non-UTF-8 text encodings (e.g. UTF-16) aren't supported by either tool. If you need to expose that kind of material, put it in a writable memory slot that a pre-processor can stage on demand.
 

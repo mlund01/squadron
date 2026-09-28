@@ -439,37 +439,6 @@ persisted target and canonical inputs.
 9. Tool calls use `(attempt_id, tool_call_id)` as their idempotency boundary.
 10. Every state transition uses durable compare-and-swap.
 
-## Capability decisions
-
-| Capability | Decision | Runtime behavior |
-|---|---|---|
-| Declarative DAG and dependencies | Retain | Harness computes eligibility and rejects bypasses |
-| Mission commander | Redesign | Exactly one persisted commander session per run |
-| Task commanders | Remove | Task work runs in ephemeral task executors |
-| Managed-agent references in missions | Remove | Managed agents remain independent product primitives |
-| Mission-scoped agent blocks | Remove | Task policy declares models, tools, skills, and data scopes directly |
-| Commander subtask tools | Remove | Executor planning stays inside its task transcript |
-| `ask_commander` and commander resaturation | Remove | Results and artifacts are persisted; one commander retains run continuity |
-| Task models and tools | Redesign | Harness resolves immutable per-attempt grants |
-| Structured output | Redesign | Universal result envelope; typed `data` schema is optional |
-| Parallel tasks | Retain | Harness dispatches from the ready set under concurrency limits |
-| Iteration | Redesign | Iterations are child task instances/attempts, never child commanders |
-| Conditional routing | Retain | Commander selects only declared edges; harness commits once |
-| `send_to` fan-out | Retain | Harness activates declared targets deterministically |
-| Retries and timeouts | Retain | New immutable attempt per retry with persisted deadlines |
-| Stop and resume | Retain | Durable state transition plus attempt reconciliation |
-| Human input | Redesign | Typed request/response events move runs through `waiting` |
-| Datasets | Retain | Explicit executor capability and immutable input snapshots |
-| Large tool results | Retain | Stored as artifacts with sampled/reference-based context |
-| Packets and files | Retain | Read/write scopes are explicit grant entries |
-| Mission memory | Redesign | Commander, executor, artifact, and persistent scopes are separate |
-| Secrets | Retain with stricter boundary | Broker resolves handles only at authorized tool execution |
-| Budgets | Retain | Aggregate commander plus executor usage; harness latches breach |
-| Cross-mission routing | Redesign | Starts a separate persisted run with explicit inputs and identity |
-| Scheduling and run-as | Retain in product | Command Center supplies trigger and principal; run persists both |
-| Notifications | Retain in product | Projected from persisted runtime events |
-| Telemetry | Redesign | Mission commander span with nested task attempts and executor drill-in |
-
 ## Failure rules
 
 - Configuration or grant-resolution failure prevents dispatch and fails the

@@ -248,10 +248,15 @@ schema is declared, `data` must satisfy it before the task may complete or
 unlock a dependency. Without a schema, natural-language and rich-only results
 are accepted.
 
-The commander's ordinary snapshot contains only the bounded summary, status,
-artifact count, and whether typed data exists. Full rich content is loaded only
-through explicit task inspection. The exact final provider response is retained
-as `rawOutput` for audit rather than reconstructed from the summary.
+The commander's ordinary snapshot contains only status, bounded summaries,
+artifact counts, and whether typed data exists. As a run grows, the prompt
+shows a limited set of ready tasks and results plus omitted counts; the
+remaining ready tasks appear in later decisions, and the commander can inspect
+a specific accepted result on demand. The complete transcript remains durable,
+while only recent complete orchestration exchanges are sent back to the model
+after each decision or restart. Full rich content is loaded only through
+explicit task inspection. The exact final provider response is retained as
+`rawOutput` for audit rather than reconstructed from the summary.
 
 ## Memory scopes
 

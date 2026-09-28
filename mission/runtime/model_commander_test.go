@@ -120,6 +120,52 @@ func TestCommanderContextWindowLimitsOlderLargeResults(t *testing.T) {
 	}
 }
 
+func TestCommanderPromptProjectionBoundsGrowingIterationState(t *testing.T) {
+	t.Parallel()
+	snapshot := Snapshot{
+		RunID: "run-1", Revision: 17, Tasks: map[string]TaskSnapshot{},
+		Results: map[string]TaskResultSummary{}, PendingRoutes: map[string][]RouteDefinition{},
+	}
+	for i := 0; i < 100; i++ {
+		name := fmt.Sprintf("item[%03d]", i)
+		snapshot.Ready = append(snapshot.Ready, name)
+		snapshot.Tasks[name] = TaskSnapshot{Name: name, State: TaskReady}
+		snapshot.Results[name] = TaskResultSummary{Status: ResultSucceeded, Summary: strings.Repeat("a", 4000)}
+	}
+	snapshot.PendingRoutes["item[099]"] = []RouteDefinition{{Target: "finish", Condition: "done"}}
+	encoded, err := json.Marshal(commanderPromptProjection(snapshot))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var projection struct {
+		Ready                []string                     `json:"ready_tasks"`
+		ReadyOmitted         int                          `json:"ready_tasks_omitted"`
+		TaskStateCounts      map[TaskState]int            `json:"task_state_counts"`
+		Results              map[string]TaskResultSummary `json:"results"`
+		ResultsOmitted       int                          `json:"results_omitted"`
+		PendingRoutes        map[string][]RouteDefinition `json:"pending_routes"`
+		PendingRoutesOmitted int                          `json:"pending_routes_omitted"`
+	}
+	if err := json.Unmarshal(encoded, &projection); err != nil {
+		t.Fatal(err)
+	}
+	if len(projection.Ready) != commanderReadyLimit || projection.ReadyOmitted != 68 || projection.TaskStateCounts[TaskReady] != 100 {
+		t.Fatalf("ready projection = %+v", projection)
+	}
+	if len(projection.Results) != commanderResultLimit || projection.ResultsOmitted != 76 {
+		t.Fatalf("result projection count = %d, omitted = %d", len(projection.Results), projection.ResultsOmitted)
+	}
+	if _, ok := projection.Results["item[099]"]; !ok {
+		t.Fatal("pending router result was omitted")
+	}
+	if len([]rune(projection.Results["item[099]"].Summary)) > commanderSummaryRuneLimit+40 {
+		t.Fatal("result summary was not truncated")
+	}
+	if len(projection.PendingRoutes) != 1 || projection.PendingRoutesOmitted != 0 || len(encoded) > 20*1024 {
+		t.Fatalf("projection size = %d, routes = %d", len(encoded), len(projection.PendingRoutes))
+	}
+}
+
 func TestCommanderSystemPromptDefinesGraphWithoutTaskCapabilities(t *testing.T) {
 	t.Parallel()
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"squadron/agent"
@@ -31,6 +32,9 @@ type ModelCommander struct {
 const (
 	commanderHistoryMaxMessages = 24
 	commanderHistoryMaxBytes    = 96 * 1024
+	commanderReadyLimit         = 32
+	commanderResultLimit        = 24
+	commanderSummaryRuneLimit   = 256
 )
 
 // CommanderBootstrap is the immutable, model-visible run context. Callers
@@ -90,7 +94,7 @@ func commanderSystemPrompt(bootstrap CommanderBootstrap) (string, error) {
 	}
 	return `You are the single commander for this mission run.
 
-Follow the declared mission graph. The harness is the sole authority for task eligibility and state transitions. An iterated task expands into ready child task instances named parent[index]; start only those children, never the parent. Each child worker receives its own frozen dataset item. When pending_routes is non-empty, use the bounded result summary when it is sufficient. Call inspect_task when you need the complete accepted output. If that output still lacks one specific fact needed to route, call clarify_task_result with a focused question; this restores the same task session without tools. Then call select_route with one declared target or "none". Otherwise select exactly one task from ready_tasks and call start_task. Emit exactly ONE orchestration tool call per response, even when multiple tasks are ready; you will be called again to start the next one. Never claim that a task started or a route was selected until the harness accepts it.
+Follow the declared mission graph. The harness is the sole authority for task eligibility and state transitions. An iterated task expands into ready child task instances named parent[index]; start only those children, never the parent. Each child worker receives its own frozen dataset item. The changing snapshot is a bounded projection: omitted ready tasks and pending routes appear in later turns, and omitted or truncated result summaries can be retrieved with inspect_task. When pending_routes is non-empty, use the bounded result summary when it is sufficient. Call inspect_task when you need the complete accepted output. If that output still lacks one specific fact needed to route, call clarify_task_result with a focused question; this restores the same task session without tools. Then call select_route with one declared target or "none". Otherwise select exactly one task from ready_tasks and call start_task. Emit exactly ONE orchestration tool call per response, even when multiple tasks are ready; you will be called again to start the next one. Never claim that a task started or a route was selected until the harness accepts it.
 
 When calling start_task, choose model from policies.task_allowed_models for that task. Use the exact model key shown there, not a provider's API model name or a model from your prior knowledge. Task tools are mandatory. You may select additional tools only from policies.optional_mission_tools; they are granted to the executor, not to you.
 
@@ -130,17 +134,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 	if err := restoreCommanderHistory(c.session, window); err != nil {
 		return CommanderDecision{}, err
 	}
-	promptJSON, err := json.Marshal(struct {
-		RunID         string                       `json:"run_id"`
-		Revision      uint64                       `json:"ready_set_revision"`
-		Ready         []string                     `json:"ready_tasks"`
-		Tasks         map[string]TaskSnapshot      `json:"tasks"`
-		Results       map[string]TaskResultSummary `json:"results,omitempty"`
-		PendingRoutes map[string][]RouteDefinition `json:"pending_routes,omitempty"`
-	}{
-		RunID: snapshot.RunID, Revision: snapshot.Revision, Ready: snapshot.Ready, Tasks: snapshot.Tasks,
-		Results: snapshot.Results, PendingRoutes: snapshot.PendingRoutes,
-	})
+	promptJSON, err := json.Marshal(commanderPromptProjection(snapshot))
 	if err != nil {
 		return CommanderDecision{}, fmt.Errorf("encode commander snapshot: %w", err)
 	}
@@ -282,6 +276,72 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 	decision.Dispatch = DispatchRequest{RequestID: requested.ID, TaskName: input.TaskName, ReadySetRevision: snapshot.Revision}
 	decision.Grant = GrantRequest{TaskName: input.TaskName, Model: input.Model, Tools: append([]string(nil), input.Tools...)}
 	return decision, nil
+}
+
+// commanderPromptProjection keeps the changing state small even when an
+// iterator creates many children. The harness still owns the complete graph,
+// and inspect_task can retrieve an omitted accepted result on demand.
+func commanderPromptProjection(snapshot Snapshot) any {
+	ready := append([]string(nil), snapshot.Ready...)
+	sort.Strings(ready)
+	readyOmitted := max(0, len(ready)-commanderReadyLimit)
+	if readyOmitted > 0 {
+		ready = ready[:commanderReadyLimit]
+	}
+	stateCounts := make(map[TaskState]int)
+	for _, task := range snapshot.Tasks {
+		stateCounts[task.State]++
+	}
+	routeNames := make([]string, 0, len(snapshot.PendingRoutes))
+	for name := range snapshot.PendingRoutes {
+		routeNames = append(routeNames, name)
+	}
+	sort.Strings(routeNames)
+	pendingRoutes := make(map[string][]RouteDefinition)
+	if len(routeNames) > 0 {
+		pendingRoutes[routeNames[0]] = snapshot.PendingRoutes[routeNames[0]]
+	}
+	resultNames := make([]string, 0, len(snapshot.Results))
+	for name := range snapshot.Results {
+		resultNames = append(resultNames, name)
+	}
+	sort.Strings(resultNames)
+	if len(routeNames) > 0 {
+		for index, name := range resultNames {
+			if name == routeNames[0] {
+				resultNames = append([]string{name}, append(resultNames[:index], resultNames[index+1:]...)...)
+				break
+			}
+		}
+	}
+	resultsOmitted := max(0, len(resultNames)-commanderResultLimit)
+	if resultsOmitted > 0 {
+		resultNames = resultNames[:commanderResultLimit]
+	}
+	results := make(map[string]TaskResultSummary, len(resultNames))
+	for _, name := range resultNames {
+		result := snapshot.Results[name]
+		runes := []rune(result.Summary)
+		if len(runes) > commanderSummaryRuneLimit {
+			result.Summary = string(runes[:commanderSummaryRuneLimit]) + "… [truncated; use inspect_task]"
+		}
+		results[name] = result
+	}
+	return struct {
+		RunID                string                       `json:"run_id"`
+		Revision             uint64                       `json:"ready_set_revision"`
+		Ready                []string                     `json:"ready_tasks"`
+		ReadyOmitted         int                          `json:"ready_tasks_omitted,omitempty"`
+		TaskStateCounts      map[TaskState]int            `json:"task_state_counts"`
+		Results              map[string]TaskResultSummary `json:"results,omitempty"`
+		ResultsOmitted       int                          `json:"results_omitted,omitempty"`
+		PendingRoutes        map[string][]RouteDefinition `json:"pending_routes,omitempty"`
+		PendingRoutesOmitted int                          `json:"pending_routes_omitted,omitempty"`
+	}{
+		RunID: snapshot.RunID, Revision: snapshot.Revision, Ready: ready, ReadyOmitted: readyOmitted,
+		TaskStateCounts: stateCounts, Results: results, ResultsOmitted: resultsOmitted,
+		PendingRoutes: pendingRoutes, PendingRoutesOmitted: max(0, len(routeNames)-1),
+	}
 }
 
 // commanderContextWindow keeps complete, most-recent orchestration exchanges

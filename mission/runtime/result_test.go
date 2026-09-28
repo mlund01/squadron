@@ -19,7 +19,7 @@ func TestTaskResultRoundTripsRichContentArtifactsAndTypedData(t *testing.T) {
 			{Name: "title", Type: "string", Required: true},
 			{Name: "pages", Type: "integer", Required: true},
 		}},
-	}})
+	}, {Name: "finish", DependsOn: []string{"render"}}})
 	if err != nil {
 		t.Fatalf("CreateDurableHarness() error = %v", err)
 	}
@@ -34,7 +34,7 @@ func TestTaskResultRoundTripsRichContentArtifactsAndTypedData(t *testing.T) {
 		t.Fatalf("DispatchTask() error = %v", err)
 	}
 	result := testResult(dispatch)
-	result.Summary = "Rendered the report"
+	result.Summary = "Rendered the résumé report"
 	result.Content = []store.MessagePart{
 		{Type: "text", Text: "Rendered the report"},
 		{Type: "document", DocumentData: "cGRm", DocumentMediaType: "application/pdf", DocumentFilename: "report.pdf"},
@@ -60,6 +60,53 @@ func TestTaskResultRoundTripsRichContentArtifactsAndTypedData(t *testing.T) {
 	}
 	if inspection.Summary != result.Summary || !reflect.DeepEqual(inspection.Content, result.Content) || string(inspection.Data) != string(result.Data) {
 		t.Fatalf("inspection = %#v", inspection)
+	}
+	var chunks strings.Builder
+	for offset := 0; ; {
+		page, err := restored.InspectTask(InspectTaskRequest{
+			RequestID: "inspect-render-page", TaskName: "render", Revision: restored.Snapshot().Revision,
+			Offset: offset, Limit: 37,
+		})
+		if err != nil {
+			t.Fatalf("InspectTask(offset=%d) error = %v", offset, err)
+		}
+		if len(page.Content) != 0 || len(page.Data) != 0 || page.TotalBytes == 0 || len(page.Chunk) > 37 {
+			t.Fatalf("inspection page leaked full output: %#v", page)
+		}
+		chunks.WriteString(page.Chunk)
+		if page.NextOffset == 0 {
+			break
+		}
+		if page.NextOffset <= offset {
+			t.Fatalf("inspection did not advance: %#v", page)
+		}
+		offset = page.NextOffset
+	}
+	var reassembled TaskInspection
+	if err := json.Unmarshal([]byte(chunks.String()), &reassembled); err != nil {
+		t.Fatalf("reassemble inspection: %v", err)
+	}
+	reassembled.RequestID = inspection.RequestID
+	if !reflect.DeepEqual(reassembled, inspection) {
+		t.Fatalf("paged inspection differs from full result: %#v", reassembled)
+	}
+	pageRequest := InspectTaskRequest{RequestID: "inspect-durable-page", TaskName: "render", Revision: restored.Snapshot().Revision, Limit: 37}
+	page, err := restored.ApplyCommanderInspection(
+		CommanderMessage{ID: "inspect-page:prompt", Role: "user", Parts: []store.MessagePart{{Type: "text", Text: "inspect"}}},
+		CommanderMessage{ID: "inspect-page", Role: "assistant", Parts: []store.MessagePart{{Type: "tool_use", ToolUseID: pageRequest.RequestID, ToolName: "inspect_task", ToolInputJSON: `{"task_name":"render"}`}}},
+		pageRequest,
+	)
+	if err != nil {
+		t.Fatalf("ApplyCommanderInspection() error = %v", err)
+	}
+	restarted, _, err := RestoreDurableHarness(runtimeStore, "run-result")
+	if err != nil {
+		t.Fatalf("restore inspection page: %v", err)
+	}
+	messages := restarted.CommanderMessages()
+	var persistedPage TaskInspection
+	if len(messages) != 3 || len(messages[2].Parts) != 1 || json.Unmarshal([]byte(messages[2].Parts[0].Text), &persistedPage) != nil || !reflect.DeepEqual(page, persistedPage) || len(persistedPage.Content) != 0 {
+		t.Fatalf("durable commander inspection was not a bounded page: %#v", messages)
 	}
 	summary := restored.Snapshot().Results["render"]
 	if summary.Summary != result.Summary || summary.ArtifactCount != 1 || !summary.HasData {

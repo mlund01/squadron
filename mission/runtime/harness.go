@@ -82,7 +82,11 @@ type InspectTaskRequest struct {
 	RequestID string
 	TaskName  string
 	Revision  uint64
+	Offset    int
+	Limit     int
 }
+
+const maxCommanderInspectionBytes = 16 * 1024
 
 const maxTaskClarifications = 3
 
@@ -125,6 +129,12 @@ type TaskInspection struct {
 	Data        json.RawMessage     `json:"data,omitempty"`
 	Diagnostics json.RawMessage     `json:"diagnostics,omitempty"`
 	Provenance  ResultProvenance    `json:"provenance"`
+	// Chunk is a byte range of the complete JSON inspection when Limit was
+	// requested. The accepted result itself is never truncated in storage.
+	Chunk      string `json:"chunk,omitempty"`
+	Offset     int    `json:"offset,omitempty"`
+	NextOffset int    `json:"nextOffset,omitempty"`
+	TotalBytes int    `json:"totalBytes,omitempty"`
 }
 
 // TaskFailure is the latest durable failure observed for a task attempt.
@@ -1140,11 +1150,42 @@ func (h *Harness) InspectTask(request InspectTaskRequest) (TaskInspection, error
 		return TaskInspection{}, fmt.Errorf("task %q has no accepted result", request.TaskName)
 	}
 	envelope := cloneTaskResultEnvelope(accepted.Envelope)
-	return TaskInspection{
+	inspection := TaskInspection{
 		RequestID: request.RequestID, TaskName: request.TaskName, Status: envelope.Status, Summary: envelope.Summary,
 		Content: envelope.Content, Artifacts: envelope.Artifacts, Data: append([]byte(nil), envelope.Data...),
 		Diagnostics: append([]byte(nil), envelope.Diagnostics...), Provenance: envelope.Provenance,
-	}, nil
+	}
+	if request.Limit == 0 {
+		return inspection, nil
+	}
+	if request.Offset < 0 || request.Limit < 0 || request.Limit > maxCommanderInspectionBytes {
+		return TaskInspection{}, fmt.Errorf("invalid inspection byte range")
+	}
+	encoded, err := json.Marshal(inspection)
+	if err != nil {
+		return TaskInspection{}, fmt.Errorf("encode inspection: %w", err)
+	}
+	if request.Offset >= len(encoded) {
+		return TaskInspection{}, fmt.Errorf("inspection offset %d exceeds result size %d", request.Offset, len(encoded))
+	}
+	end := min(len(encoded), request.Offset+request.Limit)
+	for end < len(encoded) && end > request.Offset && !utf8.RuneStart(encoded[end]) {
+		end--
+	}
+	if end == request.Offset {
+		end = request.Offset + 1
+		for end < len(encoded) && !utf8.RuneStart(encoded[end]) {
+			end++
+		}
+	}
+	chunk := TaskInspection{
+		RequestID: request.RequestID, TaskName: request.TaskName, Status: envelope.Status,
+		Chunk: string(encoded[request.Offset:end]), Offset: request.Offset, TotalBytes: len(encoded),
+	}
+	if end < len(encoded) {
+		chunk.NextOffset = end
+	}
+	return chunk, nil
 }
 
 // BeginClarification durably fences a provider call. A restored coordinator

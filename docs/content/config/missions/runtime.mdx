@@ -136,7 +136,7 @@ part of the source task's completion transaction.
 The worker receives the declared route conditions so it can surface relevant
 evidence, but it cannot choose a branch. The commander normally routes from the
 bounded result summary. When that is insufficient it may call the read-only
-`inspect_task` control, which returns the complete accepted content, typed data,
+`inspect_task` control, which pages through accepted content, typed data,
 artifacts, diagnostics, and provenance. It does not expose worker reasoning,
 turn history, tool calls, or telemetry.
 
@@ -255,7 +255,7 @@ remaining ready tasks appear in later decisions, and the commander can inspect
 a specific accepted result on demand. The complete transcript remains durable,
 while only recent complete orchestration exchanges are sent back to the model
 after each decision or restart. Full rich content is loaded only through
-explicit task inspection. The exact final provider response is retained as
+explicit, paged task inspection. The exact final provider response is retained as
 `rawOutput` for audit rather than reconstructed from the summary.
 
 ## Memory scopes

@@ -313,7 +313,7 @@ func TestModelCommanderInspectsAcceptedTaskBeforeRouting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Decide() error = %v", err)
 	}
-	if decision.Inspect.TaskName != "classify" || decision.Inspect.Revision != 8 {
+	if decision.Inspect.TaskName != "classify" || decision.Inspect.Revision != 8 || decision.Inspect.Limit != maxCommanderInspectionBytes || decision.Inspect.Offset != 0 {
 		t.Fatalf("inspection decision = %#v", decision.Inspect)
 	}
 	commander.InspectionAccepted(TaskInspection{RequestID: "inspect-tool", TaskName: "classify", Summary: "support evidence"})

@@ -106,9 +106,10 @@ remain valid. Commander interpretation may add meaning but cannot override a
 failed mechanical validation.
 
 Commander snapshots expose a bounded result projection: status, summary,
-artifact count, and presence of typed data. Full content and raw output require
-an explicit `inspect_task` read so large results do not silently consume the
-commander context window.
+artifact count, and presence of typed data. Accepted content is available to
+the commander through paged `inspect_task` reads so large results do not
+silently consume its context window. Raw provider output remains available for
+audit, not to the commander.
 
 ### Runtime event and checkpoint
 
@@ -253,10 +254,11 @@ These controls are not executable capabilities. The commander receives no
 plugin, MCP, file, memory, dataset, or built-in task tools.
 
 `inspect_task` uses progressive disclosure. Ordinary snapshots contain only a
-bounded result projection. Inspection returns the accepted output envelope
-needed for orchestration, excluding executor conversation history, reasoning,
-tool calls, and telemetry. The inspection request and harness-produced result
-are persisted in the commander transcript and audit event stream.
+bounded result projection. Inspection returns bounded byte chunks of the
+accepted JSON output envelope, with `nextOffset` for continuation, excluding
+executor conversation history, reasoning, tool calls, and telemetry. The
+inspection request and harness-produced chunk are persisted in the commander
+transcript and audit event stream.
 
 `clarify_task_result` is a bounded continuation, not a new task. The runtime
 persists the pending clarification before calling a provider, restores the

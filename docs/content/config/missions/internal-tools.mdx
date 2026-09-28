@@ -24,9 +24,10 @@ Task-level tools are always included in the resulting immutable grant.
 
 ## `inspect_task`
 
-Returns persisted state and results for a task. The commander receives compact
-result content and artifact references; the full executor transcript and raw
-tool activity remain available to operators through run drill-in.
+Reads the accepted result for a completed task in bounded JSON byte chunks.
+The commander starts at `offset = 0` and follows `nextOffset` when it needs
+more. The full executor transcript and raw tool activity are excluded from
+this control and remain available to operators through run drill-in.
 
 ## `select_route`
 

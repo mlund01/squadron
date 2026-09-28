@@ -94,7 +94,7 @@ func commanderSystemPrompt(bootstrap CommanderBootstrap) (string, error) {
 	}
 	return `You are the single commander for this mission run.
 
-Follow the declared mission graph. The harness is the sole authority for task eligibility and state transitions. An iterated task expands into ready child task instances named parent[index]; start only those children, never the parent. Each child worker receives its own frozen dataset item. The changing snapshot is a bounded projection: omitted ready tasks and pending routes appear in later turns, and omitted or truncated result summaries can be retrieved with inspect_task. When pending_routes is non-empty, use the bounded result summary when it is sufficient. Call inspect_task when you need the complete accepted output. If that output still lacks one specific fact needed to route, call clarify_task_result with a focused question; this restores the same task session without tools. Then call select_route with one declared target or "none". Otherwise select exactly one task from ready_tasks and call start_task. Emit exactly ONE orchestration tool call per response, even when multiple tasks are ready; you will be called again to start the next one. Never claim that a task started or a route was selected until the harness accepts it.
+Follow the declared mission graph. The harness is the sole authority for task eligibility and state transitions. An iterated task expands into ready child task instances named parent[index]; start only those children, never the parent. Each child worker receives its own frozen dataset item. The changing snapshot is a bounded projection: omitted ready tasks and pending routes appear in later turns, and omitted or truncated result summaries can be retrieved with inspect_task. When pending_routes is non-empty, use the bounded result summary when it is sufficient. Call inspect_task with offset 0 when you need accepted output; if nextOffset is present, call it again with that offset to read further chunks. If the inspected output still lacks one specific fact needed to route, call clarify_task_result with a focused question; this restores the same task session without tools. Then call select_route with one declared target or "none". Otherwise select exactly one task from ready_tasks and call start_task. Emit exactly ONE orchestration tool call per response, even when multiple tasks are ready; you will be called again to start the next one. Never claim that a task started or a route was selected until the harness accepts it.
 
 When calling start_task, choose model from policies.task_allowed_models for that task. Use the exact model key shown there, not a provider's API model name or a model from your prior knowledge. Task tools are mandatory. You may select additional tools only from policies.optional_mission_tools; they are granted to the executor, not to you.
 
@@ -114,7 +114,7 @@ func NewModelCommander(session CommanderModelSession, restored []CommanderMessag
 	session.SetTools([]llm.ToolDefinition{
 		{Name: "start_task", Description: "Request that the mission harness start one task from the current ready set.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"model":{"type":"string"},"tools":{"type":"array","items":{"type":"string"}}},"required":["task_name","model"],"additionalProperties":false}`)},
 		{Name: "select_route", Description: "Choose one declared target for a completed router task, or none when no condition applies. For a mission target, include its declared non-secret inputs using their native JSON types.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"target":{"type":"string"},"inputs":{"type":"object","additionalProperties":true}},"required":["task_name","target"],"additionalProperties":false}`)},
-		{Name: "inspect_task", Description: "Read the complete accepted output for a completed task. Worker turns, reasoning, tool calls, and raw provider output are excluded.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"}},"required":["task_name"],"additionalProperties":false}`)},
+		{Name: "inspect_task", Description: "Read one bounded byte chunk of a completed task's accepted JSON output. Start with offset 0 and use nextOffset to read further chunks. Worker turns, reasoning, tool calls, and raw provider output are excluded.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"offset":{"type":"integer","minimum":0}},"required":["task_name"],"additionalProperties":false}`)},
 		{Name: "clarify_task_result", Description: "Ask the completed task worker one focused follow-up using its persisted session. Tools are disabled and the number of clarifications is bounded.", InputSchema: json.RawMessage(`{"type":"object","properties":{"task_name":{"type":"string"},"question":{"type":"string","maxLength":4096}},"required":["task_name","question"],"additionalProperties":false}`)},
 	})
 	turns := 0
@@ -229,6 +229,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 	if requested.Name == "inspect_task" {
 		var input struct {
 			TaskName string `json:"task_name"`
+			Offset   int    `json:"offset"`
 		}
 		if err := json.Unmarshal(requested.Input, &input); err != nil {
 			return CommanderDecision{}, fmt.Errorf("decode inspect_task input: %w", err)
@@ -236,7 +237,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 		if input.TaskName == "" {
 			return CommanderDecision{}, fmt.Errorf("inspect_task task_name is required")
 		}
-		decision.Inspect = InspectTaskRequest{RequestID: requested.ID, TaskName: input.TaskName, Revision: snapshot.Revision}
+		decision.Inspect = InspectTaskRequest{RequestID: requested.ID, TaskName: input.TaskName, Revision: snapshot.Revision, Offset: input.Offset, Limit: maxCommanderInspectionBytes}
 		return decision, nil
 	}
 	if requested.Name == "select_route" {

@@ -27,7 +27,7 @@ var _ = Describe("Runner Integration", func() {
 		}
 		defer runner.CloseStores()
 
-		err = runner.Run(context.Background(), streamer)
+		err = runner.runPerTaskCommanders(context.Background(), streamer)
 		return streamer, err
 	}
 
@@ -179,7 +179,7 @@ var _ = Describe("Runner Integration", func() {
 				// Task "classify": agent work → task_complete (enters routing) → choose route
 				cmdCallAgent("worker", "Classify input"),
 				agentAnswer("This is type B."),
-				cmdTaskCompleteRoute("handle_b"),      // complete with route
+				cmdTaskCompleteRoute("handle_b"), // complete with route
 				// Task "handle_b": execute
 				cmdCallAgent("worker", "Handle B"),
 				agentAnswer("B handled."),

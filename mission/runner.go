@@ -468,10 +468,21 @@ func (r *Runner) AcknowledgeNextMissionLaunch(childRunID string) error {
 // Run executes the mission.
 // The caller is responsible for closing r.stores after Run returns and all events are flushed.
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
-	if r.mission.HasExecutorPolicy() {
-		return r.runMissionScoped(ctx, streamer)
+	if !r.mission.HasExecutorPolicy() || len(r.mission.Agents) > 0 || len(r.mission.LocalAgents) > 0 {
+		return fmt.Errorf("mission %q requires task-executor models and cannot launch managed agents", r.mission.Name)
 	}
+	for _, task := range r.mission.Tasks {
+		if len(task.Agents) > 0 {
+			return fmt.Errorf("mission task %q cannot launch managed agents", task.Name)
+		}
+	}
+	return r.runMissionScoped(ctx, streamer)
+}
 
+// runPerTaskCommanders retains the historical integration harness while those
+// cases are migrated to the mission-scoped runtime. Production execution goes
+// through Run and cannot enter this path.
+func (r *Runner) runPerTaskCommanders(ctx context.Context, streamer streamers.MissionHandler) error {
 	// Derive a mission-scoped context so the budget tracker can cancel every in-flight
 	// commander and agent the moment a task or mission budget is breached.
 	ctx, cancel := context.WithCancel(ctx)

@@ -273,6 +273,35 @@ func TestTaskExecutorMissionSelectsMissionScopedRunner(t *testing.T) {
 	}
 }
 
+func TestRunnerRejectsManagedAgentDispatchWithoutStartingMission(t *testing.T) {
+	tests := []struct {
+		name    string
+		mission config.Mission
+	}{
+		{name: "missing executor policy", mission: testMission("old_mission", []config.Task{testTask("work", "Do the work")})},
+		{name: "managed agent at task level", mission: config.Mission{
+			Name: "old_task", Commander: &config.MissionCommander{Model: "claude_sonnet_4"}, Models: []string{"claude_sonnet_4"},
+			Tasks: []config.Task{{Name: "work", RawObjective: "Do the work", Agents: []string{"worker"}}},
+		}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := buildTestConfig(tc.mission, testAgent("worker"))
+			runner, err := NewRunner(cfg, "", tc.mission.Name, nil)
+			if err != nil {
+				t.Fatalf("NewRunner() error = %v", err)
+			}
+			defer runner.CloseStores()
+			if err := runner.Run(context.Background(), newMockMissionStreamer()); err == nil {
+				t.Fatal("Run() launched a managed-agent mission")
+			}
+			if runner.missionID != "" {
+				t.Fatalf("mission was created despite rejection: %q", runner.missionID)
+			}
+		})
+	}
+}
+
 func TestMissionScopedRunnerCompletesThroughOneCommander(t *testing.T) {
 	provider := newMockProvider(
 		mockToolCall("start_task", json.RawMessage(`{"task_name":"work","model":"fast"}`)),

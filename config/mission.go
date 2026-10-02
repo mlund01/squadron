@@ -347,6 +347,9 @@ func (w *Mission) Validate(models []Model, memories []Memory, packets []Packet, 
 		if err := w.Memory.Validate(); err != nil {
 			return fmt.Errorf("memory: %w", err)
 		}
+		if err := w.Memory.ValidateTasks(taskNames); err != nil {
+			return fmt.Errorf("memory: %w", err)
+		}
 	}
 
 	// Validate each task

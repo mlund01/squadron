@@ -140,6 +140,50 @@ mission "m" {
 	})
 
 	Describe("mission memory block (persistent)", func() {
+		It("parses explicit memory grants, schema, and retention", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  agents = [agents.test_agent]
+  memory {
+    description = "Findings"
+    retention_days = 30
+    read_tasks = ["research", "report"]
+    write_tasks = ["research"]
+    field "summary" { type = "string" }
+    field "score" { type = "number" }
+  }
+  task "research" { objective = "go" }
+  task "report" { objective = "summarize" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			cfg, err := config.LoadFile(f)
+			Expect(err).NotTo(HaveOccurred())
+			memory := cfg.Missions[0].Memory
+			Expect(memory.HasPolicy()).To(BeTrue())
+			Expect(memory.RetentionDays).To(Equal(30))
+			Expect(memory.ReadTasks).To(Equal([]string{"research", "report"}))
+			Expect(memory.WriteTasks).To(Equal([]string{"research"}))
+			Expect(memory.Fields).To(HaveLen(2))
+			Expect(memory.Validate()).To(Succeed())
+			Expect(memory.ValidateTasks(map[string]bool{"research": true, "report": true})).To(Succeed())
+		})
+
+		It("rejects incomplete grants, unknown tasks, and duplicate fields", func() {
+			memory := &config.MissionMemory{
+				Description: "Findings", RetentionDays: 30,
+				ReadTasks: []string{"research"}, WriteTasks: []string{"report"},
+				Fields: []config.MissionMemoryField{{Name: "summary", Type: "string"}},
+			}
+			Expect(memory.Validate()).To(MatchError(ContainSubstring("read_tasks")))
+			memory.WriteTasks = []string{"research"}
+			Expect(memory.Validate()).To(Succeed())
+			Expect(memory.ValidateTasks(map[string]bool{"report": true})).To(MatchError(ContainSubstring("unknown task")))
+			memory.Fields = append(memory.Fields, memory.Fields[0])
+			Expect(memory.Validate()).To(MatchError(ContainSubstring("unique")))
+		})
+
 		It("parses a memory block with a description", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {

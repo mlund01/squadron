@@ -1618,7 +1618,7 @@ func validateExecutionGrant(taskName string, grant ExecutionGrant) error {
 	}
 	for _, tool := range grant.Tools {
 		switch tool {
-		case "inspect_mission", "start_task", "inspect_task", "clarify_task_result", "select_route", "finish_mission":
+		case "inspect_mission", "start_task", "inspect_task", "inspect_mission_memory", "clarify_task_result", "select_route", "finish_mission":
 			return fmt.Errorf("executor cannot receive commander control %q", tool)
 		}
 	}

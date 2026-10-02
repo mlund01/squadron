@@ -46,6 +46,61 @@ func TestCoordinatorPersistsRecoveryWaitAndResumesSameAttempt(t *testing.T) {
 	}
 }
 
+func TestCoordinatorInspectsMemoryBeforeDispatch(t *testing.T) {
+	t.Parallel()
+	runtimeStore := store.NewMemoryRuntimeStore()
+	harness, err := CreateDurableHarness(runtimeStore, "run-memory-coordinator", "commander", []TaskDefinition{{Name: "work"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	commander := &memoryFirstCommander{}
+	coordinator, err := NewCoordinator(harness, commander, &recordingExecutor{}, memoryGrantResolver{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if commander.read == nil || commander.read.Key != "format" || commander.read.Chunk != `"bullets"` || commander.turns != 2 {
+		t.Fatalf("memory read was not followed by dispatch: %+v", commander)
+	}
+	if harness.Snapshot().RunState != RunCompleted {
+		t.Fatalf("run state = %q", harness.Snapshot().RunState)
+	}
+}
+
+type memoryGrantResolver struct{ staticGrantResolver }
+
+func (memoryGrantResolver) ReadCommanderMemory(key string) (MemoryValueSnapshot, error) {
+	if key != "format" {
+		return MemoryValueSnapshot{}, fmt.Errorf("key %q is not declared", key)
+	}
+	return MemoryValueSnapshot{Key: key, Value: []byte(`"bullets"`), Version: 1}, nil
+}
+
+type memoryFirstCommander struct {
+	turns int
+	read  *CommanderMemoryInspection
+}
+
+func (c *memoryFirstCommander) Decide(_ context.Context, snapshot Snapshot, _ []CommanderMessage) (CommanderDecision, error) {
+	c.turns++
+	if c.turns == 1 {
+		return CommanderDecision{
+			Prompt:  CommanderMessage{ID: "memory:prompt", Role: "user", Parts: []store.MessagePart{{Type: "text", Text: "ready"}}},
+			Message: CommanderMessage{ID: "memory", Role: "assistant", Parts: []store.MessagePart{{Type: "tool_use", ToolUseID: "read-format", ToolName: "inspect_mission_memory", ToolInputJSON: `{"key":"format"}`}}},
+			Memory:  InspectMemoryRequest{RequestID: "read-format", Key: "format", Revision: snapshot.Revision},
+		}, nil
+	}
+	return (&linearCommander{}).Decide(context.Background(), snapshot, nil)
+}
+func (*memoryFirstCommander) DispatchAccepted(Dispatch)         {}
+func (*memoryFirstCommander) RouteAccepted(RouteSelection)      {}
+func (*memoryFirstCommander) InspectionAccepted(TaskInspection) {}
+func (c *memoryFirstCommander) MemoryInspectionAccepted(inspection CommanderMemoryInspection) {
+	c.read = &inspection
+}
+
 func TestCoordinatorParksHumanInputWithoutHoldingExecutionLease(t *testing.T) {
 	runtimeStore := store.NewMemoryRuntimeStore()
 	harness, err := CreateDurableHarness(runtimeStore, "run-human-coordinator", "commander-human", []TaskDefinition{{Name: "work"}})

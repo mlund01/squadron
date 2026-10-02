@@ -84,7 +84,17 @@ Omitting `memory_access` grants no access. `read_write` includes read access;
 The schema supports up to 64 fields, with keys of at most 128 bytes; a task
 snapshot is also capped at 64 KiB.
 The worker receives a bounded snapshot of those keys when its attempt starts.
-The commander cannot read mission memory or grant access to an undeclared task.
+When mission memory is declared, the commander has read-only access to its
+declared keys by default. Values are **not** injected into every commander
+prompt: `inspect_mission_memory` reads one key on demand in bounded, versioned
+pages. The returned value is stored with that commander turn so a restart
+replays the same decision context; the audit event records the key and version
+without duplicating the value. The commander cannot write memory or grant
+access to an undeclared task.
+
+Mission memory is not a secret store; values returned by this control become
+part of the run's commander transcript and its normal access/retention policy.
+
 A writable worker may call `propose_mission_memory_update` with a declared key,
 a JSON value matching its type, and the version from its snapshot (or `0` for
 a new key). The tool records a proposal; it does not write immediately. After

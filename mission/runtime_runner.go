@@ -86,7 +86,8 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	}
 	commander, commanderSession, err := missionruntime.NewModelCommanderWithProvider(commanderProvider, commanderModel, missionruntime.CommanderBootstrap{
 		MissionName: r.mission.Name, Directive: r.mission.Directive, Tasks: definitions,
-		VisibleInputs: visibleInputs, Policies: runtimeCommanderPolicies(r.mission), ConfigurationVersion: configurationVersion,
+		VisibleInputs: visibleInputs, Policies: runtimeCommanderPolicies(r.mission),
+		MemoryKeys: missionMemoryKeys(r.mission), ConfigurationVersion: configurationVersion,
 	}, r.mission.Commander.Reasoning, harness.CommanderMessages())
 	if err != nil {
 		return err
@@ -193,6 +194,17 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	}
 	streamer.MissionCompleted(r.mission.Name)
 	return nil
+}
+
+func missionMemoryKeys(m *config.Mission) []string {
+	if m.Memory == nil || !m.Memory.HasPolicy() {
+		return nil
+	}
+	keys := make([]string, 0, len(m.Memory.Fields))
+	for _, field := range m.Memory.Fields {
+		keys = append(keys, field.Name)
+	}
+	return keys
 }
 
 // runtimeCommanderPolicies exposes only capability *names* to the commander.

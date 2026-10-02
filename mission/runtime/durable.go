@@ -50,6 +50,7 @@ const (
 	EventTaskClarified               EventType = "task.clarified"
 	EventCommanderMessageAppended    EventType = "commander.message_appended"
 	EventMemoryUpdateCommitted       EventType = "memory.update_committed"
+	EventMissionMemoryInspected      EventType = "memory.inspected"
 )
 
 // Event is the append-only audit record committed with a checkpoint.
@@ -78,6 +79,14 @@ type Event struct {
 	Turns         []ModelTurnTelemetry
 	IterationPlan *IterationPlan
 	MemoryUpdate  *MemoryUpdateAudit
+	MemoryRead    *MemoryReadAudit
+}
+
+// MemoryReadAudit records which key/version was shown to the commander. The
+// value lives only in the durable commander transcript, not in this event.
+type MemoryReadAudit struct {
+	Key     string `json:"key"`
+	Version uint64 `json:"version"`
 }
 
 // MemoryUpdateAudit identifies a committed key/version without duplicating
@@ -261,6 +270,69 @@ func (h *DurableHarness) ApplyCommanderInspection(prompt, message CommanderMessa
 	}
 	h.inner = candidate
 	return inspection, nil
+}
+
+// ApplyCommanderMemoryInspection atomically persists the model's read request
+// and the bounded result. Restart replays exactly the value the commander saw,
+// even if another run changes mission memory afterward.
+func (h *DurableHarness) ApplyCommanderMemoryInspection(prompt, message CommanderMessage, request InspectMemoryRequest, value MemoryValueSnapshot) (CommanderMemoryInspection, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	before := h.inner.Checkpoint()
+	if request.Revision != before.Revision {
+		return CommanderMemoryInspection{}, fmt.Errorf("stale memory inspection revision: got %d, current %d", request.Revision, before.Revision)
+	}
+	if before.RunState != RunRunning || before.Commander.State != CommanderActive {
+		return CommanderMemoryInspection{}, fmt.Errorf("run is not accepting commander memory inspections")
+	}
+	if err := validateMemoryInspectMessage(message, request); err != nil {
+		return CommanderMemoryInspection{}, err
+	}
+	inspection, err := pageCommanderMemory(request, value)
+	if err != nil {
+		return CommanderMemoryInspection{}, err
+	}
+	candidate, err := RestoreHarness(before)
+	if err != nil {
+		return CommanderMemoryInspection{}, err
+	}
+	if err := candidate.AppendCommanderMessage(prompt); err != nil {
+		return CommanderMemoryInspection{}, err
+	}
+	if err := candidate.AppendCommanderMessage(message); err != nil {
+		return CommanderMemoryInspection{}, err
+	}
+	payload, err := json.Marshal(inspection)
+	if err != nil {
+		return CommanderMemoryInspection{}, fmt.Errorf("encode memory inspection: %w", err)
+	}
+	ack := CommanderMessage{ID: message.ID + ":result", Role: "user", Parts: []store.MessagePart{{Type: "tool_result", ToolUseID: request.RequestID, Text: string(payload)}}}
+	if err := candidate.AppendCommanderMessage(ack); err != nil {
+		return CommanderMemoryInspection{}, err
+	}
+	after := candidate.Checkpoint()
+	now := time.Now().UTC()
+	events := []Event{
+		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: now, CorrelationID: prompt.ID},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: now, CorrelationID: message.ID, Turns: messageTurns(message)},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventCommanderMessageAppended, OccurredAt: now, CorrelationID: ack.ID},
+		{RunID: after.RunID, Revision: after.Revision, Type: EventMissionMemoryInspected, OccurredAt: now, CorrelationID: request.RequestID, RequestID: request.RequestID,
+			MemoryRead: &MemoryReadAudit{Key: request.Key, Version: inspection.Version}},
+	}
+	if err := h.commit(before.Revision, after, events); err != nil {
+		return CommanderMemoryInspection{}, fmt.Errorf("persisting commander memory inspection: %w", err)
+	}
+	h.inner = candidate
+	return inspection, nil
+}
+
+func validateMemoryInspectMessage(message CommanderMessage, request InspectMemoryRequest) error {
+	for _, part := range message.Parts {
+		if part.Type == "tool_use" && part.ToolUseID == request.RequestID && part.ToolName == "inspect_mission_memory" {
+			return nil
+		}
+	}
+	return fmt.Errorf("commander message does not contain matching inspect_mission_memory call %q", request.RequestID)
 }
 
 func validateInspectMessage(message CommanderMessage, request InspectTaskRequest) error {

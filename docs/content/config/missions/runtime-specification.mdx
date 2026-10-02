@@ -112,7 +112,9 @@ silently consume its context window. Raw provider output remains available for
 audit, not to the commander.
 The immutable commander prompt contains task names, objectives, dependencies,
 routes, and iteration dataset names. Result schemas and mission-memory grants
-remain with the harness and task workers; the commander does not receive them.
+remain with the harness and task workers. When mission memory exists, the
+commander receives its declared key names but no values; it can inspect values
+through a separate, read-only control.
 
 ### Runtime event and checkpoint
 

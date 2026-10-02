@@ -61,6 +61,40 @@ func TestMissionMemoryProposalFlowsFromTaskPolicyAcrossRuns(t *testing.T) {
 	}
 }
 
+func TestCommanderReadsOnlyDeclaredKeysFromItsMission(t *testing.T) {
+	t.Parallel()
+	memoryStore := store.NewMemoryRuntimeStore()
+	if err := memoryStore.CreateRuntime(store.RuntimeCheckpointRecord{RunID: "seed-commander", Revision: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := memoryStore.CommitRuntimeWithMemory("seed-commander", 1,
+		store.RuntimeCheckpointRecord{RunID: "seed-commander", Revision: 2}, nil,
+		[]store.MissionMemoryWrite{
+			{MissionName: "research", Key: "summary", ValueJSON: `"allowed"`},
+			{MissionName: "other", Key: "summary", ValueJSON: `"other mission"`},
+		}); err != nil {
+		t.Fatal(err)
+	}
+	m := &config.Mission{Name: "research", Models: []string{"fast"}, Tasks: []config.Task{{Name: "work"}},
+		Memory: &config.MissionMemory{Description: "findings", RetentionDays: 30,
+			Fields: []config.MissionMemoryField{{Name: "summary", Type: "string"}}}}
+	resolver, err := NewRuntimeGrantResolver(m, ExecutionGrantContext{RunAs: "user:one", ConfigurationVersion: "v1", MemoryStore: memoryStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read, err := resolver.ReadCommanderMemory("summary")
+	if err != nil || read.Key != "summary" || read.Version != 1 || string(read.Value) != `"allowed"` {
+		t.Fatalf("commander read = %+v, err=%v", read, err)
+	}
+	if _, err := resolver.ReadCommanderMemory("undeclared"); err == nil {
+		t.Fatal("undeclared key was readable")
+	}
+	m.Memory = nil
+	if _, err := resolver.ReadCommanderMemory("summary"); err == nil {
+		t.Fatal("commander read memory without a mission policy")
+	}
+}
+
 func TestRuntimeGrantResolverSnapshotsOnlyTaskAuthorizedMemory(t *testing.T) {
 	t.Parallel()
 	memoryStore := store.NewMemoryRuntimeStore()
@@ -322,6 +356,7 @@ func TestCommanderControlSurfaceContainsOnlyIntrinsicOperations(t *testing.T) {
 		ControlInspectMission,
 		ControlStartTask,
 		ControlInspectTask,
+		ControlInspectMemory,
 		ControlSelectRoute,
 		ControlFinishMission,
 	}

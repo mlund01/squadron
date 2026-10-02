@@ -20,6 +20,7 @@ type CommanderDecision struct {
 	Grant    GrantRequest
 	Route    RouteRequest
 	Inspect  InspectTaskRequest
+	Memory   InspectMemoryRequest
 	Clarify  ClarifyTaskRequest
 }
 
@@ -218,6 +219,12 @@ func (c *Coordinator) Run(ctx context.Context) error {
 				c.commander.InspectionAccepted(inspection)
 				continue
 			}
+			if decision.Memory.Key != "" {
+				if err := c.inspectCommanderMemory(decision); err != nil {
+					return err
+				}
+				continue
+			}
 			if decision.Clarify.TaskName != "" {
 				if err := c.harness.BeginCommanderClarification(decision.Prompt, decision.Message, decision.Clarify); err != nil {
 					return fmt.Errorf("begin commander clarification: %w", err)
@@ -238,6 +245,13 @@ func (c *Coordinator) Run(ctx context.Context) error {
 			decision, err := c.commander.Decide(ctx, snapshot, c.harness.CommanderMessages())
 			if err != nil {
 				return fmt.Errorf("commander decision: %w", err)
+			}
+			if decision.Memory.Key != "" {
+				if err := c.inspectCommanderMemory(decision); err != nil {
+					return err
+				}
+				snapshot = c.harness.Snapshot()
+				continue
 			}
 			grant, err := c.grants.ResolveExecutionGrant(decision.Grant)
 			if err != nil {
@@ -271,6 +285,27 @@ func (c *Coordinator) Run(ctx context.Context) error {
 		}
 		return fmt.Errorf("mission is running without an active or ready task")
 	}
+}
+
+func (c *Coordinator) inspectCommanderMemory(decision CommanderDecision) error {
+	reader, ok := c.grants.(CommanderMemoryReader)
+	if !ok {
+		return fmt.Errorf("commander memory reader is unavailable")
+	}
+	value, err := reader.ReadCommanderMemory(decision.Memory.Key)
+	if err != nil {
+		return fmt.Errorf("read commander memory: %w", err)
+	}
+	inspection, err := c.harness.ApplyCommanderMemoryInspection(decision.Prompt, decision.Message, decision.Memory, value)
+	if err != nil {
+		return fmt.Errorf("apply commander memory inspection: %w", err)
+	}
+	if receiver, ok := c.commander.(interface {
+		MemoryInspectionAccepted(CommanderMemoryInspection)
+	}); ok {
+		receiver.MemoryInspectionAccepted(inspection)
+	}
+	return nil
 }
 
 func (c *Coordinator) resumeClarification(ctx context.Context, pending ClarifyTaskRequest) error {

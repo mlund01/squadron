@@ -29,6 +29,15 @@ The commander starts at `offset = 0` and follows `nextOffset` when it needs
 more. The full executor transcript and raw tool activity are excluded from
 this control and remain available to operators through run drill-in.
 
+## `inspect_mission_memory`
+
+Available when the mission declares persistent memory. Reads one declared,
+non-secret key in bounded JSON byte chunks; it does not mutate memory. The
+first page returns a version and `next_offset` when more data remains. Later
+pages pass that version as `expected_version`; a stale response means the key
+changed and the commander should restart at offset zero. Each read result is
+durably recorded with the commander turn so recovery replays the same value.
+
 ## `select_route`
 
 Selects one of the routes declared by a completed routing task. The harness

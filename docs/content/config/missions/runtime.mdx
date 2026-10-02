@@ -270,8 +270,10 @@ explicit, paged task inspection. The exact final provider response is retained a
   same attempt after restart.
 - **Run artifacts** are immutable results with provenance.
 
-Parallel executors do not share mutable scratchpads. Persistent mission memory
-is available only to tasks with an explicit `memory_access` grant. Each task
+Parallel executors do not share mutable scratchpads. When persistent mission
+memory is declared, the commander may read its declared keys on demand through
+the bounded `inspect_mission_memory` control, but cannot write them. Task
+executors still require an explicit `memory_access` grant. Each task
 receives a bounded, versioned snapshot. A writable task proposes updates via
 an intrinsic tool; the harness validates them and atomically commits them with
 an accepted task result. A version conflict rejects the result for retry.

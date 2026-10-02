@@ -27,6 +27,7 @@ const (
 	ControlInspectMission CommanderControlOperation = "inspect_mission"
 	ControlStartTask      CommanderControlOperation = "start_task"
 	ControlInspectTask    CommanderControlOperation = "inspect_task"
+	ControlInspectMemory  CommanderControlOperation = "inspect_mission_memory"
 	ControlSelectRoute    CommanderControlOperation = "select_route"
 	ControlFinishMission  CommanderControlOperation = "finish_mission"
 )
@@ -39,6 +40,7 @@ func CommanderControlSurface() []CommanderControlOperation {
 		ControlInspectMission,
 		ControlStartTask,
 		ControlInspectTask,
+		ControlInspectMemory,
 		ControlSelectRoute,
 		ControlFinishMission,
 	}
@@ -144,6 +146,45 @@ func (r *RuntimeGrantResolver) resolveMemoryGrant(taskName string) (*missionrunt
 		})
 	}
 	return grant, nil
+}
+
+// ReadCommanderMemory grants the mission commander read-only access by default
+// when this mission declares a memory schema. Keys are checked against that
+// schema; the store is never made available to the model session.
+func (r *RuntimeGrantResolver) ReadCommanderMemory(key string) (missionruntime.MemoryValueSnapshot, error) {
+	policy := r.policy.mission.Memory
+	if policy == nil || !policy.HasPolicy() {
+		return missionruntime.MemoryValueSnapshot{}, fmt.Errorf("mission does not declare memory")
+	}
+	allowed := false
+	for _, field := range policy.Fields {
+		if field.Name == key {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return missionruntime.MemoryValueSnapshot{}, fmt.Errorf("memory key %q is not declared by mission %q", key, r.policy.mission.Name)
+	}
+	if r.context.MemoryStore == nil {
+		return missionruntime.MemoryValueSnapshot{}, fmt.Errorf("commander memory access requires an atomic mission memory store")
+	}
+	entries, err := r.context.MemoryStore.LoadMissionMemory(r.policy.mission.Name)
+	if err != nil {
+		return missionruntime.MemoryValueSnapshot{}, fmt.Errorf("load mission memory: %w", err)
+	}
+	value := missionruntime.MemoryValueSnapshot{Key: key}
+	for _, entry := range entries {
+		if entry.Key != key {
+			continue
+		}
+		value.Version = entry.Version
+		if entry.ExpiresAt.IsZero() || entry.ExpiresAt.After(time.Now().UTC()) {
+			value.Value = append(json.RawMessage(nil), entry.ValueJSON...)
+		}
+		break
+	}
+	return value, nil
 }
 
 func iterationParentAndIndex(name string) (string, int, bool) {

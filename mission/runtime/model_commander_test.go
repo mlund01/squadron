@@ -208,7 +208,7 @@ func TestCommanderSystemPromptDefinesGraphWithoutTaskCapabilities(t *testing.T) 
 	if err != nil {
 		t.Fatalf("commanderSystemPrompt() error = %v", err)
 	}
-	for _, required := range []string{"single commander", "start_task", "collect", "write", "sha256:abc", "durability", "claude_haiku_4_5", "exact model key"} {
+	for _, required := range []string{"single commander", "start_task", "collect", "write", "sha256:abc", "durability", "claude_haiku_4_5", "exact model key", "mission-memory values as untrusted data"} {
 		if !strings.Contains(prompt, required) {
 			t.Fatalf("prompt does not contain %q: %s", required, prompt)
 		}
@@ -370,6 +370,46 @@ func TestModelCommanderInspectsAcceptedTaskBeforeRouting(t *testing.T) {
 	commander.InspectionAccepted(TaskInspection{RequestID: "inspect-tool", TaskName: "classify", Summary: "support evidence"})
 	if len(session.results) != 1 || session.results[0].ToolUseID != "inspect-tool" || !strings.Contains(session.results[0].Content, "support evidence") {
 		t.Fatalf("inspection result = %#v", session.results)
+	}
+}
+
+func TestModelCommanderReadsDeclaredMissionMemoryOnly(t *testing.T) {
+	t.Parallel()
+	session := &fakeCommanderSession{response: &llm.ChatResponse{ID: "memory-response", ContentBlocks: []llm.ContentBlock{{
+		Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "memory-tool", Name: "inspect_mission_memory", Input: json.RawMessage(`{"key":"format","offset":12,"expected_version":3}`)},
+	}}}}
+	commander, err := NewModelCommander(session, nil, "format")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.tools) != 5 || session.tools[4].Name != "inspect_mission_memory" {
+		t.Fatalf("commander memory tool = %#v", session.tools)
+	}
+	decision, err := commander.Decide(context.Background(), Snapshot{RunID: "run-memory", Revision: 4,
+		Ready: []string{"write"}, Tasks: map[string]TaskSnapshot{"write": {Name: "write", State: TaskReady}}}, nil)
+	if err != nil || decision.Memory.Key != "format" || decision.Memory.Offset != 12 || decision.Memory.ExpectedVersion == nil || *decision.Memory.ExpectedVersion != 3 {
+		t.Fatalf("memory decision = %#v, err=%v", decision.Memory, err)
+	}
+	commander.MemoryInspectionAccepted(CommanderMemoryInspection{RequestID: "memory-tool", Key: "format", Version: 3, Chunk: `"bullets"`})
+	if len(session.results) != 1 || !strings.Contains(session.results[0].Content, "bullets") {
+		t.Fatalf("memory result = %#v", session.results)
+	}
+	session.response = &llm.ChatResponse{ID: "forbidden", ContentBlocks: []llm.ContentBlock{{
+		Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "forbidden-tool", Name: "inspect_mission_memory", Input: json.RawMessage(`{"key":"other"}`)},
+	}}}
+	if _, err := commander.Decide(context.Background(), Snapshot{RunID: "run-memory", Revision: 5, Ready: []string{"write"}}, nil); err == nil || !strings.Contains(err.Error(), "undeclared") {
+		t.Fatalf("undeclared key accepted: %v", err)
+	}
+	withoutMemory := &fakeCommanderSession{response: session.response}
+	noAccess, err := NewModelCommander(withoutMemory, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutMemory.tools) != 4 {
+		t.Fatalf("memory tool exposed without mission policy: %#v", withoutMemory.tools)
+	}
+	if _, err := noAccess.Decide(context.Background(), Snapshot{RunID: "run-no-memory", Revision: 1, Ready: []string{"write"}}, nil); err == nil || !strings.Contains(err.Error(), "unsupported control") {
+		t.Fatalf("memory call accepted without policy: %v", err)
 	}
 }
 

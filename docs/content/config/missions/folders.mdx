@@ -63,6 +63,13 @@ serialized-commit contract; until that is implemented, use accepted results
 and artifacts for mission output. The runtime refuses a mission with persistent
 memory declarations rather than silently ignoring them.
 
+The runtime store now has an atomic, version-checked commit boundary for
+cross-run JSON memory values: a task completion, its audit events, and memory
+updates either commit together or all roll back. This is storage groundwork,
+not a task capability. The declaration remains unavailable until task-scoped
+read/write grants, result proposals, schema validation, and retention policy
+are connected to that boundary.
+
 ## File tools
 
 | Tool | Purpose |

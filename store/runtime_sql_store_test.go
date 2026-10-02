@@ -55,3 +55,46 @@ func TestSQLiteRuntimeStorePersistsAtomicRevisionAndEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestSQLiteMissionMemoryCommitIsAtomicWithRuntime(t *testing.T) {
+	bundle, err := NewSQLiteBundle(filepath.Join(t.TempDir(), "memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bundle.Close() })
+	memory := bundle.Runtime.(MissionMemoryRuntimeStore)
+	now := time.Now().UTC()
+	if err := memory.CreateRuntime(RuntimeCheckpointRecord{RunID: "run-1", Revision: 1, PayloadJSON: `{}`, UpdatedAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+	commit := func(expected, next, memoryVersion uint64, value string) error {
+		return memory.CommitRuntimeWithMemory("run-1", expected,
+			RuntimeCheckpointRecord{RunID: "run-1", Revision: next, PayloadJSON: value, UpdatedAt: now},
+			[]RuntimeEventRecord{{RunID: "run-1", Revision: next, EventType: "task.completed", OccurredAt: now}},
+			[]MissionMemoryWrite{{MissionName: "research", Key: "findings", ValueJSON: value, ExpectedVersion: memoryVersion}})
+	}
+	if err := commit(1, 2, 0, `{"count":1}`); err != nil {
+		t.Fatal(err)
+	}
+	if err := commit(2, 3, 0, `{"count":2}`); err == nil {
+		t.Fatal("accepted stale memory version")
+	}
+	checkpoint, events, err := memory.LoadRuntime("run-1")
+	if err != nil || checkpoint.Revision != 2 || len(events) != 1 {
+		t.Fatalf("failed memory commit changed runtime: checkpoint=%+v events=%d err=%v", checkpoint, len(events), err)
+	}
+	if err := commit(2, 3, 1, `{"count":2}`); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := memory.LoadMissionMemory("research")
+	if err != nil || len(entries) != 1 || entries[0].Version != 2 || entries[0].ValueJSON != `{"count":2}` {
+		t.Fatalf("memory entries=%+v err=%v", entries, err)
+	}
+	if err := commit(2, 4, 2, `{"count":3}`); err == nil {
+		t.Fatal("accepted stale runtime revision")
+	}
+	entries, _ = memory.LoadMissionMemory("research")
+	if entries[0].Version != 2 {
+		t.Fatalf("stale runtime commit changed memory: %+v", entries)
+	}
+}

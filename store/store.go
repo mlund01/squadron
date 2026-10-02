@@ -47,6 +47,35 @@ type RuntimeEventRecord struct {
 	PayloadJSON   string
 }
 
+// MissionMemoryEntry is a versioned, non-secret JSON value shared by runs of
+// one mission. Version 0 denotes a key that has not yet been written.
+type MissionMemoryEntry struct {
+	MissionName string
+	Key         string
+	ValueJSON   string
+	Version     uint64
+	ExpiresAt   time.Time
+}
+
+// MissionMemoryWrite is committed with a runtime checkpoint. ExpectedVersion
+// prevents two parallel runs from overwriting one another without noticing.
+type MissionMemoryWrite struct {
+	MissionName     string
+	Key             string
+	ValueJSON       string
+	ExpectedVersion uint64
+	ExpiresAt       time.Time
+}
+
+// MissionMemoryRuntimeStore is an optional extension for runtimes that can
+// atomically accept task completion and its authorized memory mutations.
+// Callers must not use a separate write after CommitRuntime.
+type MissionMemoryRuntimeStore interface {
+	RuntimeStore
+	LoadMissionMemory(missionName string) ([]MissionMemoryEntry, error)
+	CommitRuntimeWithMemory(runID string, expectedRevision uint64, checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord, writes []MissionMemoryWrite) error
+}
+
 // RuntimeStore is the single persistence boundary for mission execution.
 // A checkpoint and its events must become visible atomically, and Commit must
 // reject a stale expectedRevision. Event sequences are assigned by the store.

@@ -2,7 +2,9 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -13,7 +15,15 @@ func (s *SQLiteRuntimeStore) CreateRuntime(checkpoint RuntimeCheckpointRecord, e
 }
 
 func (s *SQLiteRuntimeStore) CommitRuntime(runID string, expectedRevision uint64, checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord) error {
-	return commitRuntime(s.db, DialectSQLite, runID, expectedRevision, checkpoint, events)
+	return commitRuntime(s.db, DialectSQLite, runID, expectedRevision, checkpoint, events, nil)
+}
+
+func (s *SQLiteRuntimeStore) CommitRuntimeWithMemory(runID string, expectedRevision uint64, checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord, writes []MissionMemoryWrite) error {
+	return commitRuntime(s.db, DialectSQLite, runID, expectedRevision, checkpoint, events, writes)
+}
+
+func (s *SQLiteRuntimeStore) LoadMissionMemory(missionName string) ([]MissionMemoryEntry, error) {
+	return loadMissionMemory(s.db, DialectSQLite, missionName)
 }
 
 func (s *SQLiteRuntimeStore) LoadRuntime(runID string) (RuntimeCheckpointRecord, []RuntimeEventRecord, error) {
@@ -27,7 +37,15 @@ func (s *PgRuntimeStore) CreateRuntime(checkpoint RuntimeCheckpointRecord, event
 }
 
 func (s *PgRuntimeStore) CommitRuntime(runID string, expectedRevision uint64, checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord) error {
-	return commitRuntime(s.db, DialectPostgres, runID, expectedRevision, checkpoint, events)
+	return commitRuntime(s.db, DialectPostgres, runID, expectedRevision, checkpoint, events, nil)
+}
+
+func (s *PgRuntimeStore) CommitRuntimeWithMemory(runID string, expectedRevision uint64, checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord, writes []MissionMemoryWrite) error {
+	return commitRuntime(s.db, DialectPostgres, runID, expectedRevision, checkpoint, events, writes)
+}
+
+func (s *PgRuntimeStore) LoadMissionMemory(missionName string) ([]MissionMemoryEntry, error) {
+	return loadMissionMemory(s.db, DialectPostgres, missionName)
 }
 
 func (s *PgRuntimeStore) LoadRuntime(runID string) (RuntimeCheckpointRecord, []RuntimeEventRecord, error) {
@@ -63,11 +81,14 @@ func createRuntime(db *sql.DB, dialect Dialect, checkpoint RuntimeCheckpointReco
 	return nil
 }
 
-func commitRuntime(db *sql.DB, dialect Dialect, runID string, expectedRevision uint64, checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord) error {
+func commitRuntime(db *sql.DB, dialect Dialect, runID string, expectedRevision uint64, checkpoint RuntimeCheckpointRecord, events []RuntimeEventRecord, writes []MissionMemoryWrite) error {
 	if checkpoint.RunID != runID {
 		return fmt.Errorf("checkpoint belongs to run %q, want %q", checkpoint.RunID, runID)
 	}
 	if err := validateRuntimeEvents(runID, events); err != nil {
+		return err
+	}
+	if err := validateMissionMemoryWrites(writes); err != nil {
 		return err
 	}
 	tx, err := db.Begin()
@@ -103,10 +124,106 @@ func commitRuntime(db *sql.DB, dialect Dialect, runID string, expectedRevision u
 	if err := insertRuntimeEvents(tx, dialect, runID, maxSequence+1, events); err != nil {
 		return err
 	}
+	if err := applyMissionMemoryWrites(tx, dialect, runID, checkpoint.Revision, writes); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit runtime transition: %w", err)
 	}
 	return nil
+}
+
+func validateMissionMemoryWrites(writes []MissionMemoryWrite) error {
+	seen := make(map[string]bool, len(writes))
+	for _, write := range writes {
+		if strings.TrimSpace(write.MissionName) == "" || strings.ContainsRune(write.MissionName, 0) ||
+			strings.TrimSpace(write.Key) == "" || strings.ContainsRune(write.Key, 0) || len(write.Key) > 128 {
+			return fmt.Errorf("mission memory write requires mission name and key of at most 128 bytes")
+		}
+		if len(write.ValueJSON) > 64*1024 || !json.Valid([]byte(write.ValueJSON)) {
+			return fmt.Errorf("mission memory %q has invalid or oversized JSON value", write.Key)
+		}
+		identity := write.MissionName + "\x00" + write.Key
+		if seen[identity] {
+			return fmt.Errorf("duplicate mission memory write for %q", write.Key)
+		}
+		seen[identity] = true
+	}
+	return nil
+}
+
+func applyMissionMemoryWrites(tx *sql.Tx, dialect Dialect, runID string, revision uint64, writes []MissionMemoryWrite) error {
+	insert := `INSERT INTO mission_memory (mission_name, memory_key, value_json, version, expires_at, updated_at) VALUES (?, ?, ?, 1, ?, ?)
+		ON CONFLICT(mission_name, memory_key) DO NOTHING`
+	update := `UPDATE mission_memory SET value_json = ?, version = version + 1, expires_at = ?, updated_at = ?
+		WHERE mission_name = ? AND memory_key = ? AND version = ?`
+	audit := `INSERT INTO mission_memory_writes (run_id, revision, mission_name, memory_key, version, occurred_at) VALUES (?, ?, ?, ?, ?, ?)`
+	if dialect == DialectPostgres {
+		insert = `INSERT INTO mission_memory (mission_name, memory_key, value_json, version, expires_at, updated_at) VALUES ($1, $2, $3, 1, $4, $5)
+			ON CONFLICT(mission_name, memory_key) DO NOTHING`
+		update = `UPDATE mission_memory SET value_json = $1, version = version + 1, expires_at = $2, updated_at = $3
+			WHERE mission_name = $4 AND memory_key = $5 AND version = $6`
+		audit = `INSERT INTO mission_memory_writes (run_id, revision, mission_name, memory_key, version, occurred_at) VALUES ($1, $2, $3, $4, $5, $6)`
+	}
+	now := formatRuntimeTime(time.Now())
+	for _, write := range writes {
+		var expires any
+		if !write.ExpiresAt.IsZero() {
+			expires = formatRuntimeTime(write.ExpiresAt)
+		}
+		var result sql.Result
+		var err error
+		if write.ExpectedVersion == 0 {
+			result, err = tx.Exec(insert, write.MissionName, write.Key, write.ValueJSON, expires, now)
+		} else {
+			result, err = tx.Exec(update, write.ValueJSON, expires, now, write.MissionName, write.Key, write.ExpectedVersion)
+		}
+		if err != nil {
+			return fmt.Errorf("write mission memory %q: %w", write.Key, err)
+		}
+		rows, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("inspect mission memory write %q: %w", write.Key, err)
+		}
+		if rows != 1 {
+			return fmt.Errorf("mission memory %q version conflict: expected %d", write.Key, write.ExpectedVersion)
+		}
+		if _, err := tx.Exec(audit, runID, revision, write.MissionName, write.Key, write.ExpectedVersion+1, now); err != nil {
+			return fmt.Errorf("audit mission memory %q: %w", write.Key, err)
+		}
+	}
+	return nil
+}
+
+func loadMissionMemory(db *sql.DB, dialect Dialect, missionName string) ([]MissionMemoryEntry, error) {
+	if strings.TrimSpace(missionName) == "" {
+		return nil, fmt.Errorf("mission name is required")
+	}
+	query := `SELECT memory_key, value_json, version, expires_at FROM mission_memory WHERE mission_name = ? ORDER BY memory_key`
+	if dialect == DialectPostgres {
+		query = `SELECT memory_key, value_json, version, expires_at FROM mission_memory WHERE mission_name = $1 ORDER BY memory_key`
+	}
+	rows, err := db.Query(query, missionName)
+	if err != nil {
+		return nil, fmt.Errorf("load mission memory: %w", err)
+	}
+	defer rows.Close()
+	var entries []MissionMemoryEntry
+	for rows.Next() {
+		entry := MissionMemoryEntry{MissionName: missionName}
+		var expires sql.NullString
+		if err := rows.Scan(&entry.Key, &entry.ValueJSON, &entry.Version, &expires); err != nil {
+			return nil, fmt.Errorf("scan mission memory: %w", err)
+		}
+		if expires.Valid {
+			entry.ExpiresAt, err = time.Parse(time.RFC3339Nano, expires.String)
+			if err != nil {
+				return nil, fmt.Errorf("parse mission memory expiry: %w", err)
+			}
+		}
+		entries = append(entries, entry)
+	}
+	return entries, rows.Err()
 }
 
 func loadRuntime(db *sql.DB, dialect Dialect, runID string) (RuntimeCheckpointRecord, []RuntimeEventRecord, error) {

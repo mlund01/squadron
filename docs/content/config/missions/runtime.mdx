@@ -269,6 +269,8 @@ Parallel executors do not share mutable scratchpads. Persistent mission memory
 is not granted to task executors until the runtime has an explicit schema,
 retention, authorization, and serialized-write contract; missions declaring
 it fail before execution rather than silently ignoring the declaration.
+The runtime store has a version-checked atomic checkpoint/memory commit, but
+the executor-facing authorization and proposal path is not yet enabled.
 
 Managed-agent memory is configured separately as disabled, session-scoped, or
 persistent. Agent memory never mixes with mission memory implicitly.

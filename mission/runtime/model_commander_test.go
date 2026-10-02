@@ -218,6 +218,32 @@ func TestCommanderSystemPromptDefinesGraphWithoutTaskCapabilities(t *testing.T) 
 	}
 }
 
+func TestCommanderSystemPromptOmitsExecutorOnlyPolicy(t *testing.T) {
+	t.Parallel()
+	bootstrap := CommanderBootstrap{MissionName: "research", Tasks: []TaskDefinition{{
+		Name: "collect", Objective: "Collect sources", DependsOn: []string{"prepare"},
+		Routes:       []RouteDefinition{{Target: "write", Condition: "sources found"}},
+		Iterator:     &IterationPolicy{Dataset: "sources", ConcurrencyLimit: 2},
+		ResultPolicy: ResultPolicy{Fields: []ResultField{{Name: "private_result_schema", Type: "string"}}},
+		MemoryPolicy: &TaskMemoryPolicy{MissionName: "research", Access: "read_write", RetentionDays: 30,
+			Fields: []ResultField{{Name: "private_memory_schema", Type: "string"}}},
+	}}}
+	prompt, err := commanderSystemPrompt(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"Collect sources", "prepare", "sources found", `"dataset":"sources"`} {
+		if !strings.Contains(prompt, required) {
+			t.Fatalf("commander lost graph context %q", required)
+		}
+	}
+	for _, excluded := range []string{"private_result_schema", "private_memory_schema", "retentionDays", "concurrencyLimit", "maxPayloadBytes"} {
+		if strings.Contains(prompt, excluded) {
+			t.Fatalf("executor-only policy %q leaked into commander prompt", excluded)
+		}
+	}
+}
+
 func TestModelCommanderRetriesParallelControlCallsWithoutPersistingRejectedTurn(t *testing.T) {
 	t.Parallel()
 	session := &fakeCommanderSession{responses: []*llm.ChatResponse{

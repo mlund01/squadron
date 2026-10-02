@@ -110,6 +110,9 @@ artifact count, and presence of typed data. Accepted content is available to
 the commander through paged `inspect_task` reads so large results do not
 silently consume its context window. Raw provider output remains available for
 audit, not to the commander.
+The immutable commander prompt contains task names, objectives, dependencies,
+routes, and iteration dataset names. Result schemas and mission-memory grants
+remain with the harness and task workers; the commander does not receive them.
 
 ### Runtime event and checkpoint
 

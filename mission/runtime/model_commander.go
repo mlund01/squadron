@@ -49,6 +49,38 @@ type CommanderBootstrap struct {
 	ConfigurationVersion string
 }
 
+// commanderTaskProjection is the graph context needed to choose the next
+// orchestration control. Execution and memory policies remain harness-owned;
+// serializing full TaskDefinitions here needlessly exposes their schemas and
+// grows the commander's immutable context on every model request.
+type commanderTaskProjection struct {
+	Name      string                       `json:"name"`
+	Objective string                       `json:"objective"`
+	DependsOn []string                     `json:"depends_on,omitempty"`
+	SendTo    []string                     `json:"send_to,omitempty"`
+	Routes    []RouteDefinition            `json:"routes,omitempty"`
+	Iterator  *commanderIteratorProjection `json:"iterator,omitempty"`
+}
+
+type commanderIteratorProjection struct {
+	Dataset string `json:"dataset"`
+}
+
+func projectCommanderTasks(definitions []TaskDefinition) []commanderTaskProjection {
+	tasks := make([]commanderTaskProjection, 0, len(definitions))
+	for _, definition := range definitions {
+		task := commanderTaskProjection{
+			Name: definition.Name, Objective: definition.Objective,
+			DependsOn: definition.DependsOn, SendTo: definition.SendTo, Routes: definition.Routes,
+		}
+		if definition.Iterator != nil {
+			task.Iterator = &commanderIteratorProjection{Dataset: definition.Iterator.Dataset}
+		}
+		tasks = append(tasks, task)
+	}
+	return tasks
+}
+
 // NewModelCommanderWithProvider creates the production llm.Session used by a
 // mission commander. The session receives intrinsic controls only.
 func NewModelCommanderWithProvider(provider llm.Provider, model string, bootstrap CommanderBootstrap, reasoning string, restored []CommanderMessage) (*ModelCommander, *llm.Session, error) {
@@ -79,14 +111,14 @@ func commanderSystemPrompt(bootstrap CommanderBootstrap) (string, error) {
 		return "", fmt.Errorf("mission name is required")
 	}
 	contextJSON, err := json.Marshal(struct {
-		MissionName          string           `json:"mission_name"`
-		Directive            string           `json:"directive,omitempty"`
-		Tasks                []TaskDefinition `json:"tasks"`
-		VisibleInputs        map[string]any   `json:"inputs,omitempty"`
-		Policies             map[string]any   `json:"policies,omitempty"`
-		ConfigurationVersion string           `json:"configuration_version,omitempty"`
+		MissionName          string                    `json:"mission_name"`
+		Directive            string                    `json:"directive,omitempty"`
+		Tasks                []commanderTaskProjection `json:"tasks"`
+		VisibleInputs        map[string]any            `json:"inputs,omitempty"`
+		Policies             map[string]any            `json:"policies,omitempty"`
+		ConfigurationVersion string                    `json:"configuration_version,omitempty"`
 	}{
-		MissionName: bootstrap.MissionName, Directive: bootstrap.Directive, Tasks: bootstrap.Tasks,
+		MissionName: bootstrap.MissionName, Directive: bootstrap.Directive, Tasks: projectCommanderTasks(bootstrap.Tasks),
 		VisibleInputs: bootstrap.VisibleInputs, Policies: bootstrap.Policies, ConfigurationVersion: bootstrap.ConfigurationVersion,
 	})
 	if err != nil {

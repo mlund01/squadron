@@ -261,14 +261,14 @@ explicit, paged task inspection. The exact final provider response is retained a
 ## Memory scopes
 
 - **Commander context** contains graph state, decisions, and compact summaries.
-- **Executor scratchpad** is isolated to one task attempt.
+- **Executor scratchpad** is isolated to one task attempt and restored for that
+  same attempt after restart.
 - **Run artifacts** are immutable results with provenance.
-- **Persistent mission memory** has an explicit schema, retention policy,
-  authorization, and serialized writes.
 
-Parallel executors do not share mutable memory implicitly. An executor may
-propose a persistent-memory update, but the harness authorizes, orders, and
-audits the commit.
+Parallel executors do not share mutable scratchpads. Persistent mission memory
+is not granted to task executors until the runtime has an explicit schema,
+retention, authorization, and serialized-write contract; missions declaring
+it fail before execution rather than silently ignoring the declaration.
 
 Managed-agent memory is configured separately as disabled, session-scoped, or
 persistent. Agent memory never mixes with mission memory implicitly.

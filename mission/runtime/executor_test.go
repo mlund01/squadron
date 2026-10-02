@@ -75,6 +75,32 @@ func TestBoundedExecutorRejectsUnavailableAndIntrinsicTools(t *testing.T) {
 	}
 }
 
+func TestBoundedExecutorExposesOnlyGrantedAttemptTools(t *testing.T) {
+	t.Parallel()
+	factory := &recordingSessionFactory{}
+	executor, err := NewBoundedExecutor(nil, factory, passthroughBroker{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor.SetAttemptToolFactory(func(_ context.Context, dispatch Dispatch) (map[string]aitools.Tool, error) {
+		if dispatch.AttemptID != "run-1:work:1" {
+			t.Fatalf("attempt factory received wrong dispatch: %#v", dispatch)
+		}
+		return map[string]aitools.Tool{"file_read": stubTool{name: "file_read"}, "file_create": stubTool{name: "file_create"}}, nil
+	})
+	dispatch := Dispatch{RunID: "run-1", TaskName: "work", AttemptID: "run-1:work:1", Grant: ExecutionGrant{
+		TaskName: "work", Model: "fast", Tools: []string{"file_read"}, RunAs: "user:one", ConfigurationVersion: "v1",
+	}}
+	if _, err := executor.Execute(context.Background(), dispatch); err != nil {
+		t.Fatal(err)
+	}
+	factory.mu.Lock()
+	defer factory.mu.Unlock()
+	if len(factory.calls) != 1 || len(factory.calls[0].tools) != 1 || factory.calls[0].tools["file_read"] == nil || factory.calls[0].tools["file_create"] != nil {
+		t.Fatalf("attempt tools escaped durable grant: %#v", factory.calls)
+	}
+}
+
 func TestBoundedExecutorInjectsCredentialsOnlyAtToolCall(t *testing.T) {
 	t.Parallel()
 

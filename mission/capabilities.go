@@ -236,7 +236,14 @@ func (p *CapabilityPolicy) ResolveGrant(taskName, model string, selectedMissionT
 
 	tools := make([]string, 0, len(task.Tools)+len(selectedMissionTools))
 	seen := make(map[string]struct{}, cap(tools))
-	for _, toolRef := range append(append([]string{}, task.Tools...), selectedMissionTools...) {
+	selected := append(append([]string{}, task.Tools...), selectedMissionTools...)
+	if p.mission.Scratchpad || len(p.mission.Packets) > 0 || len(task.Packets) > 0 {
+		selected = append(selected, "file_list", "file_read", "file_view", "file_search", "file_grep")
+		if p.mission.Scratchpad {
+			selected = append(selected, "file_create", "file_delete")
+		}
+	}
+	for _, toolRef := range selected {
 		if _, ok := seen[toolRef]; ok {
 			continue
 		}

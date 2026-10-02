@@ -118,7 +118,7 @@ func resolveSlotPath(store MemoryStore, name, relPath string) (string, error) {
 
 // slotParamDescription is reused across every file tool's `slot` parameter
 // so the agent sees a consistent description.
-const slotParamDescription = "Slot to operate in. Use \"memory\" for the available mission or managed-agent memory, \"scratchpad\" for a mission's ephemeral per-run scratchpad, or a shared memory name."
+const slotParamDescription = "Slot to operate in. Use \"scratchpad\" for this task attempt's private working files, \"packet.<name>\" for granted read-only reference files, or \"memory\" for available managed-agent memory."
 
 // =============================================================================
 // file_list — List files and directories

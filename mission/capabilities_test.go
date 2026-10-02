@@ -64,11 +64,47 @@ func TestCapabilityPolicyResolveGrant(t *testing.T) {
 	}
 }
 
+func TestCapabilityPolicyGrantsOnlyDeclaredStorageSlots(t *testing.T) {
+	t.Parallel()
+	m := &config.Mission{
+		Name: "research", Models: []string{"fast"}, Scratchpad: true,
+		Tasks: []config.Task{{Name: "collect", Packets: []string{"sources"}}, {Name: "summarize"}},
+	}
+	policy, err := NewCapabilityPolicy(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := policy.ResolveGrant("collect", "fast", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []string{"file_list", "file_read", "file_view", "file_search", "file_grep", "file_create", "file_delete"} {
+		if !containsString(grant.Tools, tool) {
+			t.Fatalf("storage tool %q missing from durable grant: %v", tool, grant.Tools)
+		}
+	}
+	m.Scratchpad = false
+	grant, err = policy.ResolveGrant("collect", "fast", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsString(grant.Tools, "file_create") || !containsString(grant.Tools, "file_read") {
+		t.Fatalf("packet-only grant should be read-only: %v", grant.Tools)
+	}
+	grant, err = policy.ResolveGrant("summarize", "fast", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(grant.Tools) != 0 {
+		t.Fatalf("task inherited a sibling's packet tools: %v", grant.Tools)
+	}
+}
+
 func TestRuntimeCommanderPoliciesExposeExactGrantKeys(t *testing.T) {
 	t.Parallel()
 	m := &config.Mission{
 		Models: []string{"claude_haiku_4_5", "gpt_5"},
-		Tools: []string{"plugins.search.all"},
+		Tools:  []string{"plugins.search.all"},
 		Tasks: []config.Task{
 			{Name: "draft", Tools: []string{"mcp.files.read"}},
 			{Name: "polish", Models: []string{"gpt_5"}},

@@ -6,20 +6,20 @@ title: Packets
 
 A **packet** is a read-only bundle of reference files attached to a mission. Use it when task executors need documentation, knowledge bases, examples, prompt libraries, or other reference material that must not change during the run.
 
-Packets are the read-only counterpart to [memory and scratchpad slots](/config/missions/folders). Memory slots are writable workspaces with Squadron-managed paths; packets point at *user-controlled* directories and are immutable to task executors.
+Packets are the read-only counterpart to the [attempt scratchpad](/config/missions/folders). Scratchpads use Squadron-managed paths; packets point at *user-controlled* directories and are immutable to task executors.
 
-| Capability | Packet | Memory / Scratchpad |
+| Capability | Packet | Attempt scratchpad |
 |------------|--------|----------------------|
 | Task executors can read files | yes | yes |
 | Task executors can write/delete | **no** | yes |
 | Path | user-supplied | Squadron-derived |
 | Allowed file types | UTF-8 text (`file_read`) + images/SVG/PDF (`file_view`) | any |
 | HCL parsed inside the path | **no** (excluded) | n/a |
-| Tool slot name | `packet.<name>` | `<name>` / `"memory"` / `"scratchpad"` |
+| Tool slot name | `packet.<name>` | `"scratchpad"` |
 
 ## Declaring a packet
 
-Declare packets at the top level of your HCL, alongside `memory` blocks:
+Declare packets at the top level of your HCL:
 
 ```hcl
 packet "knowledge_base" {
@@ -84,7 +84,10 @@ mission "answer_questions" {
 
 Both mission-level and task-level references are validated at load time; an unknown packet name fails the parse.
 
-> **Task-level declarations are not runtime access boundaries.** Every task in a mission shares the same mission-wide slot store, so a packet referenced by *any* task is accessible to *every* task in that mission. Use task-level `packets = [...]` to document intent, not for isolation.
+Task-level declarations are runtime access boundaries. Each executor sees its
+task's packets plus mission-level packets, not packets declared only by sibling
+tasks. The grant is persisted with the task attempt so recovery preserves the
+same access policy.
 
 ## Reading from a packet
 
@@ -142,17 +145,17 @@ packet "tone_guide" {
 mission "support_reply" {
   commander { model = models.anthropic.claude_sonnet_4 }
   models    = [models.anthropic.claude_sonnet_4]
-  packets   = [packets.playbooks, packets.tone_guide]
+  packets   = [packets.playbooks]
 
   scratchpad = true
 
   task "draft" {
-    objective = "Read the relevant playbook from packet.playbooks and draft a reply in the scratchpad."
+    objective = "Read the relevant playbook from packet.playbooks and return an accepted draft."
   }
 
   task "polish" {
     depends_on = [tasks.draft]
-    objective  = "Refine the draft against packet.tone_guide and save the final reply to the scratchpad."
+    objective  = "Refine the accepted draft against packet.tone_guide and return the final reply."
     packets    = [packets.tone_guide]
   }
 }

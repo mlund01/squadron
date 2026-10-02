@@ -25,6 +25,9 @@ import (
 // missions. MissionStore receives only the run directory record needed by
 // existing product discovery; RuntimeStore is the sole state authority.
 func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.MissionHandler) error {
+	if r.mission.Memory != nil || len(r.mission.Memories) > 0 {
+		return fmt.Errorf("mission %q declares persistent memory without a runtime authorization and commit policy", r.mission.Name)
+	}
 	if err := r.restoreRuntimeInputs(); err != nil {
 		return err
 	}
@@ -118,6 +121,7 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	if err != nil {
 		return err
 	}
+	executor.SetAttemptToolFactory(r.runtimeAttemptTools)
 	coordinator, err := missionruntime.NewCoordinator(harness, commander, executor, grantResolver)
 	if err != nil {
 		return err

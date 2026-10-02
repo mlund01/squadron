@@ -100,9 +100,17 @@ type CredentialBroker interface {
 // BoundedExecutor materializes exactly the tools named by the persisted grant.
 // It never shares a mutable tool map or session between attempts.
 type BoundedExecutor struct {
-	registry map[string]aitools.Tool
-	factory  TaskSessionFactory
-	broker   CredentialBroker
+	registry     map[string]aitools.Tool
+	factory      TaskSessionFactory
+	broker       CredentialBroker
+	attemptTools func(context.Context, Dispatch) (map[string]aitools.Tool, error)
+}
+
+// SetAttemptToolFactory adds tools whose backing state is derived from the
+// immutable dispatch (for example, an attempt-local scratchpad). It must be
+// called before the executor starts processing attempts.
+func (e *BoundedExecutor) SetAttemptToolFactory(factory func(context.Context, Dispatch) (map[string]aitools.Tool, error)) {
+	e.attemptTools = factory
 }
 
 func NewBoundedExecutor(registry map[string]aitools.Tool, factory TaskSessionFactory, broker CredentialBroker) (*BoundedExecutor, error) {
@@ -163,11 +171,30 @@ func (e *BoundedExecutor) newSession(ctx context.Context, dispatch Dispatch) (Ta
 	if err := validateExecutionGrant(dispatch.TaskName, dispatch.Grant); err != nil {
 		return nil, err
 	}
+	var dynamic map[string]aitools.Tool
+	if e.attemptTools != nil {
+		var err error
+		dynamic, err = e.attemptTools(ctx, cloneDispatch(dispatch))
+		if err != nil {
+			return nil, fmt.Errorf("create attempt tools: %w", err)
+		}
+		for name := range dynamic {
+			if dynamic[name] == nil {
+				return nil, fmt.Errorf("attempt tool %q is nil", name)
+			}
+			if _, exists := e.registry[name]; exists {
+				return nil, fmt.Errorf("attempt tool %q conflicts with static registry", name)
+			}
+		}
+	}
 	tools := make(map[string]aitools.Tool, len(dispatch.Grant.Tools))
 	for _, name := range dispatch.Grant.Tools {
 		tool, ok := e.registry[name]
 		if !ok {
-			return nil, fmt.Errorf("granted tool %q is unavailable", name)
+			tool, ok = dynamic[name]
+			if !ok {
+				return nil, fmt.Errorf("granted tool %q is unavailable", name)
+			}
 		}
 		tools[name] = &authorizedTool{tool: tool, broker: e.broker, authorization: ToolCallAuthorization{
 			RunID: dispatch.RunID, TaskName: dispatch.TaskName, AttemptID: dispatch.AttemptID,

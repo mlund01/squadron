@@ -167,6 +167,10 @@ func (f *ModelTaskSessionFactory) Clarify(ctx context.Context, dispatch Dispatch
 	if len(answer) == 0 {
 		return TaskClarificationResult{}, fmt.Errorf("task worker returned an empty clarification")
 	}
+	answer, err = boundedCommanderClarification(answer)
+	if err != nil {
+		return TaskClarificationResult{}, err
+	}
 	updatedTranscript, err := captureTaskTurnTelemetry(
 		taskSessionMessagesFromLLM(session.SnapshotMessages()), transcript, response,
 		dispatch.AttemptID, "task", dispatch.TaskName, dispatch.Grant.Model,
@@ -175,6 +179,32 @@ func (f *ModelTaskSessionFactory) Clarify(ctx context.Context, dispatch Dispatch
 		return TaskClarificationResult{}, err
 	}
 	return TaskClarificationResult{Answer: answer, SessionTranscript: updatedTranscript}, nil
+}
+
+func boundedCommanderClarification(parts []store.MessagePart) ([]store.MessagePart, error) {
+	var text strings.Builder
+	for _, part := range parts {
+		if part.Type != "text" || part.Text == "" {
+			continue
+		}
+		if text.Len() > 0 {
+			text.WriteByte('\n')
+		}
+		text.WriteString(part.Text)
+	}
+	if strings.TrimSpace(text.String()) == "" {
+		return nil, fmt.Errorf("task clarification must contain text")
+	}
+	answer := text.String()
+	if len(answer) > maxCommanderClarificationBytes {
+		const suffix = "… [truncated; full answer retained in task transcript]"
+		cut := maxCommanderClarificationBytes - len(suffix)
+		for cut > 0 && !utf8.RuneStart(answer[cut]) {
+			cut--
+		}
+		answer = answer[:cut] + suffix
+	}
+	return []store.MessagePart{{Type: "text", Text: answer}}, nil
 }
 
 type modelTaskSession struct {

@@ -353,6 +353,28 @@ func TestModelTaskSessionClarificationRestoresTranscriptAndDisablesTools(t *test
 	}
 }
 
+func TestModelTaskClarificationBoundsCommanderAnswerButRetainsTranscript(t *testing.T) {
+	t.Parallel()
+	fullAnswer := strings.Repeat("🙂", maxCommanderClarificationBytes)
+	modelSession := &fakeTaskModelSession{responses: []*llm.ChatResponse{{Content: fullAnswer}}}
+	factory, err := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: modelSession}, []TaskObjective{{Name: "classify", Objective: "Classify"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transcript := []TaskSessionMessage{{Role: string(llm.RoleAssistant), Parts: []store.MessagePart{{Type: "text", Text: "Initial result"}}}}
+	result, err := factory.Clarify(context.Background(), Dispatch{TaskName: "classify", AttemptID: "attempt-1"}, transcript, "Which evidence matters?")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Answer) != 1 || result.Answer[0].Type != "text" || len(result.Answer[0].Text) > maxCommanderClarificationBytes ||
+		!strings.Contains(result.Answer[0].Text, "truncated") {
+		t.Fatalf("commander clarification is not bounded: %+v", result.Answer)
+	}
+	if got := result.SessionTranscript[len(result.SessionTranscript)-1].Parts[0].Text; got != fullAnswer {
+		t.Fatalf("durable task transcript lost original response: length=%d", len(got))
+	}
+}
+
 func TestModelTaskSessionResumesCommittedToolWithoutInvokingItAgain(t *testing.T) {
 	t.Parallel()
 	toolUse := &llm.ToolUseBlock{ID: "call-1", Name: "search", Input: json.RawMessage(`{"query":"durability"}`)}

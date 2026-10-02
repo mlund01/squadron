@@ -99,6 +99,7 @@ type InspectTaskRequest struct {
 const maxCommanderInspectionBytes = 16 * 1024
 
 const maxTaskClarifications = 3
+const maxCommanderClarificationBytes = 16 * 1024
 
 // ClarifyTaskRequest asks the same logical task-worker session a bounded,
 // read-only follow-up. The request is persisted before provider work begins.
@@ -1313,6 +1314,9 @@ func (h *Harness) CompleteClarification(requestID string, result TaskClarificati
 	}
 	if len(result.Answer) == 0 || len(result.SessionTranscript) == 0 {
 		return TaskClarification{}, fmt.Errorf("clarification answer and updated session transcript are required")
+	}
+	if len(result.Answer) != 1 || result.Answer[0].Type != "text" || strings.TrimSpace(result.Answer[0].Text) == "" || len(result.Answer[0].Text) > maxCommanderClarificationBytes {
+		return TaskClarification{}, fmt.Errorf("commander clarification must be one nonempty text part of at most %d bytes", maxCommanderClarificationBytes)
 	}
 	if err := h.recordTaskTranscriptTurnsLocked(result.SessionTranscript); err != nil {
 		return TaskClarification{}, err

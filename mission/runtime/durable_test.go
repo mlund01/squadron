@@ -277,6 +277,11 @@ func TestDurableClarificationRestoresPendingRequestAndCommitsUpdatedSession(t *t
 		TaskSessionMessage{Role: "user", Parts: []persistence.MessagePart{{Type: "text", Text: request.Question}}},
 		TaskSessionMessage{Role: "assistant", Parts: []persistence.MessagePart{{Type: "text", Text: "HTTP 401"}}},
 	)
+	if _, err := restored.CompleteClarification("clarify-1", "clarify-message", TaskClarificationResult{
+		Answer: []persistence.MessagePart{{Type: "text", Text: strings.Repeat("x", maxCommanderClarificationBytes+1)}}, SessionTranscript: updated,
+	}); err == nil {
+		t.Fatal("oversized clarification was accepted into commander context")
+	}
 	clarification, err := restored.CompleteClarification("clarify-1", "clarify-message", TaskClarificationResult{
 		Answer: []persistence.MessagePart{{Type: "text", Text: "HTTP 401"}}, SessionTranscript: updated,
 	})

@@ -145,8 +145,10 @@ the commander may call `clarify_task_result`. The runtime first persists the
 request, restores the exact worker session transcript, removes all tools, and
 runs one focused follow-up turn. The answer and updated transcript are then
 committed before the commander continues. Clarifications are limited to three
-per task. They cannot perform new external work and survive coordinator
-restarts without creating a different logical worker session.
+per task. The commander receives at most 16 KiB of text from each answer;
+the full worker response remains in its durable transcript. Clarifications
+cannot perform new external work and survive coordinator restarts without
+creating a different logical worker session.
 
 Every accepted attempt creates a fresh provider session. The executor sends
 only that task's objective and immutable input snapshot, and registers only the

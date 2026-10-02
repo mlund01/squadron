@@ -47,8 +47,8 @@ mission "data_pipeline" {
 | `input` | block | Mission input parameters (repeatable) |
 | `task` | block | Task definitions (repeatable) |
 | `dataset` | block | Dataset definitions (optional) |
-| `memories` | list | Reserved for persistent memory; missions declaring it cannot run until the authorization and commit contract is available (see [Task Storage](/config/missions/folders)). |
-| `memory` | block | Reserved mission-scoped persistent memory declaration; not yet runnable. |
+| `memories` | list | Shared-memory references are not supported by the task-scoped runtime and cannot run. |
+| `memory` | block | Mission-scoped persistent memory schema and retention. Tasks opt in with `memory_access`; see [Task Storage](/config/missions/folders). |
 | `scratchpad` | bool | If `true`, each task attempt gets an isolated scratchpad slot; the run root is auto-deleted after 7 days. |
 | `trigger` | block | Webhook trigger (optional) |
 | `max_parallel` | number | Max concurrent instances (default: 3) |

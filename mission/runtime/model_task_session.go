@@ -83,7 +83,7 @@ func (f *ModelTaskSessionFactory) NewTaskSession(ctx context.Context, dispatch D
 	if session == nil {
 		return nil, fmt.Errorf("task model session builder returned nil")
 	}
-	toolsByModelName := make(map[string]aitools.Tool, len(tools))
+	toolsByModelName := make(map[string]aitools.Tool, len(tools)+1)
 	for name, tool := range tools {
 		modelName := aitools.SanitizeToolName(name)
 		if _, exists := toolsByModelName[modelName]; exists {
@@ -91,7 +91,19 @@ func (f *ModelTaskSessionFactory) NewTaskSession(ctx context.Context, dispatch D
 		}
 		toolsByModelName[modelName] = tool
 	}
-	session.SetTools(aitools.ToolsToDefinitions(tools))
+	modelTools := make(map[string]aitools.Tool, len(tools)+1)
+	for name, tool := range tools {
+		modelTools[name] = tool
+	}
+	if dispatch.Grant.Memory != nil && dispatch.Grant.Memory.Access == "read_write" {
+		if _, exists := toolsByModelName[memoryProposalToolName]; exists {
+			return nil, fmt.Errorf("granted tool collides with intrinsic memory proposal tool")
+		}
+		proposalTool := &memoryProposalTool{grant: *dispatch.Grant.Memory}
+		modelTools[memoryProposalToolName] = proposalTool
+		toolsByModelName[memoryProposalToolName] = proposalTool
+	}
+	session.SetTools(aitools.ToolsToDefinitions(modelTools))
 	return &modelTaskSession{
 		session: session, dispatch: cloneDispatch(dispatch), objective: objective.Objective,
 		resultPolicy: cloneResultPolicy(objective.ResultPolicy), tools: toolsByModelName,
@@ -209,6 +221,8 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 		Inputs          json.RawMessage      `json:"inputs"`
 		Iteration       *IterationInput      `json:"iteration,omitempty"`
 		Dependencies    []DependencySnapshot `json:"dependencies,omitempty"`
+		Memory          *TaskMemoryGrant     `json:"memory,omitempty"`
+		MemoryRule      string               `json:"memoryRule,omitempty"`
 		OutputContract  []ResultField        `json:"outputContract,omitempty"`
 		OutputRule      string               `json:"outputRule,omitempty"`
 		RoutingCriteria []RouteDefinition    `json:"routingCriteria,omitempty"`
@@ -216,6 +230,8 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 	}{
 		Task: s.dispatch.TaskName, Objective: s.objective, Inputs: inputJSON, Iteration: s.dispatch.Grant.Iteration,
 		Dependencies:    s.dispatch.Grant.Dependencies,
+		Memory:          s.dispatch.Grant.Memory,
+		MemoryRule:      memoryRule(s.dispatch.Grant.Memory),
 		OutputContract:  s.resultPolicy.Fields,
 		OutputRule:      outputRule(s.resultPolicy),
 		RoutingCriteria: s.routes,
@@ -265,6 +281,10 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 				return TaskResultEnvelope{}, &TaskRecoveryBlockedError{Err: fmt.Errorf("checkpoint final task response: %w", err)}
 			}
 			result, err := taskResultFromResponse(s.dispatch, response)
+			if err != nil {
+				return TaskResultEnvelope{}, err
+			}
+			result.MemoryProposals, err = memoryProposalsFromProgress(progress, s.dispatch.Grant.Memory)
 			if err != nil {
 				return TaskResultEnvelope{}, err
 			}
@@ -399,6 +419,16 @@ func (s *modelTaskSession) RunResumable(ctx context.Context, progress TaskAttemp
 		}
 	}
 	return TaskResultEnvelope{}, fmt.Errorf("task session exceeded %d turns", maxTaskSessionTurns)
+}
+
+func memoryRule(grant *TaskMemoryGrant) string {
+	if grant == nil {
+		return ""
+	}
+	if grant.Access == "read_write" {
+		return "Memory values and versions are a read snapshot. To request an update, call propose_mission_memory_update with a declared key, a JSON value, and its snapshot version (0 for a new key). The tool records a proposal only; the harness commits it if the final task result is accepted."
+	}
+	return "Memory values are a read-only snapshot. Do not propose or perform memory writes."
 }
 
 func captureTaskTurnTelemetry(current, previous []TaskSessionMessage, response *llm.ChatResponse, sessionID, entity, taskName, model string) ([]TaskSessionMessage, error) {

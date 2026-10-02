@@ -57,14 +57,15 @@ type ResultProvenance struct {
 // task executor. RawOutput preserves the exact final model response for audit;
 // Content is the useful rich response exposed to operators and the commander.
 type TaskResultEnvelope struct {
-	Status      ResultStatus        `json:"status"`
-	Summary     string              `json:"summary"`
-	Content     []store.MessagePart `json:"content,omitempty"`
-	Artifacts   []ArtifactReference `json:"artifacts,omitempty"`
-	Data        json.RawMessage     `json:"data,omitempty"`
-	Diagnostics json.RawMessage     `json:"diagnostics,omitempty"`
-	RawOutput   []store.MessagePart `json:"rawOutput"`
-	Provenance  ResultProvenance    `json:"provenance"`
+	Status          ResultStatus        `json:"status"`
+	Summary         string              `json:"summary"`
+	Content         []store.MessagePart `json:"content,omitempty"`
+	Artifacts       []ArtifactReference `json:"artifacts,omitempty"`
+	Data            json.RawMessage     `json:"data,omitempty"`
+	Diagnostics     json.RawMessage     `json:"diagnostics,omitempty"`
+	MemoryProposals []MemoryProposal    `json:"memoryProposals,omitempty"`
+	RawOutput       []store.MessagePart `json:"rawOutput"`
+	Provenance      ResultProvenance    `json:"provenance"`
 	// SessionTranscript is populated by the model-session adapter for durable
 	// continuation. It is moved into AcceptedTaskResult during validation and
 	// is never included in the executor-visible result payload.
@@ -135,6 +136,19 @@ func validateTaskResult(dispatch Dispatch, policy ResultPolicy, envelope TaskRes
 	}
 	if len(envelope.Data) > 0 && !json.Valid(envelope.Data) {
 		errors = append(errors, "result data is not valid JSON")
+	}
+	if len(envelope.MemoryProposals) > 32 {
+		errors = append(errors, "result contains too many memory proposals")
+	}
+	seenMemoryKeys := make(map[string]bool, len(envelope.MemoryProposals))
+	for _, proposal := range envelope.MemoryProposals {
+		if err := validateMemoryProposal(dispatch.Grant.Memory, proposal); err != nil {
+			errors = append(errors, err.Error())
+		}
+		if seenMemoryKeys[proposal.Key] {
+			errors = append(errors, fmt.Sprintf("duplicate memory proposal for %q", proposal.Key))
+		}
+		seenMemoryKeys[proposal.Key] = true
 	}
 	if len(policy.Fields) > 0 {
 		if len(envelope.Data) == 0 {
@@ -251,6 +265,10 @@ func cloneTaskResultEnvelope(result TaskResultEnvelope) TaskResultEnvelope {
 	result.Artifacts = append([]ArtifactReference(nil), result.Artifacts...)
 	result.Data = append(json.RawMessage(nil), result.Data...)
 	result.Diagnostics = append(json.RawMessage(nil), result.Diagnostics...)
+	result.MemoryProposals = append([]MemoryProposal(nil), result.MemoryProposals...)
+	for index := range result.MemoryProposals {
+		result.MemoryProposals[index].Value = append(json.RawMessage(nil), result.MemoryProposals[index].Value...)
+	}
 	result.SessionTranscript = cloneTaskSessionMessages(result.SessionTranscript)
 	return result
 }

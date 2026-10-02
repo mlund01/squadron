@@ -25,8 +25,18 @@ type TaskDefinition struct {
 	RetryDelaySeconds int
 	TimeoutSeconds    int
 	ResultPolicy      ResultPolicy
+	MemoryPolicy      *TaskMemoryPolicy
 	Iterator          *IterationPolicy
 	ParentTask        string
+}
+
+// TaskMemoryPolicy is frozen with the task graph. The resolved execution grant
+// may contain values, but cannot broaden this task-level authorization.
+type TaskMemoryPolicy struct {
+	MissionName   string        `json:"missionName"`
+	Access        string        `json:"access"`
+	RetentionDays int           `json:"retentionDays"`
+	Fields        []ResultField `json:"fields"`
 }
 
 type RouteDefinition struct {
@@ -241,6 +251,24 @@ type ExecutionGrant struct {
 	ConfigurationVersion string
 	Iteration            *IterationInput
 	Dependencies         []DependencySnapshot
+	Memory               *TaskMemoryGrant
+}
+
+// TaskMemoryGrant is the immutable memory capability and value/version
+// snapshot accepted at dispatch. A restart reuses this snapshot rather than
+// silently substituting newer cross-run values.
+type TaskMemoryGrant struct {
+	MissionName   string                `json:"missionName"`
+	Access        string                `json:"access"`
+	RetentionDays int                   `json:"retentionDays"`
+	Fields        []ResultField         `json:"fields"`
+	Entries       []MemoryValueSnapshot `json:"entries,omitempty"`
+}
+
+type MemoryValueSnapshot struct {
+	Key     string          `json:"key"`
+	Value   json.RawMessage `json:"value,omitempty"`
+	Version uint64          `json:"version"`
 }
 
 // DependencySnapshot is the accepted, model-visible output of a declared
@@ -496,6 +524,10 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 			return nil, err
 		}
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
+		definition.MemoryPolicy = cloneTaskMemoryPolicy(definition.MemoryPolicy)
+		if err := validateTaskMemoryPolicy(definition.MemoryPolicy); err != nil {
+			return nil, fmt.Errorf("task %q: %w", definition.Name, err)
+		}
 		if definition.Iterator != nil {
 			policy := *definition.Iterator
 			definition.Iterator = &policy
@@ -638,6 +670,7 @@ func (h *Harness) ExpandIteration(plan IterationPlan) error {
 			RetryDelaySeconds: parent.RetryDelaySeconds,
 			TimeoutSeconds:    parent.TimeoutSeconds,
 			ResultPolicy:      cloneResultPolicy(parent.ResultPolicy),
+			MemoryPolicy:      cloneTaskMemoryPolicy(parent.MemoryPolicy),
 			ParentTask:        plan.ParentTask,
 		}
 		h.taskStates[child.Name] = TaskBlocked
@@ -1358,6 +1391,10 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 		definition.SendTo = append([]string(nil), definition.SendTo...)
 		definition.Routes = append([]RouteDefinition(nil), definition.Routes...)
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
+		definition.MemoryPolicy = cloneTaskMemoryPolicy(definition.MemoryPolicy)
+		if err := validateTaskMemoryPolicy(definition.MemoryPolicy); err != nil {
+			return nil, fmt.Errorf("checkpoint task %q: %w", definition.Name, err)
+		}
 		if err := validateAttemptTiming(definition); err != nil {
 			return nil, err
 		}
@@ -1460,6 +1497,9 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 		}
 	}
 	if err := validateExecutionGrant(request.TaskName, request.Grant); err != nil {
+		return Dispatch{}, err
+	}
+	if err := validateMemoryGrantPolicy(definition.MemoryPolicy, request.Grant.Memory); err != nil {
 		return Dispatch{}, err
 	}
 	if request.Grant.Iteration != nil {
@@ -1581,8 +1621,88 @@ func validateExecutionGrant(taskName string, grant ExecutionGrant) error {
 	return nil
 }
 
+func cloneTaskMemoryPolicy(policy *TaskMemoryPolicy) *TaskMemoryPolicy {
+	if policy == nil {
+		return nil
+	}
+	copy := *policy
+	copy.Fields = cloneResultFields(policy.Fields)
+	return &copy
+}
+
+func validateTaskMemoryPolicy(policy *TaskMemoryPolicy) error {
+	if policy == nil {
+		return nil
+	}
+	if policy.MissionName == "" || (policy.Access != "read" && policy.Access != "read_write") || policy.RetentionDays < 1 || policy.RetentionDays > 3650 || len(policy.Fields) == 0 {
+		return fmt.Errorf("invalid task memory policy")
+	}
+	seen := make(map[string]bool, len(policy.Fields))
+	for _, field := range policy.Fields {
+		if field.Name == "" || seen[field.Name] || field.Required || field.Items != nil || len(field.Properties) > 0 {
+			return fmt.Errorf("invalid task memory field %q", field.Name)
+		}
+		switch field.Type {
+		case "string", "number", "integer", "boolean", "object", "array":
+		default:
+			return fmt.Errorf("invalid task memory field type %q", field.Type)
+		}
+		seen[field.Name] = true
+	}
+	return nil
+}
+
+func validateMemoryGrantPolicy(policy *TaskMemoryPolicy, grant *TaskMemoryGrant) error {
+	if policy == nil {
+		if grant != nil {
+			return fmt.Errorf("task is not granted mission-memory access")
+		}
+		return nil
+	}
+	if grant == nil || grant.MissionName != policy.MissionName || grant.Access != policy.Access || grant.RetentionDays != policy.RetentionDays || !reflect.DeepEqual(cloneResultFields(grant.Fields), cloneResultFields(policy.Fields)) {
+		return fmt.Errorf("mission-memory grant exceeds or differs from the task policy")
+	}
+	if len(grant.Entries) > 64 {
+		return fmt.Errorf("mission-memory grant has too many entries")
+	}
+	allowed := make(map[string]ResultField, len(policy.Fields))
+	for _, field := range policy.Fields {
+		allowed[field.Name] = field
+	}
+	seen := make(map[string]bool, len(grant.Entries))
+	totalBytes := 0
+	for _, entry := range grant.Entries {
+		field, exists := allowed[entry.Key]
+		if !exists || seen[entry.Key] || entry.Version == 0 || (len(entry.Value) > 0 && !json.Valid(entry.Value)) {
+			return fmt.Errorf("invalid mission-memory snapshot entry %q", entry.Key)
+		}
+		if len(entry.Value) > 0 {
+			var value any
+			if err := json.Unmarshal(entry.Value, &value); err != nil || len(validateResultValue(value, field, "memory."+entry.Key)) > 0 {
+				return fmt.Errorf("mission-memory snapshot entry %q violates its field type", entry.Key)
+			}
+		}
+		seen[entry.Key] = true
+		totalBytes += len(entry.Key) + len(entry.Value)
+	}
+	if totalBytes > 64*1024 {
+		return fmt.Errorf("mission-memory grant exceeds its size limit")
+	}
+	return nil
+}
+
 func cloneExecutionGrant(grant ExecutionGrant) ExecutionGrant {
 	grant.Tools = append([]string(nil), grant.Tools...)
+	if grant.Memory != nil {
+		memory := *grant.Memory
+		memory.Fields = cloneResultFields(memory.Fields)
+		memory.Entries = make([]MemoryValueSnapshot, len(grant.Memory.Entries))
+		for index, entry := range grant.Memory.Entries {
+			entry.Value = append(json.RawMessage(nil), entry.Value...)
+			memory.Entries[index] = entry
+		}
+		grant.Memory = &memory
+	}
 	if grant.Iteration != nil {
 		item := *grant.Iteration
 		item.Item = append(json.RawMessage(nil), item.Item...)
@@ -1642,6 +1762,7 @@ func (h *Harness) CompleteTaskWithLease(taskName, attemptID string, result TaskR
 	h.results[taskName] = accepted
 	delete(h.failures, taskName)
 	delete(h.activeByTask, taskName)
+	h.scrubClosedDispatchMemoryLocked(active.RequestID)
 	delete(h.taskProgress, attemptID)
 	delete(h.executionLeases, attemptID)
 	for _, target := range h.tasks[taskName].SendTo {
@@ -1800,6 +1921,7 @@ func (h *Harness) FailTaskWithLease(taskName, attemptID string, cause error, lea
 	}
 	h.failures[taskName] = failure
 	delete(h.activeByTask, taskName)
+	h.scrubClosedDispatchMemoryLocked(active.RequestID)
 	if progress, ok := h.taskProgress[attemptID]; ok {
 		progress.Phase = "failed"
 		// Tool operation state is not needed after the attempt closes. The
@@ -1972,6 +2094,17 @@ func (h *Harness) activeIterationChildrenLocked(parent string) int {
 	return count
 }
 
+func (h *Harness) scrubClosedDispatchMemoryLocked(requestID string) {
+	dispatch, ok := h.dispatches[requestID]
+	if !ok || dispatch.Grant.Memory == nil {
+		return
+	}
+	for i := range dispatch.Grant.Memory.Entries {
+		dispatch.Grant.Memory.Entries[i].Value = nil
+	}
+	h.dispatches[requestID] = dispatch
+}
+
 func (h *Harness) executableAttemptCountLocked() int {
 	count := 0
 	for name := range h.activeByTask {
@@ -1989,6 +2122,7 @@ func (h *Harness) checkpointLocked() Checkpoint {
 		definition.SendTo = append([]string(nil), definition.SendTo...)
 		definition.Routes = append([]RouteDefinition(nil), definition.Routes...)
 		definition.ResultPolicy = cloneResultPolicy(definition.ResultPolicy)
+		definition.MemoryPolicy = cloneTaskMemoryPolicy(definition.MemoryPolicy)
 		if definition.Iterator != nil {
 			policy := *definition.Iterator
 			definition.Iterator = &policy

@@ -81,22 +81,21 @@ task "report" {
 
 Omitting `memory_access` grants no access. `read_write` includes read access;
 `read` cannot propose updates. Fields declare allowed top-level JSON keys.
-These declarations do not yet give a worker live memory access: the runtime
-still rejects persistent-memory missions until the proposal and authorization
-path is connected.
+The worker receives a bounded snapshot of those keys when its attempt starts.
+The commander cannot read mission memory or grant access to an undeclared task.
+A writable worker may call `propose_mission_memory_update` with a declared key,
+a JSON value matching its type, and the version from its snapshot (or `0` for
+a new key). The tool records a proposal; it does not write immediately. After
+the task result passes validation, the harness commits its proposals with the
+task completion and audit events in one transaction. Concurrent updates to the
+same key use version checks; a conflict rejects the result for retry.
 
-Persistent mission and shared-memory declarations do not grant task executors
-file access. Durable cross-run memory requires a separate authorization and
-serialized-commit contract; until that is implemented, use accepted results
-and artifacts for mission output. The runtime refuses a mission with persistent
-memory declarations rather than silently ignoring them.
-
-The runtime store now has an atomic, version-checked commit boundary for
-cross-run JSON memory values: a task completion, its audit events, and memory
-updates either commit together or all roll back. This is storage groundwork,
-not a task capability. The declaration remains unavailable until task-scoped
-read/write grants, result proposals, schema validation, and retention policy
-are connected to that boundary.
+`retention_days` limits how long a value remains available in future task
+snapshots. An expired value is erased from the mission-memory store on its next
+read while its version remains for conflict checks. It is not a promise to
+erase text a worker already copied into a run transcript or artifact. Mission
+memory does not grant file access. Shared-memory references via `memories` are
+not part of this task-scoped capability and cannot run.
 
 ## File tools
 

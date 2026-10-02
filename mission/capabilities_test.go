@@ -1,15 +1,127 @@
 package mission
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"squadron/config"
 	missionruntime "squadron/mission/runtime"
+	"squadron/store"
 
 	"github.com/zclconf/go-cty/cty"
 )
+
+func TestMissionMemoryProposalFlowsFromTaskPolicyAcrossRuns(t *testing.T) {
+	memoryStore := store.NewMemoryRuntimeStore()
+	m := &config.Mission{Name: "research", Models: []string{"fast"},
+		Memory: &config.MissionMemory{Description: "findings", RetentionDays: 30,
+			Fields: []config.MissionMemoryField{{Name: "summary", Type: "string"}}},
+		Tasks: []config.Task{{Name: "collect", MemoryAccess: config.MemoryAccessReadWrite}},
+	}
+	definitions, err := RuntimeTaskDefinitions(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewRuntimeGrantResolver(m, ExecutionGrantContext{RunAs: "user:one", ConfigurationVersion: "v1", MemoryStore: memoryStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness, err := missionruntime.CreateDurableHarness(memoryStore, "run-1", "commander-1", definitions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	grant, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{TaskName: "collect", Model: "fast"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch, err := harness.DispatchTask(missionruntime.DispatchRequest{
+		RequestID: "start-1", TaskName: "collect", ReadySetRevision: harness.Snapshot().Revision, Grant: grant,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := missionruntime.TaskResultEnvelope{Status: missionruntime.ResultSucceeded, Summary: "done",
+		RawOutput:       []store.MessagePart{{Type: "text", Text: "done"}},
+		MemoryProposals: []missionruntime.MemoryProposal{{Key: "summary", Value: json.RawMessage(`"saved"`), ExpectedVersion: 0}},
+		Provenance: missionruntime.ResultProvenance{RunID: dispatch.RunID, TaskName: dispatch.TaskName,
+			AttemptID: dispatch.AttemptID, Model: grant.Model, RunAs: grant.RunAs, ConfigurationVersion: grant.ConfigurationVersion},
+	}
+	if err := harness.CompleteTask("collect", dispatch.AttemptID, result); err != nil {
+		t.Fatal(err)
+	}
+	next, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{TaskName: "collect", Model: "fast"})
+	if err != nil || next.Memory == nil || len(next.Memory.Entries) != 1 || string(next.Memory.Entries[0].Value) != `"saved"` || next.Memory.Entries[0].Version != 1 {
+		t.Fatalf("next run did not receive committed memory: %+v err=%v", next.Memory, err)
+	}
+}
+
+func TestRuntimeGrantResolverSnapshotsOnlyTaskAuthorizedMemory(t *testing.T) {
+	t.Parallel()
+	memoryStore := store.NewMemoryRuntimeStore()
+	now := time.Now().UTC()
+	if err := memoryStore.CreateRuntime(store.RuntimeCheckpointRecord{RunID: "seed", Revision: 1}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := memoryStore.CommitRuntimeWithMemory("seed", 1,
+		store.RuntimeCheckpointRecord{RunID: "seed", Revision: 2}, nil,
+		[]store.MissionMemoryWrite{
+			{MissionName: "research", Key: "summary", ValueJSON: `"current"`, ExpiresAt: now.Add(time.Hour)},
+			{MissionName: "research", Key: "expired", ValueJSON: `"old"`, ExpiresAt: now.Add(-time.Hour)},
+		}); err != nil {
+		t.Fatal(err)
+	}
+	m := &config.Mission{
+		Name: "research", Models: []string{"fast"},
+		Memory: &config.MissionMemory{Description: "findings", RetentionDays: 30, Fields: []config.MissionMemoryField{
+			{Name: "summary", Type: "string"}, {Name: "expired", Type: "string"},
+		}},
+		Tasks: []config.Task{
+			{Name: "writer", MemoryAccess: config.MemoryAccessReadWrite},
+			{Name: "reader", MemoryAccess: config.MemoryAccessRead},
+			{Name: "private"},
+		},
+	}
+	definitions, err := RuntimeTaskDefinitions(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if definitions[0].MemoryPolicy == nil || definitions[0].MemoryPolicy.Access != config.MemoryAccessReadWrite ||
+		definitions[1].MemoryPolicy == nil || definitions[1].MemoryPolicy.Access != config.MemoryAccessRead ||
+		definitions[2].MemoryPolicy != nil {
+		t.Fatalf("task memory policies = %+v", definitions)
+	}
+	resolver, err := NewRuntimeGrantResolver(m, ExecutionGrantContext{
+		RunAs: "user:one", ConfigurationVersion: "v1", MemoryStore: memoryStore,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"writer", "reader"} {
+		grant, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{TaskName: name, Model: "fast"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if grant.Memory == nil || grant.Memory.Access != m.GetTaskByName(name).MemoryAccess || len(grant.Memory.Entries) != 2 {
+			t.Fatalf("task %q memory grant = %+v", name, grant.Memory)
+		}
+		if string(grant.Memory.Entries[1].Value) != `"current"` || grant.Memory.Entries[1].Version != 1 {
+			t.Fatalf("current memory snapshot = %+v", grant.Memory.Entries)
+		}
+		if len(grant.Memory.Entries[0].Value) != 0 || grant.Memory.Entries[0].Version != 1 {
+			t.Fatalf("expired value was exposed or version omitted: %+v", grant.Memory.Entries[0])
+		}
+	}
+	private, err := resolver.ResolveExecutionGrant(missionruntime.GrantRequest{TaskName: "private", Model: "fast"})
+	if err != nil || private.Memory != nil {
+		t.Fatalf("ungranted task received memory: %+v err=%v", private.Memory, err)
+	}
+}
 
 func TestCapabilityPolicyResolveGrant(t *testing.T) {
 	t.Parallel()

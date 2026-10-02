@@ -11,6 +11,10 @@ import (
 // checkpoint from a failure to read an existing checkpoint.
 var ErrRuntimeNotFound = errors.New("runtime not found")
 
+// ErrMissionMemoryConflict means a proposed write used a stale key version.
+// The runtime may retry the task with a new immutable memory snapshot.
+var ErrMissionMemoryConflict = errors.New("mission memory version conflict")
+
 // Bundle holds all stores for tracking mission execution.
 // Note: ResultStore and KnowledgeStore remain in their original packages
 // (aitools and mission) to avoid import cycles. They continue to be used

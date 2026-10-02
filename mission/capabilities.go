@@ -5,9 +5,16 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"squadron/config"
 	missionruntime "squadron/mission/runtime"
+	"squadron/store"
+)
+
+const (
+	maxMissionMemorySnapshotEntries = 64
+	maxMissionMemorySnapshotBytes   = 64 * 1024
 )
 
 // CommanderControlOperation names a harness-owned operation exposed to the
@@ -43,6 +50,7 @@ type ExecutionGrantContext struct {
 	RunAs                string
 	InputsJSON           string
 	ConfigurationVersion string
+	MemoryStore          store.MissionMemoryRuntimeStore
 }
 
 // RuntimeGrantResolver binds declarative mission policy to one run identity
@@ -81,11 +89,61 @@ func (r *RuntimeGrantResolver) ResolveExecutionGrant(request missionruntime.Gran
 	if err != nil {
 		return missionruntime.ExecutionGrant{}, fmt.Errorf("encode execution policy: %w", err)
 	}
+	memory, err := r.resolveMemoryGrant(policyTaskName)
+	if err != nil {
+		return missionruntime.ExecutionGrant{}, err
+	}
 	return missionruntime.ExecutionGrant{
 		TaskName: request.TaskName, Model: grant.Model, Tools: append([]string(nil), grant.Tools...),
 		RunAs: r.context.RunAs, InputsJSON: r.context.InputsJSON, PolicyJSON: string(policyJSON),
-		ConfigurationVersion: r.context.ConfigurationVersion,
+		ConfigurationVersion: r.context.ConfigurationVersion, Memory: memory,
 	}, nil
+}
+
+func (r *RuntimeGrantResolver) resolveMemoryGrant(taskName string) (*missionruntime.TaskMemoryGrant, error) {
+	task := r.policy.mission.GetTaskByName(taskName)
+	if task == nil || task.MemoryAccess == "" {
+		return nil, nil
+	}
+	policy := r.policy.mission.Memory
+	if policy == nil || !policy.HasPolicy() {
+		return nil, fmt.Errorf("task %q has memory access without a mission memory policy", taskName)
+	}
+	if r.context.MemoryStore == nil {
+		return nil, fmt.Errorf("task %q memory access requires an atomic mission memory store", taskName)
+	}
+	entries, err := r.context.MemoryStore.LoadMissionMemory(r.policy.mission.Name)
+	if err != nil {
+		return nil, fmt.Errorf("load memory for task %q: %w", taskName, err)
+	}
+	grant := &missionruntime.TaskMemoryGrant{
+		MissionName: r.policy.mission.Name, Access: task.MemoryAccess,
+		RetentionDays: policy.RetentionDays,
+	}
+	allowed := make(map[string]bool, len(policy.Fields))
+	for _, field := range policy.Fields {
+		allowed[field.Name] = true
+		grant.Fields = append(grant.Fields, missionruntime.ResultField{Name: field.Name, Type: field.Type})
+	}
+	now := time.Now().UTC()
+	totalBytes := 0
+	for _, entry := range entries {
+		if !allowed[entry.Key] {
+			continue
+		}
+		value := json.RawMessage(entry.ValueJSON)
+		if !entry.ExpiresAt.IsZero() && !entry.ExpiresAt.After(now) {
+			value = nil // Retain the version for CAS, but do not disclose expired content.
+		}
+		totalBytes += len(entry.Key) + len(value)
+		if len(grant.Entries) >= maxMissionMemorySnapshotEntries || totalBytes > maxMissionMemorySnapshotBytes {
+			return nil, fmt.Errorf("task %q memory snapshot exceeds its size limit", taskName)
+		}
+		grant.Entries = append(grant.Entries, missionruntime.MemoryValueSnapshot{
+			Key: entry.Key, Value: append(json.RawMessage(nil), value...), Version: entry.Version,
+		})
+	}
+	return grant, nil
 }
 
 func iterationParentAndIndex(name string) (string, int, bool) {
@@ -126,6 +184,18 @@ func RuntimeTaskDefinitionsWithMissions(m *config.Mission, missions []config.Mis
 			MaxRetries:        task.MaxRetries,
 			RetryDelaySeconds: task.RetryDelaySeconds,
 			TimeoutSeconds:    task.TimeoutSeconds,
+		}
+		if task.MemoryAccess != "" {
+			if m.Memory == nil || !m.Memory.HasPolicy() {
+				return nil, fmt.Errorf("task %q has memory access without a mission memory policy", task.Name)
+			}
+			policy := &missionruntime.TaskMemoryPolicy{
+				MissionName: m.Name, Access: task.MemoryAccess, RetentionDays: m.Memory.RetentionDays,
+			}
+			for _, field := range m.Memory.Fields {
+				policy.Fields = append(policy.Fields, missionruntime.ResultField{Name: field.Name, Type: field.Type})
+			}
+			definition.MemoryPolicy = policy
 		}
 		if task.Iterator != nil {
 			definition.Iterator = &missionruntime.IterationPolicy{

@@ -114,3 +114,49 @@ func TestSQLiteMissionMemoryCommitIsAtomicWithRuntime(t *testing.T) {
 		t.Fatalf("memory audit count=%d err=%v, want 2", auditCount, err)
 	}
 }
+
+func TestSQLiteMissionMemoryExpiredValueIsErasedButVersionRemains(t *testing.T) {
+	bundle, err := NewSQLiteBundle(filepath.Join(t.TempDir(), "expired-memory.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bundle.Close() })
+	memory := bundle.Runtime.(MissionMemoryRuntimeStore)
+	now := time.Now().UTC()
+	if err := memory.CreateRuntime(RuntimeCheckpointRecord{RunID: "run-1", Revision: 1, PayloadJSON: `{}`, UpdatedAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.CommitRuntimeWithMemory("run-1", 1,
+		RuntimeCheckpointRecord{RunID: "run-1", Revision: 2, PayloadJSON: `{}`, UpdatedAt: now}, nil,
+		[]MissionMemoryWrite{{MissionName: "research", Key: "summary", ValueJSON: `"old secret"`, ExpectedVersion: 0, ExpiresAt: now.Add(-time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := memory.LoadMissionMemory("research")
+	if err != nil || len(entries) != 1 || entries[0].ValueJSON != "null" || entries[0].Version != 1 {
+		t.Fatalf("expired entry = %+v, err = %v", entries, err)
+	}
+	var stored string
+	if err := bundle.Runtime.(*SQLiteRuntimeStore).db.QueryRow(`SELECT value_json FROM mission_memory WHERE mission_name = 'research' AND memory_key = 'summary'`).Scan(&stored); err != nil || stored != "null" {
+		t.Fatalf("expired bytes remain in database: %q, err = %v", stored, err)
+	}
+}
+
+func TestInMemoryMissionMemoryExpiredValueIsErased(t *testing.T) {
+	memory := NewMemoryRuntimeStore()
+	now := time.Now().UTC()
+	if err := memory.CreateRuntime(RuntimeCheckpointRecord{RunID: "run-1", Revision: 1, PayloadJSON: `{}`, UpdatedAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.CommitRuntimeWithMemory("run-1", 1,
+		RuntimeCheckpointRecord{RunID: "run-1", Revision: 2, PayloadJSON: `{}`, UpdatedAt: now}, nil,
+		[]MissionMemoryWrite{{MissionName: "research", Key: "summary", ValueJSON: `"old secret"`, ExpiresAt: now.Add(-time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := memory.LoadMissionMemory("research")
+	if err != nil || len(entries) != 1 || entries[0].ValueJSON != "null" || entries[0].Version != 1 {
+		t.Fatalf("expired entry = %+v, err = %v", entries, err)
+	}
+	if got := memory.memory["research\x00summary"].ValueJSON; got != "null" {
+		t.Fatalf("expired bytes remain in store: %q", got)
+	}
+}

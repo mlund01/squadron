@@ -62,6 +62,45 @@ func TestModelTaskSessionRunsGrantedToolsInFreshProviderSession(t *testing.T) {
 	}
 }
 
+func TestTaskPromptIncludesOnlyPersistedMemoryGrant(t *testing.T) {
+	modelSession := &fakeTaskModelSession{responses: []*llm.ChatResponse{{Content: "done"}}}
+	factory, err := NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: modelSession}, []TaskObjective{{Name: "work", Objective: "Use findings"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dispatch := Dispatch{RunID: "run-1", TaskName: "work", AttemptID: "run-1:work:1", Grant: ExecutionGrant{
+		TaskName: "work", Model: "fast", InputsJSON: `{}`, Memory: &TaskMemoryGrant{
+			MissionName: "research", Access: "read", RetentionDays: 30,
+			Fields:  []ResultField{{Name: "summary", Type: "string"}},
+			Entries: []MemoryValueSnapshot{{Key: "summary", Value: json.RawMessage(`"saved"`), Version: 2}},
+		},
+	}}
+	session, err := factory.NewTaskSession(context.Background(), dispatch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(modelSession.prompts) != 1 || !strings.Contains(modelSession.prompts[0], `"value":"saved"`) ||
+		!strings.Contains(modelSession.prompts[0], `"version":2`) {
+		t.Fatalf("memory snapshot absent from task prompt: %v", modelSession.prompts)
+	}
+	dispatch.Grant.Memory = nil
+	withoutMemory := &fakeTaskModelSession{responses: []*llm.ChatResponse{{Content: "done"}}}
+	factory, _ = NewModelTaskSessionFactory(&fakeTaskModelSessionBuilder{session: withoutMemory}, []TaskObjective{{Name: "work", Objective: "Use findings"}})
+	session, err = factory.NewTaskSession(context.Background(), dispatch, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Run(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(withoutMemory.prompts[0], `"memory"`) || strings.Contains(withoutMemory.prompts[0], "saved") {
+		t.Fatalf("ungranted task saw memory: %q", withoutMemory.prompts[0])
+	}
+}
+
 func TestModelTaskSessionParksHumanInputAndReplaysOriginalToolCall(t *testing.T) {
 	toolUse := &llm.ChatResponse{ContentBlocks: []llm.ContentBlock{{Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{
 		ID: "ask-1", Name: "builtins_human_ask", Input: json.RawMessage(`{"question":"Proceed?","timeout_seconds":120}`),

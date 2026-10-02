@@ -186,7 +186,7 @@ func applyMissionMemoryWrites(tx *sql.Tx, dialect Dialect, runID string, revisio
 			return fmt.Errorf("inspect mission memory write %q: %w", write.Key, err)
 		}
 		if rows != 1 {
-			return fmt.Errorf("mission memory %q version conflict: expected %d", write.Key, write.ExpectedVersion)
+			return fmt.Errorf("%w: key %q expected version %d", ErrMissionMemoryConflict, write.Key, write.ExpectedVersion)
 		}
 		if _, err := tx.Exec(audit, runID, revision, write.MissionName, write.Key, write.ExpectedVersion+1, now); err != nil {
 			return fmt.Errorf("audit mission memory %q: %w", write.Key, err)
@@ -207,8 +207,8 @@ func loadMissionMemory(db *sql.DB, dialect Dialect, missionName string) ([]Missi
 	if err != nil {
 		return nil, fmt.Errorf("load mission memory: %w", err)
 	}
-	defer rows.Close()
 	var entries []MissionMemoryEntry
+	now := time.Now().UTC()
 	for rows.Next() {
 		entry := MissionMemoryEntry{MissionName: missionName}
 		var expires sql.NullString
@@ -221,9 +221,33 @@ func loadMissionMemory(db *sql.DB, dialect Dialect, missionName string) ([]Missi
 				return nil, fmt.Errorf("parse mission memory expiry: %w", err)
 			}
 		}
+		if !entry.ExpiresAt.IsZero() && !entry.ExpiresAt.After(now) {
+			entry.ValueJSON = "null"
+		}
 		entries = append(entries, entry)
 	}
-	return entries, rows.Err()
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	// Keep the version as a CAS tombstone while erasing expired bytes. A
+	// concurrent newer write is protected by the version and expiry predicate.
+	prune := `UPDATE mission_memory SET value_json = 'null' WHERE mission_name = ? AND memory_key = ? AND version = ? AND expires_at = ? AND value_json <> 'null'`
+	if dialect == DialectPostgres {
+		prune = `UPDATE mission_memory SET value_json = 'null' WHERE mission_name = $1 AND memory_key = $2 AND version = $3 AND expires_at = $4 AND value_json <> 'null'`
+	}
+	for _, entry := range entries {
+		if entry.ExpiresAt.IsZero() || entry.ExpiresAt.After(now) {
+			continue
+		}
+		if _, err := db.Exec(prune, missionName, entry.Key, entry.Version, formatRuntimeTime(entry.ExpiresAt)); err != nil {
+			return nil, fmt.Errorf("prune expired mission memory %q: %w", entry.Key, err)
+		}
+	}
+	return entries, nil
 }
 
 func loadRuntime(db *sql.DB, dialect Dialect, runID string) (RuntimeCheckpointRecord, []RuntimeEventRecord, error) {

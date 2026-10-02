@@ -25,8 +25,13 @@ import (
 // missions. MissionStore receives only the run directory record needed by
 // existing product discovery; RuntimeStore is the sole state authority.
 func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.MissionHandler) error {
-	if r.mission.Memory != nil || len(r.mission.Memories) > 0 {
-		return fmt.Errorf("mission %q declares persistent memory without a runtime authorization and commit policy", r.mission.Name)
+	if len(r.mission.Memories) > 0 {
+		return fmt.Errorf("mission %q references shared memory, which is not supported by the task-scoped runtime policy", r.mission.Name)
+	}
+	if r.mission.Memory != nil && r.mission.Memory.HasPolicy() {
+		if _, ok := r.stores.Runtime.(store.MissionMemoryRuntimeStore); !ok {
+			return fmt.Errorf("mission %q requires an atomic mission memory runtime store", r.mission.Name)
+		}
 	}
 	if err := r.restoreRuntimeInputs(); err != nil {
 		return err
@@ -88,8 +93,10 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 	}
 	defer commanderSession.Close()
 
+	memoryStore, _ := r.stores.Runtime.(store.MissionMemoryRuntimeStore)
 	grantResolver, err := NewRuntimeGrantResolver(r.mission, ExecutionGrantContext{
 		RunAs: "user:local", InputsJSON: string(inputsJSON), ConfigurationVersion: configurationVersion,
+		MemoryStore: memoryStore,
 	})
 	if err != nil {
 		return err

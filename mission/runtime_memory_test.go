@@ -76,9 +76,9 @@ func TestRuntimePacketSlotsDoNotLeakAcrossTasks(t *testing.T) {
 	}
 }
 
-func TestRuntimeRejectsPersistentMemoryWithoutCommitPolicy(t *testing.T) {
+func TestRuntimeRejectsSharedMemoryWithoutTaskScopedPolicy(t *testing.T) {
 	runner := &Runner{mission: &config.Mission{Name: "research", Memories: []string{"shared"}}}
-	if err := runner.runMissionScoped(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "persistent memory") {
-		t.Fatalf("persistent memory was silently ignored: %v", err)
+	if err := runner.runMissionScoped(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "shared memory") {
+		t.Fatalf("shared memory was silently ignored: %v", err)
 	}
 }

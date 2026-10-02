@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 // MemoryRuntimeStore is a deterministic RuntimeStore for tests and embedded
@@ -57,7 +58,7 @@ func (s *MemoryRuntimeStore) CommitRuntimeWithMemory(runID string, expectedRevis
 	for _, write := range writes {
 		current := s.memory[write.MissionName+"\x00"+write.Key]
 		if current.Version != write.ExpectedVersion {
-			return fmt.Errorf("mission memory %q version conflict: expected %d", write.Key, write.ExpectedVersion)
+			return fmt.Errorf("%w: key %q expected version %d", ErrMissionMemoryConflict, write.Key, write.ExpectedVersion)
 		}
 	}
 	s.checkpoints[runID] = checkpoint
@@ -72,14 +73,19 @@ func (s *MemoryRuntimeStore) CommitRuntimeWithMemory(runID string, expectedRevis
 }
 
 func (s *MemoryRuntimeStore) LoadMissionMemory(missionName string) ([]MissionMemoryEntry, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if missionName == "" {
 		return nil, fmt.Errorf("mission name is required")
 	}
 	var entries []MissionMemoryEntry
-	for _, entry := range s.memory {
+	now := time.Now().UTC()
+	for identity, entry := range s.memory {
 		if entry.MissionName == missionName {
+			if !entry.ExpiresAt.IsZero() && !entry.ExpiresAt.After(now) {
+				entry.ValueJSON = "null"
+				s.memory[identity] = entry
+			}
 			entries = append(entries, entry)
 		}
 	}

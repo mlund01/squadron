@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"sync"
@@ -48,6 +49,7 @@ const (
 	EventTaskClarificationRequested  EventType = "task.clarification_requested"
 	EventTaskClarified               EventType = "task.clarified"
 	EventCommanderMessageAppended    EventType = "commander.message_appended"
+	EventMemoryUpdateCommitted       EventType = "memory.update_committed"
 )
 
 // Event is the append-only audit record committed with a checkpoint.
@@ -75,6 +77,15 @@ type Event struct {
 	Launch        *CrossMissionLaunch
 	Turns         []ModelTurnTelemetry
 	IterationPlan *IterationPlan
+	MemoryUpdate  *MemoryUpdateAudit
+}
+
+// MemoryUpdateAudit identifies a committed key/version without duplicating
+// the value in the event stream.
+type MemoryUpdateAudit struct {
+	MissionName string `json:"missionName"`
+	Key         string `json:"key"`
+	Version     uint64 `json:"version"`
 }
 
 // RuntimeRestart records only checkpointed facts at automatic worker recovery.
@@ -1047,7 +1058,26 @@ func (h *DurableHarness) CompleteTaskWithLease(taskName, attemptID string, resul
 	accepted := after.Results[taskName]
 	events := []Event{
 		{RunID: after.RunID, Revision: after.Revision, Type: EventTaskCompleted, OccurredAt: time.Now().UTC(), TaskName: taskName, AttemptID: attemptID, Result: &accepted},
-		{RunID: after.RunID, Revision: after.Revision, Type: EventReadySetPublished, OccurredAt: time.Now().UTC()},
+	}
+	var memoryWrites []store.MissionMemoryWrite
+	if len(accepted.Envelope.MemoryProposals) > 0 {
+		memory := before.ActiveByTask[taskName].Grant.Memory
+		if memory == nil {
+			return fmt.Errorf("task %q proposed memory updates without a grant", taskName)
+		}
+		expiresAt := time.Now().UTC().AddDate(0, 0, memory.RetentionDays)
+		for _, proposal := range accepted.Envelope.MemoryProposals {
+			memoryWrites = append(memoryWrites, store.MissionMemoryWrite{
+				MissionName: memory.MissionName, Key: proposal.Key,
+				ValueJSON: string(proposal.Value), ExpectedVersion: proposal.ExpectedVersion,
+				ExpiresAt: expiresAt,
+			})
+			events = append(events, Event{
+				RunID: after.RunID, Revision: after.Revision, Type: EventMemoryUpdateCommitted,
+				OccurredAt: time.Now().UTC(), TaskName: taskName, AttemptID: attemptID,
+				MemoryUpdate: &MemoryUpdateAudit{MissionName: memory.MissionName, Key: proposal.Key, Version: proposal.ExpectedVersion + 1},
+			})
+		}
 	}
 	if parent := checkpointDefinitionParent(after, taskName); parent != "" {
 		if _, wasCompleted := before.Results[parent]; !wasCompleted {
@@ -1056,10 +1086,14 @@ func (h *DurableHarness) CompleteTaskWithLease(taskName, attemptID string, resul
 			}
 		}
 	}
+	events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventReadySetPublished, OccurredAt: time.Now().UTC()})
 	if after.RunState == RunCompleted {
 		events = append(events, Event{RunID: after.RunID, Revision: after.Revision, Type: EventMissionCompleted, OccurredAt: time.Now().UTC()})
 	}
-	if err := h.commit(before.Revision, after, events); err != nil {
+	if err := h.commitWithMemory(before.Revision, after, events, memoryWrites); err != nil {
+		if errors.Is(err, store.ErrMissionMemoryConflict) {
+			return &ResultRejectedError{Err: err}
+		}
 		return fmt.Errorf("persisting task completion: %w", err)
 	}
 	h.inner = candidate
@@ -1222,6 +1256,21 @@ func (h *DurableHarness) commit(expectedRevision uint64, checkpoint Checkpoint, 
 		return err
 	}
 	return h.store.CommitRuntime(checkpoint.RunID, expectedRevision, checkpointRecord, eventRecords)
+}
+
+func (h *DurableHarness) commitWithMemory(expectedRevision uint64, checkpoint Checkpoint, events []Event, writes []store.MissionMemoryWrite) error {
+	if len(writes) == 0 {
+		return h.commit(expectedRevision, checkpoint, events)
+	}
+	memoryStore, ok := h.store.(store.MissionMemoryRuntimeStore)
+	if !ok {
+		return fmt.Errorf("runtime store does not support atomic mission memory commits")
+	}
+	checkpointRecord, eventRecords, err := encodeCommit(checkpoint, events)
+	if err != nil {
+		return err
+	}
+	return memoryStore.CommitRuntimeWithMemory(checkpoint.RunID, expectedRevision, checkpointRecord, eventRecords, writes)
 }
 
 func encodeCommit(checkpoint Checkpoint, events []Event) (store.RuntimeCheckpointRecord, []store.RuntimeEventRecord, error) {

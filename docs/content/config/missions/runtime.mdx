@@ -266,11 +266,13 @@ explicit, paged task inspection. The exact final provider response is retained a
 - **Run artifacts** are immutable results with provenance.
 
 Parallel executors do not share mutable scratchpads. Persistent mission memory
-is not granted to task executors until the runtime has an explicit schema,
-retention, authorization, and serialized-write contract; missions declaring
-it fail before execution rather than silently ignoring the declaration.
-The runtime store has a version-checked atomic checkpoint/memory commit, but
-the executor-facing authorization and proposal path is not yet enabled.
+is available only to tasks with an explicit `memory_access` grant. Each task
+receives a bounded, versioned snapshot. A writable task proposes updates via
+an intrinsic tool; the harness validates them and atomically commits them with
+an accepted task result. A version conflict rejects the result for retry.
+Expired values are withheld from new snapshots and erased from the memory
+store when it is read, with versions retained for conflict checks. Existing
+run transcripts and artifacts have their own retention behavior.
 
 Managed-agent memory is configured separately as disabled, session-scoped, or
 persistent. Agent memory never mixes with mission memory implicitly.

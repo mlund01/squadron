@@ -81,6 +81,8 @@ task "report" {
 
 Omitting `memory_access` grants no access. `read_write` includes read access;
 `read` cannot propose updates. Fields declare allowed top-level JSON keys.
+The schema supports up to 64 fields, with keys of at most 128 bytes; a task
+snapshot is also capped at 64 KiB.
 The worker receives a bounded snapshot of those keys when its attempt starts.
 The commander cannot read mission memory or grant access to an undeclared task.
 A writable worker may call `propose_mission_memory_update` with a declared key,

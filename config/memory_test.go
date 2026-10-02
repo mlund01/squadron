@@ -1,6 +1,9 @@
 package config_test
 
 import (
+	"fmt"
+	"strings"
+
 	"squadron/config"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -183,6 +186,17 @@ mission "m" {
 			Expect(memory.Validate()).To(Succeed())
 			memory.Fields = append(memory.Fields, memory.Fields[0])
 			Expect(memory.Validate()).To(MatchError(ContainSubstring("unique")))
+		})
+
+		It("rejects memory schemas beyond runtime key and field limits", func() {
+			memory := &config.MissionMemory{Description: "Findings", RetentionDays: 30,
+				Fields: []config.MissionMemoryField{{Name: strings.Repeat("x", config.MaxMissionMemoryKeyBytes+1), Type: "string"}}}
+			Expect(memory.Validate()).To(HaveOccurred())
+			memory.Fields[0].Name = "summary"
+			for len(memory.Fields) <= config.MaxMissionMemoryFields {
+				memory.Fields = append(memory.Fields, config.MissionMemoryField{Name: fmt.Sprintf("key_%d", len(memory.Fields)), Type: "string"})
+			}
+			Expect(memory.Validate()).To(MatchError(ContainSubstring("more than")))
 		})
 
 		It("rejects task grants without a mission memory policy", func() {

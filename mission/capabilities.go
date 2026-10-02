@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	maxMissionMemorySnapshotEntries = 64
+	maxMissionMemorySnapshotEntries = config.MaxMissionMemoryFields
 	maxMissionMemorySnapshotBytes   = 64 * 1024
 )
 

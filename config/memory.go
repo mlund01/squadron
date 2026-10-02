@@ -9,10 +9,12 @@ import (
 // them via the `slot` parameter on the file tools, alongside any shared
 // memory names declared at the top level.
 const (
-	MemorySlotName        = "memory"
-	ScratchpadSlotName    = "scratchpad"
-	MemoryAccessRead      = "read"
-	MemoryAccessReadWrite = "read_write"
+	MemorySlotName           = "memory"
+	ScratchpadSlotName       = "scratchpad"
+	MemoryAccessRead         = "read"
+	MemoryAccessReadWrite    = "read_write"
+	MaxMissionMemoryFields   = 64
+	MaxMissionMemoryKeyBytes = 128
 )
 
 // ScratchpadCleanupDays is the auto-delete window applied to every
@@ -105,9 +107,12 @@ func (mm *MissionMemory) Validate() error {
 	if len(mm.Fields) == 0 {
 		return fmt.Errorf("at least one field is required")
 	}
+	if len(mm.Fields) > MaxMissionMemoryFields {
+		return fmt.Errorf("memory has more than %d fields", MaxMissionMemoryFields)
+	}
 	fields := make(map[string]bool, len(mm.Fields))
 	for _, field := range mm.Fields {
-		if field.Name == "" || fields[field.Name] {
+		if strings.TrimSpace(field.Name) == "" || strings.ContainsRune(field.Name, 0) || len(field.Name) > MaxMissionMemoryKeyBytes || fields[field.Name] {
 			return fmt.Errorf("memory fields must have unique, nonempty names")
 		}
 		fields[field.Name] = true

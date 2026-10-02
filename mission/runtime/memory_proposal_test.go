@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"squadron/aitools"
 	"squadron/llm"
@@ -165,5 +167,70 @@ func TestTaskMemoryPolicyRejectsForgedGrants(t *testing.T) {
 	noMemory.Memory = testMemoryGrant("read")
 	if _, err := harness.DispatchTask(DispatchRequest{RequestID: "forged-other", TaskName: "no_memory", ReadySetRevision: harness.Snapshot().Revision, Grant: noMemory}); err == nil {
 		t.Fatal("ungranted task accepted memory snapshot")
+	}
+}
+
+func TestSQLiteMissionMemoryGrantAndCommitSurviveRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "memory-restart.db")
+	bundle, err := store.NewSQLiteBundle(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	memoryStore := bundle.Runtime.(store.MissionMemoryRuntimeStore)
+	now := time.Now().UTC()
+	if err := memoryStore.CreateRuntime(store.RuntimeCheckpointRecord{RunID: "seed", Revision: 1, PayloadJSON: `{}`, UpdatedAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := memoryStore.CommitRuntimeWithMemory("seed", 1,
+		store.RuntimeCheckpointRecord{RunID: "seed", Revision: 2, PayloadJSON: `{}`, UpdatedAt: now}, nil,
+		[]store.MissionMemoryWrite{{MissionName: "research", Key: "summary", ValueJSON: `"before"`, ExpiresAt: now.Add(24 * time.Hour)}}); err != nil {
+		t.Fatal(err)
+	}
+	policy := &TaskMemoryPolicy{MissionName: "research", Access: "read_write", RetentionDays: 30,
+		Fields: []ResultField{{Name: "summary", Type: "string"}}}
+	harness, err := CreateDurableHarness(bundle.Runtime, "run-restart-memory", "commander", []TaskDefinition{{Name: "work", MemoryPolicy: policy}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	grant := testGrant("work")
+	grant.Memory = testMemoryGrant("read_write")
+	grant.Memory.Entries = []MemoryValueSnapshot{{Key: "summary", Value: json.RawMessage(`"before"`), Version: 1}}
+	dispatch, err := harness.DispatchTask(DispatchRequest{RequestID: "start", TaskName: "work",
+		ReadySetRevision: harness.Snapshot().Revision, Grant: grant})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bundle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bundle, err = store.NewSQLiteBundle(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer bundle.Close()
+	harness, _, err = RestoreDurableHarness(bundle.Runtime, "run-restart-memory")
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored := harness.inner.Checkpoint().ActiveByTask["work"]
+	if restored.Grant.Memory == nil || len(restored.Grant.Memory.Entries) != 1 ||
+		string(restored.Grant.Memory.Entries[0].Value) != `"before"` || restored.Grant.Memory.Entries[0].Version != 1 {
+		t.Fatalf("restored grant = %+v", restored.Grant.Memory)
+	}
+	result := testResult(dispatch)
+	result.MemoryProposals = []MemoryProposal{{Key: "summary", Value: json.RawMessage(`"after"`), ExpectedVersion: 1}}
+	if err := harness.CompleteTask("work", dispatch.AttemptID, result); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := bundle.Runtime.(store.MissionMemoryRuntimeStore).LoadMissionMemory("research")
+	if err != nil || len(entries) != 1 || entries[0].Version != 2 || entries[0].ValueJSON != `"after"` {
+		t.Fatalf("memory after restart = %+v, err = %v", entries, err)
+	}
+	closedDispatch := harness.inner.Checkpoint().Dispatches["start"]
+	if closedDispatch.Grant.Memory == nil || len(closedDispatch.Grant.Memory.Entries[0].Value) != 0 {
+		t.Fatalf("closed dispatch retained snapshot value: %+v", closedDispatch.Grant.Memory)
 	}
 }

@@ -97,4 +97,20 @@ func TestSQLiteMissionMemoryCommitIsAtomicWithRuntime(t *testing.T) {
 	if entries[0].Version != 2 {
 		t.Fatalf("stale runtime commit changed memory: %+v", entries)
 	}
+	if err := memory.CreateRuntime(RuntimeCheckpointRecord{RunID: "run-2", Revision: 1, PayloadJSON: `{}`, UpdatedAt: now}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := memory.CommitRuntimeWithMemory("run-2", 1,
+		RuntimeCheckpointRecord{RunID: "run-2", Revision: 2, PayloadJSON: `{"done":true}`, UpdatedAt: now},
+		nil, []MissionMemoryWrite{{MissionName: "research", Key: "findings", ValueJSON: `{"count":3}`, ExpectedVersion: 1}}); err == nil {
+		t.Fatal("second run overwrote memory using a stale version")
+	}
+	other, _, err := memory.LoadRuntime("run-2")
+	if err != nil || other.Revision != 1 {
+		t.Fatalf("cross-run conflict advanced checkpoint: %+v err=%v", other, err)
+	}
+	var auditCount int
+	if err := bundle.Runtime.(*SQLiteRuntimeStore).db.QueryRow(`SELECT COUNT(*) FROM mission_memory_writes`).Scan(&auditCount); err != nil || auditCount != 2 {
+		t.Fatalf("memory audit count=%d err=%v, want 2", auditCount, err)
+	}
 }

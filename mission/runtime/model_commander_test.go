@@ -145,6 +145,56 @@ func TestCommanderContextWindowDropsSingleOversizedExchangeAndUsesSnapshot(t *te
 	}
 }
 
+func TestCommanderDecisionBudgetsFixedContextSnapshotAndHistoryTogether(t *testing.T) {
+	t.Parallel()
+	var history []CommanderMessage
+	for i := 0; i < 2; i++ {
+		id := fmt.Sprintf("history-%d", i)
+		history = append(history,
+			CommanderMessage{ID: id + ":prompt", Role: "user", Parts: []store.MessagePart{{Type: "text", Text: id}}},
+			CommanderMessage{ID: id, Role: "assistant", Parts: []store.MessagePart{{Type: "tool_use", ToolUseID: id, ToolName: "inspect_task", ToolInputJSON: `{}`}}},
+			CommanderMessage{ID: id + ":result", Role: "user", Parts: []store.MessagePart{{Type: "tool_result", ToolUseID: id, Text: strings.Repeat("x", 6*1024)}}},
+		)
+	}
+	session := &fakeCommanderSession{response: &llm.ChatResponse{ID: "next", ContentBlocks: []llm.ContentBlock{{
+		Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "start", Name: "start_task", Input: json.RawMessage(`{"task_name":"collect","model":"fast"}`)},
+	}}}}
+	commander, err := NewModelCommander(session, history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commander.systemPromptBytes = commanderRequestMaxBytes - 10*1024
+	decision, err := commander.Decide(context.Background(), Snapshot{RunID: "run-1", Revision: 4,
+		Ready: []string{"collect"}, Tasks: map[string]TaskSnapshot{"collect": {Name: "collect", State: TaskReady}}}, history)
+	if err != nil || decision.Dispatch.TaskName != "collect" {
+		t.Fatalf("decision = %+v, err=%v", decision, err)
+	}
+	if len(session.loaded) != 3 || session.loaded[0].GetTextContent() != "history-1" {
+		t.Fatalf("aggregate budget did not trim whole old exchange: %#v", session.loaded)
+	}
+	retained, err := json.Marshal(history[3:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(session.prompts) != 1 || commander.systemPromptBytes+len(session.prompts[0])+len(retained)+len(commanderParallelRetryHint) > commanderRequestMaxBytes {
+		t.Fatal("commander request exceeded its aggregate byte budget")
+	}
+}
+
+func TestCommanderDecisionRejectsOversizedCurrentSnapshotBeforeProviderCall(t *testing.T) {
+	t.Parallel()
+	session := &fakeCommanderSession{}
+	commander, err := NewModelCommander(session, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = commander.Decide(context.Background(), Snapshot{RunID: "run-large", Revision: 1,
+		PendingRoutes: map[string][]RouteDefinition{"router": {{Target: "next", Condition: strings.Repeat("x", commanderRequestMaxBytes)}}}}, nil)
+	if err == nil || !strings.Contains(err.Error(), "request budget") || len(session.prompts) != 0 {
+		t.Fatalf("oversized snapshot reached provider: err=%v prompts=%v", err, session.prompts)
+	}
+}
+
 func TestCommanderPromptProjectionBoundsGrowingIterationState(t *testing.T) {
 	t.Parallel()
 	snapshot := Snapshot{

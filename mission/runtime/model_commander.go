@@ -24,15 +24,17 @@ type CommanderModelSession interface {
 
 // ModelCommander adapts one persistent model session to CommanderDriver.
 type ModelCommander struct {
-	session    CommanderModelSession
-	model      string
-	turns      int
-	memoryKeys map[string]bool
+	session           CommanderModelSession
+	model             string
+	turns             int
+	memoryKeys        map[string]bool
+	systemPromptBytes int
 }
 
 const (
 	commanderHistoryMaxMessages = 24
 	commanderHistoryMaxBytes    = 96 * 1024
+	commanderRequestMaxBytes    = 256 * 1024
 	commanderReadyLimit         = 32
 	commanderResultLimit        = 24
 	commanderSummaryRuneLimit   = 256
@@ -105,6 +107,7 @@ func NewModelCommanderWithProvider(provider llm.Provider, model string, bootstra
 		return nil, nil, err
 	}
 	commander.model = model
+	commander.systemPromptBytes = len(prompt)
 	return commander, session, nil
 }
 
@@ -171,16 +174,24 @@ func NewModelCommander(session CommanderModelSession, restored []CommanderMessag
 }
 
 func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history []CommanderMessage) (CommanderDecision, error) {
-	window := commanderContextWindow(history)
+	promptJSON, err := json.Marshal(commanderPromptProjection(snapshot))
+	if err != nil {
+		return CommanderDecision{}, fmt.Errorf("encode commander snapshot: %w", err)
+	}
+	// Keep fixed context, current state, and rolling history under one budget.
+	// Reserve the possible retry instruction because the model may first return
+	// parallel controls. Durable history is not deleted; only provider context is
+	// narrowed for this decision.
+	historyBudget := commanderRequestMaxBytes - c.systemPromptBytes - len(promptJSON) - len(commanderParallelRetryHint)
+	if historyBudget < 0 {
+		return CommanderDecision{}, fmt.Errorf("commander fixed context and snapshot exceed %d-byte request budget (fixed=%d, snapshot=%d)", commanderRequestMaxBytes, c.systemPromptBytes, len(promptJSON))
+	}
+	window := commanderContextWindowWithBudget(history, min(commanderHistoryMaxBytes, historyBudget))
 	// The durable transcript is authoritative. Reload it before every decision
 	// so the provider sees the last accepted tool result even when its previous
 	// in-memory turn was interrupted or did not receive that result directly.
 	if err := restoreCommanderHistory(c.session, window); err != nil {
 		return CommanderDecision{}, err
-	}
-	promptJSON, err := json.Marshal(commanderPromptProjection(snapshot))
-	if err != nil {
-		return CommanderDecision{}, fmt.Errorf("encode commander snapshot: %w", err)
 	}
 	var prompt llm.Message
 	var response *llm.ChatResponse
@@ -197,7 +208,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 		}
 		promptText := string(promptJSON)
 		if attempt > 0 {
-			promptText += "\n\nYour previous response contained multiple control calls. Request exactly ONE control call now. The harness will ask you again for remaining ready tasks."
+			promptText += commanderParallelRetryHint
 		}
 		prompt = llm.NewTextMessage(llm.RoleUser, promptText)
 		response, err = c.session.SendMessageStream(ctx, prompt, nil)
@@ -338,6 +349,8 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 	return decision, nil
 }
 
+const commanderParallelRetryHint = "\n\nYour previous response contained multiple control calls. Request exactly ONE control call now. The harness will ask you again for remaining ready tasks."
+
 // commanderPromptProjection keeps the changing state small even when an
 // iterator creates many children. The harness still owns the complete graph,
 // and inspect_task can retrieve an omitted accepted result on demand.
@@ -408,6 +421,13 @@ func commanderPromptProjection(snapshot Snapshot) any {
 // in the provider prompt. The harness retains every message durably; current
 // task state and accepted result summaries arrive in each new snapshot.
 func commanderContextWindow(history []CommanderMessage) []CommanderMessage {
+	return commanderContextWindowWithBudget(history, commanderHistoryMaxBytes)
+}
+
+func commanderContextWindowWithBudget(history []CommanderMessage, maxBytes int) []CommanderMessage {
+	if maxBytes <= 0 {
+		return nil
+	}
 	start := 0
 	if len(history) > commanderHistoryMaxMessages {
 		start = nextCommanderPrompt(history, len(history)-commanderHistoryMaxMessages)
@@ -417,7 +437,7 @@ func commanderContextWindow(history []CommanderMessage) []CommanderMessage {
 	}
 	for start < len(history) {
 		encoded, err := json.Marshal(history[start:])
-		if err != nil || len(encoded) <= commanderHistoryMaxBytes {
+		if err != nil || len(encoded) <= maxBytes {
 			break
 		}
 		next := nextCommanderPrompt(history, start+1)

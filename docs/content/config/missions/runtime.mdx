@@ -259,9 +259,14 @@ while only recent complete orchestration exchanges are sent back to the model
 after each decision or restart. If one exchange alone exceeds the history
 budget, it is omitted from model context; the current harness snapshot still
 drives the next decision and the detail can be inspected again in bounded
-chunks. Full rich content is loaded only through
-explicit, paged task inspection. The exact final provider response is retained as
-`rawOutput` for audit rather than reconstructed from the summary.
+chunks. The fixed prompt, current snapshot, and retained history share a
+256 KiB budget for application-supplied text per decision (not a model-token
+limit, and excluding provider formatting and tool schemas). History shrinks
+first, without deleting the durable transcript. If the fixed prompt and snapshot alone exceed that budget,
+Squadron reports the overflow before calling a model. Full rich content is
+loaded only through explicit, paged task inspection. The exact final provider
+response is retained as `rawOutput` for audit rather than reconstructed from
+the summary.
 
 ## Memory scopes
 

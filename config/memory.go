@@ -9,8 +9,10 @@ import (
 // them via the `slot` parameter on the file tools, alongside any shared
 // memory names declared at the top level.
 const (
-	MemorySlotName     = "memory"
-	ScratchpadSlotName = "scratchpad"
+	MemorySlotName        = "memory"
+	ScratchpadSlotName    = "scratchpad"
+	MemoryAccessRead      = "read"
+	MemoryAccessReadWrite = "read_write"
 )
 
 // ScratchpadCleanupDays is the auto-delete window applied to every
@@ -75,8 +77,6 @@ func validateSlotName(name string) error {
 type MissionMemory struct {
 	Description   string               `hcl:"description" json:"description"`
 	RetentionDays int                  `hcl:"retention_days,optional" json:"retentionDays,omitempty"`
-	ReadTasks     []string             `hcl:"read_tasks,optional" json:"readTasks,omitempty"`
-	WriteTasks    []string             `hcl:"write_tasks,optional" json:"writeTasks,omitempty"`
 	Fields        []MissionMemoryField `hcl:"field,block" json:"fields,omitempty"`
 }
 
@@ -88,7 +88,7 @@ type MissionMemoryField struct {
 }
 
 func (mm *MissionMemory) HasPolicy() bool {
-	return mm.RetentionDays != 0 || len(mm.ReadTasks) > 0 || len(mm.WriteTasks) > 0 || len(mm.Fields) > 0
+	return mm.RetentionDays != 0 || len(mm.Fields) > 0
 }
 
 // Validate enforces the required description.
@@ -97,27 +97,13 @@ func (mm *MissionMemory) Validate() error {
 		return fmt.Errorf("description is required")
 	}
 	if !mm.HasPolicy() {
-		return nil // Legacy declaration remains inert; the runtime refuses to run it.
+		return nil // A description-only declaration grants no runtime capability.
 	}
 	if mm.RetentionDays < 1 || mm.RetentionDays > 3650 {
 		return fmt.Errorf("retention_days must be between 1 and 3650")
 	}
-	if len(mm.ReadTasks) == 0 || len(mm.Fields) == 0 {
-		return fmt.Errorf("read_tasks and at least one field are required")
-	}
-	readers := make(map[string]bool, len(mm.ReadTasks))
-	for _, task := range mm.ReadTasks {
-		if task == "" || readers[task] {
-			return fmt.Errorf("read_tasks must contain unique, nonempty names")
-		}
-		readers[task] = true
-	}
-	writers := make(map[string]bool, len(mm.WriteTasks))
-	for _, task := range mm.WriteTasks {
-		if !readers[task] || writers[task] {
-			return fmt.Errorf("write task %q must be a unique member of read_tasks", task)
-		}
-		writers[task] = true
+	if len(mm.Fields) == 0 {
+		return fmt.Errorf("at least one field is required")
 	}
 	fields := make(map[string]bool, len(mm.Fields))
 	for _, field := range mm.Fields {
@@ -129,15 +115,6 @@ func (mm *MissionMemory) Validate() error {
 		case "string", "number", "integer", "boolean", "object", "array":
 		default:
 			return fmt.Errorf("memory field %q has unsupported type %q", field.Name, field.Type)
-		}
-	}
-	return nil
-}
-
-func (mm *MissionMemory) ValidateTasks(taskNames map[string]bool) error {
-	for _, task := range append(append([]string(nil), mm.ReadTasks...), mm.WriteTasks...) {
-		if !taskNames[task] {
-			return fmt.Errorf("memory access references unknown task %q", task)
 		}
 	}
 	return nil

@@ -140,48 +140,103 @@ mission "m" {
 	})
 
 	Describe("mission memory block (persistent)", func() {
-		It("parses explicit memory grants, schema, and retention", func() {
+		It("parses schema and retention with access declared on tasks", func() {
 			hcl := fullBaseHCL() + `
 mission "m" {
   commander { model = models.anthropic.claude_sonnet_4 }
-  agents = [agents.test_agent]
+  models = [models.anthropic.claude_sonnet_4]
   memory {
     description = "Findings"
     retention_days = 30
-    read_tasks = ["research", "report"]
-    write_tasks = ["research"]
     field "summary" { type = "string" }
     field "score" { type = "number" }
   }
-  task "research" { objective = "go" }
-  task "report" { objective = "summarize" }
+  task "research" {
+    objective = "go"
+    memory_access = "read_write"
+  }
+  task "report" {
+    objective = "summarize"
+    memory_access = "read"
+  }
+  task "audit" { objective = "Check formatting" }
 }
 `
 			_, f := writeFixture("config.hcl", hcl)
-			cfg, err := config.LoadFile(f)
+			cfg, err := config.LoadAndValidate(f)
 			Expect(err).NotTo(HaveOccurred())
 			memory := cfg.Missions[0].Memory
 			Expect(memory.HasPolicy()).To(BeTrue())
 			Expect(memory.RetentionDays).To(Equal(30))
-			Expect(memory.ReadTasks).To(Equal([]string{"research", "report"}))
-			Expect(memory.WriteTasks).To(Equal([]string{"research"}))
 			Expect(memory.Fields).To(HaveLen(2))
-			Expect(memory.Validate()).To(Succeed())
-			Expect(memory.ValidateTasks(map[string]bool{"research": true, "report": true})).To(Succeed())
+			Expect(cfg.Missions[0].Tasks[0].MemoryAccess).To(Equal("read_write"))
+			Expect(cfg.Missions[0].Tasks[1].MemoryAccess).To(Equal("read"))
+			Expect(cfg.Missions[0].Tasks[2].MemoryAccess).To(BeEmpty())
 		})
 
-		It("rejects incomplete grants, unknown tasks, and duplicate fields", func() {
+		It("rejects incomplete schema and duplicate fields", func() {
 			memory := &config.MissionMemory{
 				Description: "Findings", RetentionDays: 30,
-				ReadTasks: []string{"research"}, WriteTasks: []string{"report"},
-				Fields: []config.MissionMemoryField{{Name: "summary", Type: "string"}},
 			}
-			Expect(memory.Validate()).To(MatchError(ContainSubstring("read_tasks")))
-			memory.WriteTasks = []string{"research"}
+			Expect(memory.Validate()).To(MatchError(ContainSubstring("field")))
+			memory.Fields = []config.MissionMemoryField{{Name: "summary", Type: "string"}}
 			Expect(memory.Validate()).To(Succeed())
-			Expect(memory.ValidateTasks(map[string]bool{"report": true})).To(MatchError(ContainSubstring("unknown task")))
 			memory.Fields = append(memory.Fields, memory.Fields[0])
 			Expect(memory.Validate()).To(MatchError(ContainSubstring("unique")))
+		})
+
+		It("rejects task grants without a mission memory policy", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  models = [models.anthropic.claude_sonnet_4]
+  task "research" {
+    objective = "go"
+    memory_access = "read_write"
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadAndValidate(f)
+			Expect(err).To(MatchError(ContainSubstring("requires a mission memory policy")))
+		})
+
+		It("rejects unsupported task memory access", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  models = [models.anthropic.claude_sonnet_4]
+  memory {
+    description = "Findings"
+    retention_days = 30
+    field "summary" { type = "string" }
+  }
+  task "research" {
+    objective = "go"
+    memory_access = "write"
+  }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadAndValidate(f)
+			Expect(err).To(MatchError(ContainSubstring("must be read or read_write")))
+		})
+
+		It("rejects obsolete memory-level task grants", func() {
+			hcl := fullBaseHCL() + `
+mission "m" {
+  commander { model = models.anthropic.claude_sonnet_4 }
+  models = [models.anthropic.claude_sonnet_4]
+  memory {
+    description = "Findings"
+    read_tasks = ["research"]
+  }
+  task "research" { objective = "go" }
+}
+`
+			_, f := writeFixture("config.hcl", hcl)
+			_, err := config.LoadFile(f)
+			Expect(err).To(HaveOccurred())
 		})
 
 		It("parses a memory block with a description", func() {

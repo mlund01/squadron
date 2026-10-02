@@ -31,6 +31,7 @@ task "summarize" {
 | `depends_on` | list | Tasks that must complete first |
 | `models` | list | Optional subset of the mission model pool that may execute this task |
 | `tools` | list | Capabilities always granted to this task's executor |
+| `memory_access` | string | Access to declared mission memory: `read` or `read_write`; omitted means none. See [Task Storage](/config/missions/folders). |
 | `output` | block | Structured output schema (optional) |
 | `router` | block | Conditional routing — LLM picks a branch after task completes (optional) |
 | `send_to` | list | Unconditional routing — activate target tasks on completion (optional) |

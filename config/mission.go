@@ -170,7 +170,8 @@ type Task struct {
 	MaxRetries        int           `json:"maxRetries,omitempty"`
 	RetryDelaySeconds int           `json:"retryDelaySeconds,omitempty"`
 	TimeoutSeconds    int           `json:"timeoutSeconds,omitempty"`
-	Packets           []string      `json:"packets,omitempty"` // task-scoped declared packet references (parsed manually)
+	Packets           []string      `json:"packets,omitempty"`      // task-scoped declared packet references (parsed manually)
+	MemoryAccess      string        `json:"memoryAccess,omitempty"` // "read" or "read_write" for mission memory
 	DependsOn         []string      `hcl:"depends_on,optional" json:"dependsOn,omitempty"`
 	Iterator          *TaskIterator `json:"iterator,omitempty"`
 	Output            *OutputSchema `json:"output,omitempty"`
@@ -347,8 +348,16 @@ func (w *Mission) Validate(models []Model, memories []Memory, packets []Packet, 
 		if err := w.Memory.Validate(); err != nil {
 			return fmt.Errorf("memory: %w", err)
 		}
-		if err := w.Memory.ValidateTasks(taskNames); err != nil {
-			return fmt.Errorf("memory: %w", err)
+	}
+	for _, task := range w.Tasks {
+		if task.MemoryAccess == "" {
+			continue
+		}
+		if task.MemoryAccess != MemoryAccessRead && task.MemoryAccess != MemoryAccessReadWrite {
+			return fmt.Errorf("task '%s': memory_access must be read or read_write", task.Name)
+		}
+		if w.Memory == nil || !w.Memory.HasPolicy() {
+			return fmt.Errorf("task '%s': memory_access requires a mission memory policy", task.Name)
 		}
 	}
 

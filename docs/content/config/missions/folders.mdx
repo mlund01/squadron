@@ -57,24 +57,33 @@ task is available only to that task. Either declaration grants the read tools
 
 ## Persistent mission memory
 
-The reserved declaration can express a bounded, typed policy:
+The mission memory block defines storage shape and retention; access is granted
+where each task is declared:
 
 ```hcl
 memory {
   description    = "Research findings"
   retention_days = 30
-  read_tasks     = ["research", "report"]
-  write_tasks    = ["research"]
-
   field "summary" { type = "string" }
   field "score"   { type = "number" }
 }
+
+task "research" {
+  objective     = "Gather findings"
+  memory_access = "read_write"
+}
+
+task "report" {
+  objective     = "Summarize the findings"
+  memory_access = "read"
+}
 ```
 
-Writers must also be readers; task names must exist in the mission. Fields
-declare allowed top-level JSON keys. These declarations do not yet grant a
-worker access: the runtime still rejects persistent-memory missions until the
-proposal and authorization path is connected.
+Omitting `memory_access` grants no access. `read_write` includes read access;
+`read` cannot propose updates. Fields declare allowed top-level JSON keys.
+These declarations do not yet give a worker live memory access: the runtime
+still rejects persistent-memory missions until the proposal and authorization
+path is connected.
 
 Persistent mission and shared-memory declarations do not grant task executors
 file access. Durable cross-run memory requires a separate authorization and

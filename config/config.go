@@ -2852,6 +2852,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			{Name: "retry_delay_seconds"}, // Optional - persisted delay before a retry
 			{Name: "timeout_seconds"},     // Optional - wall-clock limit per task attempt
 			{Name: "packets"},             // Optional - task-scoped declared packet references
+			{Name: "memory_access"},       // Optional - task-scoped mission memory grant
 			{Name: "depends_on"},
 			{Name: "send_to"},
 			{Name: "output"}, // shorthand: output = { field = string("desc", true) }
@@ -2973,6 +2974,17 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 			taskPackets = append(taskPackets, v.AsString())
 		}
 	}
+	var memoryAccess string
+	if attr, ok := taskContent.Attributes["memory_access"]; ok {
+		value, diags := attr.Expr.Value(ctx)
+		if diags.HasErrors() {
+			return nil, fmt.Errorf("task '%s' memory_access: %w", taskName, diags)
+		}
+		if !value.IsKnown() || value.IsNull() || value.Type() != cty.String {
+			return nil, fmt.Errorf("task '%s' memory_access must be a string", taskName)
+		}
+		memoryAccess = value.AsString()
+	}
 
 	// Get depends_on (optional array of task references)
 	var dependsOn []string
@@ -3090,6 +3102,7 @@ func parseTaskBlock(block *hcl.Block, ctx *hcl.EvalContext) (*Task, error) {
 		RetryDelaySeconds: retryDelaySeconds,
 		TimeoutSeconds:    timeoutSeconds,
 		Packets:           taskPackets,
+		MemoryAccess:      memoryAccess,
 		DependsOn:         dependsOn,
 		SendTo:            sendTo,
 		Iterator:          iterator,

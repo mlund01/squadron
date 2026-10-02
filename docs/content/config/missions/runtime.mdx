@@ -256,7 +256,10 @@ shows a limited set of ready tasks and results plus omitted counts; the
 remaining ready tasks appear in later decisions, and the commander can inspect
 a specific accepted result on demand. The complete transcript remains durable,
 while only recent complete orchestration exchanges are sent back to the model
-after each decision or restart. Full rich content is loaded only through
+after each decision or restart. If one exchange alone exceeds the history
+budget, it is omitted from model context; the current harness snapshot still
+drives the next decision and the detail can be inspected again in bounded
+chunks. Full rich content is loaded only through
 explicit, paged task inspection. The exact final provider response is retained as
 `rawOutput` for audit rather than reconstructed from the summary.
 

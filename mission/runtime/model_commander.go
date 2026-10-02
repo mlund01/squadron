@@ -363,9 +363,10 @@ func commanderContextWindow(history []CommanderMessage) []CommanderMessage {
 		}
 		next := nextCommanderPrompt(history, start+1)
 		if next >= len(history) {
-			// A single large inspection remains available to the commander;
-			// do not split its tool-use/result exchange.
-			break
+			// Never split an exchange or exceed the budget. The current harness
+			// snapshot is authoritative, so a dropped oversized exchange may be
+			// inspected again in bounded chunks if the detail is still needed.
+			return nil
 		}
 		start = next
 	}

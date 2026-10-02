@@ -120,6 +120,31 @@ func TestCommanderContextWindowLimitsOlderLargeResults(t *testing.T) {
 	}
 }
 
+func TestCommanderContextWindowDropsSingleOversizedExchangeAndUsesSnapshot(t *testing.T) {
+	t.Parallel()
+	history := []CommanderMessage{
+		{ID: "large:prompt", Role: "user", Parts: []store.MessagePart{{Type: "text", Text: "inspect result"}}},
+		{ID: "large", Role: "assistant", Parts: []store.MessagePart{{Type: "tool_use", ToolUseID: "large", ToolName: "inspect_task", ToolInputJSON: `{}`}}},
+		{ID: "large:result", Role: "user", Parts: []store.MessagePart{{Type: "tool_result", ToolUseID: "large", Text: strings.Repeat("x", commanderHistoryMaxBytes)}}},
+	}
+	if window := commanderContextWindow(history); len(window) != 0 {
+		t.Fatalf("oversized exchange exceeded the context budget: %d messages", len(window))
+	}
+	session := &fakeCommanderSession{response: &llm.ChatResponse{ID: "start-response", ContentBlocks: []llm.ContentBlock{{
+		Type: llm.ContentTypeToolUse, ToolUse: &llm.ToolUseBlock{ID: "start-1", Name: "start_task", Input: json.RawMessage(`{"task_name":"collect","model":"fast"}`)},
+	}}}}
+	commander, err := NewModelCommander(session, history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := commander.Decide(context.Background(), Snapshot{RunID: "run-1", Revision: 2,
+		Ready: []string{"collect"}, Tasks: map[string]TaskSnapshot{"collect": {Name: "collect", State: TaskReady}}}, history)
+	if err != nil || decision.Dispatch.TaskName != "collect" || len(session.loaded) != 0 || len(session.prompts) != 1 ||
+		!strings.Contains(session.prompts[0], "collect") {
+		t.Fatalf("snapshot fallback failed: decision=%+v loaded=%d prompts=%v err=%v", decision, len(session.loaded), session.prompts, err)
+	}
+}
+
 func TestCommanderPromptProjectionBoundsGrowingIterationState(t *testing.T) {
 	t.Parallel()
 	snapshot := Snapshot{

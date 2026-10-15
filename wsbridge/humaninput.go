@@ -437,8 +437,12 @@ func (c *Client) handleResolveHumanInput(env *protocol.Envelope) (*protocol.Enve
 		})
 	}
 	if out.AlreadyResolved {
-		log.Printf("resolve_human_input for %s arrived after a prior resolution — replaying existing record", payload.ToolCallID)
-	} else if c.humanInputNotifier == nil {
+		log.Printf("resolve_human_input for %s arrived after a prior resolution — returning existing record", payload.ToolCallID)
+		return protocol.NewResponse(env.RequestID, protocol.TypeResolveHumanInputResult, &protocol.ResolveHumanInputResultPayload{
+			Accepted: false, Reason: "already resolved", HumanInput: recordToProtocol(out.Record),
+		})
+	}
+	if c.humanInputNotifier == nil {
 		go c.resumeReadyHumanInputMission(out.Record.MissionID)
 	}
 	return protocol.NewResponse(env.RequestID, protocol.TypeResolveHumanInputResult, &protocol.ResolveHumanInputResultPayload{

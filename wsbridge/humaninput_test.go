@@ -295,7 +295,7 @@ var _ = Describe("Client.handleResolveHumanInput", func() {
 		Expect(ack.Reason).To(ContainSubstring("not found"))
 	})
 
-	It("is idempotent — resolving twice does not fail", func() {
+	It("keeps the first answer and reports a later response as already resolved", func() {
 		c := newBareClient()
 		Expect(c.stores.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
 			ToolCallID: "call-1",
@@ -320,7 +320,9 @@ var _ = Describe("Client.handleResolveHumanInput", func() {
 		Expect(protocol.DecodePayload(resp1, &a1)).To(Succeed())
 		Expect(protocol.DecodePayload(resp2, &a2)).To(Succeed())
 		Expect(a1.Accepted).To(BeTrue())
-		Expect(a2.Accepted).To(BeTrue())
+		Expect(a2.Accepted).To(BeFalse())
+		Expect(a2.Reason).To(Equal("already resolved"))
+		Expect(a2.HumanInput.Response).To(Equal("A"))
 	})
 })
 

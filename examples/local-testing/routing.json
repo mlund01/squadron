@@ -1,0 +1,12 @@
+{
+  "mission": "local_routing",
+  "inputs": {"case_key": "LOCAL-001"},
+  "turns": [
+    {"expect": "LOCAL_CLASSIFY", "tool": "task_complete", "input": {"summary": "Synthetic case requires repair.", "route": "repair"}},
+    {"expect": "LOCAL_REPAIR", "tool": "task_complete", "input": {"summary": "Synthetic repair recorded."}}
+  ],
+  "expected_exit": 0,
+  "expected_mission_status": "completed",
+  "expected_tasks": {"classify": "completed", "repair": "completed"},
+  "must_not_complete": ["dismiss"]
+}

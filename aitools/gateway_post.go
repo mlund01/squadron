@@ -27,6 +27,8 @@ type GatewayBridge interface {
 	// MessageToolSchema is the gateway-supplied JSON Schema for the tool's
 	// params. Empty → squadron's default { message, channel } shape.
 	MessageToolSchema() string
+	// Link joins the calling run to the request the gateway holds under key.
+	Link(ctx context.Context, key string) error
 }
 
 // GatewayAttachment is a squadron-local file resolved from the mission's

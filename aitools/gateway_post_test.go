@@ -18,6 +18,7 @@ type fakeGatewayBridge struct {
 	err         error
 	desc        string
 	schema      string
+	linkedKey   string
 }
 
 func (f *fakeGatewayBridge) PostMessage(_ context.Context, payload string, attachments []aitools.GatewayAttachment) error {
@@ -27,6 +28,10 @@ func (f *fakeGatewayBridge) PostMessage(_ context.Context, payload string, attac
 }
 func (f *fakeGatewayBridge) MessageToolDescription() string { return f.desc }
 func (f *fakeGatewayBridge) MessageToolSchema() string      { return f.schema }
+func (f *fakeGatewayBridge) Link(_ context.Context, key string) error {
+	f.linkedKey = key
+	return f.err
+}
 
 // fakeMemStore resolves any slot to a fixed root dir for attachment tests.
 type fakeMemStore struct{ root string }

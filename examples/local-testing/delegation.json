@@ -1,0 +1,29 @@
+{
+  "mission": "local_delegation",
+  "turns": [
+    {
+      "expect": "LOCAL_DELEGATE",
+      "tool": "call_agent",
+      "input": {
+        "name": "worker",
+        "task": "LOCAL_WORKER: report the synthetic record count."
+      }
+    },
+    {
+      "expect": "LOCAL_WORKER",
+      "text": "<ANSWER>The synthetic fixture contains 3 records.</ANSWER>"
+    },
+    {
+      "expect": "The synthetic fixture contains 3 records.",
+      "tool": "task_complete",
+      "input": {
+        "summary": "Worker confirmed 3 synthetic records."
+      }
+    }
+  ],
+  "expected_exit": 0,
+  "expected_mission_status": "completed",
+  "expected_tasks": {
+    "delegate": "completed"
+  }
+}

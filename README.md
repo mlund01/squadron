@@ -148,3 +148,10 @@ Plugins extend Squadron with custom tools. The [squadron-sdk](https://github.com
 ## License
 
 [MIT](LICENSE)
+
+## Local testing
+
+See [Test Squadron locally](docs/local-testing.md) to build the CLI, run missions
+with a scripted local model, inspect isolated run state, and test your own
+configuration. Integration-specific checks, including Slack message previews,
+build on that setup.

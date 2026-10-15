@@ -1,0 +1,9 @@
+{
+  "mission": "local_failure",
+  "turns": [
+    {"expect": "LOCAL_FAILURE", "tool": "task_complete", "input": {"succeed": false, "reason": "Intentional local test failure", "summary": "Synthetic failure."}}
+  ],
+  "expected_exit": 1,
+  "expected_mission_status": "failed",
+  "expected_tasks": {"fail": "failed"}
+}

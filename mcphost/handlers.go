@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"squadron/config"
 	"squadron/docs"
@@ -120,6 +121,7 @@ func (h *handlers) getMissionConfig(_ context.Context, req mcp.CallToolRequest) 
 			return toolResult(map[string]any{
 				"name":   m.Name,
 				"config": m,
+				"inputs": missionInputsJSON(m.Inputs),
 			})
 		}
 	}
@@ -213,13 +215,13 @@ func (h *handlers) listRuns(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	}
 
 	type runSummary struct {
-		ID          string     `json:"id"`
-		MissionName string     `json:"missionName"`
-		Status      string     `json:"status"`
-		StartedAt   any        `json:"startedAt"`
-		FinishedAt  any        `json:"finishedAt,omitempty"`
-		Inputs      any        `json:"inputs,omitempty"`
-		TaskCount   int        `json:"taskCount"`
+		ID          string           `json:"id"`
+		MissionName string           `json:"missionName"`
+		Status      string           `json:"status"`
+		StartedAt   any              `json:"startedAt"`
+		FinishedAt  any              `json:"finishedAt,omitempty"`
+		Inputs      any              `json:"inputs,omitempty"`
+		TaskCount   int              `json:"taskCount"`
 		Datasets    []datasetSummary `json:"datasets,omitempty"`
 	}
 
@@ -866,4 +868,52 @@ func (h *handlers) mcpRefresh(ctx context.Context, req mcp.CallToolRequest) (*mc
 		"name":   name,
 		"status": "token refreshed",
 	})
+}
+
+// missionInputJSON reports an input with its required flag and default
+// spelled out. config.MissionInput keeps the default as a cty.Value, which
+// isn't serialised, so "config" alone can't tell a client which inputs it
+// must supply.
+type missionInputJSON struct {
+	Name        string             `json:"name"`
+	Type        string             `json:"type"`
+	Description string             `json:"description,omitempty"`
+	Required    bool               `json:"required"`
+	Default     json.RawMessage    `json:"default,omitempty"`
+	Protected   bool               `json:"protected,omitempty"`
+	Items       *missionInputJSON  `json:"items,omitempty"`
+	Properties  []missionInputJSON `json:"properties,omitempty"`
+}
+
+func missionInputsJSON(inputs []config.MissionInput) []missionInputJSON {
+	out := make([]missionInputJSON, 0, len(inputs))
+	for _, inp := range inputs {
+		out = append(out, missionInputToJSON(inp))
+	}
+	return out
+}
+
+// missionInputToJSON matches the command center's rule for required, and
+// never reports a protected input's default, which holds a secret.
+func missionInputToJSON(inp config.MissionInput) missionInputJSON {
+	j := missionInputJSON{
+		Name:        inp.Name,
+		Type:        inp.Type,
+		Description: inp.Description,
+		Required:    inp.Default == nil && !inp.Protected,
+		Protected:   inp.Protected,
+	}
+	if inp.Default != nil && !inp.Protected && inp.Default.IsWhollyKnown() {
+		if b, err := ctyjson.Marshal(*inp.Default, inp.Default.Type()); err == nil {
+			j.Default = b
+		}
+	}
+	if inp.Items != nil {
+		items := missionInputToJSON(*inp.Items)
+		j.Items = &items
+	}
+	for _, prop := range inp.Properties {
+		j.Properties = append(j.Properties, missionInputToJSON(prop))
+	}
+	return j
 }

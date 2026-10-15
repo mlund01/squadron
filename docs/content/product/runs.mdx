@@ -39,6 +39,9 @@ the entire mission's cost.
 
 The execution timeline uses a shared mission clock: overlapping task bars
 represent parallel work, while multiple bars on one task represent retries.
+Amber bars mark human-input waits or stopped work. A terminal run status takes
+precedence over an active-looking last checkpoint, so old attempts do not keep
+pulsing or present pending input as an action after the run ends.
 For an iterated task, the canvas card reports how many child executions have
 finished. Open that card to choose a specific child session; the timeline shows
 one row per child execution rather than counting the iteration parent as work.

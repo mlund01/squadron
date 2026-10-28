@@ -190,10 +190,13 @@ func New(ctx context.Context, opts Options) (*Agent, error) {
 		tools["file_delete"] = &aitools.MemoryDeleteTool{Store: opts.MemoryStore}
 		tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}
 		tools["file_grep"] = &aitools.MemoryGrepTool{Store: opts.MemoryStore}
-		// The gateway post tool resolves attachments from the same store.
+		// The gateway post and edit tools resolve attachments from the same store.
 		for _, tool := range tools {
-			if gp, ok := tool.(*aitools.GatewayPostTool); ok {
-				gp.Store = opts.MemoryStore
+			switch gt := tool.(type) {
+			case *aitools.GatewayPostTool:
+				gt.Store = opts.MemoryStore
+			case *aitools.GatewayEditTool:
+				gt.Store = opts.MemoryStore
 			}
 		}
 	}

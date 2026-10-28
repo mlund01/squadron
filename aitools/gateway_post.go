@@ -16,17 +16,18 @@ import (
 // Pass nil to build a tool that reports the gateway is unavailable instead of
 // posting — the tool is always registered.
 type GatewayBridge interface {
-	// PostMessage forwards the raw, gateway-schema-shaped JSON the agent
-	// produced (text + rich layout) plus any squadron-resolved file
-	// attachments. The gateway parses the payload and uploads the attachment
-	// bytes directly.
-	PostMessage(ctx context.Context, payload string, attachments []GatewayAttachment) error
+	// PostMessage forwards the payload and attachments to the gateway and
+	// returns the message ID. The ID is empty when the gateway omits it.
+	PostMessage(ctx context.Context, payload string, attachments []GatewayAttachment) (string, error)
 	// MessageToolDescription is the gateway-supplied tool description (how to
 	// format messages for this gateway). Empty → squadron's default.
 	MessageToolDescription() string
 	// MessageToolSchema is the gateway-supplied JSON Schema for the tool's
 	// params. Empty → squadron's default { message, channel } shape.
 	MessageToolSchema() string
+	// EditMessage replaces the message identified by an ID returned from
+	// PostMessage, using the same payload and attachment format.
+	EditMessage(ctx context.Context, id, payload string, attachments []GatewayAttachment) error
 }
 
 // GatewayAttachment is a squadron-local file resolved from the mission's
@@ -91,38 +92,52 @@ type gatewayAttachmentRef struct {
 }
 
 func (t *GatewayPostTool) ToolDescription() string {
+	return gatewayPostDescription(t.Bridge, t.Store)
+}
+
+func (t *GatewayPostTool) ToolPayloadSchema() Schema {
+	return Schema{Type: TypeObject, Properties: PropertyMap{}}.WithRawJSONSchema(json.RawMessage(gatewayPostSchema(t.Bridge, t.Store)))
+}
+
+func gatewayPostDescription(bridge GatewayBridge, store MemoryStore) string {
 	base := defaultGatewayPostDescription
-	if t.Bridge != nil {
-		if d := t.Bridge.MessageToolDescription(); d != "" {
+	if bridge != nil {
+		if d := bridge.MessageToolDescription(); d != "" {
 			base = d
 		}
 	}
-	if t.Store != nil {
+	if store != nil {
 		return base + " " + attachmentsDescriptionSuffix
 	}
 	return base
 }
 
-func (t *GatewayPostTool) ToolPayloadSchema() Schema {
+func gatewayPostSchema(bridge GatewayBridge, store MemoryStore) string {
 	raw := ""
-	if t.Bridge != nil {
-		raw = t.Bridge.MessageToolSchema()
+	if bridge != nil {
+		raw = bridge.MessageToolSchema()
 	}
 	if strings.TrimSpace(raw) == "" {
 		raw = defaultGatewayPostSchema
 	}
 	// The gateway owns text + rich layout; squadron owns attachments (local
 	// files), so inject that field only when a memory store is available.
-	if t.Store != nil {
+	if store != nil {
 		raw = injectAttachmentsProperty(raw)
 	}
-	return Schema{Type: TypeObject, Properties: PropertyMap{}}.WithRawJSONSchema(json.RawMessage(raw))
+	return raw
 }
 
 // injectAttachmentsProperty adds squadron's `attachments` property to the
 // gateway-owned schema. Best-effort: if the schema can't be parsed or already
 // defines `attachments`, it is returned unchanged.
 func injectAttachmentsProperty(schema string) string {
+	return injectProperty(schema, "attachments", attachmentsSchemaProperty, false)
+}
+
+// injectProperty adds a property to the schema and marks it required when requested.
+// It returns the original schema if parsing fails or the property already exists.
+func injectProperty(schema, name, property string, required bool) string {
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(schema), &root); err != nil {
 		return schema
@@ -133,15 +148,28 @@ func injectAttachmentsProperty(schema string) string {
 			return schema
 		}
 	}
-	if _, exists := props["attachments"]; exists {
+	if _, exists := props[name]; exists {
 		return schema
 	}
-	props["attachments"] = json.RawMessage(attachmentsSchemaProperty)
+	props[name] = json.RawMessage(property)
 	newProps, err := json.Marshal(props)
 	if err != nil {
 		return schema
 	}
 	root["properties"] = newProps
+	if required {
+		var names []string
+		if rawRequired, ok := root["required"]; ok {
+			if err := json.Unmarshal(rawRequired, &names); err != nil {
+				return schema
+			}
+		}
+		newRequired, err := json.Marshal(append(names, name))
+		if err != nil {
+			return schema
+		}
+		root["required"] = newRequired
+	}
 	out, err := json.Marshal(root)
 	if err != nil {
 		return schema
@@ -163,26 +191,16 @@ func (t *GatewayPostTool) Call(ctx context.Context, params string) string {
 		return "Error: invalid JSON parameters"
 	}
 
-	payload := params
-	var attachments []GatewayAttachment
-
-	// Pull `attachments` out of the payload and resolve it against the mission's
-	// local file storage; the gateway never sees the references, only bytes.
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(params), &root); err != nil {
 		return "Error: invalid JSON parameters"
 	}
-	if rawAtt, ok := root["attachments"]; ok {
-		delete(root, "attachments")
-		var refs []gatewayAttachmentRef
-		if err := json.Unmarshal(rawAtt, &refs); err != nil {
-			return "Error: attachments must be an array of {slot, path} objects"
-		}
-		resolved, errMsg := t.resolveAttachments(refs)
-		if errMsg != "" {
-			return "Error: " + errMsg
-		}
-		attachments = resolved
+	payload := params
+	attachments, found, errMsg := takeAttachments(t.Store, root)
+	if errMsg != "" {
+		return "Error: " + errMsg
+	}
+	if found {
 		rest, err := json.Marshal(root)
 		if err != nil {
 			return "Error: " + err.Error()
@@ -190,17 +208,37 @@ func (t *GatewayPostTool) Call(ctx context.Context, params string) string {
 		payload = string(rest)
 	}
 
-	if err := t.Bridge.PostMessage(ctx, payload, attachments); err != nil {
+	id, err := t.Bridge.PostMessage(ctx, payload, attachments)
+	if err != nil {
 		return "Error: " + err.Error()
 	}
-	return "Message posted to the gateway."
+	if id == "" {
+		return "Message posted to the gateway."
+	}
+	return "Message posted to the gateway. Its id is " + id + "; pass it to builtins.gateway.edit to change this message."
 }
 
-func (t *GatewayPostTool) resolveAttachments(refs []gatewayAttachmentRef) ([]GatewayAttachment, string) {
+// takeAttachments removes the attachments field from the payload and reads
+// the referenced files from local storage. found reports whether the field was present.
+func takeAttachments(store MemoryStore, root map[string]json.RawMessage) (attachments []GatewayAttachment, found bool, errMsg string) {
+	rawAtt, ok := root["attachments"]
+	if !ok {
+		return nil, false, ""
+	}
+	delete(root, "attachments")
+	var refs []gatewayAttachmentRef
+	if err := json.Unmarshal(rawAtt, &refs); err != nil {
+		return nil, true, "attachments must be an array of {slot, path} objects"
+	}
+	attachments, errMsg = resolveAttachments(store, refs)
+	return attachments, true, errMsg
+}
+
+func resolveAttachments(store MemoryStore, refs []gatewayAttachmentRef) ([]GatewayAttachment, string) {
 	if len(refs) == 0 {
 		return nil, ""
 	}
-	if t.Store == nil {
+	if store == nil {
 		return nil, "attachments are not available for this mission (no memory or scratchpad configured)"
 	}
 	var out []GatewayAttachment
@@ -209,7 +247,7 @@ func (t *GatewayPostTool) resolveAttachments(refs []gatewayAttachmentRef) ([]Gat
 		if strings.TrimSpace(r.Slot) == "" || strings.TrimSpace(r.Path) == "" {
 			return nil, "each attachment needs a non-empty slot and path"
 		}
-		abs, err := resolveSlotPath(t.Store, r.Slot, r.Path)
+		abs, err := resolveSlotPath(store, r.Slot, r.Path)
 		if err != nil {
 			return nil, fmt.Sprintf("attachment %s/%s: %v", r.Slot, r.Path, err)
 		}

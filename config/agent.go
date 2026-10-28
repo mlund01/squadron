@@ -28,7 +28,7 @@ var BuiltinTools = map[string][]string{
 	"dataset": {"set", "sample", "count"},
 	"utils":   {"sleep", "current_time"},
 	"human":   {"ask"},
-	"gateway": {"post"},
+	"gateway": {"post", "edit"},
 }
 
 // InternalTools is the list of available internal tools (legacy format for backwards compatibility)

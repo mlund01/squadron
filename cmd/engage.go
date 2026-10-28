@@ -276,11 +276,17 @@ func runEngage(cmd *cobra.Command, args []string) {
 				return sharedClient.GetConfig()
 			},
 			Stores: func() *store.Bundle { return sharedStores },
-			RunMission: func(name string, inputs map[string]string) (string, error) {
+			RunURL: func(id string) string {
 				if sharedClient == nil {
-					return "", fmt.Errorf("squadron is still starting up")
+					return ""
 				}
-				return sharedClient.RunMissionDirect(name, inputs)
+				return sharedClient.RunURL(id)
+			},
+			RunMission: func(name string, inputs map[string]string, threadID string) (string, string, error) {
+				if sharedClient == nil {
+					return "", "", fmt.Errorf("squadron is still starting up")
+				}
+				return sharedClient.RunMissionDirect(name, inputs, threadID)
 			},
 			ReloadConfig: func() error {
 				if sharedClient == nil {
@@ -375,6 +381,7 @@ func runEngage(cmd *cobra.Command, args []string) {
 	var gatewayMgr *gateway.Manager
 	if cfgErr == nil && cfg != nil && cfg.Gateway != nil {
 		gatewayMgr = gateway.NewManager(stores, notifier, client.HumanInputListener())
+		gatewayMgr.RunURL = client.RunURL
 		if err := gatewayMgr.Start(context.Background(), gateway.Config{
 			Name:     cfg.Gateway.Name,
 			Source:   cfg.Gateway.Source,

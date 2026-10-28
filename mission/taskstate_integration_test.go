@@ -20,7 +20,7 @@ var _ = Describe("TaskStateManager with SQLite store", func() {
 		Expect(err).NotTo(HaveOccurred())
 
 		// Create a mission and task in the DB
-		missionID, err := bundle.Missions.CreateMission("test", "{}", "{}")
+		missionID, err := bundle.Missions.CreateMission("test", "test-thread", "{}", "{}")
 		Expect(err).NotTo(HaveOccurred())
 
 		taskID, err := bundle.Missions.CreateTask(missionID, "task-a", "{}")
@@ -113,7 +113,7 @@ var _ = Describe("TaskStateManager with SQLite store", func() {
 			Expect(mgr2.GetTaskID("fresh-task")).To(Equal(""))
 
 			// Simulate runTask creating the DB record
-			missionID2, _ := bundle.Missions.CreateMission("test2", "{}", "{}")
+			missionID2, _ := bundle.Missions.CreateMission("test2", "test-thread", "{}", "{}")
 			taskID2, _ := bundle.Missions.CreateTask(missionID2, "fresh-task", "{}")
 
 			mgr2.SetTaskID("fresh-task", taskID2)

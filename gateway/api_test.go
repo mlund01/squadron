@@ -94,27 +94,37 @@ var _ = Describe("squadronAPI.ListHumanInputs", func() {
 	It("filters by state and mission_id", func() {
 		bundle := newAPITestBundle()
 		api, _ := newSquadronAPI(bundle, nil)
+		api.runURL = func(id string) string { return "https://cc.example/instances/1/runs/" + id }
+		m1, err := bundle.Missions.CreateMission("first", "shared-thread", "{}", "{}")
+		Expect(err).NotTo(HaveOccurred())
+		m2, err := bundle.Missions.CreateMission("second", "shared-thread", "{}", "{}")
+		Expect(err).NotTo(HaveOccurred())
 
 		Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
-			ToolCallID: "open-m1", MissionID: "m1", Question: "?",
+			ToolCallID: "open-m1", MissionID: m1, Question: "?",
 		})).To(Succeed())
 		Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
-			ToolCallID: "open-m2", MissionID: "m2", Question: "?",
+			ToolCallID: "open-m2", MissionID: m2, Question: "?",
 		})).To(Succeed())
 		Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
-			ToolCallID: "resolved-m1", MissionID: "m1", Question: "?",
+			ToolCallID: "resolved-m1", MissionID: m1, Question: "?",
 		})).To(Succeed())
-		_, err := bundle.HumanInputs.ResolveRequest("resolved-m1", "x", "user")
+		_, err = bundle.HumanInputs.ResolveRequest("resolved-m1", "x", "user")
 		Expect(err).NotTo(HaveOccurred())
 
 		// State filter alone.
 		rows, _, err := api.ListHumanInputs(context.Background(), gwsdk.HumanInputFilter{State: gwsdk.HumanInputStateOpen})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rows).To(HaveLen(2))
+		Expect(rows[0].ThreadID).To(Equal("shared-thread"))
+		Expect(rows[1].ThreadID).To(Equal("shared-thread"))
+		for _, row := range rows {
+			Expect(row.RunURL).To(Equal(api.runURL(row.MissionID)))
+		}
 
 		// State + mission filter.
 		rows, _, err = api.ListHumanInputs(context.Background(),
-			gwsdk.HumanInputFilter{State: gwsdk.HumanInputStateOpen, MissionID: "m1"})
+			gwsdk.HumanInputFilter{State: gwsdk.HumanInputStateOpen, MissionID: m1})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(rows).To(HaveLen(1))
 		Expect(rows[0].ToolCallID).To(Equal("open-m1"))

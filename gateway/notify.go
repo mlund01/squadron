@@ -33,6 +33,7 @@ func (s *NotifySink) Notify(ctx context.Context, ch *config.NotificationChannel,
 	}
 	return s.mgr.Notify(ctx, gwsdk.NotificationRecord{
 		MissionID:   rec.MissionID,
+		ThreadID:    rec.ThreadID,
 		MissionName: rec.MissionName,
 		Event:       rec.Event,
 		Title:       rec.Title,

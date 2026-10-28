@@ -36,8 +36,9 @@ type gatewayClient interface {
 	OnHumanInputRequested(ctx context.Context, rec gwsdk.HumanInputRecord) error
 	OnHumanInputResolved(ctx context.Context, rec gwsdk.HumanInputRecord) error
 	OnNotification(ctx context.Context, rec gwsdk.NotificationRecord) error
-	PostMessage(ctx context.Context, req gwsdk.PostMessageRequest) error
+	PostMessage(ctx context.Context, req gwsdk.PostMessageRequest) (gwsdk.PostMessageResponse, error)
 	MessageToolSpec(ctx context.Context) (gwsdk.MessageToolSpec, error)
+	EditMessage(ctx context.Context, req gwsdk.EditMessageRequest) error
 	Shutdown(ctx context.Context) error
 }
 
@@ -57,6 +58,8 @@ type launcher func(ctx context.Context, cfg Config, host *gwsdk.HostPlugin) (gat
 // singleton (one gateway block per config) so we hold a single client
 // rather than a registry.
 type Manager struct {
+	// RunURL resolves links for outgoing run records. Set before Start.
+	RunURL   func(string) string
 	stores   *store.Bundle
 	notifier *humaninput.Notifier
 	listener humaninput.Listener
@@ -133,6 +136,7 @@ func (m *Manager) launchLocked(ctx context.Context, cfg Config) error {
 		stores:   m.stores,
 		notifier: m.notifier,
 		listener: m.listener,
+		runURL:   m.RunURL,
 	}}
 
 	gw, proc, err := m.launch(ctx, cfg, host)
@@ -300,28 +304,43 @@ func (m *Manager) Notify(ctx context.Context, rec gwsdk.NotificationRecord) erro
 	if gw == nil {
 		return nil
 	}
+	rec.RunURL = missionURL(m.RunURL, rec.MissionID)
 	return gw.OnNotification(ctx, rec)
 }
 
-// PostMessage forwards the raw, gateway-schema-shaped payload to the running
-// gateway. Returns an error (surfaced to the calling agent) when no gateway is
-// up. Satisfies aitools.GatewayBridge.
-func (m *Manager) PostMessage(ctx context.Context, payload string, attachments []aitools.GatewayAttachment) error {
+// PostMessage forwards the payload and attachments to the running gateway
+// and returns the message ID. It returns an error when no gateway is running.
+func (m *Manager) PostMessage(ctx context.Context, payload string, attachments []aitools.GatewayAttachment) (string, error) {
+	missionID, taskID := aitools.MissionContextFromContext(ctx)
+	m.mu.Lock()
+	gw := m.gw
+	m.mu.Unlock()
+	if gw == nil {
+		return "", fmt.Errorf("no gateway is currently running")
+	}
+	resp, err := gw.PostMessage(ctx, gwsdk.PostMessageRequest{Payload: payload, Attachments: sdkAttachments(attachments), RunURL: missionURL(m.RunURL, missionID), MissionID: missionID, TaskID: taskID, ThreadID: aitools.MissionThreadFromContext(ctx)})
+	return resp.MessageID, err
+}
+
+// EditMessage replaces the identified message through the running gateway.
+// It returns an error when no gateway is running.
+func (m *Manager) EditMessage(ctx context.Context, id, payload string, attachments []aitools.GatewayAttachment) error {
+	missionID, taskID := aitools.MissionContextFromContext(ctx)
 	m.mu.Lock()
 	gw := m.gw
 	m.mu.Unlock()
 	if gw == nil {
 		return fmt.Errorf("no gateway is currently running")
 	}
-	req := gwsdk.PostMessageRequest{Payload: payload}
-	for _, a := range attachments {
-		req.Attachments = append(req.Attachments, gwsdk.FileAttachment{
-			Filename: a.Filename,
-			MimeType: a.MimeType,
-			Content:  a.Content,
-		})
+	return gw.EditMessage(ctx, gwsdk.EditMessageRequest{MessageID: id, Payload: payload, Attachments: sdkAttachments(attachments), RunURL: missionURL(m.RunURL, missionID), MissionID: missionID, TaskID: taskID, ThreadID: aitools.MissionThreadFromContext(ctx)})
+}
+
+func sdkAttachments(in []aitools.GatewayAttachment) []gwsdk.FileAttachment {
+	var out []gwsdk.FileAttachment
+	for _, a := range in {
+		out = append(out, gwsdk.FileAttachment{Filename: a.Filename, MimeType: a.MimeType, Content: a.Content})
 	}
-	return gw.PostMessage(ctx, req)
+	return out
 }
 
 // MessageToolDescription returns the gateway-supplied post-tool description
@@ -352,7 +371,12 @@ func (m *Manager) dispatch(ctx context.Context, ev humaninput.Event) {
 		return
 	}
 
-	rec := storeRecordToSDK(ev.Record)
+	rec, err := storeRecordToSDK(ev.Record, m.stores)
+	if err != nil {
+		log.Printf("gateway question: %v", err)
+		return
+	}
+	rec.RunURL = missionURL(m.RunURL, rec.MissionID)
 	switch ev.Kind {
 	case humaninput.EventKindCreated:
 		if err := gw.OnHumanInputRequested(ctx, rec); err != nil {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	ctyjson "github.com/zclconf/go-cty/cty/json"
 
 	"squadron/config"
 	"squadron/docs"
@@ -120,6 +121,7 @@ func (h *handlers) getMissionConfig(_ context.Context, req mcp.CallToolRequest) 
 			return toolResult(map[string]any{
 				"name":   m.Name,
 				"config": m,
+				"inputs": missionInputsJSON(m.Inputs),
 			})
 		}
 	}
@@ -168,14 +170,21 @@ func (h *handlers) runMission(_ context.Context, req mcp.CallToolRequest) (*mcp.
 		return mcp.NewToolResultError("mission execution not available"), nil
 	}
 
-	missionID, err := h.deps.RunMission(name, inputs)
+	threadID, _ := req.GetArguments()["thread_id"].(string)
+	missionID, threadID, err := h.deps.RunMission(name, inputs, threadID)
 	if err != nil {
 		return mcp.NewToolResultError(fmt.Sprintf("failed to start mission: %v", err)), nil
 	}
 
+	runURL := ""
+	if h.deps.RunURL != nil {
+		runURL = h.deps.RunURL(missionID)
+	}
 	return toolResult(map[string]any{
+		"runUrl":    runURL,
 		"accepted":  true,
 		"missionId": missionID,
+		"threadId":  threadID,
 	})
 }
 
@@ -213,13 +222,14 @@ func (h *handlers) listRuns(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 	}
 
 	type runSummary struct {
-		ID          string     `json:"id"`
-		MissionName string     `json:"missionName"`
-		Status      string     `json:"status"`
-		StartedAt   any        `json:"startedAt"`
-		FinishedAt  any        `json:"finishedAt,omitempty"`
-		Inputs      any        `json:"inputs,omitempty"`
-		TaskCount   int        `json:"taskCount"`
+		ThreadID    string           `json:"threadId"`
+		ID          string           `json:"id"`
+		MissionName string           `json:"missionName"`
+		Status      string           `json:"status"`
+		StartedAt   any              `json:"startedAt"`
+		FinishedAt  any              `json:"finishedAt,omitempty"`
+		Inputs      any              `json:"inputs,omitempty"`
+		TaskCount   int              `json:"taskCount"`
 		Datasets    []datasetSummary `json:"datasets,omitempty"`
 	}
 
@@ -234,6 +244,7 @@ func (h *handlers) listRuns(_ context.Context, req mcp.CallToolRequest) (*mcp.Ca
 		}
 
 		runs = append(runs, runSummary{
+			ThreadID:    r.ThreadID,
 			ID:          r.ID,
 			MissionName: r.MissionName,
 			Status:      r.Status,
@@ -317,6 +328,7 @@ func (h *handlers) getRunDetails(_ context.Context, req mcp.CallToolRequest) (*m
 	return toolResult(map[string]any{
 		"id":          record.ID,
 		"missionName": record.MissionName,
+		"threadId":    record.ThreadID,
 		"status":      record.Status,
 		"startedAt":   record.StartedAt,
 		"finishedAt":  record.FinishedAt,
@@ -348,6 +360,7 @@ func (h *handlers) getRunConfig(_ context.Context, req mcp.CallToolRequest) (*mc
 	return toolResult(map[string]any{
 		"id":          record.ID,
 		"missionName": record.MissionName,
+		"threadId":    record.ThreadID,
 		"config":      config,
 	})
 }
@@ -866,4 +879,50 @@ func (h *handlers) mcpRefresh(ctx context.Context, req mcp.CallToolRequest) (*mc
 		"name":   name,
 		"status": "token refreshed",
 	})
+}
+
+// missionInputJSON exposes required flags and JSON defaults omitted from
+// config.MissionInput serialization.
+type missionInputJSON struct {
+	Name        string             `json:"name"`
+	Type        string             `json:"type"`
+	Description string             `json:"description,omitempty"`
+	Required    bool               `json:"required"`
+	Default     json.RawMessage    `json:"default,omitempty"`
+	Protected   bool               `json:"protected,omitempty"`
+	Items       *missionInputJSON  `json:"items,omitempty"`
+	Properties  []missionInputJSON `json:"properties,omitempty"`
+}
+
+func missionInputsJSON(inputs []config.MissionInput) []missionInputJSON {
+	out := make([]missionInputJSON, 0, len(inputs))
+	for _, inp := range inputs {
+		out = append(out, missionInputToJSON(inp))
+	}
+	return out
+}
+
+// missionInputToJSON marks inputs required when they have no default and
+// are unprotected. Protected input defaults are omitted from the response.
+func missionInputToJSON(inp config.MissionInput) missionInputJSON {
+	j := missionInputJSON{
+		Name:        inp.Name,
+		Type:        inp.Type,
+		Description: inp.Description,
+		Required:    inp.Default == nil && !inp.Protected,
+		Protected:   inp.Protected,
+	}
+	if inp.Default != nil && !inp.Protected && inp.Default.IsWhollyKnown() {
+		if b, err := ctyjson.Marshal(*inp.Default, inp.Default.Type()); err == nil {
+			j.Default = b
+		}
+	}
+	if inp.Items != nil {
+		items := missionInputToJSON(*inp.Items)
+		j.Items = &items
+	}
+	for _, prop := range inp.Properties {
+		j.Properties = append(j.Properties, missionInputToJSON(prop))
+	}
+	return j
 }

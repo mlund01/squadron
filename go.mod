@@ -120,3 +120,5 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/mlund01/squadron-gateway-sdk => github.com/FedTax/squadron-gateway-sdk v0.0.0-20261027194028-b0ed0f7c42fc

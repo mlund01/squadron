@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"squadron/store"
 )
@@ -31,7 +31,7 @@ var _ = Describe("EventStore", func() {
 		})
 
 		It("stores and retrieves events by mission", func() {
-			missionID, err := bundle.Missions.CreateMission("test-mission", "{}", "{}")
+			missionID, err := bundle.Missions.CreateMission("test-mission", "test-thread", "{}", "{}")
 			Expect(err).NotTo(HaveOccurred())
 
 			event := store.MissionEvent{
@@ -53,7 +53,7 @@ var _ = Describe("EventStore", func() {
 		})
 
 		It("stores events with task references", func() {
-			missionID, err := bundle.Missions.CreateMission("test-mission", "{}", "{}")
+			missionID, err := bundle.Missions.CreateMission("test-mission", "test-thread", "{}", "{}")
 			Expect(err).NotTo(HaveOccurred())
 
 			taskID, err := bundle.Missions.CreateTask(missionID, "task-1", "{}")
@@ -77,7 +77,7 @@ var _ = Describe("EventStore", func() {
 		})
 
 		It("stores events with session and iteration references", func() {
-			missionID, err := bundle.Missions.CreateMission("test-mission", "{}", "{}")
+			missionID, err := bundle.Missions.CreateMission("test-mission", "test-thread", "{}", "{}")
 			Expect(err).NotTo(HaveOccurred())
 
 			taskID, err := bundle.Missions.CreateTask(missionID, "task-1", "{}")
@@ -107,7 +107,7 @@ var _ = Describe("EventStore", func() {
 		})
 
 		It("respects limit and offset for pagination", func() {
-			missionID, err := bundle.Missions.CreateMission("test-mission", "{}", "{}")
+			missionID, err := bundle.Missions.CreateMission("test-mission", "test-thread", "{}", "{}")
 			Expect(err).NotTo(HaveOccurred())
 
 			for i := 0; i < 5; i++ {

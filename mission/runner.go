@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/mlund01/squadron-wire/protocol"
 	"github.com/zclconf/go-cty/cty"
@@ -40,6 +41,7 @@ type Runner struct {
 	resolvedDatasets map[string][]cty.Value
 	datasetIDs       map[string]string // dataset name → store ID
 	missionID        string
+	threadID         string
 
 	// Task state management
 	mu                  sync.RWMutex
@@ -127,6 +129,15 @@ func WithDebugLogger(logger *DebugLogger) RunnerOption {
 		r.debugLogger = logger
 	}
 }
+
+// WithThreadID assigns this run to a mission thread: a chain of related runs.
+// New runs generate an ID when empty; resumed runs retain their stored ID.
+func WithThreadID(threadID string) RunnerOption {
+	return func(r *Runner) { r.threadID = threadID }
+}
+
+// ThreadID identifies the mission thread containing this run.
+func (r *Runner) ThreadID() string { return r.threadID }
 
 // WithResume configures the runner to resume a previously failed mission
 func WithResume(missionID string) RunnerOption {
@@ -248,6 +259,23 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 	// Apply options (must happen before input/dataset resolution so resumeMissionID is set)
 	for _, opt := range opts {
 		opt(r)
+	}
+
+	// Preserve supplied thread IDs so separate runs can share a mission thread.
+	// Resuming restores the stored ID; only an unassigned new run needs a UUID.
+	if r.resumeMissionID != "" {
+		record, err := stores.Missions.GetMission(r.resumeMissionID)
+		if err != nil {
+			stores.Close()
+			return nil, fmt.Errorf("resume: %w", err)
+		}
+		if r.threadID != "" && r.threadID != record.ThreadID {
+			stores.Close()
+			return nil, fmt.Errorf("resume cannot change the mission thread")
+		}
+		r.threadID = record.ThreadID
+	} else if r.threadID == "" {
+		r.threadID = uuid.NewString()
 	}
 
 	// Build budget tracker (nil if no budgets declared — zero overhead in that case)
@@ -411,6 +439,7 @@ func (r *Runner) NextMissionInputs() map[string]string {
 // Run executes the mission.
 // The caller is responsible for closing r.stores after Run returns and all events are flushed.
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
+	ctx = aitools.WithMissionThread(ctx, r.threadID)
 
 	// Derive a mission-scoped context so the budget tracker can cancel every in-flight
 	// commander and agent the moment a task or mission budget is breached.
@@ -565,7 +594,7 @@ func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) err
 		rawInputsJSON, _ := json.Marshal(r.rawInputs)
 		configJSON, _ := json.Marshal(r.missionSnapshot())
 		var err error
-		missionID, err = r.stores.Missions.CreateMission(r.mission.Name, string(rawInputsJSON), string(configJSON))
+		missionID, err = r.stores.Missions.CreateMission(r.mission.Name, r.threadID, string(rawInputsJSON), string(configJSON))
 		if err != nil {
 			return fmt.Errorf("create mission record: %w", err)
 		}

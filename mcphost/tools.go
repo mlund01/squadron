@@ -33,9 +33,10 @@ func registerTools(srv *server.MCPServer, h *handlers) {
 
 	// Mission execution
 	srv.AddTool(mcp.NewTool("run_mission",
-		mcp.WithDescription("Start a mission. Returns immediately with a mission ID."),
+		mcp.WithDescription("Start a mission. Returns its mission ID and mission thread ID."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Mission name")),
 		mcp.WithObject("inputs", mcp.Description("Optional mission inputs as key-value pairs")),
+		mcp.WithString("thread_id", mcp.Description("Mission thread shared by related runs. Omit to generate a new UUID.")),
 	), h.runMission)
 
 	// Runs (history)

@@ -56,6 +56,25 @@ A gateway that advertises no spec falls back to a simple `{ message, channel }` 
 
 `builtins.gateway.post` is only a valid tool reference **when a gateway block is present** — `squadron verify` rejects it otherwise.
 
+## Shared mission conversations
+
+A mission thread is a chain of related runs. Squadron supplies its `ThreadID`
+to the gateway with posts, edits, questions and notifications, so a gateway can
+keep those runs in one conversation. Automatic mission routing inherits the ID,
+and resume retains it. A separate start can join by supplying `--thread-id` on
+the CLI or `thread_id` through MCP `run_mission`.
+
+Each run retains its `MissionID` for its run URL and question ownership.
+Squadron supplies `RunURL` on posts, edits, questions and notifications after
+command-center registration. It builds the link from the connected address and
+assigned instance ID using `/instances/{instanceID}/runs/{missionID}`. Before
+registration and in headless mode, the URL is empty. A local command center
+produces a localhost link, usable on the machine running Squadron.
+
+Missions can save shared content in a configured [memory](/missions/memory)
+to compose later updates. Memory sharing is configured separately from the
+mission thread. Each gateway defines its message payload and editing behavior.
+
 ## Fields
 
 | Field | Type | Required | Description |

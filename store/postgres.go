@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/zclconf/go-cty/cty"
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/zclconf/go-cty/cty"
 )
 
 // NewPostgresBundle creates a Bundle backed by PostgreSQL
@@ -54,11 +54,11 @@ type PgMissionStore struct {
 	db *sql.DB
 }
 
-func (s *PgMissionStore) CreateMission(name string, inputsJSON, configJSON string) (string, error) {
+func (s *PgMissionStore) CreateMission(name, threadID string, inputsJSON, configJSON string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES ($1, $2, $3, $4, $5)`,
-		id, name, inputsJSON, configJSON, tsNow(),
+		`INSERT INTO missions (id, mission_name, thread_id, input_values_json, config_json, started_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+		id, name, threadID, inputsJSON, configJSON, tsNow(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create mission: %w", err)
@@ -261,9 +261,9 @@ func (s *PgMissionStore) GetMission(id string) (*MissionRecord, error) {
 	var finishedAtStr sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions WHERE id = $1`,
+		`SELECT id, thread_id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions WHERE id = $1`,
 		id,
-	).Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr)
+	).Scan(&m.ID, &m.ThreadID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("mission not found: %w", err)
 	}
@@ -332,7 +332,7 @@ func (s *PgMissionStore) ListMissions(limit, offset int) ([]MissionRecord, int, 
 	}
 
 	rows, err := s.db.Query(
-		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions ORDER BY started_at DESC, id DESC LIMIT $1 OFFSET $2`,
+		`SELECT id, thread_id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions ORDER BY started_at DESC, id DESC LIMIT $1 OFFSET $2`,
 		limit, offset,
 	)
 	if err != nil {
@@ -347,7 +347,7 @@ func (s *PgMissionStore) ListMissions(limit, offset int) ([]MissionRecord, int, 
 		var startedAtStr string
 		var finishedAtStr sql.NullString
 
-		if err := rows.Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr); err != nil {
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, 0, err
 		}
 		m.StartedAt, _ = tsParse(startedAtStr)

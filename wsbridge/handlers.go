@@ -78,7 +78,10 @@ func (c *Client) handleGetConfig(env *protocol.Envelope) (*protocol.Envelope, er
 }
 
 func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, error) {
-	var payload protocol.RunMissionPayload
+	var payload struct {
+		protocol.RunMissionPayload
+		ThreadID string `json:"threadId,omitempty"`
+	}
 	if err := protocol.DecodePayload(env, &payload); err != nil {
 		return nil, fmt.Errorf("decode run_mission: %w", err)
 	}
@@ -121,7 +124,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 
 	// Create mission runner with no-op debug logger
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
+	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithThreadID(payload.ThreadID), mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
 	if err != nil {
 		c.concurrency.NotifyMissionDone(payload.MissionName)
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
@@ -155,10 +158,10 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 	c.runningMissions[missionID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 	c.missionMu.Unlock()
 
-	return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
-		Accepted:  true,
-		MissionID: missionID,
-	})
+	return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &struct {
+		protocol.RunMissionAckPayload
+		ThreadID string `json:"threadId"`
+	}{protocol.RunMissionAckPayload{Accepted: true, MissionID: missionID}, runner.ThreadID()})
 }
 
 func (c *Client) handleStopMission(env *protocol.Envelope) (*protocol.Envelope, error) {
@@ -1263,6 +1266,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 			// stop does not fire one.
 			if status == "failed" {
 				c.dispatchNotification(runner.NotificationConfig(), notification.Record{
+					ThreadID:    runner.ThreadID(),
 					MissionID:   mid,
 					MissionName: missionName,
 					Event:       config.NotifyMissionFailed,
@@ -1282,6 +1286,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		})
 		c.SendEvent(completeEnv)
 		c.dispatchNotification(runner.NotificationConfig(), notification.Record{
+			ThreadID:    runner.ThreadID(),
 			MissionID:   mid,
 			MissionName: missionName,
 			Event:       config.NotifyMissionCompleted,
@@ -1307,7 +1312,9 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		cfg := c.getConfig()
 		debugLogger, _ := mission.NewDebugLogger("")
 		var newErr error
-		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
+		// Carry the thread ID forward so the next mission remains in this chain
+		// of related runs while receiving its own mission ID.
+		runner, newErr = mission.NewRunner(cfg, c.configPath, nextMission, inputs, mission.WithThreadID(runner.ThreadID()), mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
 		if newErr != nil {
 			log.Printf("Failed to create runner for chained mission %q: %v", nextMission, newErr)
 			return
@@ -1452,12 +1459,12 @@ func (c *Client) RunScheduledMission(missionName, source string, inputs map[stri
 }
 
 // RunMissionDirect starts a mission without going through the WebSocket protocol.
-// It returns the mission ID immediately. The mission runs in the background.
-// This is used by the MCP server to trigger missions.
-func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) (string, error) {
+// It returns the run ID and mission thread ID after startup. An empty
+// threadID starts a new mission thread; execution continues in the background.
+func (c *Client) RunMissionDirect(missionName string, inputs map[string]string, threadID string) (string, string, error) {
 	cfg := c.getConfig()
 	if cfg == nil {
-		return "", fmt.Errorf("config not loaded")
+		return "", "", fmt.Errorf("config not loaded")
 	}
 
 	// Validate mission exists
@@ -1469,20 +1476,20 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 		}
 	}
 	if missionCfg == nil {
-		return "", fmt.Errorf("mission %q not found", missionName)
+		return "", "", fmt.Errorf("mission %q not found", missionName)
 	}
 
 	// Check concurrency limit
 	if !c.concurrency.NotifyMissionStarted(missionName) {
-		return "", fmt.Errorf("mission %q is at max parallel capacity (%d)", missionName, missionCfg.MaxParallel)
+		return "", "", fmt.Errorf("mission %q is at max parallel capacity (%d)", missionName, missionCfg.MaxParallel)
 	}
 
 	// Create mission runner
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
+	runner, err := mission.NewRunner(cfg, c.configPath, missionName, inputs, mission.WithThreadID(threadID), mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
 	if err != nil {
 		c.concurrency.NotifyMissionDone(missionName)
-		return "", fmt.Errorf("failed to create runner: %w", err)
+		return "", "", fmt.Errorf("failed to create runner: %w", err)
 	}
 
 	// Create WS handler for tracking and event streaming
@@ -1499,7 +1506,7 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 	missionID, err := wsHandler.WaitForMissionID(30 * time.Second)
 	if err != nil {
 		missionCancel()
-		return "", fmt.Errorf("mission failed to start: %w", err)
+		return "", "", fmt.Errorf("mission failed to start: %w", err)
 	}
 
 	// Track the running mission
@@ -1507,7 +1514,7 @@ func (c *Client) RunMissionDirect(missionName string, inputs map[string]string) 
 	c.runningMissions[missionID] = &runningMission{cancel: missionCancel, drain: runner.Drain}
 	c.missionMu.Unlock()
 
-	return missionID, nil
+	return missionID, runner.ThreadID(), nil
 }
 
 func (c *Client) handleGetCostSummary(env *protocol.Envelope) (*protocol.Envelope, error) {

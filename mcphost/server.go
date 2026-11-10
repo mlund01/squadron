@@ -20,6 +20,8 @@ import (
 // listening socket first, allowing consumer-side `mcp` blocks declared in
 // the same config to dial localhost without deadlocking on themselves.
 type Deps struct {
+	// RunURL resolves the link returned with a newly started run.
+	RunURL func(string) string
 	// Config returns the current config snapshot (may be hot-reloaded).
 	Config func() *config.Config
 	// Stores returns the active store bundle. May return nil before the full
@@ -29,9 +31,9 @@ type Deps struct {
 	Version string
 	// ConfigPath is the path to the config directory.
 	ConfigPath string
-	// RunMission kicks off a mission by name with optional inputs, returning
-	// the mission ID. May be nil before the full startup completes.
-	RunMission func(name string, inputs map[string]string) (string, error)
+	// RunMission starts a run in the supplied mission thread, or a new one
+	// when empty. Returns the run ID and mission thread ID. Nil before startup.
+	RunMission func(name string, inputs map[string]string, threadID string) (string, string, error)
 	// ReloadConfig re-reads and validates config from disk, swapping it in if
 	// valid. May be nil before the full startup completes.
 	ReloadConfig func() error

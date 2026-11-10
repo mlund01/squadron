@@ -30,7 +30,7 @@ func (b *Bundle) Close() error {
 
 // MissionStore tracks mission runs and their tasks
 type MissionStore interface {
-	CreateMission(name string, inputsJSON, configJSON string) (id string, err error)
+	CreateMission(name, threadID string, inputsJSON, configJSON string) (id string, err error)
 	UpdateMissionStatus(id, status string) error
 	// UpdateMissionStatusCAS atomically transitions a mission status, returning false if current status doesn't match expected.
 	UpdateMissionStatusCAS(id, expectedOldStatus, newStatus string) (bool, error)
@@ -78,6 +78,9 @@ type MissionTask struct {
 
 // MissionRecord represents a mission row
 type MissionRecord struct {
+	// ThreadID identifies the mission thread containing this run.
+	// A mission thread is a chain of related mission runs.
+	ThreadID        string     `json:"threadId"`
 	ID              string     `json:"id"`
 	MissionName     string     `json:"missionName"`
 	Status          string     `json:"status"`

@@ -58,7 +58,7 @@ var _ = Describe("BatchingEventStore", func() {
 	}
 
 	It("flushes events on read (GetEventsByMission)", func() {
-		missionID, err := bundle.Missions.CreateMission("m1", "{}", "{}")
+		missionID, err := bundle.Missions.CreateMission("m1", "test-thread", "{}", "{}")
 		Expect(err).NotTo(HaveOccurred())
 
 		for i := 0; i < 5; i++ {
@@ -80,7 +80,7 @@ var _ = Describe("BatchingEventStore", func() {
 		b1, err := store.NewSQLiteBundle(dbPath)
 		Expect(err).NotTo(HaveOccurred())
 
-		missionID, err := b1.Missions.CreateMission("m1", "{}", "{}")
+		missionID, err := b1.Missions.CreateMission("m1", "test-thread", "{}", "{}")
 		Expect(err).NotTo(HaveOccurred())
 
 		for i := 0; i < 3; i++ {
@@ -101,7 +101,7 @@ var _ = Describe("BatchingEventStore", func() {
 	})
 
 	It("auto-flushes after time interval", func() {
-		missionID, err := bundle.Missions.CreateMission("m1", "{}", "{}")
+		missionID, err := bundle.Missions.CreateMission("m1", "test-thread", "{}", "{}")
 		Expect(err).NotTo(HaveOccurred())
 
 		Expect(bundle.Events.StoreEvent(makeEvent("evt-timer-1", missionID))).To(Succeed())
@@ -130,7 +130,7 @@ var _ = Describe("BatchingEventStore", func() {
 		batcher := store.NewBatchingEventStoreWithOptions(rawBundle.Events, 1024, 10*time.Second)
 		defer batcher.Close()
 
-		missionID, err := rawBundle.Missions.CreateMission("m1", "{}", "{}")
+		missionID, err := rawBundle.Missions.CreateMission("m1", "test-thread", "{}", "{}")
 		Expect(err).NotTo(HaveOccurred())
 
 		// Write a few small events — should stay buffered
@@ -158,7 +158,7 @@ var _ = Describe("BatchingEventStore", func() {
 	})
 
 	It("batch-inserts via StoreEvents pass-through", func() {
-		missionID, err := bundle.Missions.CreateMission("m1", "{}", "{}")
+		missionID, err := bundle.Missions.CreateMission("m1", "test-thread", "{}", "{}")
 		Expect(err).NotTo(HaveOccurred())
 
 		events := []store.MissionEvent{

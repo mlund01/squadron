@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	_ "github.com/jackc/pgx/v5/stdlib"
 
 	"squadron/store"
 )
@@ -36,11 +36,11 @@ var _ = Describe("ListMissions", func() {
 		})
 
 		It("lists all missions", func() {
-			_, err := bundle.Missions.CreateMission("mission-a", `{"key":"val"}`, "{}")
+			_, err := bundle.Missions.CreateMission("mission-a", "test-thread", `{"key":"val"}`, "{}")
 			Expect(err).NotTo(HaveOccurred())
 			time.Sleep(10 * time.Millisecond) // ensure different timestamps
 
-			_, err = bundle.Missions.CreateMission("mission-b", "{}", "{}")
+			_, err = bundle.Missions.CreateMission("mission-b", "test-thread", "{}", "{}")
 			Expect(err).NotTo(HaveOccurred())
 
 			missions, total, err := bundle.Missions.ListMissions(10, 0)
@@ -55,7 +55,7 @@ var _ = Describe("ListMissions", func() {
 
 		It("respects limit and offset", func() {
 			for _, name := range []string{"m1", "m2", "m3", "m4", "m5"} {
-				_, err := bundle.Missions.CreateMission(name, "{}", "{}")
+				_, err := bundle.Missions.CreateMission(name, "test-thread", "{}", "{}")
 				Expect(err).NotTo(HaveOccurred())
 				time.Sleep(10 * time.Millisecond)
 			}
@@ -85,7 +85,7 @@ var _ = Describe("ListMissions", func() {
 		})
 
 		It("returns correct total even with offset beyond count", func() {
-			_, err := bundle.Missions.CreateMission("only-one", "{}", "{}")
+			_, err := bundle.Missions.CreateMission("only-one", "test-thread", "{}", "{}")
 			Expect(err).NotTo(HaveOccurred())
 
 			missions, total, err := bundle.Missions.ListMissions(10, 100)
@@ -95,7 +95,7 @@ var _ = Describe("ListMissions", func() {
 		})
 
 		It("includes status and timestamps", func() {
-			id, err := bundle.Missions.CreateMission("tracked", "{}", "{}")
+			id, err := bundle.Missions.CreateMission("tracked", "test-thread", "{}", "{}")
 			Expect(err).NotTo(HaveOccurred())
 
 			err = bundle.Missions.UpdateMissionStatus(id, "completed")

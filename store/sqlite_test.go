@@ -29,7 +29,7 @@ func newSQLiteBundle() (*store.Bundle, func()) {
 
 // helper to create a mission + task for tests that need one
 func seedMissionAndTask(bundle *store.Bundle) (missionID, taskID string) {
-	missionID, err := bundle.Missions.CreateMission("test-mission", `{"key":"val"}`, `{"cfg":true}`)
+	missionID, err := bundle.Missions.CreateMission("test-mission", "test-thread", `{"key":"val"}`, `{"cfg":true}`)
 	Expect(err).NotTo(HaveOccurred())
 	taskID, err = bundle.Missions.CreateTask(missionID, "test-task", `{"timeout":30}`)
 	Expect(err).NotTo(HaveOccurred())
@@ -55,7 +55,7 @@ var _ = Describe("SQLite MissionStore", func() {
 	// =========================================================================
 	Describe("CreateMission", func() {
 		It("returns a valid ID and stores name, status, and config", func() {
-			id, err := bundle.Missions.CreateMission("my-mission", `{"input":"data"}`, `{"cfg":1}`)
+			id, err := bundle.Missions.CreateMission("my-mission", "test-thread", `{"input":"data"}`, `{"cfg":1}`)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(id).NotTo(BeEmpty())
 
@@ -75,7 +75,7 @@ var _ = Describe("SQLite MissionStore", func() {
 	// =========================================================================
 	Describe("GetMission", func() {
 		It("retrieves a mission by ID with all fields", func() {
-			id, err := bundle.Missions.CreateMission("detailed", `{"a":"b"}`, `{"x":true}`)
+			id, err := bundle.Missions.CreateMission("detailed", "test-thread", `{"a":"b"}`, `{"x":true}`)
 			Expect(err).NotTo(HaveOccurred())
 
 			m, err := bundle.Missions.GetMission(id)
@@ -98,7 +98,7 @@ var _ = Describe("SQLite MissionStore", func() {
 	// =========================================================================
 	Describe("UpdateMissionStatus", func() {
 		It("updates status to completed and sets finished_at", func() {
-			id, _ := bundle.Missions.CreateMission("m", "{}", "{}")
+			id, _ := bundle.Missions.CreateMission("m", "test-thread", "{}", "{}")
 
 			err := bundle.Missions.UpdateMissionStatus(id, "completed")
 			Expect(err).NotTo(HaveOccurred())
@@ -109,7 +109,7 @@ var _ = Describe("SQLite MissionStore", func() {
 		})
 
 		It("updates status to failed and sets finished_at", func() {
-			id, _ := bundle.Missions.CreateMission("m", "{}", "{}")
+			id, _ := bundle.Missions.CreateMission("m", "test-thread", "{}", "{}")
 
 			err := bundle.Missions.UpdateMissionStatus(id, "failed")
 			Expect(err).NotTo(HaveOccurred())
@@ -120,7 +120,7 @@ var _ = Describe("SQLite MissionStore", func() {
 		})
 
 		It("does not set finished_at for non-terminal statuses", func() {
-			id, _ := bundle.Missions.CreateMission("m", "{}", "{}")
+			id, _ := bundle.Missions.CreateMission("m", "test-thread", "{}", "{}")
 
 			err := bundle.Missions.UpdateMissionStatus(id, "paused")
 			Expect(err).NotTo(HaveOccurred())
@@ -136,7 +136,7 @@ var _ = Describe("SQLite MissionStore", func() {
 	// =========================================================================
 	Describe("CreateTask", func() {
 		It("creates a task linked to a mission with config", func() {
-			missionID, _ := bundle.Missions.CreateMission("m", "{}", "{}")
+			missionID, _ := bundle.Missions.CreateMission("m", "test-thread", "{}", "{}")
 
 			taskID, err := bundle.Missions.CreateTask(missionID, "scrape", `{"retries":3}`)
 			Expect(err).NotTo(HaveOccurred())
@@ -211,7 +211,7 @@ var _ = Describe("SQLite MissionStore", func() {
 	// =========================================================================
 	Describe("GetTasksByMission", func() {
 		It("returns all tasks for a mission", func() {
-			missionID, _ := bundle.Missions.CreateMission("m", "{}", "{}")
+			missionID, _ := bundle.Missions.CreateMission("m", "test-thread", "{}", "{}")
 			_, err := bundle.Missions.CreateTask(missionID, "task-a", "{}")
 			Expect(err).NotTo(HaveOccurred())
 			_, err = bundle.Missions.CreateTask(missionID, "task-b", "{}")
@@ -226,7 +226,7 @@ var _ = Describe("SQLite MissionStore", func() {
 		})
 
 		It("returns empty slice for mission with no tasks", func() {
-			missionID, _ := bundle.Missions.CreateMission("empty", "{}", "{}")
+			missionID, _ := bundle.Missions.CreateMission("empty", "test-thread", "{}", "{}")
 			tasks, err := bundle.Missions.GetTasksByMission(missionID)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(tasks).To(BeEmpty())
@@ -238,7 +238,7 @@ var _ = Describe("SQLite MissionStore", func() {
 	// =========================================================================
 	Describe("GetTaskByName", func() {
 		It("retrieves a task by mission ID and name", func() {
-			missionID, _ := bundle.Missions.CreateMission("m", "{}", "{}")
+			missionID, _ := bundle.Missions.CreateMission("m", "test-thread", "{}", "{}")
 			taskID, _ := bundle.Missions.CreateTask(missionID, "unique-name", `{"k":"v"}`)
 
 			t, err := bundle.Missions.GetTaskByName(missionID, "unique-name")
@@ -248,7 +248,7 @@ var _ = Describe("SQLite MissionStore", func() {
 		})
 
 		It("returns an error when no task matches", func() {
-			missionID, _ := bundle.Missions.CreateMission("m", "{}", "{}")
+			missionID, _ := bundle.Missions.CreateMission("m", "test-thread", "{}", "{}")
 			_, err := bundle.Missions.GetTaskByName(missionID, "nope")
 			Expect(err).To(HaveOccurred())
 		})
@@ -1021,7 +1021,7 @@ var _ = Describe("SQLite DatasetStore", func() {
 	BeforeEach(func() {
 		bundle, cleanup = newSQLiteBundle()
 		var err error
-		missionID, err = bundle.Missions.CreateMission("ds-mission", "{}", "{}")
+		missionID, err = bundle.Missions.CreateMission("ds-mission", "test-thread", "{}", "{}")
 		Expect(err).NotTo(HaveOccurred())
 	})
 
@@ -1218,7 +1218,7 @@ var _ = Describe("SQLite DatasetStore", func() {
 			bundle.Datasets.CreateDataset(missionID, "ds-b", "second")
 
 			// Create a dataset in a different mission to confirm isolation
-			otherMission, _ := bundle.Missions.CreateMission("other", "{}", "{}")
+			otherMission, _ := bundle.Missions.CreateMission("other", "test-thread", "{}", "{}")
 			bundle.Datasets.CreateDataset(otherMission, "ds-c", "other mission")
 
 			datasets, err := bundle.Datasets.ListDatasets(missionID)

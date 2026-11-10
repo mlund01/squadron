@@ -53,7 +53,7 @@ The host exposes Squadron itself as a collection of tools:
 |------|-------------|
 | `list_missions` | List all missions defined in config |
 | `get_mission_config` | Get the full configuration of a mission |
-| `run_mission` | Start a mission with optional inputs (returns mission ID) |
+| `run_mission` | Start a mission with optional inputs and `thread_id` (returns `missionId`, `threadId` and `runUrl`) |
 | `list_runs` | List recent mission runs with optional filtering by name |
 | `get_run_details` | Get high-level details of a run including task summaries |
 | `get_run_config` | Get the config snapshot used for a specific run |
@@ -154,3 +154,20 @@ mcp_host {
 squadron engage -c ./config
 # MCP host is now available at http://localhost:8090/mcp
 ```
+
+### Starting a follow-up mission
+
+Pass `thread_id` alongside `name` and `inputs` to start another run in an
+existing mission thread (a chain of related runs):
+
+```json
+{"name": "follow_up", "thread_id": "case-123", "inputs": {}}
+```
+
+Omit `thread_id` to generate a new UUID. Automatic mission routing inherits the
+thread ID, and resume retains it. The response includes both `missionId`, for
+the individual run, and `threadId`, for the shared gateway conversation. Run
+history and details also report `threadId`.
+
+`runUrl` links to the new run in the connected command center. It is empty
+until command-center registration completes, including in headless mode.

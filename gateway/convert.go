@@ -1,6 +1,8 @@
 package gateway
 
 import (
+	"fmt"
+
 	gwsdk "github.com/mlund01/squadron-gateway-sdk"
 
 	"squadron/store"
@@ -9,7 +11,7 @@ import (
 // Separate types intentional: store schema can evolve without
 // rippling through every gateway implementation.
 
-func storeRecordToSDK(r store.HumanInputRequestRecord) gwsdk.HumanInputRecord {
+func storeRecordToSDK(r store.HumanInputRequestRecord, stores *store.Bundle) (gwsdk.HumanInputRecord, error) {
 	out := gwsdk.HumanInputRecord{
 		ID:                r.ID,
 		MissionID:         r.MissionID,
@@ -28,7 +30,16 @@ func storeRecordToSDK(r store.HumanInputRequestRecord) gwsdk.HumanInputRecord {
 	if r.ResolvedAt != nil {
 		out.ResolvedAt = r.ResolvedAt.UTC()
 	}
-	return out
+
+	if r.MissionID != "" && stores != nil && stores.Missions != nil {
+		mission, err := stores.Missions.GetMission(r.MissionID)
+		if err != nil {
+			return out, fmt.Errorf("load question mission thread: %w", err)
+		}
+		out.ThreadID = mission.ThreadID
+		out.MissionName = mission.MissionName
+	}
+	return out, nil
 }
 
 func filterFromSDK(f gwsdk.HumanInputFilter) store.HumanInputFilter {

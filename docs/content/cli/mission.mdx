@@ -19,6 +19,7 @@ squadron mission <mission-name> -c <config-path> [--input key=value...]
 | `-c, --config` | Path to config directory (default: `.`) |
 | `-d, --debug` | Enable debug mode (captures LLM messages) |
 | `-i, --input` | Mission input as key=value (repeatable) |
+| `--thread-id` | Join a mission thread (chain of related runs); omitted generates a UUID |
 | `--resume` | Resume a previously failed mission by its ID |
 
 ## Example
@@ -28,6 +29,23 @@ squadron mission data_pipeline -c ./my-config
 
 squadron mission weather_report -c ./config --input city=Chicago
 ```
+
+## Mission threads
+
+Each run has its own mission ID and belongs to a mission thread: a chain of
+related runs that can share a gateway conversation. A new run generates a UUID
+for its thread unless you supply `--thread-id`. The command prints that ID.
+
+To start a follow-up in an existing mission thread:
+
+```bash
+squadron mission follow_up -c ./config --thread-id <existing-thread-id>
+```
+
+Automatic cross-mission routing in `squadron engage` passes the thread ID to the
+next mission. Resuming restores the stored thread ID; supplying a different ID
+with `--resume` is rejected. Mission IDs continue to identify individual runs,
+including their questions and run URLs.
 
 ## Resume
 

@@ -35,10 +35,10 @@ type runningMission struct {
 
 // Client manages the WebSocket connection from a squadron instance to commander.
 type Client struct {
-	cfg      *config.Config // may be partial until full load succeeds
-	cfgReady bool          // true when config is fully loaded and validated
-	cfgError string        // non-empty when config failed to load
-	cfgMu    sync.RWMutex
+	cfg        *config.Config // may be partial until full load succeeds
+	cfgReady   bool           // true when config is fully loaded and validated
+	cfgError   string         // non-empty when config failed to load
+	cfgMu      sync.RWMutex
 	configPath string
 	stores     *store.Bundle
 	version    string
@@ -55,9 +55,10 @@ type Client struct {
 	send      chan []byte
 	connected bool // true after successful Connect + register
 
-	mu         sync.Mutex
-	pending    map[string]chan *protocol.Envelope // requestID → response channel
-	instanceID string                             // assigned by commander on register
+	mu               sync.Mutex
+	pending          map[string]chan *protocol.Envelope // requestID → response channel
+	commandCenterURL string
+	instanceID       string // assigned by commander on register
 
 	// Incoming request handlers
 	handlers map[protocol.MessageType]RequestHandler
@@ -125,23 +126,23 @@ type RequestHandler func(env *protocol.Envelope) (*protocol.Envelope, error)
 func NewClient(cfg *config.Config, cfgReady bool, cfgError string, configPath string, stores *store.Bundle, version string) *Client {
 	ctx, stop := context.WithCancel(context.Background())
 	c := &Client{
-		cfg:        cfg,
-		cfgReady:   cfgReady,
-		cfgError:   cfgError,
-		configPath: configPath,
-		stores:     stores,
-		version:    version,
-		send:         make(chan []byte, 256),
-		pending:      make(map[string]chan *protocol.Envelope),
-		handlers:     make(map[protocol.MessageType]RequestHandler),
+		cfg:             cfg,
+		cfgReady:        cfgReady,
+		cfgError:        cfgError,
+		configPath:      configPath,
+		stores:          stores,
+		version:         version,
+		send:            make(chan []byte, 256),
+		pending:         make(map[string]chan *protocol.Envelope),
+		handlers:        make(map[protocol.MessageType]RequestHandler),
 		chatSessions:    make(map[string]*chatSession),
 		runningMissions: make(map[string]*runningMission),
 		subscriptions:   NewSubscriptionManager(),
 		concurrency:     noopConcurrency{},
 		humanInputs:     newHumanInputListeners(),
-		done:         make(chan struct{}),
-		ctx:        ctx,
-		stop:       stop,
+		done:            make(chan struct{}),
+		ctx:             ctx,
+		stop:            stop,
 	}
 	c.registerHandlers()
 	return c
@@ -230,7 +231,7 @@ func (c *Client) connectToURL(url string) error {
 	// Register with commander. If registration fails, tear down just the
 	// socket — do NOT call Close(), which would cancel c.ctx and prevent
 	// any future reconnect attempts on this client.
-	if err := c.register(); err != nil {
+	if err := c.register(url); err != nil {
 		ws.Close()
 		return fmt.Errorf("register: %w", err)
 	}
@@ -295,6 +296,8 @@ func (c *Client) Close() {
 
 // InstanceID returns the ID assigned by commander.
 func (c *Client) InstanceID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.instanceID
 }
 
@@ -387,7 +390,7 @@ func closeRemovedPlugins(oldCfg, newCfg *config.Config) {
 	}
 }
 
-func (c *Client) register() error {
+func (c *Client) register(commandCenterURL string) error {
 	cfg := c.getConfig()
 	instanceConfig := ConfigToInstanceConfig(cfg) // handles nil cfg
 
@@ -428,7 +431,10 @@ func (c *Client) register() error {
 		return fmt.Errorf("registration rejected: %s", ack.Reason)
 	}
 
+	c.mu.Lock()
 	c.instanceID = ack.InstanceID
+	c.commandCenterURL = commandCenterURL
+	c.mu.Unlock()
 	return nil
 }
 
@@ -510,19 +516,19 @@ func (c *Client) dispatch(env *protocol.Envelope) {
 
 	// Handlers that work without a loaded config
 	configFreeHandlers := map[protocol.MessageType]bool{
-		protocol.TypeReloadConfig:       true,
-		protocol.TypeGetConfig:          true,
-		protocol.TypeSetVariable:        true,
-		protocol.TypeDeleteVariable:     true,
-		protocol.TypeGetVariables:       true,
-		protocol.TypeListConfigFiles:    true,
-		protocol.TypeGetConfigFile:      true,
-		protocol.TypeWriteConfigFile:    true,
-		protocol.TypeValidateConfig:     true,
+		protocol.TypeReloadConfig:    true,
+		protocol.TypeGetConfig:       true,
+		protocol.TypeSetVariable:     true,
+		protocol.TypeDeleteVariable:  true,
+		protocol.TypeGetVariables:    true,
+		protocol.TypeListConfigFiles: true,
+		protocol.TypeGetConfigFile:   true,
+		protocol.TypeWriteConfigFile: true,
+		protocol.TypeValidateConfig:  true,
 		// Human-in-the-loop endpoints operate purely against the
 		// store, which exists independently of the HCL config.
-		protocol.TypeGetHumanInputs:     true,
-		protocol.TypeResolveHumanInput:  true,
+		protocol.TypeGetHumanInputs:    true,
+		protocol.TypeResolveHumanInput: true,
 	}
 
 	// Handle incoming requests from commander

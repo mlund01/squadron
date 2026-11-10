@@ -74,6 +74,11 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 		return "", fmt.Errorf("ask: no store configured")
 	}
 
+	// Register before persistence makes the question available to answer.
+	ch := make(chan protocol.ResolveHumanInputPayload, 1)
+	cancel := c.humanInputs.register(req.ToolCallID, ch)
+	defer cancel()
+
 	record := &store.HumanInputRequestRecord{
 		MissionID:         req.MissionID,
 		TaskID:            req.TaskID,
@@ -99,10 +104,6 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 			humaninput.PublishCreated(c.humanInputNotifier, *stored)
 		}
 	}
-
-	ch := make(chan protocol.ResolveHumanInputPayload, 1)
-	cancel := c.humanInputs.register(req.ToolCallID, ch)
-	defer cancel()
 
 	select {
 	case resp := <-ch:

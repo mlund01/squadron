@@ -699,7 +699,7 @@ func TestSQLiteRestartRecoveryAcrossDurableBoundaries(t *testing.T) {
 	assertSQLiteEventCount(t, dbPath, runID, eventsAfterRoute)
 
 	bundle, harness, _ = reopenSQLiteHarness(t, dbPath, runID)
-	childRunID, err := bundle.Missions.CreateMissionForLaunch(runID, selection.RequestID, selection.Target, `{"topic":"durability"}`, `{"mission":"follow_up"}`)
+	childRunID, err := bundle.Missions.CreateMissionForLaunch(runID, selection.RequestID, selection.Target, "test-thread", `{"topic":"durability"}`, `{"mission":"follow_up"}`)
 	if err != nil {
 		t.Fatalf("CreateMissionForLaunch() error = %v", err)
 	}
@@ -710,7 +710,7 @@ func TestSQLiteRestartRecoveryAcrossDurableBoundaries(t *testing.T) {
 
 	bundle, harness, events = reopenSQLiteHarness(t, dbPath, runID)
 	eventsAfterLaunch := len(events)
-	replayedChildRunID, err := bundle.Missions.CreateMissionForLaunch(runID, selection.RequestID, selection.Target, `{"topic":"durability"}`, `{"mission":"follow_up"}`)
+	replayedChildRunID, err := bundle.Missions.CreateMissionForLaunch(runID, selection.RequestID, selection.Target, "test-thread", `{"topic":"durability"}`, `{"mission":"follow_up"}`)
 	if err != nil {
 		t.Fatalf("replayed CreateMissionForLaunch() error = %v", err)
 	}

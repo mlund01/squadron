@@ -69,6 +69,18 @@ var _ = Describe("Migrations", func() {
 		Expect(count).To(Equal(len(loaded)))
 	})
 
+	It("records the thread migration when a main-branch database already has the column", func() {
+		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
+		// Simulate a database migrated by main's former version 5, before
+		// this branch assigns the thread column to version 11.
+		_, err := db.Exec(`DELETE FROM schema_migrations WHERE version = 11`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
+		var count int
+		Expect(db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 11`).Scan(&count)).To(Succeed())
+		Expect(count).To(Equal(1))
+	})
+
 	It("creates every table referenced by the stores", func() {
 		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
 

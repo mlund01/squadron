@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/hashicorp/hcl/v2"
 	"github.com/mlund01/squadron-wire/protocol"
 	"github.com/zclconf/go-cty/cty"
@@ -41,6 +42,7 @@ type Runner struct {
 	resolvedDatasets map[string][]cty.Value
 	datasetIDs       map[string]string // dataset name → store ID
 	missionID        string
+	threadID         string
 
 	// Task state management
 	mu                  sync.RWMutex
@@ -132,6 +134,15 @@ func WithDebugLogger(logger *DebugLogger) RunnerOption {
 		r.debugLogger = logger
 	}
 }
+
+// WithThreadID assigns this run to a mission thread: a chain of related runs.
+// New runs generate an ID when empty; resumed runs retain their stored ID.
+func WithThreadID(threadID string) RunnerOption {
+	return func(r *Runner) { r.threadID = threadID }
+}
+
+// ThreadID identifies the mission thread containing this run.
+func (r *Runner) ThreadID() string { return r.threadID }
 
 // WithResume configures the runner to resume a previously failed mission
 func WithResume(missionID string) RunnerOption {
@@ -268,6 +279,23 @@ func NewRunner(cfg *config.Config, configPath string, missionName string, inputs
 	// Apply options (must happen before input/dataset resolution so resumeMissionID is set)
 	for _, opt := range opts {
 		opt(r)
+	}
+
+	// Preserve supplied thread IDs so separate runs can share a mission thread.
+	// Resuming restores the stored ID; only an unassigned new run needs a UUID.
+	if r.resumeMissionID != "" {
+		record, err := stores.Missions.GetMission(r.resumeMissionID)
+		if err != nil {
+			stores.Close()
+			return nil, fmt.Errorf("resume: %w", err)
+		}
+		if r.threadID != "" && r.threadID != record.ThreadID {
+			stores.Close()
+			return nil, fmt.Errorf("resume cannot change the mission thread")
+		}
+		r.threadID = record.ThreadID
+	} else if r.threadID == "" {
+		r.threadID = uuid.NewString()
 	}
 
 	// Build budget tracker (nil if no budgets declared — zero overhead in that case)
@@ -437,13 +465,13 @@ func (r *Runner) NextMissionLaunchID() string { return r.nextMissionLaunchID }
 
 func (r *Runner) createMissionRecord(inputsJSON, configJSON string) (string, error) {
 	if r.launchParentMissionID == "" && r.launchRequestID == "" {
-		return r.stores.Missions.CreateMission(r.mission.Name, inputsJSON, configJSON)
+		return r.stores.Missions.CreateMission(r.mission.Name, r.threadID, inputsJSON, configJSON)
 	}
 	if r.launchParentMissionID == "" || r.launchRequestID == "" {
 		return "", fmt.Errorf("cross-mission launch requires both parent mission ID and launch request ID")
 	}
 	return r.stores.Missions.CreateMissionForLaunch(
-		r.launchParentMissionID, r.launchRequestID, r.mission.Name, inputsJSON, configJSON,
+		r.launchParentMissionID, r.launchRequestID, r.mission.Name, r.threadID, inputsJSON, configJSON,
 	)
 }
 
@@ -468,6 +496,7 @@ func (r *Runner) AcknowledgeNextMissionLaunch(childRunID string) error {
 // Run executes the mission.
 // The caller is responsible for closing r.stores after Run returns and all events are flushed.
 func (r *Runner) Run(ctx context.Context, streamer streamers.MissionHandler) error {
+	ctx = aitools.WithMissionThread(ctx, r.threadID)
 	if !r.mission.HasExecutorPolicy() || len(r.mission.Agents) > 0 || len(r.mission.LocalAgents) > 0 {
 		return fmt.Errorf("mission %q requires task-executor models and cannot launch managed agents", r.mission.Name)
 	}

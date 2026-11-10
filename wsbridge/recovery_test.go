@@ -11,7 +11,7 @@ import (
 
 func TestResumeOrphanedMissionsAcknowledgesExistingCrossMissionChild(t *testing.T) {
 	bundle := newTestBundle(t)
-	parentID, err := bundle.Missions.CreateMission("parent", `{}`, `{}`)
+	parentID, err := bundle.Missions.CreateMission("parent", "test-thread", `{}`, `{}`)
 	if err != nil {
 		t.Fatalf("CreateMission(parent) error = %v", err)
 	}
@@ -63,7 +63,7 @@ func TestResumeOrphanedMissionsAcknowledgesExistingCrossMissionChild(t *testing.
 		t.Fatalf("UpdateMissionStatus(parent) error = %v", err)
 	}
 
-	childID, err := bundle.Missions.CreateMissionForLaunch(parentID, "route-1", "child", `{"topic":"durability"}`, `{}`)
+	childID, err := bundle.Missions.CreateMissionForLaunch(parentID, "route-1", "child", "test-thread", `{"topic":"durability"}`, `{}`)
 	if err != nil {
 		t.Fatalf("CreateMissionForLaunch() error = %v", err)
 	}

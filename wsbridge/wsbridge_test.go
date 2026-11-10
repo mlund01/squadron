@@ -216,6 +216,10 @@ func TestClientConnectAndRegister(t *testing.T) {
 	if client.InstanceID() != "inst-42" {
 		t.Errorf("expected instance ID 'inst-42', got %q", client.InstanceID())
 	}
+	wantURL := strings.TrimSuffix(strings.Replace(mc.wsURL(), "ws://", "http://", 1), "/ws") + "/instances/inst-42/runs/run-1"
+	if got := client.RunURL("run-1"); got != wantURL {
+		t.Errorf("run URL = %q, want %q", got, wantURL)
+	}
 }
 
 // TestClientReconnectStopsStaleWritePump exercises the reconnect path that
@@ -381,7 +385,7 @@ func TestClientHandlesGetMissions(t *testing.T) {
 	stores := newTestBundle(t)
 
 	// Create some mission records in the store
-	stores.Missions.CreateMission("search-mission", `{"query": "test"}`, `{}`)
+	stores.Missions.CreateMission("search-mission", "test-thread", `{"query": "test"}`, `{}`)
 
 	client := wsbridge.NewClient(cfg, true, "", ".", stores, "1.0.0")
 

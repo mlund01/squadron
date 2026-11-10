@@ -76,6 +76,11 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 		return "", fmt.Errorf("ask: no store configured")
 	}
 
+	// Register before persistence makes the question available to answer.
+	ch := make(chan protocol.ResolveHumanInputPayload, 1)
+	cancel := c.humanInputs.register(req.ToolCallID, ch)
+	defer cancel()
+
 	record := &store.HumanInputRequestRecord{
 		MissionID:         req.MissionID,
 		TaskID:            req.TaskID,
@@ -91,11 +96,6 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 		return "", fmt.Errorf("ask: persist open request: %w", err)
 	}
 
-	// Register before reading the canonical row. This closes the race where a
-	// response arrives after the read but before the waiter becomes visible.
-	ch := make(chan protocol.ResolveHumanInputPayload, 1)
-	cancel := c.humanInputs.register(req.ToolCallID, ch)
-	defer cancel()
 	stored, err := c.stores.HumanInputs.GetByToolCallID(req.ToolCallID)
 	if err != nil {
 		return "", fmt.Errorf("ask: load persisted request: %w", err)

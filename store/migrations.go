@@ -177,6 +177,19 @@ func RunMigrations(db *sql.DB, dialect Dialect) error {
 			sqlText = m.Postgres
 			insertStmt = `INSERT INTO schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)`
 		}
+		// Main previously used version 5 for this column while the new
+		// runtime reserved that version for a different migration. Keep
+		// both installed databases upgradeable: version 11 adds the column
+		// where absent and records a no-op where main already added it.
+		if m.Name == "mission_threads" {
+			exists, err := missionThreadColumnExists(db, dialect)
+			if err != nil {
+				return fmt.Errorf("inspect mission thread column: %w", err)
+			}
+			if exists {
+				sqlText = "SELECT 1"
+			}
+		}
 
 		if err := applyMigration(db, m, sqlText, insertStmt); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", m.Version, m.Name, err)
@@ -184,6 +197,34 @@ func RunMigrations(db *sql.DB, dialect Dialect) error {
 	}
 
 	return nil
+}
+
+func missionThreadColumnExists(db *sql.DB, dialect Dialect) (bool, error) {
+	if dialect == DialectPostgres {
+		var exists bool
+		err := db.QueryRow(`SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			WHERE table_schema = current_schema() AND table_name = 'missions' AND column_name = 'thread_id'
+		)`).Scan(&exists)
+		return exists, err
+	}
+	rows, err := db.Query(`PRAGMA table_info(missions)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, typ string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false, err
+		}
+		if name == "thread_id" {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 func loadAppliedVersions(db *sql.DB) (map[int]bool, error) {

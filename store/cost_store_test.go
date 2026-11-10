@@ -14,7 +14,7 @@ func TestSQLiteCostStoreUsesStableTurnIDIdempotently(t *testing.T) {
 	}
 	defer bundle.Close()
 
-	missionID, err := bundle.Missions.CreateMission("durable", `{}`, `{}`)
+	missionID, err := bundle.Missions.CreateMission("durable", "test-thread", `{}`, `{}`)
 	if err != nil {
 		t.Fatalf("CreateMission() error = %v", err)
 	}

@@ -498,8 +498,11 @@ func NewCommander(ctx context.Context, opts CommanderOptions) (*Commander, error
 		sup.tools["file_search"] = &aitools.MemorySearchTool{Store: opts.MemoryStore}
 		sup.tools["file_grep"] = &aitools.MemoryGrepTool{Store: opts.MemoryStore}
 		for _, tool := range sup.tools {
-			if gp, ok := tool.(*aitools.GatewayPostTool); ok {
-				gp.Store = opts.MemoryStore
+			switch gt := tool.(type) {
+			case *aitools.GatewayPostTool:
+				gt.Store = opts.MemoryStore
+			case *aitools.GatewayEditTool:
+				gt.Store = opts.MemoryStore
 			}
 		}
 		if memoryPrompt := prompts.FormatMemoryContext(opts.MemoryStore); memoryPrompt != "" {

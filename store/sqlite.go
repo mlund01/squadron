@@ -51,11 +51,11 @@ type SQLiteMissionStore struct {
 	db *sql.DB
 }
 
-func (s *SQLiteMissionStore) CreateMission(name string, inputsJSON, configJSON string) (string, error) {
+func (s *SQLiteMissionStore) CreateMission(name, threadID string, inputsJSON, configJSON string) (string, error) {
 	id := generateID()
 	_, err := s.db.Exec(
-		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES (?, ?, ?, ?, ?)`,
-		id, name, inputsJSON, configJSON, tsNow(),
+		`INSERT INTO missions (id, mission_name, thread_id, input_values_json, config_json, started_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		id, name, threadID, inputsJSON, configJSON, tsNow(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create mission: %w", err)
@@ -63,23 +63,28 @@ func (s *SQLiteMissionStore) CreateMission(name string, inputsJSON, configJSON s
 	return id, nil
 }
 
-func (s *SQLiteMissionStore) CreateMissionForLaunch(parentRunID, launchID, name, inputsJSON, configJSON string) (string, error) {
+func (s *SQLiteMissionStore) CreateMissionForLaunch(parentRunID, launchID, name, threadID, inputsJSON, configJSON string) (string, error) {
 	if parentRunID == "" || launchID == "" {
 		return "", fmt.Errorf("parent run ID and launch ID are required")
 	}
 	id := MissionIDForLaunch(parentRunID, launchID)
 	_, err := s.db.Exec(
-		`INSERT INTO missions (id, mission_name, input_values_json, config_json, started_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
-		id, name, inputsJSON, configJSON, tsNow(),
+		`INSERT INTO missions (id, mission_name, thread_id, input_values_json, config_json, started_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING`,
+		id, name, threadID, inputsJSON, configJSON, tsNow(),
 	)
 	if err != nil {
 		return "", fmt.Errorf("create launched mission: %w", err)
+	}
+	if threadID != "" {
+		if _, err := s.db.Exec(`UPDATE missions SET thread_id = ? WHERE id = ? AND thread_id = ''`, threadID, id); err != nil {
+			return "", fmt.Errorf("attach launched mission thread: %w", err)
+		}
 	}
 	record, err := s.GetMission(id)
 	if err != nil {
 		return "", fmt.Errorf("read launched mission: %w", err)
 	}
-	if record.MissionName != name || record.InputValuesJSON != inputsJSON || record.ConfigJSON != configJSON {
+	if record.MissionName != name || record.ThreadID != threadID || record.InputValuesJSON != inputsJSON || record.ConfigJSON != configJSON {
 		return "", fmt.Errorf("launch %q for parent %q conflicts with existing mission %q", launchID, parentRunID, id)
 	}
 	return id, nil
@@ -283,9 +288,9 @@ func (s *SQLiteMissionStore) GetMission(id string) (*MissionRecord, error) {
 	var finishedAtStr sql.NullString
 
 	err := s.db.QueryRow(
-		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions WHERE id = ?`,
+		`SELECT id, thread_id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions WHERE id = ?`,
 		id,
-	).Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr)
+	).Scan(&m.ID, &m.ThreadID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("mission not found: %w", err)
 	}
@@ -980,7 +985,7 @@ func (s *SQLiteMissionStore) ListMissions(limit, offset int) ([]MissionRecord, i
 	}
 
 	rows, err := s.db.Query(
-		`SELECT id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`,
+		`SELECT id, thread_id, mission_name, status, input_values_json, config_json, started_at, finished_at FROM missions ORDER BY started_at DESC, rowid DESC LIMIT ? OFFSET ?`,
 		limit, offset,
 	)
 	if err != nil {
@@ -995,7 +1000,7 @@ func (s *SQLiteMissionStore) ListMissions(limit, offset int) ([]MissionRecord, i
 		var startedAtStr string
 		var finishedAtStr sql.NullString
 
-		if err := rows.Scan(&m.ID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr); err != nil {
+		if err := rows.Scan(&m.ID, &m.ThreadID, &m.MissionName, &m.Status, &inputsJSON, &configJSON, &startedAtStr, &finishedAtStr); err != nil {
 			return nil, 0, err
 		}
 		m.StartedAt, _ = tsParse(startedAtStr)

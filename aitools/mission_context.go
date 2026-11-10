@@ -25,3 +25,16 @@ func MissionContextFromContext(ctx context.Context) (missionID, taskID string) {
 	mc, _ := ctx.Value(missionContextKey{}).(missionContext)
 	return mc.missionID, mc.taskID
 }
+
+type missionThreadContextKey struct{}
+
+// WithMissionThread attaches a mission thread ID to the execution context.
+// A mission thread is a chain of related mission runs.
+func WithMissionThread(ctx context.Context, threadID string) context.Context {
+	return context.WithValue(ctx, missionThreadContextKey{}, threadID)
+}
+
+func MissionThreadFromContext(ctx context.Context) string {
+	threadID, _ := ctx.Value(missionThreadContextKey{}).(string)
+	return threadID
+}

@@ -55,10 +55,10 @@ func (m *mockMissionStore) GetTaskOutputs(taskID string) ([]store.TaskOutputRow,
 }
 
 // Stub implementations for unused interface methods.
-func (m *mockMissionStore) CreateMission(name, inputsJSON, configJSON string) (string, error) {
+func (m *mockMissionStore) CreateMission(name, threadID, inputsJSON, configJSON string) (string, error) {
 	return "", nil
 }
-func (m *mockMissionStore) CreateMissionForLaunch(parentRunID, launchID, name, inputsJSON, configJSON string) (string, error) {
+func (m *mockMissionStore) CreateMissionForLaunch(parentRunID, launchID, name, threadID, inputsJSON, configJSON string) (string, error) {
 	return "", nil
 }
 func (m *mockMissionStore) UpdateMissionStatus(id, status string) error { return nil }

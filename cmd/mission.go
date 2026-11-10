@@ -19,6 +19,7 @@ import (
 var inputFlags []string
 var missionDebugMode bool
 var resumeMissionID string
+var missionThreadID string
 var missionAutoInit bool
 
 var missionCmd = &cobra.Command{
@@ -71,7 +72,7 @@ var missionCmd = &cobra.Command{
 
 		// Build runner options
 		var runnerOpts []mission.RunnerOption
-		runnerOpts = append(runnerOpts, mission.WithDebugLogger(debugLogger))
+		runnerOpts = append(runnerOpts, mission.WithDebugLogger(debugLogger), mission.WithThreadID(missionThreadID))
 		if resumeMissionID != "" {
 			runnerOpts = append(runnerOpts, mission.WithResume(resumeMissionID))
 		}
@@ -82,6 +83,8 @@ var missionCmd = &cobra.Command{
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
 		}
+
+		fmt.Printf("Mission thread: %s\n", runner.ThreadID())
 
 		// Create handler with event persistence
 		cliHandler := cli.NewMissionHandler()
@@ -117,6 +120,7 @@ func parseInputFlags(flags []string) (map[string]string, error) {
 
 func init() {
 	rootCmd.AddCommand(missionCmd)
+	missionCmd.Flags().StringVar(&missionThreadID, "thread-id", "", "Join a mission thread (chain of related runs); omitted generates a UUID")
 	missionCmd.Flags().StringVarP(&configPath, "config", "c", ".", "Path to config file or directory")
 	missionCmd.Flags().StringArrayVarP(&inputFlags, "input", "i", nil, "Mission input in key=value format (can be repeated)")
 	missionCmd.Flags().BoolVarP(&missionDebugMode, "debug", "d", false, "Enable debug mode to capture LLM messages and events")

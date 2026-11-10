@@ -57,9 +57,10 @@ type Client struct {
 	send      chan []byte
 	connected bool // true after successful Connect + register
 
-	mu         sync.Mutex
-	pending    map[string]chan *protocol.Envelope // requestID → response channel
-	instanceID string                             // assigned by commander on register
+	mu               sync.Mutex
+	pending          map[string]chan *protocol.Envelope // requestID → response channel
+	commandCenterURL string
+	instanceID       string // assigned by commander on register
 
 	// Incoming request handlers
 	handlers map[protocol.MessageType]RequestHandler
@@ -246,7 +247,7 @@ func (c *Client) connectToURL(url, workerCredential string) error {
 	// Register with commander. If registration fails, tear down just the
 	// socket — do NOT call Close(), which would cancel c.ctx and prevent
 	// any future reconnect attempts on this client.
-	if err := c.register(); err != nil {
+	if err := c.register(url); err != nil {
 		c.connected = false
 		ws.Close()
 		return fmt.Errorf("register: %w", err)
@@ -312,6 +313,8 @@ func (c *Client) Close() {
 
 // InstanceID returns the ID assigned by commander.
 func (c *Client) InstanceID() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.instanceID
 }
 
@@ -409,7 +412,7 @@ func closeRemovedPlugins(oldCfg, newCfg *config.Config) {
 	}
 }
 
-func (c *Client) register() error {
+func (c *Client) register(commandCenterURL string) error {
 	cfg := c.getConfig()
 	instanceConfig := ConfigToInstanceConfig(cfg) // handles nil cfg
 
@@ -450,7 +453,10 @@ func (c *Client) register() error {
 		return fmt.Errorf("registration rejected: %s", ack.Reason)
 	}
 
+	c.mu.Lock()
 	c.instanceID = ack.InstanceID
+	c.commandCenterURL = commandCenterURL
+	c.mu.Unlock()
 	return nil
 }
 

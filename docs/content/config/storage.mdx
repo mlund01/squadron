@@ -1,0 +1,73 @@
+---
+title: Storage
+---
+
+# storage
+
+The `storage` block configures where Squadron persists mission runs — transcripts, tool results, events, costs, and everything needed to resume a failed mission.
+
+The block is optional. When omitted, Squadron uses SQLite at `<config-dir>/.squadron/store.db`.
+
+## Minimal Example
+
+```hcl
+storage {
+  backend = "sqlite"
+}
+```
+
+## Full Example
+
+```hcl
+storage {
+  backend  = "sqlite"
+  path     = ".squadron/store.db"
+  ttl_days = 30
+}
+```
+
+Postgres:
+
+```hcl
+storage {
+  backend     = "postgres"
+  conn_string = vars.postgres_url
+  ttl_days    = 30
+}
+```
+
+## Fields
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `backend` | string | no | `"sqlite"` | `"sqlite"` or `"postgres"`. |
+| `path` | string | no | `".squadron/store.db"` | SQLite file path, relative to the config directory. Ignored for Postgres. |
+| `conn_string` | string | for Postgres | — | Postgres connection string. Required when `backend = "postgres"`. |
+| `ttl_days` | number | no | `0` | Delete finished mission records (and CLI `debug/` directories) after this many days. `0` or omitted keeps everything forever. |
+
+## Retention (`ttl_days`)
+
+Mission runs accumulate LLM transcripts, tool payloads, images in message parts, events, and cost rows. Set `ttl_days` to cap that history:
+
+```hcl
+storage {
+  backend  = "sqlite"
+  ttl_days = 30
+}
+```
+
+**What is deleted.** Every row belonging to a finished mission older than the TTL: tasks, sessions, messages (including media parts), tool results, events, costs, datasets, route decisions, and human-input requests. CLI `debug/<name>_YYYYMMDD_HHMMSS/` directories of the same age are removed too.
+
+**What is kept.**
+- Missions still `running` or `stopping`
+- Chat sessions (not tied to a mission)
+- Shared and mission **memory** on disk (those persist across runs by design)
+- Packets, the vault, plugin/MCP caches
+
+Age is `COALESCE(finished_at, started_at)`. Stopped missions do not set `finished_at`, so they age from start time.
+
+**When it runs.** Once at the start of each `squadron mission` (asynchronously) and hourly while `squadron engage` is running. A config reload picks up a new `ttl_days` on the next hourly tick.
+
+**Tradeoffs.** Failed or stopped runs past the TTL cannot be `--resume`d. Command-center cost charts only cover the retention window.
+
+Scratchpads and file-input staging directories already auto-delete after 7 days and are not controlled by `ttl_days`.

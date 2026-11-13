@@ -78,6 +78,9 @@ func (m *mockMissionStore) GetMission(id string) (*store.MissionRecord, error) {
 func (m *mockMissionStore) ListMissions(limit, offset int) ([]store.MissionRecord, int, error) {
 	return nil, 0, nil
 }
+func (m *mockMissionStore) PurgeExpiredMissions(olderThan time.Time) (int, error) {
+	return 0, nil
+}
 func (m *mockMissionStore) StoreTaskOutput(taskID string, datasetName *string, datasetIndex *int, itemID *string, outputJSON string) error {
 	return nil
 }

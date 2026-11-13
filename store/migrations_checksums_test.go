@@ -47,16 +47,8 @@ var migrationChecksums = map[string]string{
 	"0005_reserved_legacy_slot.postgres.sql":         "b4e0497804e46e0a0b0b8c31975b062152d551bac49c3c2e80932567b4085dcd",
 	"0006_repair_session_message_parts.sqlite.sql":   "037f03fcf9fbdf9747613fd127f0bad84ef7abe8615840a705beab86bec28f5f",
 	"0006_repair_session_message_parts.postgres.sql": "9286e6f058d2e422b3c534827176634693c23e81e7a70e90ea8aeba83e69a6cc",
-	"0007_mission_runtime.sqlite.sql":                "be6bd55bb60f14bfe6569ce60d4c657517b2bb55cb623bba40939e21e6cf752e",
-	"0007_mission_runtime.postgres.sql":              "6eaa637e1c44f588bf88d29e463a5da4f566565313ea3b83b72af07397936069",
-	"0008_runtime_turn_costs.sqlite.sql":             "3861cdaf35afdcc2581f254de948cc369824bd413ac2bb4633d42f13fa0b8bc2",
-	"0008_runtime_turn_costs.postgres.sql":           "b83049125708e751a3542c286a31cb3cae675d2c3d2fbb2e2766e23ed2882743",
-	"0009_human_input_deadlines.sqlite.sql":          "da74b0411e428188a52153971ffc3a56098386fc592460e0872abb3c845e536f",
-	"0009_human_input_deadlines.postgres.sql":        "83e640bac0310a18ecafd4f4125927f7f9ba458aa87bae367b152d707acebd6b",
-	"0010_mission_memory.sqlite.sql":                 "f2bb018f554c455ea928ad93300b65be3ba4b9316caf099110ae63ab83a3ab92",
-	"0010_mission_memory.postgres.sql":               "bbbd9532aadedf427634cf9c5b02b66e0e9db3109d16a715d025857000e638bf",
-	"0011_mission_threads.sqlite.sql":                "5c19b25e4ac4adff18b53bce2866beb8778de09978a084e74aecf187365d0b4b",
-	"0011_mission_threads.postgres.sql":              "5c19b25e4ac4adff18b53bce2866beb8778de09978a084e74aecf187365d0b4b",
+	"0007_mission_runtime.sqlite.sql":                "17c2f3cbd4606542a777989d4645eb60838d0488d59444eae0708047197c96d3",
+	"0007_mission_runtime.postgres.sql":              "ec358d8c05541dcdc6563712c38f2d164c4bbfaebe0df1fa39c885e9bfa8b8db",
 }
 
 var _ = Describe("Migration checksums", func() {

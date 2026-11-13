@@ -246,6 +246,39 @@ func TestCapabilityPolicyGrantsOnlyDeclaredStorageSlots(t *testing.T) {
 	}
 }
 
+func TestCapabilityPolicyGrantsFileInputReadOnlyTools(t *testing.T) {
+	t.Parallel()
+	m := &config.Mission{
+		Name: "review", Models: []string{"fast"},
+		Inputs: []config.MissionInput{{Name: "document", Type: config.InputTypeFile}},
+		Tasks:  []config.Task{{Name: "inspect"}},
+	}
+	policy, err := NewCapabilityPolicy(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := policy.ResolveGrant("inspect", "fast", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"file_list", "file_read", "file_view"} {
+		if !containsString(grant.Tools, name) {
+			t.Fatalf("missing file-input tool %q: %v", name, grant.Tools)
+		}
+	}
+	for _, name := range []string{"file_create", "file_delete"} {
+		if containsString(grant.Tools, name) {
+			t.Fatalf("file input granted write tool %q: %v", name, grant.Tools)
+		}
+	}
+	if _, err := policy.ResolveGrant("inspect", "fast", []string{"file_read"}); err != nil {
+		t.Fatalf("redundantly selected file-input read tool was rejected: %v", err)
+	}
+	if _, err := policy.ResolveGrant("inspect", "fast", []string{"file_create"}); err == nil {
+		t.Fatal("file input allowed an undeclared write tool")
+	}
+}
+
 func TestRuntimeCommanderPoliciesExposeExactGrantKeys(t *testing.T) {
 	t.Parallel()
 	m := &config.Mission{

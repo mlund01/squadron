@@ -33,7 +33,14 @@ func (r *Runner) runtimeAttemptTools(_ context.Context, dispatch missionruntime.
 	for _, name := range task.Packets {
 		packetNames[name] = struct{}{}
 	}
-	if !r.mission.Scratchpad && len(packetNames) == 0 {
+	hasFileInput := false
+	for _, input := range r.mission.Inputs {
+		if input.Type == config.InputTypeFile {
+			hasFileInput = true
+			break
+		}
+	}
+	if !r.mission.Scratchpad && len(packetNames) == 0 && !hasFileInput {
 		return nil, nil
 	}
 	store := &missionMemoryStore{slots: make(map[string]*memorySlot)}
@@ -71,6 +78,16 @@ func (r *Runner) runtimeAttemptTools(_ context.Context, dispatch missionruntime.
 	}
 	for name := range packetNames {
 		return nil, fmt.Errorf("packet %q is not configured", name)
+	}
+	for _, input := range r.mission.Inputs {
+		if input.Type != config.InputTypeFile {
+			continue
+		}
+		root, ok := r.runtimeFileInputDirs[input.Name]
+		if !ok {
+			return nil, fmt.Errorf("file input %q is not staged", input.Name)
+		}
+		store.slots[config.InputFileSlotPrefix+input.Name] = &memorySlot{absPath: root, description: input.Description}
 	}
 	tools := map[string]aitools.Tool{
 		"file_list":   &aitools.MemoryListTool{Store: store},

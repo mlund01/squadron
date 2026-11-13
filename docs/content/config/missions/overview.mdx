@@ -175,8 +175,9 @@ File inputs are always required and cannot declare a `default` or be
 Either way the file is staged into an isolated per-run slot. Task executors read text
 files with `file_read`, and view images (PNG/JPEG/GIF/WebP), SVGs, and PDFs with
 `file_view` (SVGs are rasterized to PNG; PDFs are sent as native document
-blocks). A single file is capped at 10 MB, and files outside the project root
-must be supplied via the base64 form.
+blocks). The executor receives the `input.document` slot reference rather than
+the upload envelope, and that slot is read-only. A single file is capped at
+10 MB, and files outside the project root must be supplied via the base64 form.
 
 ## How Missions Execute
 

@@ -26,7 +26,7 @@ import (
 // existing product discovery; RuntimeStore is the sole state authority.
 func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.MissionHandler) error {
 	if len(r.mission.Memories) > 0 {
-		return fmt.Errorf("mission %q references shared memory, which is not supported by the task-scoped runtime policy", r.mission.Name)
+		return fmt.Errorf("mission %q references shared memory, which is not supported by task-level memory policy", r.mission.Name)
 	}
 	if r.mission.Memory != nil && r.mission.Memory.HasPolicy() {
 		if _, ok := r.stores.Runtime.(store.MissionMemoryRuntimeStore); !ok {
@@ -68,6 +68,14 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		return fmt.Errorf("initialize mission runtime: %w", err)
 	}
 	r.missionID = runID
+	fileInputDirs, err := r.materializeFileInputs(runID)
+	if err != nil {
+		return fmt.Errorf("stage mission file inputs: %w", err)
+	}
+	r.runtimeFileInputDirs = fileInputDirs
+	if len(fileInputDirs) > 0 {
+		go func() { _, _ = SweepExpiredInputs() }()
+	}
 	if r.automaticRecovery {
 		if err := harness.RecordAutomaticRecovery(); err != nil {
 			return fmt.Errorf("record automatic mission recovery: %w", err)
@@ -436,13 +444,20 @@ func (r *Runner) runtimeAPIModel(modelKey string) string {
 }
 
 func (r *Runner) visibleRuntimeInputs() map[string]any {
+	inputTypes := make(map[string]string, len(r.mission.Inputs))
 	protected := make(map[string]bool, len(r.mission.Inputs))
 	for _, input := range r.mission.Inputs {
 		protected[input.Name] = input.Protected
+		inputTypes[input.Name] = input.Type
 	}
 	result := make(map[string]any)
 	for name, value := range r.rawInputs {
-		if !protected[name] {
+		if protected[name] {
+			continue
+		}
+		if inputTypes[name] == config.InputTypeFile {
+			result[name] = config.InputFileSlotPrefix + name
+		} else {
 			result[name] = value
 		}
 	}

@@ -103,6 +103,25 @@ storage { backend = "sqlite" }
 		Expect(ok).To(BeTrue())
 		Expect(connection.APIKey).To(Equal("runtime-key"))
 	})
+
+	It("is accepted while configuration is waiting for model connections", func() {
+		dir := GinkgoT().TempDir()
+		Expect(os.WriteFile(filepath.Join(dir, "models.hcl"), []byte(`
+model_provider "openai" { models = ["gpt_5"] }
+storage { backend = "sqlite" }
+`), 0600)).To(Succeed())
+		client := NewClient(&config.Config{}, false, "waiting for model connections", dir, nil, "test")
+		env, err := protocol.NewEvent(protocol.TypeSyncModelConnections, map[string]any{"connections": map[string]any{"openai": map[string]any{"provider": "openai", "apiKey": "runtime-key", "promptCaching": true}}})
+		Expect(err).NotTo(HaveOccurred())
+
+		client.dispatch(env)
+
+		Expect(client.HasConfig()).To(BeTrue())
+		connection, ok := runtimemodels.Get("openai")
+		Expect(ok).To(BeTrue())
+		Expect(connection.APIKey).To(Equal("runtime-key"))
+		Consistently(client.send, "50ms").ShouldNot(Receive())
+	})
 })
 
 var _ = Describe("workspace variable synchronization", func() {

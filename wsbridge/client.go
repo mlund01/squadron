@@ -181,6 +181,8 @@ func (c *Client) SetHumanInputNotifier(n *humaninput.Notifier) {
 				if ev.Kind == humaninput.EventKindResolved {
 					c.emitHumanInputResolved(ev.Record)
 					go c.resumeReadyHumanInputMission(ev.Record.MissionID)
+				} else if ev.Kind == humaninput.EventKindCanceled {
+					c.emitHumanInputCanceled(ev.Record)
 				}
 			}
 		}
@@ -538,16 +540,18 @@ func (c *Client) dispatch(env *protocol.Envelope) {
 
 	// Handlers that work without a loaded config
 	configFreeHandlers := map[protocol.MessageType]bool{
-		protocol.TypeReloadConfig:    true,
-		protocol.TypeGetConfig:       true,
-		"sync_variables":             true,
-		protocol.TypeListConfigFiles: true,
-		protocol.TypeGetConfigFile:   true,
-		protocol.TypeWriteConfigFile: true,
-		protocol.TypeValidateConfig:  true,
+		protocol.TypeReloadConfig:         true,
+		protocol.TypeGetConfig:            true,
+		protocol.TypeSyncVariables:        true,
+		protocol.TypeSyncModelConnections: true,
+		protocol.TypeListConfigFiles:      true,
+		protocol.TypeGetConfigFile:        true,
+		protocol.TypeWriteConfigFile:      true,
+		protocol.TypeValidateConfig:       true,
 		// Human-in-the-loop endpoints operate purely against the
 		// store, which exists independently of the HCL config.
 		protocol.TypeGetHumanInputs:    true,
+		protocol.TypeGetHumanInput:     true,
 		protocol.TypeResolveHumanInput: true,
 	}
 

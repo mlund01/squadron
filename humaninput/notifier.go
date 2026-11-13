@@ -14,6 +14,7 @@ type EventKind string
 const (
 	EventKindCreated  EventKind = "created"
 	EventKindResolved EventKind = "resolved"
+	EventKindCanceled EventKind = "canceled"
 )
 
 type Event struct {

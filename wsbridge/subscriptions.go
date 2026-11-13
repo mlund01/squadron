@@ -25,6 +25,7 @@ var GlobalEvents = map[string]bool{
 	// running mission without subscribing to each one individually.
 	"human_input_requested": true,
 	"human_input_resolved":  true,
+	"human_input_canceled":  true,
 }
 
 // subscription represents an active event subscription

@@ -48,6 +48,9 @@ func (a *squadronAPI) ResolveHumanInput(ctx context.Context, toolCallID, respons
 	if out.AlreadyExpired {
 		return gwsdk.ResolveResult{}, fmt.Errorf("human input request %q expired", toolCallID)
 	}
+	if out.AlreadyCanceled {
+		return gwsdk.ResolveResult{}, fmt.Errorf("human input request %q canceled", toolCallID)
+	}
 	rec, err := storeRecordToSDK(out.Record, a.stores)
 	if err != nil {
 		return gwsdk.ResolveResult{}, err

@@ -44,6 +44,9 @@ func TestModelCommanderExposesOnlyStartTaskAndRestoresTranscript(t *testing.T) {
 	if decision.Dispatch.TaskName != "collect" || decision.Dispatch.RequestID != "tool-1" || decision.Dispatch.ReadySetRevision != 4 {
 		t.Fatalf("decision = %#v", decision)
 	}
+	if len(session.tools) != 1 || session.tools[0].Name != "start_task" {
+		t.Fatalf("non-route snapshot exposed unrelated controls: %#v", session.tools)
+	}
 	if decision.Grant.TaskName != "collect" || decision.Grant.Model != "fast" {
 		t.Fatalf("grant request = %#v", decision.Grant)
 	}
@@ -324,6 +327,36 @@ func TestModelCommanderRetriesParallelControlCallsWithoutPersistingRejectedTurn(
 	}
 }
 
+func TestModelCommanderRetriesRouteControlWhenNoRouteIsPending(t *testing.T) {
+	t.Parallel()
+	session := &fakeCommanderSession{responses: []*llm.ChatResponse{
+		{ID: "wrong-route", Usage: llm.Usage{InputTokens: 7}, ContentBlocks: []llm.ContentBlock{{
+			Type:    llm.ContentTypeToolUse,
+			ToolUse: &llm.ToolUseBlock{ID: "route", Name: "select_route", Input: json.RawMessage(`{"task_name":"audience","target":"launch_note"}`)},
+		}}},
+		{ID: "correct-start", Usage: llm.Usage{InputTokens: 8}, ContentBlocks: []llm.ContentBlock{{
+			Type:    llm.ContentTypeToolUse,
+			ToolUse: &llm.ToolUseBlock{ID: "start", Name: "start_task", Input: json.RawMessage(`{"task_name":"launch_note","model":"fast"}`)},
+		}}},
+	}}
+	commander, err := NewModelCommander(session, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision, err := commander.Decide(context.Background(), Snapshot{
+		RunID: "parallel", Revision: 8, Ready: []string{"launch_note"},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Dispatch.TaskName != "launch_note" || decision.Message.ID != "correct-start" || decision.Message.Telemetry.InputTokens != 15 {
+		t.Fatalf("accepted decision = %#v", decision)
+	}
+	if len(session.prompts) != 2 || !strings.Contains(session.prompts[1], "invalid for this snapshot") || session.loadCount != 3 {
+		t.Fatalf("retry prompts = %#v, restored %d times", session.prompts, session.loadCount)
+	}
+}
+
 func TestModelCommanderSelectsPendingDeclaredRoute(t *testing.T) {
 	t.Parallel()
 	session := &fakeCommanderSession{response: &llm.ChatResponse{ID: "route-response", ContentBlocks: []llm.ContentBlock{{
@@ -342,6 +375,9 @@ func TestModelCommanderSelectsPendingDeclaredRoute(t *testing.T) {
 	}
 	if decision.Route.TaskName != "classify" || decision.Route.Target != "support" || decision.Route.Revision != 7 {
 		t.Fatalf("route decision = %#v", decision.Route)
+	}
+	if len(session.tools) != 3 || session.tools[0].Name != "select_route" || session.tools[1].Name != "inspect_task" || session.tools[2].Name != "clarify_task_result" {
+		t.Fatalf("pending route snapshot exposed wrong controls: %#v", session.tools)
 	}
 	commander.RouteAccepted(RouteSelection{RequestID: "route-tool", TaskName: "classify", Target: "support"})
 	if len(session.results) != 1 || session.results[0].ToolUseID != "route-tool" {

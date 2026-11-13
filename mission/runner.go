@@ -71,6 +71,8 @@ type Runner struct {
 
 	// Memory access for mission
 	memoryStore aitools.MemoryStore
+	// Read-only file input slots staged once for the mission-scoped runtime.
+	runtimeFileInputDirs map[string]string
 
 	// Conditional routing state
 	routerPending []routerActivation // queue of tasks activated by routers

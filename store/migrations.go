@@ -177,21 +177,7 @@ func RunMigrations(db *sql.DB, dialect Dialect) error {
 			sqlText = m.Postgres
 			insertStmt = `INSERT INTO schema_migrations (version, name, applied_at) VALUES ($1, $2, $3)`
 		}
-		// Main previously used version 5 for this column while the new
-		// runtime reserved that version for a different migration. Keep
-		// both installed databases upgradeable: version 11 adds the column
-		// where absent and records a no-op where main already added it.
-		if m.Name == "mission_threads" {
-			exists, err := missionThreadColumnExists(db, dialect)
-			if err != nil {
-				return fmt.Errorf("inspect mission thread column: %w", err)
-			}
-			if exists {
-				sqlText = "SELECT 1"
-			}
-		}
-
-		if err := applyMigration(db, m, sqlText, insertStmt); err != nil {
+		if err := applyMigration(db, dialect, m, sqlText, insertStmt); err != nil {
 			return fmt.Errorf("apply migration %d (%s): %w", m.Version, m.Name, err)
 		}
 	}
@@ -199,7 +185,12 @@ func RunMigrations(db *sql.DB, dialect Dialect) error {
 	return nil
 }
 
-func missionThreadColumnExists(db *sql.DB, dialect Dialect) (bool, error) {
+type migrationQueryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func missionThreadColumnExists(db migrationQueryer, dialect Dialect) (bool, error) {
 	if dialect == DialectPostgres {
 		var exists bool
 		err := db.QueryRow(`SELECT EXISTS (
@@ -248,7 +239,7 @@ func loadAppliedVersions(db *sql.DB) (map[int]bool, error) {
 	return applied, nil
 }
 
-func applyMigration(db *sql.DB, m Migration, sqlText, insertStmt string) error {
+func applyMigration(db *sql.DB, dialect Dialect, m Migration, sqlText, insertStmt string) error {
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
@@ -258,6 +249,20 @@ func applyMigration(db *sql.DB, m Migration, sqlText, insertStmt string) error {
 	if sqlText != "" {
 		if _, err := tx.Exec(sqlText); err != nil {
 			return fmt.Errorf("exec: %w", err)
+		}
+	}
+	// Main used version 5 for missions.thread_id; this branch used it as a
+	// reserved slot. Add the column as part of the consolidated runtime
+	// migration only if the source schema does not already have it.
+	if m.Name == "mission_runtime" {
+		exists, err := missionThreadColumnExists(tx, dialect)
+		if err != nil {
+			return fmt.Errorf("inspect mission thread column: %w", err)
+		}
+		if !exists {
+			if _, err := tx.Exec(`ALTER TABLE missions ADD COLUMN thread_id TEXT NOT NULL DEFAULT ''`); err != nil {
+				return fmt.Errorf("add mission thread column: %w", err)
+			}
 		}
 	}
 

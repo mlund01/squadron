@@ -2,8 +2,11 @@ package wsbridge
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 	"time"
+
+	"github.com/mlund01/squadron-wire/protocol"
 
 	missionruntime "squadron/mission/runtime"
 	"squadron/store"
@@ -65,7 +68,7 @@ func TestMissionRuntimeProjectionUsesAcceptedTranscriptAfterCompletion(t *testin
 		TaskStates: map[string]missionruntime.TaskState{"research": missionruntime.TaskCompleted},
 		Dispatches: map[string]missionruntime.Dispatch{"attempt-1": {AttemptID: "attempt-1", TaskName: "research", Attempt: 1}},
 		Results: map[string]missionruntime.AcceptedTaskResult{"research": {
-			Envelope: missionruntime.TaskResultEnvelope{Summary: "Completed research", Provenance: missionruntime.ResultProvenance{AttemptID: "attempt-1"}},
+			Envelope:          missionruntime.TaskResultEnvelope{Summary: "Completed research", Provenance: missionruntime.ResultProvenance{AttemptID: "attempt-1"}},
 			SessionTranscript: []missionruntime.TaskSessionMessage{{Role: "assistant", Parts: []store.MessagePart{{Type: "text", Text: "The answer."}}}},
 		}},
 	}
@@ -82,5 +85,20 @@ func TestMissionRuntimeProjectionUsesAcceptedTranscriptAfterCompletion(t *testin
 	}
 	if got.Tasks[0].Summary != "Completed research" || got.Tasks[0].Attempts[0].Messages[0].Parts[0].Text != "The answer." {
 		t.Fatalf("completed task projection = %#v", got.Tasks[0])
+	}
+}
+
+func TestAttributeRuntimeCostsByCommanderAndTask(t *testing.T) {
+	projection := &protocol.MissionRuntimeInfo{
+		Tasks: []protocol.MissionRuntimeTaskInfo{{Name: "research"}, {Name: "write"}},
+	}
+	attributeRuntimeCosts(projection, []store.TurnCostRecord{
+		{Entity: "commander", TotalCost: 0.02},
+		{Entity: "task", TaskName: "research", TotalCost: 0.03},
+		{Entity: "task", TaskName: "research", TotalCost: 0.01},
+		{Entity: "task", TaskName: "write", TotalCost: 0.04},
+	})
+	if math.Abs(projection.TotalCost-0.1) > 1e-9 || math.Abs(projection.Commander.Cost-0.02) > 1e-9 || math.Abs(projection.Tasks[0].Cost-0.04) > 1e-9 || math.Abs(projection.Tasks[1].Cost-0.04) > 1e-9 {
+		t.Fatalf("cost attribution = %#v", projection)
 	}
 }

@@ -76,6 +76,35 @@ func TestRuntimePacketSlotsDoNotLeakAcrossTasks(t *testing.T) {
 	}
 }
 
+func TestRuntimeFileInputSlotIsStagedAndReadOnly(t *testing.T) {
+	withTempHome(t)
+	runner := fileInputRunner(t, t.TempDir(), []config.MissionInput{{Name: "document", Type: config.InputTypeFile, Description: "source"}}, map[string]string{
+		"document": envelope(t, "report.txt", []byte("observed report")),
+	})
+	runner.cfg = &config.Config{}
+	runner.mission.Tasks = []config.Task{{Name: "inspect"}}
+	dirs, err := runner.materializeFileInputs("run-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.runtimeFileInputDirs = dirs
+	tools, err := runner.runtimeAttemptTools(context.Background(), missionruntime.Dispatch{RunID: "run-1", TaskName: "inspect", AttemptID: "run-1:inspect:1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tools["file_create"] != nil || tools["file_delete"] != nil {
+		t.Fatal("file-input-only task received write tools")
+	}
+	read := tools["file_read"].Call(context.Background(), `{"slot":"input.document","path":"report.txt"}`)
+	if !strings.Contains(read, "observed report") {
+		t.Fatalf("staged input unavailable: %s", read)
+	}
+	visible := runner.visibleRuntimeInputs()
+	if visible["document"] != "input.document" {
+		t.Fatalf("commander input = %#v, want slot name only", visible)
+	}
+}
+
 func TestRuntimeRejectsSharedMemoryWithoutTaskScopedPolicy(t *testing.T) {
 	runner := &Runner{mission: &config.Mission{Name: "research", Memories: []string{"shared"}}}
 	if err := runner.runMissionScoped(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "shared memory") {

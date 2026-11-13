@@ -1,0 +1,33 @@
+# Test the Mission Harness
+
+The mission harness has a deterministic contract gate for decisions that must
+never depend on a model judge: graph eligibility, capability grants, result
+validation, parallel limits, routing, iteration, retries, human-input waits,
+cancellation, and restart replay.
+
+From the Squadron repository root, run:
+
+```bash
+python3 scripts/harness_regression.py
+```
+
+The script runs the `mission` and `mission/runtime` Go test packages and writes
+`artifacts/harness-regression/harness-contracts.md` and
+`harness-contracts.json`. The manifest at `evals/harness/contracts.json` maps
+each invariant to the test that proves it. A failed, skipped, renamed, or
+unexecuted evidence test fails the gate. The report records the commit, Go
+version, command, and per-contract result; it does not copy test stdout,
+credentials, or task traces.
+
+CI runs the full Go suite once and applies the same contract gate to its
+`go test -json` output. Its compact report is uploaded as the
+`harness-contracts` artifact. To add a contract, first add a hermetic test
+against the runtime boundary, then add its exact package and test name to the
+manifest. Do not use a model-graded result to waive a failed contract.
+
+Behavioral evaluations against real providers are a separate work stream.
+They will score commander choices, task grants, routes, result interpretation,
+quality, and cost using recorded trace evidence and labeled cases. Jev may be
+one judge for bounded criteria after it has been compared with deterministic
+checks, human labels, and another judge. No model-graded threshold is part of
+the current CI gate.

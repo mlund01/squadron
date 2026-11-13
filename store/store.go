@@ -405,6 +405,9 @@ type HumanInputStore interface {
 	// ExpireRequest atomically expires an open request only if its persisted
 	// deadline is due. Replaying the transition returns the canonical row.
 	ExpireRequest(toolCallID string, now time.Time) (*HumanInputRequestRecord, error)
+	// CancelRequest atomically marks a still-open request canceled when its
+	// mission stops or fails. A deadline that has already passed wins.
+	CancelRequest(toolCallID, reason string, now time.Time) (*HumanInputRequestRecord, error)
 	ListRequests(filter HumanInputFilter) ([]HumanInputRequestRecord, int, error)
 }
 
@@ -412,6 +415,7 @@ const (
 	HumanInputStateOpen     = "open"
 	HumanInputStateResolved = "resolved"
 	HumanInputStateExpired  = "expired"
+	HumanInputStateCanceled = "canceled"
 )
 
 // HumanInputRequestRecord is one human-input request row.
@@ -425,6 +429,7 @@ type HumanInputRequestRecord struct {
 	ID                string   `json:"id"`
 	MissionID         string   `json:"missionId,omitempty"`
 	TaskID            string   `json:"taskId,omitempty"`
+	TaskName          string   `json:"taskName,omitempty"`
 	ToolCallID        string   `json:"toolCallId"`
 	Question          string   `json:"question"`
 	ShortSummary      string   `json:"shortSummary,omitempty"`
@@ -440,6 +445,8 @@ type HumanInputRequestRecord struct {
 	DeadlineAt      *time.Time `json:"deadlineAt,omitempty"`
 	ResolvedAt      *time.Time `json:"resolvedAt,omitempty"`
 	ExpiredAt       *time.Time `json:"expiredAt,omitempty"`
+	CanceledAt      *time.Time `json:"canceledAt,omitempty"`
+	CancelReason    string     `json:"cancelReason,omitempty"`
 	Response        *string    `json:"response,omitempty"`
 	ResponderUserID *string    `json:"responderUserId,omitempty"`
 }

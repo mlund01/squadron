@@ -94,6 +94,8 @@ func BuildGo(pluginDir, sourcePath string) error {
 	fmt.Printf("  Output: %s\n", output)
 	cmd := exec.Command("go", "build", "-o", output, ".")
 	cmd.Dir = sourcePath
+	// Plugins are independent modules and must not inherit the host's go.work.
+	cmd.Env = append(os.Environ(), "GOWORK=off")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {

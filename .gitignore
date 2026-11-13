@@ -20,3 +20,4 @@ squadron
 .squadron/
 stories/
 /plugin_*
+/artifacts/harness-regression/

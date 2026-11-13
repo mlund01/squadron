@@ -14,7 +14,7 @@ require (
 	github.com/mark3labs/mcp-go v0.46.0
 	github.com/mlund01/squadron-gateway-sdk v0.0.4
 	github.com/mlund01/squadron-sdk v0.0.32-0.20260924033410-dcadd2e0f84f
-	github.com/mlund01/squadron-wire v0.0.43
+	github.com/mlund01/squadron-wire v0.0.44-0.20261113041100-da8a81234560
 	github.com/onsi/ginkgo/v2 v2.28.1
 	github.com/onsi/gomega v1.39.1
 	github.com/openai/openai-go v1.12.0

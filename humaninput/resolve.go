@@ -15,6 +15,7 @@ type ResolveOutcome struct {
 	Record          store.HumanInputRequestRecord
 	AlreadyResolved bool
 	AlreadyExpired  bool
+	AlreadyCanceled bool
 	NotFound        bool
 }
 
@@ -52,6 +53,9 @@ func Resolve(
 	if existing.State == store.HumanInputStateExpired {
 		return ResolveOutcome{Record: *existing, AlreadyExpired: true}, nil
 	}
+	if existing.State == store.HumanInputStateCanceled {
+		return ResolveOutcome{Record: *existing, AlreadyCanceled: true}, nil
+	}
 
 	resolved, err := stores.HumanInputs.ResolveRequest(toolCallID, response, responderUserID)
 	if err != nil {
@@ -59,6 +63,9 @@ func Resolve(
 	}
 	if resolved.State == store.HumanInputStateExpired {
 		return ResolveOutcome{Record: *resolved, AlreadyExpired: true}, nil
+	}
+	if resolved.State == store.HumanInputStateCanceled {
+		return ResolveOutcome{Record: *resolved, AlreadyCanceled: true}, nil
 	}
 	if resolved.State != store.HumanInputStateResolved {
 		return ResolveOutcome{}, fmt.Errorf("resolve: request %q remains in state %q", toolCallID, resolved.State)

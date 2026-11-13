@@ -66,10 +66,11 @@ var _ = Describe("HumanInputTool", func() {
 		br := &fakeBridge{reply: "ok", replaySafe: true}
 		tool := &aitools.HumanInputTool{Bridge: br}
 		ctx := aitools.WithInvocationMetadata(context.Background(), aitools.InvocationMetadata{
-			ToolUseID: "provider-call", IdempotencyKey: "sq_stable_call",
+			ToolUseID: "provider-call", IdempotencyKey: "sq_stable_call", TaskName: "ask_preference",
 		})
 		Expect(tool.Call(ctx, `{"question":"hi"}`)).To(Equal("ok"))
 		Expect(br.got.ToolCallID).To(Equal("sq_stable_call"))
+		Expect(br.got.TaskName).To(Equal("ask_preference"))
 		Expect(aitools.IsReplaySafe(tool)).To(BeTrue())
 		br.replaySafe = false
 		Expect(aitools.IsReplaySafe(tool)).To(BeFalse())

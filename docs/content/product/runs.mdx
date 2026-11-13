@@ -35,7 +35,9 @@ Its drill-in includes the task objective, granted model and tools, run-as
 identity, persisted conversation, accepted result, and any attempts or retry
 state. Each attempt shows its elapsed time and recorded model-turn and token
 usage when available. These are attempt-specific facts, not an estimate of
-the entire mission's cost.
+the entire mission's cost. The run summary shows wall time and estimated cost
+for all recorded model turns; the commander and each task drill-in show their
+own share from the durable cost ledger. Task cost includes all of its attempts.
 
 The execution timeline uses a shared mission clock: overlapping task bars
 represent parallel work, while multiple bars on one task represent retries.
@@ -45,6 +47,8 @@ pulsing or present pending input as an action after the run ends.
 For an iterated task, the canvas card reports how many child executions have
 finished. Open that card to choose a specific child session; the timeline shows
 one row per child execution rather than counting the iteration parent as work.
+Each child drill-in shows the frozen dataset item that was supplied to that
+executor, so its result can be read in context.
 If a worker restarts during a run, a recovery marker appears in the timeline.
 Expand its details to see the last checkpoint time, affected task attempt, and
 any in-flight tool. The task Trace records a safe replay or a recovery block
@@ -71,11 +75,13 @@ activity.
 ## Respond to human input
 
 The workspace's **Human input** page lists questions waiting for a response,
-alongside answered and expired requests. Open a request to review its question
-and context or follow its link back to the mission run. Choose or write an
-answer, review it in the confirmation dialog, and then send it to the waiting
-mission. The same response control appears on the live run page. A request
-cannot be answered after it has expired.
+alongside answered, expired, and canceled requests. Open a request to review
+its question, deadline, and mission context or follow its link back to the run.
+Choose or write an answer, review it in the confirmation dialog, and then send
+it to the waiting mission. The same response control appears on the live run
+page, with a link to the request detail. Answering requires permission to run
+that mission. A request cannot be answered after it has been answered, expired,
+or canceled; stopping or failing a mission cancels its unanswered requests.
 
 ## Stop and resume
 

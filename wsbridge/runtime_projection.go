@@ -121,6 +121,27 @@ func missionRuntimeProjection(runtimeStore store.RuntimeStore, runID string) (*p
 	return projection, events, nil
 }
 
+// attributeRuntimeCosts uses the reporting ledger rather than estimating from
+// tokens in the UI. The ledger is projected idempotently from durable model
+// turns, so a recovered run does not count the same turn twice.
+func attributeRuntimeCosts(projection *protocol.MissionRuntimeInfo, costs []store.TurnCostRecord) {
+	if projection == nil {
+		return
+	}
+	tasks := make(map[string]*protocol.MissionRuntimeTaskInfo, len(projection.Tasks))
+	for index := range projection.Tasks {
+		tasks[projection.Tasks[index].Name] = &projection.Tasks[index]
+	}
+	for _, cost := range costs {
+		projection.TotalCost += cost.TotalCost
+		if cost.Entity == "commander" {
+			projection.Commander.Cost += cost.TotalCost
+		} else if task := tasks[cost.TaskName]; task != nil {
+			task.Cost += cost.TotalCost
+		}
+	}
+}
+
 func runtimeTaskMessages(attemptID string, messages []missionruntime.TaskSessionMessage) []protocol.MissionRuntimeMessageInfo {
 	result := make([]protocol.MissionRuntimeMessageInfo, 0, len(messages))
 	for index, message := range messages {

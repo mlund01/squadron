@@ -1,1 +1,0 @@
-ALTER TABLE missions ADD COLUMN thread_id TEXT NOT NULL DEFAULT '';

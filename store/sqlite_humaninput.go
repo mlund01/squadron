@@ -33,11 +33,11 @@ func (s *SQLiteHumanInputStore) CreateRequest(req *HumanInputRequestRecord) erro
 
 	_, err = s.db.Exec(
 		`INSERT INTO human_input_requests
-		    (id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
+		    (id, mission_id, task_id, task_name, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
 		     state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(tool_call_id) DO NOTHING`,
-		req.ID, nullIfEmpty(req.MissionID), nullIfEmpty(req.TaskID),
+		req.ID, nullIfEmpty(req.MissionID), nullIfEmpty(req.TaskID), nullIfEmpty(req.TaskName),
 		req.ToolCallID, req.Question, nullIfEmpty(req.ShortSummary), nullIfEmpty(req.AdditionalContext), choicesJSON, boolToInt(req.MultiSelect), req.State,
 		tsFrom(req.RequestedAt), tsFromPtr(req.DeadlineAt), tsFromPtr(req.ResolvedAt), tsFromPtr(req.ExpiredAt),
 		req.Response, req.ResponderUserID,
@@ -50,8 +50,8 @@ func (s *SQLiteHumanInputStore) CreateRequest(req *HumanInputRequestRecord) erro
 
 func (s *SQLiteHumanInputStore) GetByToolCallID(toolCallID string) (*HumanInputRequestRecord, error) {
 	row := s.db.QueryRow(
-		`SELECT id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
-		        state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id
+		`SELECT id, mission_id, task_id, task_name, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
+		        state, requested_at, deadline_at, resolved_at, expired_at, canceled_at, cancel_reason, response, responder_user_id
 		 FROM human_input_requests WHERE tool_call_id = ?`,
 		toolCallID,
 	)
@@ -90,6 +90,21 @@ func (s *SQLiteHumanInputStore) ExpireRequest(toolCallID string, now time.Time) 
 	return s.GetByToolCallID(toolCallID)
 }
 
+func (s *SQLiteHumanInputStore) CancelRequest(toolCallID, reason string, now time.Time) (*HumanInputRequestRecord, error) {
+	if _, err := s.ExpireRequest(toolCallID, now); err != nil {
+		return nil, err
+	}
+	_, err := s.db.Exec(
+		`UPDATE human_input_requests SET state = ?, canceled_at = ?, cancel_reason = ?
+		 WHERE tool_call_id = ? AND state = ? AND (deadline_at IS NULL OR deadline_at > ?)`,
+		HumanInputStateCanceled, tsFrom(now), reason, toolCallID, HumanInputStateOpen, tsFrom(now),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cancel human input request: %w", err)
+	}
+	return s.ExpireRequest(toolCallID, time.Now().UTC())
+}
+
 func (s *SQLiteHumanInputStore) ListRequests(filter HumanInputFilter) ([]HumanInputRequestRecord, int, error) {
 	where := ""
 	args := []any{}
@@ -112,8 +127,8 @@ func (s *SQLiteHumanInputStore) ListRequests(filter HumanInputFilter) ([]HumanIn
 	if filter.OldestFirst {
 		order = " ORDER BY requested_at ASC"
 	}
-	q := `SELECT id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
-	              state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id
+	q := `SELECT id, mission_id, task_id, task_name, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
+	              state, requested_at, deadline_at, resolved_at, expired_at, canceled_at, cancel_reason, response, responder_user_id
 	       FROM human_input_requests WHERE 1=1` + where + order
 	listArgs := append([]any{}, args...)
 	if filter.Limit > 0 {
@@ -144,15 +159,15 @@ type humanInputRowScanner interface {
 
 func scanHumanInputRequest(r humanInputRowScanner) (*HumanInputRequestRecord, error) {
 	var (
-		rec                                                                   HumanInputRequestRecord
-		missionID, taskID, shortSummary, additionalContext, choicesJSON       sql.NullString
-		deadlineAtStr, resolvedAtStr, expiredAtStr, response, responderUserID sql.NullString
-		requestedAtStr                                                        string
-		multiSelectInt                                                        int
+		rec                                                                                                HumanInputRequestRecord
+		missionID, taskID, taskName, shortSummary, additionalContext, choicesJSON                          sql.NullString
+		deadlineAtStr, resolvedAtStr, expiredAtStr, canceledAtStr, cancelReason, response, responderUserID sql.NullString
+		requestedAtStr                                                                                     string
+		multiSelectInt                                                                                     int
 	)
 	err := r.Scan(
-		&rec.ID, &missionID, &taskID, &rec.ToolCallID, &rec.Question, &shortSummary, &additionalContext, &choicesJSON, &multiSelectInt,
-		&rec.State, &requestedAtStr, &deadlineAtStr, &resolvedAtStr, &expiredAtStr, &response, &responderUserID,
+		&rec.ID, &missionID, &taskID, &taskName, &rec.ToolCallID, &rec.Question, &shortSummary, &additionalContext, &choicesJSON, &multiSelectInt,
+		&rec.State, &requestedAtStr, &deadlineAtStr, &resolvedAtStr, &expiredAtStr, &canceledAtStr, &cancelReason, &response, &responderUserID,
 	)
 	rec.MultiSelect = multiSelectInt != 0
 	if err != nil {
@@ -163,6 +178,9 @@ func scanHumanInputRequest(r humanInputRowScanner) (*HumanInputRequestRecord, er
 	}
 	if taskID.Valid {
 		rec.TaskID = taskID.String
+	}
+	if taskName.Valid {
+		rec.TaskName = taskName.String
 	}
 	if shortSummary.Valid {
 		rec.ShortSummary = shortSummary.String
@@ -191,6 +209,13 @@ func scanHumanInputRequest(r humanInputRowScanner) (*HumanInputRequestRecord, er
 	rec.ExpiredAt, err = tsParseNull(expiredAtStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse expired_at: %w", err)
+	}
+	rec.CanceledAt, err = tsParseNull(canceledAtStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse canceled_at: %w", err)
+	}
+	if cancelReason.Valid {
+		rec.CancelReason = cancelReason.String
 	}
 	if response.Valid {
 		s := response.String

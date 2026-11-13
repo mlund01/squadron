@@ -35,11 +35,11 @@ func (s *PgHumanInputStore) CreateRequest(req *HumanInputRequestRecord) error {
 
 	_, err = s.db.Exec(
 		`INSERT INTO human_input_requests
-		    (id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
+		    (id, mission_id, task_id, task_name, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
 		     state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 		 ON CONFLICT(tool_call_id) DO NOTHING`,
-		req.ID, nullIfEmpty(req.MissionID), nullIfEmpty(req.TaskID),
+		req.ID, nullIfEmpty(req.MissionID), nullIfEmpty(req.TaskID), nullIfEmpty(req.TaskName),
 		req.ToolCallID, req.Question, nullIfEmpty(req.ShortSummary), nullIfEmpty(req.AdditionalContext), choicesJSON, req.MultiSelect, req.State,
 		req.RequestedAt.UTC(), req.DeadlineAt, req.ResolvedAt, req.ExpiredAt,
 		req.Response, req.ResponderUserID,
@@ -52,8 +52,8 @@ func (s *PgHumanInputStore) CreateRequest(req *HumanInputRequestRecord) error {
 
 func (s *PgHumanInputStore) GetByToolCallID(toolCallID string) (*HumanInputRequestRecord, error) {
 	row := s.db.QueryRow(
-		`SELECT id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
-		        state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id
+		`SELECT id, mission_id, task_id, task_name, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
+		        state, requested_at, deadline_at, resolved_at, expired_at, canceled_at, cancel_reason, response, responder_user_id
 		 FROM human_input_requests WHERE tool_call_id = $1`,
 		toolCallID,
 	)
@@ -90,6 +90,21 @@ func (s *PgHumanInputStore) ExpireRequest(toolCallID string, now time.Time) (*Hu
 	return s.GetByToolCallID(toolCallID)
 }
 
+func (s *PgHumanInputStore) CancelRequest(toolCallID, reason string, now time.Time) (*HumanInputRequestRecord, error) {
+	if _, err := s.ExpireRequest(toolCallID, now); err != nil {
+		return nil, err
+	}
+	_, err := s.db.Exec(
+		`UPDATE human_input_requests SET state = $1, canceled_at = $2, cancel_reason = $3
+		 WHERE tool_call_id = $4 AND state = $5 AND (deadline_at IS NULL OR deadline_at > clock_timestamp())`,
+		HumanInputStateCanceled, now.UTC(), reason, toolCallID, HumanInputStateOpen,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("cancel human input request: %w", err)
+	}
+	return s.ExpireRequest(toolCallID, time.Now().UTC())
+}
+
 func (s *PgHumanInputStore) ListRequests(filter HumanInputFilter) ([]HumanInputRequestRecord, int, error) {
 	where := ""
 	args := []any{}
@@ -116,8 +131,8 @@ func (s *PgHumanInputStore) ListRequests(filter HumanInputFilter) ([]HumanInputR
 	if filter.OldestFirst {
 		order = " ORDER BY requested_at ASC"
 	}
-	q := `SELECT id, mission_id, task_id, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
-	              state, requested_at, deadline_at, resolved_at, expired_at, response, responder_user_id
+	q := `SELECT id, mission_id, task_id, task_name, tool_call_id, question, short_summary, additional_context, choices_json, multi_select,
+	              state, requested_at, deadline_at, resolved_at, expired_at, canceled_at, cancel_reason, response, responder_user_id
 	       FROM human_input_requests WHERE 1=1` + where + order
 	if filter.Limit > 0 {
 		q += fmt.Sprintf(" LIMIT %d OFFSET %d", filter.Limit, filter.Offset)
@@ -143,15 +158,15 @@ func (s *PgHumanInputStore) ListRequests(filter HumanInputFilter) ([]HumanInputR
 // come back as time.Time (Postgres native) rather than strings (SQLite).
 func scanHumanInputRequestPG(r humanInputRowScanner) (*HumanInputRequestRecord, error) {
 	var (
-		rec                                                             HumanInputRequestRecord
-		missionID, taskID, shortSummary, additionalContext, choicesJSON sql.NullString
-		response, responderUserID                                       sql.NullString
-		requestedAt                                                     time.Time
-		deadlineAt, resolvedAt, expiredAt                               sql.NullTime
+		rec                                                                       HumanInputRequestRecord
+		missionID, taskID, taskName, shortSummary, additionalContext, choicesJSON sql.NullString
+		cancelReason, response, responderUserID                                   sql.NullString
+		requestedAt                                                               time.Time
+		deadlineAt, resolvedAt, expiredAt, canceledAt                             sql.NullTime
 	)
 	err := r.Scan(
-		&rec.ID, &missionID, &taskID, &rec.ToolCallID, &rec.Question, &shortSummary, &additionalContext, &choicesJSON, &rec.MultiSelect,
-		&rec.State, &requestedAt, &deadlineAt, &resolvedAt, &expiredAt, &response, &responderUserID,
+		&rec.ID, &missionID, &taskID, &taskName, &rec.ToolCallID, &rec.Question, &shortSummary, &additionalContext, &choicesJSON, &rec.MultiSelect,
+		&rec.State, &requestedAt, &deadlineAt, &resolvedAt, &expiredAt, &canceledAt, &cancelReason, &response, &responderUserID,
 	)
 	if err != nil {
 		return nil, err
@@ -161,6 +176,9 @@ func scanHumanInputRequestPG(r humanInputRowScanner) (*HumanInputRequestRecord, 
 	}
 	if taskID.Valid {
 		rec.TaskID = taskID.String
+	}
+	if taskName.Valid {
+		rec.TaskName = taskName.String
 	}
 	if shortSummary.Valid {
 		rec.ShortSummary = shortSummary.String
@@ -185,6 +203,13 @@ func scanHumanInputRequestPG(r humanInputRowScanner) (*HumanInputRequestRecord, 
 	if expiredAt.Valid {
 		t := expiredAt.Time
 		rec.ExpiredAt = &t
+	}
+	if canceledAt.Valid {
+		t := canceledAt.Time
+		rec.CanceledAt = &t
+	}
+	if cancelReason.Valid {
+		rec.CancelReason = cancelReason.String
 	}
 	if response.Valid {
 		s := response.String

@@ -25,6 +25,7 @@ type CommanderModelSession interface {
 // ModelCommander adapts one persistent model session to CommanderDriver.
 type ModelCommander struct {
 	session           CommanderModelSession
+	tools             []llm.ToolDefinition
 	model             string
 	turns             int
 	memoryKeys        map[string]bool
@@ -170,10 +171,25 @@ func NewModelCommander(session CommanderModelSession, restored []CommanderMessag
 	for _, key := range memoryKeys {
 		allowedMemoryKeys[key] = true
 	}
-	return &ModelCommander{session: session, turns: turns, memoryKeys: allowedMemoryKeys}, nil
+	return &ModelCommander{session: session, tools: tools, turns: turns, memoryKeys: allowedMemoryKeys}, nil
 }
 
 func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history []CommanderMessage) (CommanderDecision, error) {
+	// Offer only controls that are legal for this snapshot. The harness still
+	// validates every decision, but the model should not be asked to choose
+	// between start_task and route controls when only one class is possible.
+	available := make([]llm.ToolDefinition, 0, len(c.tools))
+	for _, tool := range c.tools {
+		if len(snapshot.PendingRoutes) > 0 {
+			if tool.Name == "start_task" {
+				continue
+			}
+		} else if tool.Name == "select_route" || tool.Name == "inspect_task" || tool.Name == "clarify_task_result" {
+			continue
+		}
+		available = append(available, tool)
+	}
+	c.session.SetTools(available)
 	promptJSON, err := json.Marshal(commanderPromptProjection(snapshot))
 	if err != nil {
 		return CommanderDecision{}, fmt.Errorf("encode commander snapshot: %w", err)
@@ -182,7 +198,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 	// Reserve the possible retry instruction because the model may first return
 	// parallel controls. Durable history is not deleted; only provider context is
 	// narrowed for this decision.
-	historyBudget := commanderRequestMaxBytes - c.systemPromptBytes - len(promptJSON) - len(commanderParallelRetryHint)
+	historyBudget := commanderRequestMaxBytes - c.systemPromptBytes - len(promptJSON) - max(len(commanderParallelRetryHint), len(commanderWrongControlRetryHint))
 	if historyBudget < 0 {
 		return CommanderDecision{}, fmt.Errorf("commander fixed context and snapshot exceed %d-byte request budget (fixed=%d, snapshot=%d)", commanderRequestMaxBytes, c.systemPromptBytes, len(promptJSON))
 	}
@@ -197,6 +213,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 	var response *llm.ChatResponse
 	var requested *llm.ToolUseBlock
 	var usage llm.Usage
+	retryHint := ""
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
 			// The rejected turn never changed the harness. Reset the provider
@@ -208,7 +225,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 		}
 		promptText := string(promptJSON)
 		if attempt > 0 {
-			promptText += commanderParallelRetryHint
+			promptText += retryHint
 		}
 		prompt = llm.NewTextMessage(llm.RoleUser, promptText)
 		response, err = c.session.SendMessageStream(ctx, prompt, nil)
@@ -234,12 +251,22 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 			}
 			requested = block.ToolUse
 		}
-		if !multiple {
-			break
+		if multiple {
+			if attempt == 2 {
+				return CommanderDecision{}, fmt.Errorf("commander returned multiple control calls")
+			}
+			retryHint = commanderParallelRetryHint
+			continue
 		}
-		if attempt == 2 {
-			return CommanderDecision{}, fmt.Errorf("commander returned multiple control calls")
+		if requested != nil && ((len(snapshot.PendingRoutes) == 0 && requested.Name == "select_route") ||
+			(len(snapshot.PendingRoutes) > 0 && requested.Name == "start_task")) {
+			if attempt == 2 {
+				break
+			}
+			retryHint = commanderWrongControlRetryHint
+			continue
 		}
+		break
 	}
 	if requested == nil {
 		return CommanderDecision{}, fmt.Errorf("commander must request an orchestration control")
@@ -350,6 +377,7 @@ func (c *ModelCommander) Decide(ctx context.Context, snapshot Snapshot, history 
 }
 
 const commanderParallelRetryHint = "\n\nYour previous response contained multiple control calls. Request exactly ONE control call now. The harness will ask you again for remaining ready tasks."
+const commanderWrongControlRetryHint = "\n\nYour last control was invalid for this snapshot. If pending_routes is non-empty, select_route; otherwise start_task from ready_tasks."
 
 // commanderPromptProjection keeps the changing state small even when an
 // iterator creates many children. The harness still owns the complete graph,

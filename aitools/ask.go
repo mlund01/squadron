@@ -59,6 +59,7 @@ type HumanInputRequest struct {
 	ToolCallID        string
 	MissionID         string
 	TaskID            string
+	TaskName          string
 	Question          string
 	ShortSummary      string
 	AdditionalContext string
@@ -210,9 +211,11 @@ func prepareHumanInputRequest(ctx context.Context, params string) (askParams, Hu
 		return p, HumanInputRequest{}, "Error: timeout_seconds must be a finite, non-negative duration"
 	}
 	missionID, taskID := MissionContextFromContext(ctx)
+	taskName := ""
 	toolCallID := uuid.NewString()
 	startedAt := time.Now().UTC()
 	if invocation, ok := InvocationMetadataFromContext(ctx); ok {
+		taskName = invocation.TaskName
 		if invocation.IdempotencyKey != "" {
 			toolCallID = invocation.IdempotencyKey
 		}
@@ -221,7 +224,7 @@ func prepareHumanInputRequest(ctx context.Context, params string) (askParams, Hu
 		}
 	}
 	req := HumanInputRequest{
-		ToolCallID: toolCallID, MissionID: missionID, TaskID: taskID,
+		ToolCallID: toolCallID, MissionID: missionID, TaskID: taskID, TaskName: taskName,
 		Question: p.Question, ShortSummary: p.ShortSummary, AdditionalContext: p.AdditionalContext,
 		Choices: p.Choices, MultiSelect: p.MultiSelect && len(p.Choices) > 0,
 	}

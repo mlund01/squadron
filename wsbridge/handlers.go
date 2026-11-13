@@ -59,6 +59,7 @@ func (c *Client) registerHandlers() {
 	c.handlers[protocol.TypeSubscribe] = c.handleSubscribe
 	c.handlers[protocol.TypeUnsubscribe] = c.handleUnsubscribe
 	c.handlers[protocol.TypeGetHumanInputs] = c.handleGetHumanInputs
+	c.handlers[protocol.TypeGetHumanInput] = c.handleGetHumanInput
 	c.handlers[protocol.TypeResolveHumanInput] = c.handleResolveHumanInput
 	c.handlers["sync_variables"] = c.handleSyncVariables
 	c.handlers["sync_model_connections"] = c.handleSyncModelConnections
@@ -243,7 +244,7 @@ func (c *Client) handleStopMission(env *protocol.Envelope) (*protocol.Envelope, 
 				Reason:   fmt.Sprintf("mission %q not running and failed to update status: %v", payload.MissionID, err),
 			})
 		}
-		c.cancelOpenHumanInputsForMission(payload.MissionID, "[cancelled: mission stopped]")
+		c.cancelOpenHumanInputsForMission(payload.MissionID, "Mission stopped")
 		c.emitMissionLifecycleEvent(payload.MissionID, protocol.EventMissionStopped, protocol.MissionStoppedData{
 			MissionID: payload.MissionID,
 		})
@@ -327,7 +328,7 @@ func (c *Client) handleResumeMission(env *protocol.Envelope) (*protocol.Envelope
 				status = "waiting"
 			}
 			if status != "waiting" {
-				c.cancelOpenHumanInputsForMission(mid, "[cancelled: mission "+status+"]")
+				c.cancelOpenHumanInputsForMission(mid, "Mission "+status)
 			} else {
 				c.scheduleWaitingHumanInputMission(mid)
 				go c.resumeReadyHumanInputMission(mid)
@@ -504,6 +505,13 @@ func (c *Client) handleGetMission(env *protocol.Envelope) (*protocol.Envelope, e
 	runtimeInfo, _, err := missionRuntimeProjection(c.stores.Runtime, payload.MissionID)
 	if err != nil {
 		return nil, err
+	}
+	if runtimeInfo != nil {
+		costs, err := c.stores.Costs.GetCostsByMission(payload.MissionID)
+		if err != nil {
+			return nil, fmt.Errorf("get mission runtime costs: %w", err)
+		}
+		attributeRuntimeCosts(runtimeInfo, costs)
 	}
 
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetMissionResult, &protocol.GetMissionResultPayload{
@@ -1263,7 +1271,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 				status = "waiting"
 			}
 			if status != "waiting" {
-				c.cancelOpenHumanInputsForMission(mid, "[cancelled: mission "+status+"]")
+				c.cancelOpenHumanInputsForMission(mid, "Mission "+status)
 			} else {
 				c.scheduleWaitingHumanInputMission(mid)
 				go c.resumeReadyHumanInputMission(mid)

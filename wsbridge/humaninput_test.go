@@ -51,28 +51,28 @@ func newBareClient() *Client {
 var _ = Describe("humanInputListeners", func() {
 	It("delivers a response to the registered listener and reports true", func() {
 		l := newHumanInputListeners()
-		ch := make(chan protocol.ResolveHumanInputPayload, 1)
+		ch := make(chan humanInputDelivery, 1)
 		cancel := l.register("call-1", ch)
 		defer cancel()
 
-		ok := l.deliver(protocol.ResolveHumanInputPayload{ToolCallID: "call-1", Response: "hello"})
+		ok := l.deliver(humanInputDelivery{ToolCallID: "call-1", Response: "hello"})
 		Expect(ok).To(BeTrue())
 		Expect((<-ch).Response).To(Equal("hello"))
 	})
 
 	It("reports false when no listener is registered", func() {
 		l := newHumanInputListeners()
-		ok := l.deliver(protocol.ResolveHumanInputPayload{ToolCallID: "ghost"})
+		ok := l.deliver(humanInputDelivery{ToolCallID: "ghost"})
 		Expect(ok).To(BeFalse())
 	})
 
 	It("deregisters via the returned cancel func", func() {
 		l := newHumanInputListeners()
-		ch := make(chan protocol.ResolveHumanInputPayload, 1)
+		ch := make(chan humanInputDelivery, 1)
 		cancel := l.register("call-1", ch)
 		cancel()
 
-		ok := l.deliver(protocol.ResolveHumanInputPayload{ToolCallID: "call-1"})
+		ok := l.deliver(humanInputDelivery{ToolCallID: "call-1"})
 		Expect(ok).To(BeFalse())
 	})
 })
@@ -258,7 +258,7 @@ var _ = Describe("Client.handleGetHumanInputs", func() {
 		c := newBareClient()
 
 		Expect(c.stores.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
-			ToolCallID: "a", Question: "qa",
+			ToolCallID: "a", TaskName: "ask_preference", Question: "qa",
 		})).To(Succeed())
 		Expect(c.stores.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
 			ToolCallID: "b", Question: "qb",
@@ -277,6 +277,40 @@ var _ = Describe("Client.handleGetHumanInputs", func() {
 		Expect(result.Total).To(Equal(1))
 		Expect(result.HumanInputs).To(HaveLen(1))
 		Expect(result.HumanInputs[0].ToolCallID).To(Equal("a"))
+		Expect(result.HumanInputs[0].TaskName).To(Equal("ask_preference"))
+	})
+})
+
+var _ = Describe("Client.handleGetHumanInput", func() {
+	It("returns one request independently of its inbox state and includes its deadline", func() {
+		c := newBareClient()
+		deadline := time.Now().UTC().Add(time.Hour).Truncate(time.Millisecond)
+		Expect(c.stores.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+			ToolCallID: "detail-call", TaskName: "ask_preference", Question: "Which tone?", DeadlineAt: &deadline,
+		})).To(Succeed())
+		_, err := c.stores.HumanInputs.ResolveRequest("detail-call", "Playful", "user-1")
+		Expect(err).NotTo(HaveOccurred())
+
+		env, _ := protocol.NewRequest(protocol.TypeGetHumanInput, &protocol.GetHumanInputPayload{ToolCallID: "detail-call"})
+		resp, err := c.handleGetHumanInput(env)
+		Expect(err).NotTo(HaveOccurred())
+		var result protocol.GetHumanInputResultPayload
+		Expect(protocol.DecodePayload(resp, &result)).To(Succeed())
+		Expect(result.Found).To(BeTrue())
+		Expect(result.HumanInput.State).To(Equal(store.HumanInputStateResolved))
+		Expect(result.HumanInput.Response).To(Equal("Playful"))
+		Expect(result.HumanInput.TaskName).To(Equal("ask_preference"))
+		Expect(result.HumanInput.DeadlineAt).To(Equal(deadline.Format("2006-01-02T15:04:05.000Z")))
+	})
+
+	It("reports a missing request without depending on pagination", func() {
+		c := newBareClient()
+		env, _ := protocol.NewRequest(protocol.TypeGetHumanInput, &protocol.GetHumanInputPayload{ToolCallID: "missing"})
+		resp, err := c.handleGetHumanInput(env)
+		Expect(err).NotTo(HaveOccurred())
+		var result protocol.GetHumanInputResultPayload
+		Expect(protocol.DecodePayload(resp, &result)).To(Succeed())
+		Expect(result.Found).To(BeFalse())
 	})
 })
 
@@ -324,13 +358,36 @@ var _ = Describe("Client.handleResolveHumanInput", func() {
 		Expect(a2.Reason).To(Equal("already resolved"))
 		Expect(a2.HumanInput.Response).To(Equal("A"))
 	})
+
+	It("rejects an answer after cancellation and preserves the cancellation outcome", func() {
+		c := newBareClient()
+		Expect(c.stores.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+			ToolCallID: "canceled-call", Question: "Approve?",
+		})).To(Succeed())
+		_, err := c.stores.HumanInputs.CancelRequest("canceled-call", "Mission stopped", time.Now().UTC())
+		Expect(err).NotTo(HaveOccurred())
+
+		env, err := protocol.NewRequest(protocol.TypeResolveHumanInput, &protocol.ResolveHumanInputPayload{
+			ToolCallID: "canceled-call", Response: "yes", ResponderUserID: "user-1",
+		})
+		Expect(err).NotTo(HaveOccurred())
+		resp, err := c.handleResolveHumanInput(env)
+		Expect(err).NotTo(HaveOccurred())
+		var result protocol.ResolveHumanInputResultPayload
+		Expect(protocol.DecodePayload(resp, &result)).To(Succeed())
+		Expect(result.Accepted).To(BeFalse())
+		Expect(result.Reason).To(Equal("canceled"))
+		Expect(result.HumanInput.State).To(Equal(store.HumanInputStateCanceled))
+		Expect(result.HumanInput.CancelReason).To(Equal("Mission stopped"))
+		Expect(result.HumanInput.Response).To(BeEmpty())
+	})
 })
 
 // Silence unused sql import when only types are used.
 var _ = sql.ErrNoRows
 
 var _ = Describe("Client.cancelOpenHumanInputsForMission", func() {
-	It("auto-resolves every open request for the failed mission and leaves other missions untouched", func() {
+	It("cancels every open request for the failed mission and leaves other missions untouched", func() {
 		c := newBareClient()
 
 		// Two open rows on the failed mission, one on a different mission,
@@ -365,8 +422,8 @@ var _ = Describe("Client.cancelOpenHumanInputsForMission", func() {
 			}
 		}
 
-		expectState("a-open", store.HumanInputStateResolved, "[cancelled: mission failed]")
-		expectState("b-open", store.HumanInputStateResolved, "[cancelled: mission failed]")
+		expectState("a-open", store.HumanInputStateCanceled, "")
+		expectState("b-open", store.HumanInputStateCanceled, "")
 		// already-resolved row keeps its prior response (Resolve is idempotent).
 		expectState("c-already", store.HumanInputStateResolved, "earlier")
 		// Different mission's open row is untouched.
@@ -406,8 +463,8 @@ var _ = Describe("Client.cancelOpenHumanInputsForMission", func() {
 
 		select {
 		case err := <-done:
-			Expect(err).NotTo(HaveOccurred(),
-				"AskHuman should return cleanly with the sentinel response, not error out")
+			Expect(err).To(MatchError(context.Canceled),
+				"AskHuman should stop without accepting a synthetic answer")
 		case <-time.After(time.Second):
 			Fail("AskHuman did not unblock when its row was cancelled")
 		}
@@ -534,7 +591,7 @@ func strPtr(s string) *string { return &s }
 // emitted for each so the Inbox clears in real time.
 // ─────────────────────────────────────────────────────────────────────────────
 var _ = Describe("Mission failure cancel → wire event chain", func() {
-	It("emits one resolved wire event per cancelled row, and only for the failing mission", func() {
+	It("emits one canceled wire event per cancelled row, and only for the failing mission", func() {
 		c := newBareClient()
 		// Subscribe globally so wire events with any missionID flow.
 		c.subscriptions.Subscribe("global", "")
@@ -562,7 +619,7 @@ var _ = Describe("Mission failure cancel → wire event chain", func() {
 			if env == nil {
 				continue
 			}
-			if payload.EventType != protocol.EventHumanInputResolved {
+			if payload.EventType != protocol.EventHumanInputCanceled {
 				continue
 			}
 			data, ok := payload.Data.(map[string]any)

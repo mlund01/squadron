@@ -139,7 +139,7 @@ func TestModelTaskSessionParksHumanInputAndReplaysOriginalToolCall(t *testing.T)
 	if checkpoint.Tools["ask-1"].Status != ToolOperationInFlight || len(firstModel.results) != 0 {
 		t.Fatalf("pending tool leaked model result: progress=%#v results=%#v", checkpoint, firstModel.results)
 	}
-	if bridge.request.MissionID != dispatch.RunID || bridge.request.ToolCallID != wantID {
+	if bridge.request.MissionID != dispatch.RunID || bridge.request.TaskName != dispatch.TaskName || bridge.request.ToolCallID != wantID {
 		t.Fatalf("bridge request = %#v", bridge.request)
 	}
 	bridge.pending = false

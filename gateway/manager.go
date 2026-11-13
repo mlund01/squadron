@@ -382,7 +382,9 @@ func (m *Manager) dispatch(ctx context.Context, ev humaninput.Event) {
 		if err := gw.OnHumanInputRequested(ctx, rec); err != nil {
 			log.Printf("gateway %q OnHumanInputRequested: %v", name, err)
 		}
-	case humaninput.EventKindResolved:
+	case humaninput.EventKindResolved, humaninput.EventKindCanceled:
+		// A canceled request is terminal too. Existing gateways use this
+		// callback to dismiss the prompt; the record carries its true state.
 		if err := gw.OnHumanInputResolved(ctx, rec); err != nil {
 			log.Printf("gateway %q OnHumanInputResolved: %v", name, err)
 		}

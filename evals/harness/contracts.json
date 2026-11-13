@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "cases": [
+    {"id": "graph-legality", "package": "squadron/mission/runtime", "test": "TestDispatchRejectsIneligibleAndStaleDecisions", "invariant": "Ineligible and stale commander dispatches are rejected."},
+    {"id": "capability-isolation", "package": "squadron/mission", "test": "TestCapabilityPolicyResolveGrant", "invariant": "Task executors receive only allowed models and tools."},
+    {"id": "file-input-isolation", "package": "squadron/mission", "test": "TestRuntimeFileInputSlotIsStagedAndReadOnly", "invariant": "Uploaded files are exposed by a read-only slot, not as prompt payloads."},
+    {"id": "result-validation", "package": "squadron/mission/runtime", "test": "TestInvalidTypedResultCannotAdvanceDependencies", "invariant": "Malformed task results cannot advance the graph."},
+    {"id": "parallelism", "package": "squadron/mission/runtime", "test": "TestHarnessEnforcesParallelCeilingAndRejectsStaleCompletion", "invariant": "The parallel ceiling and attempt identity are enforced."},
+    {"id": "routing", "package": "squadron/mission/runtime", "test": "TestCoordinatorPersistsRouteDecisionAndExecutesOnlySelectedBranch", "invariant": "Only the selected declared branch executes."},
+    {"id": "iteration", "package": "squadron/mission/runtime", "test": "TestDurableIterationSequentialRecoveryAndParentCompletion", "invariant": "Iteration children and parent completion survive recovery."},
+    {"id": "retries", "package": "squadron/mission/runtime", "test": "TestCoordinatorFailsMissionWhenRetryPolicyIsExhausted", "invariant": "Exhausted retries terminate the mission."},
+    {"id": "human-input", "package": "squadron/mission/runtime", "test": "TestSQLiteHumanInputBoundarySurvivesRestarts", "invariant": "Human-input waits and responses survive SQLite restart."},
+    {"id": "cancellation", "package": "squadron/mission/runtime", "test": "TestCoordinatorCancellationReleasesLeaseWithoutFailingAttempt", "invariant": "Cancellation releases a lease without corrupting the attempt."},
+    {"id": "durable-replay", "package": "squadron/mission/runtime", "test": "TestSQLiteRestartAfterPersistedToolResultDoesNotRepeatSideEffect", "invariant": "Restart does not duplicate a persisted tool side effect."}
+  ]
+}

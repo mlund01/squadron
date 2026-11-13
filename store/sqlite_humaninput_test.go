@@ -32,6 +32,7 @@ var _ = Describe("HumanInputStore (SQLite)", func() {
 			rec := &store.HumanInputRequestRecord{
 				MissionID:         "m-1",
 				TaskID:            "t-1",
+				TaskName:          "ask_preference",
 				ToolCallID:        "tc-multi",
 				Question:          "Pick any that apply",
 				ShortSummary:      "Pick any",
@@ -48,6 +49,7 @@ var _ = Describe("HumanInputStore (SQLite)", func() {
 			Expect(got.Choices).To(Equal([]string{"A", "B", "C"}))
 			Expect(got.MissionID).To(Equal("m-1"))
 			Expect(got.TaskID).To(Equal("t-1"))
+			Expect(got.TaskName).To(Equal("ask_preference"))
 			Expect(got.ShortSummary).To(Equal("Pick any"))
 			Expect(got.AdditionalContext).To(Equal("background _markdown_"))
 			Expect(got.State).To(Equal(store.HumanInputStateOpen))
@@ -155,6 +157,49 @@ var _ = Describe("HumanInputStore (SQLite)", func() {
 		})
 	})
 
+	Describe("CancelRequest", func() {
+		It("closes an open request without fabricating an answer", func() {
+			Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{ToolCallID: "tc-cancel", Question: "Approve?"})).To(Succeed())
+			closed, err := bundle.HumanInputs.CancelRequest("tc-cancel", "Mission stopped", time.Now().UTC())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(closed.State).To(Equal(store.HumanInputStateCanceled))
+			Expect(closed.CancelReason).To(Equal("Mission stopped"))
+			Expect(closed.CanceledAt).NotTo(BeNil())
+			Expect(closed.Response).To(BeNil())
+			Expect(closed.ResponderUserID).To(BeNil())
+			answered, err := bundle.HumanInputs.ResolveRequest("tc-cancel", "yes", "alice")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(answered.State).To(Equal(store.HumanInputStateCanceled))
+			Expect(answered.Response).To(BeNil())
+			rows, total, err := bundle.HumanInputs.ListRequests(store.HumanInputFilter{State: store.HumanInputStateCanceled})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(Equal(1))
+			Expect(rows).To(HaveLen(1))
+		})
+
+		It("does not cancel a request answered first", func() {
+			Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{ToolCallID: "tc-answered", Question: "Approve?"})).To(Succeed())
+			_, err := bundle.HumanInputs.ResolveRequest("tc-answered", "yes", "alice")
+			Expect(err).NotTo(HaveOccurred())
+			closed, err := bundle.HumanInputs.CancelRequest("tc-answered", "Mission stopped", time.Now().UTC())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(closed.State).To(Equal(store.HumanInputStateResolved))
+			Expect(*closed.Response).To(Equal("yes"))
+		})
+
+		It("lets an elapsed deadline win over cancellation", func() {
+			deadline := time.Now().UTC().Add(-time.Minute)
+			Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+				ToolCallID: "tc-expired-before-cancel", Question: "Approve?", DeadlineAt: &deadline,
+			})).To(Succeed())
+			closed, err := bundle.HumanInputs.CancelRequest("tc-expired-before-cancel", "Mission stopped", time.Now().UTC())
+			Expect(err).NotTo(HaveOccurred())
+			Expect(closed.State).To(Equal(store.HumanInputStateExpired))
+			Expect(closed.ExpiredAt).NotTo(BeNil())
+			Expect(closed.CanceledAt).To(BeNil())
+		})
+	})
+
 	Describe("ListRequests filters", func() {
 		BeforeEach(func() {
 			oldT := time.Now().Add(-2 * time.Hour)
@@ -182,6 +227,32 @@ var _ = Describe("HumanInputStore (SQLite)", func() {
 			Expect(rows).To(HaveLen(3))
 			for _, r := range rows {
 				Expect(r.State).To(Equal(store.HumanInputStateOpen))
+			}
+		})
+
+		It("returns an empty page for a state with no requests", func() {
+			rows, total, err := bundle.HumanInputs.ListRequests(store.HumanInputFilter{State: store.HumanInputStateCanceled})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(total).To(BeZero())
+			Expect(rows).To(BeEmpty())
+		})
+
+		It("keeps expired and canceled requests in their own history views", func() {
+			deadline := time.Now().UTC().Add(-time.Minute)
+			Expect(bundle.HumanInputs.CreateRequest(&store.HumanInputRequestRecord{
+				ToolCallID: "expired-m1", MissionID: "m1", Question: "?", DeadlineAt: &deadline,
+			})).To(Succeed())
+			_, err := bundle.HumanInputs.ExpireRequest("expired-m1", time.Now().UTC())
+			Expect(err).NotTo(HaveOccurred())
+			_, err = bundle.HumanInputs.CancelRequest("open-m2", "Mission stopped", time.Now().UTC())
+			Expect(err).NotTo(HaveOccurred())
+
+			for _, state := range []string{store.HumanInputStateResolved, store.HumanInputStateExpired, store.HumanInputStateCanceled} {
+				rows, total, err := bundle.HumanInputs.ListRequests(store.HumanInputFilter{State: state})
+				Expect(err).NotTo(HaveOccurred())
+				Expect(total).To(Equal(1), "state %s", state)
+				Expect(rows).To(HaveLen(1))
+				Expect(rows[0].State).To(Equal(state))
 			}
 		})
 

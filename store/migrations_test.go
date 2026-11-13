@@ -69,16 +69,31 @@ var _ = Describe("Migrations", func() {
 		Expect(count).To(Equal(len(loaded)))
 	})
 
-	It("records the thread migration when a main-branch database already has the column", func() {
-		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
-		// Simulate a database migrated by main's former version 5, before
-		// this branch assigns the thread column to version 11.
-		_, err := db.Exec(`DELETE FROM schema_migrations WHERE version = 11`)
+	It("upgrades a main-branch database that already has the thread column", func() {
+		migrations, err := store.LoadMigrations()
 		Expect(err).NotTo(HaveOccurred())
+		Expect(migrations).To(HaveLen(7))
+		_, err = db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)`)
+		Expect(err).NotTo(HaveOccurred())
+		for _, migration := range migrations[:6] {
+			sqlText := migration.SQLite
+			name := migration.Name
+			if migration.Version == 5 {
+				// Main used version 5 for mission threads, not the branch's
+				// reserved slot. Both paths must converge at version 7.
+				sqlText = `ALTER TABLE missions ADD COLUMN thread_id TEXT NOT NULL DEFAULT ''`
+				name = "mission_threads"
+			}
+			_, err = db.Exec(sqlText)
+			Expect(err).NotTo(HaveOccurred())
+			_, err = db.Exec(`INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, 'test')`, migration.Version, name)
+			Expect(err).NotTo(HaveOccurred())
+		}
 		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
 		var count int
-		Expect(db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 11`).Scan(&count)).To(Succeed())
+		Expect(db.QueryRow(`SELECT COUNT(*) FROM schema_migrations WHERE version = 7`).Scan(&count)).To(Succeed())
 		Expect(count).To(Equal(1))
+		Expect(store.RunMigrations(db, store.DialectSQLite)).To(Succeed())
 	})
 
 	It("creates every table referenced by the stores", func() {

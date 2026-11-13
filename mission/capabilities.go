@@ -333,11 +333,12 @@ func (p *CapabilityPolicy) ResolveGrant(taskName, model string, selectedMissionT
 	if !containsString(allowedModels, model) {
 		return TaskCapabilityGrant{}, fmt.Errorf("model '%s' is not allowed for task '%s'", model, taskName)
 	}
+	implicitTools := p.implicitTaskTools(task)
 
 	for _, toolRef := range selectedMissionTools {
-		// Task tools are mandatory. A commander may redundantly name one in
+		// Task and implicit slot tools are mandatory. A commander may redundantly name one in
 		// its optional selection; deduplication below still grants it once.
-		if containsString(task.Tools, toolRef) {
+		if containsString(task.Tools, toolRef) || containsString(implicitTools, toolRef) {
 			continue
 		}
 		if !containsString(p.mission.Tools, toolRef) {
@@ -348,12 +349,7 @@ func (p *CapabilityPolicy) ResolveGrant(taskName, model string, selectedMissionT
 	tools := make([]string, 0, len(task.Tools)+len(selectedMissionTools))
 	seen := make(map[string]struct{}, cap(tools))
 	selected := append(append([]string{}, task.Tools...), selectedMissionTools...)
-	if p.mission.Scratchpad || len(p.mission.Packets) > 0 || len(task.Packets) > 0 {
-		selected = append(selected, "file_list", "file_read", "file_view", "file_search", "file_grep")
-		if p.mission.Scratchpad {
-			selected = append(selected, "file_create", "file_delete")
-		}
-	}
+	selected = append(selected, implicitTools...)
 	for _, toolRef := range selected {
 		if _, ok := seen[toolRef]; ok {
 			continue
@@ -367,6 +363,24 @@ func (p *CapabilityPolicy) ResolveGrant(taskName, model string, selectedMissionT
 		Model:    model,
 		Tools:    tools,
 	}, nil
+}
+
+func (p *CapabilityPolicy) implicitTaskTools(task *config.Task) []string {
+	hasFileInput := false
+	for _, input := range p.mission.Inputs {
+		if input.Type == config.InputTypeFile {
+			hasFileInput = true
+			break
+		}
+	}
+	if p.mission.Scratchpad || len(p.mission.Packets) > 0 || len(task.Packets) > 0 || hasFileInput {
+		tools := []string{"file_list", "file_read", "file_view", "file_search", "file_grep"}
+		if p.mission.Scratchpad {
+			tools = append(tools, "file_create", "file_delete")
+		}
+		return tools
+	}
+	return nil
 }
 
 func containsString(values []string, target string) bool {

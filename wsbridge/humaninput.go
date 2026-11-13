@@ -21,14 +21,21 @@ import (
 // AskHuman that's blocked waiting for it. Keyed by tool_call_id.
 type humanInputListeners struct {
 	mu sync.Mutex
-	m  map[string]chan<- protocol.ResolveHumanInputPayload
+	m  map[string]chan<- humanInputDelivery
+}
+
+type humanInputDelivery struct {
+	ToolCallID      string
+	Response        string
+	ResponderUserID string
+	Canceled        bool
 }
 
 func newHumanInputListeners() *humanInputListeners {
-	return &humanInputListeners{m: make(map[string]chan<- protocol.ResolveHumanInputPayload)}
+	return &humanInputListeners{m: make(map[string]chan<- humanInputDelivery)}
 }
 
-func (l *humanInputListeners) register(toolCallID string, ch chan<- protocol.ResolveHumanInputPayload) func() {
+func (l *humanInputListeners) register(toolCallID string, ch chan<- humanInputDelivery) func() {
 	l.mu.Lock()
 	l.m[toolCallID] = ch
 	l.mu.Unlock()
@@ -39,7 +46,7 @@ func (l *humanInputListeners) register(toolCallID string, ch chan<- protocol.Res
 	}
 }
 
-func (l *humanInputListeners) deliver(resp protocol.ResolveHumanInputPayload) bool {
+func (l *humanInputListeners) deliver(resp humanInputDelivery) bool {
 	l.mu.Lock()
 	ch, ok := l.m[resp.ToolCallID]
 	l.mu.Unlock()
@@ -58,11 +65,15 @@ func (l *humanInputListeners) deliver(resp protocol.ResolveHumanInputPayload) bo
 // gateways, and any future surface all wake the same blocking
 // AskHuman call regardless of which surface accepted the answer.
 func (l *humanInputListeners) DeliverResolution(toolCallID, response, responderUserID string) {
-	l.deliver(protocol.ResolveHumanInputPayload{
+	l.deliver(humanInputDelivery{
 		ToolCallID:      toolCallID,
 		Response:        response,
 		ResponderUserID: responderUserID,
 	})
+}
+
+func (l *humanInputListeners) deliverCancellation(toolCallID string) {
+	l.deliver(humanInputDelivery{ToolCallID: toolCallID, Canceled: true})
 }
 
 // AskHuman implements aitools.HumanInputBridge. The open record is
@@ -77,13 +88,14 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 	}
 
 	// Register before persistence makes the question available to answer.
-	ch := make(chan protocol.ResolveHumanInputPayload, 1)
+	ch := make(chan humanInputDelivery, 1)
 	cancel := c.humanInputs.register(req.ToolCallID, ch)
 	defer cancel()
 
 	record := &store.HumanInputRequestRecord{
 		MissionID:         req.MissionID,
 		TaskID:            req.TaskID,
+		TaskName:          req.TaskName,
 		ToolCallID:        req.ToolCallID,
 		Question:          req.Question,
 		ShortSummary:      req.ShortSummary,
@@ -102,6 +114,9 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 	}
 	if stored.State == store.HumanInputStateResolved && stored.Response != nil {
 		return *stored.Response, nil
+	}
+	if stored.State == store.HumanInputStateCanceled {
+		return "", context.Canceled
 	}
 	if stored.DeadlineAt != nil {
 		stored, err = c.stores.HumanInputs.ExpireRequest(req.ToolCallID, time.Now().UTC())
@@ -128,6 +143,9 @@ func (c *Client) AskHuman(ctx context.Context, req aitools.HumanInputRequest) (s
 
 	select {
 	case resp := <-ch:
+		if resp.Canceled {
+			return "", context.Canceled
+		}
 		return resp.Response, nil
 	case <-ctx.Done():
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) && stored.DeadlineAt != nil {
@@ -163,7 +181,7 @@ func (c *Client) BeginAskHuman(ctx context.Context, req aitools.HumanInputReques
 	created := errors.Is(err, sql.ErrNoRows)
 	if created {
 		record := &store.HumanInputRequestRecord{
-			MissionID: req.MissionID, TaskID: req.TaskID, ToolCallID: req.ToolCallID,
+			MissionID: req.MissionID, TaskID: req.TaskID, TaskName: req.TaskName, ToolCallID: req.ToolCallID,
 			Question: req.Question, ShortSummary: req.ShortSummary, AdditionalContext: req.AdditionalContext,
 			Choices: req.Choices, MultiSelect: req.MultiSelect, DeadlineAt: req.DeadlineAt,
 		}
@@ -175,7 +193,7 @@ func (c *Client) BeginAskHuman(ctx context.Context, req aitools.HumanInputReques
 			return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: reload request: %w", err)
 		}
 	}
-	if prior.Question != req.Question || prior.MissionID != req.MissionID || prior.TaskID != req.TaskID || !sameHumanInputDeadline(prior.DeadlineAt, req.DeadlineAt) {
+	if prior.Question != req.Question || prior.MissionID != req.MissionID || prior.TaskID != req.TaskID || prior.TaskName != req.TaskName || !sameHumanInputDeadline(prior.DeadlineAt, req.DeadlineAt) {
 		return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: tool call %q conflicts with its persisted request", req.ToolCallID)
 	}
 	if prior.DeadlineAt != nil && prior.State == store.HumanInputStateOpen {
@@ -200,6 +218,8 @@ func (c *Client) BeginAskHuman(ctx context.Context, req aitools.HumanInputReques
 		return aitools.DeferredHumanInputResult{Response: *prior.Response, RequestedAt: prior.RequestedAt}, nil
 	case store.HumanInputStateExpired:
 		return aitools.DeferredHumanInputResult{}, context.DeadlineExceeded
+	case store.HumanInputStateCanceled:
+		return aitools.DeferredHumanInputResult{}, context.Canceled
 	default:
 		return aitools.DeferredHumanInputResult{}, fmt.Errorf("ask: unsupported request state %q", prior.State)
 	}
@@ -395,10 +415,51 @@ func (c *Client) handleGetHumanInputs(env *protocol.Envelope) (*protocol.Envelop
 	for _, r := range rows {
 		out := recordToProtocol(r)
 		out.MissionName = missionNames[r.MissionID]
-		out.TaskName = taskNames[r.TaskID]
+		if out.TaskName == "" {
+			out.TaskName = taskNames[r.TaskID]
+		}
 		result.HumanInputs = append(result.HumanInputs, out)
 	}
 	return protocol.NewResponse(env.RequestID, protocol.TypeGetHumanInputsResult, result)
+}
+
+func (c *Client) handleGetHumanInput(env *protocol.Envelope) (*protocol.Envelope, error) {
+	var payload protocol.GetHumanInputPayload
+	if err := protocol.DecodePayload(env, &payload); err != nil {
+		return nil, fmt.Errorf("decode get_human_input: %w", err)
+	}
+	if payload.ToolCallID == "" {
+		return nil, fmt.Errorf("get_human_input: tool call ID is required")
+	}
+	result := &protocol.GetHumanInputResultPayload{}
+	if c.stores == nil || c.stores.HumanInputs == nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeGetHumanInputResult, result)
+	}
+	rec, err := c.stores.HumanInputs.GetByToolCallID(payload.ToolCallID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return protocol.NewResponse(env.RequestID, protocol.TypeGetHumanInputResult, result)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if rec == nil {
+		return protocol.NewResponse(env.RequestID, protocol.TypeGetHumanInputResult, result)
+	}
+	result.Found = true
+	result.HumanInput = recordToProtocol(*rec)
+	if c.stores.Missions != nil {
+		if rec.MissionID != "" {
+			if mission, err := c.stores.Missions.GetMission(rec.MissionID); err == nil && mission != nil {
+				result.HumanInput.MissionName = mission.MissionName
+			}
+		}
+		if rec.TaskID != "" && result.HumanInput.TaskName == "" {
+			if task, err := c.stores.Missions.GetTask(rec.TaskID); err == nil && task != nil {
+				result.HumanInput.TaskName = task.TaskName
+			}
+		}
+	}
+	return protocol.NewResponse(env.RequestID, protocol.TypeGetHumanInputResult, result)
 }
 
 // handleResolveHumanInput delegates to humaninput.Resolve so
@@ -434,6 +495,11 @@ func (c *Client) handleResolveHumanInput(env *protocol.Envelope) (*protocol.Enve
 	if out.AlreadyExpired {
 		return protocol.NewResponse(env.RequestID, protocol.TypeResolveHumanInputResult, &protocol.ResolveHumanInputResultPayload{
 			Accepted: false, Reason: "expired", HumanInput: recordToProtocol(out.Record),
+		})
+	}
+	if out.AlreadyCanceled {
+		return protocol.NewResponse(env.RequestID, protocol.TypeResolveHumanInputResult, &protocol.ResolveHumanInputResultPayload{
+			Accepted: false, Reason: "canceled", HumanInput: recordToProtocol(out.Record),
 		})
 	}
 	if out.AlreadyResolved {
@@ -509,11 +575,8 @@ func (c *Client) emitHumanInputResolved(rec store.HumanInputRequestRecord) {
 	}
 }
 
-// cancelOpenHumanInputsForMission auto-resolves still-open requests
-// for a mission that's failed or stopped, so the Inbox and connected
-// gateways don't linger on dead questions. Each row goes through the
-// shared Resolve helper with a "system" responder and sentinel
-// response — same code path as a real answer.
+// cancelOpenHumanInputsForMission closes unanswered requests without
+// recording a synthetic human answer or resuming a terminal mission.
 func (c *Client) cancelOpenHumanInputsForMission(missionID, reason string) {
 	if missionID == "" || c.stores == nil || c.stores.HumanInputs == nil {
 		return
@@ -527,10 +590,37 @@ func (c *Client) cancelOpenHumanInputsForMission(missionID, reason string) {
 		return
 	}
 	for _, r := range rows {
-		if _, err := humaninput.Resolve(c.stores, c.humanInputs, c.humanInputNotifier,
-			r.ToolCallID, reason, "system"); err != nil {
+		closed, err := c.stores.HumanInputs.CancelRequest(r.ToolCallID, reason, time.Now().UTC())
+		if err != nil {
 			log.Printf("cancel open human input %s: %v", r.ToolCallID, err)
+			continue
 		}
+		if closed.State != store.HumanInputStateCanceled {
+			continue // A response or deadline won the race.
+		}
+		c.humanInputs.deliverCancellation(r.ToolCallID)
+		if c.humanInputNotifier != nil {
+			c.humanInputNotifier.Publish(humaninput.Event{Kind: humaninput.EventKindCanceled, Record: *closed})
+		} else {
+			c.emitHumanInputCanceled(*closed)
+		}
+	}
+}
+
+func (c *Client) emitHumanInputCanceled(rec store.HumanInputRequestRecord) {
+	if rec.MissionID == "" || !c.subscriptions.ShouldSend(string(protocol.EventHumanInputCanceled), rec.MissionID) {
+		return
+	}
+	env, err := protocol.NewEvent(protocol.TypeMissionEvent, &protocol.MissionEventPayload{
+		MissionID: rec.MissionID, EventType: protocol.EventHumanInputCanceled,
+		Data: protocol.HumanInputCanceledData{ToolCallID: rec.ToolCallID, Reason: rec.CancelReason},
+	})
+	if err != nil {
+		log.Printf("emit human_input_canceled: marshal: %v", err)
+		return
+	}
+	if err := c.SendEvent(env); err != nil {
+		log.Printf("emit human_input_canceled: send: %v", err)
 	}
 }
 
@@ -539,6 +629,7 @@ func recordToProtocol(rec store.HumanInputRequestRecord) protocol.HumanInputReco
 		ID:                rec.ID,
 		MissionID:         rec.MissionID,
 		TaskID:            rec.TaskID,
+		TaskName:          rec.TaskName,
 		ToolCallID:        rec.ToolCallID,
 		Question:          rec.Question,
 		ShortSummary:      rec.ShortSummary,
@@ -548,9 +639,19 @@ func recordToProtocol(rec store.HumanInputRequestRecord) protocol.HumanInputReco
 		State:             rec.State,
 		RequestedAt:       rec.RequestedAt.UTC().Format("2006-01-02T15:04:05.000Z"),
 	}
+	if rec.DeadlineAt != nil {
+		out.DeadlineAt = rec.DeadlineAt.UTC().Format("2006-01-02T15:04:05.000Z")
+	}
 	if rec.ResolvedAt != nil {
 		out.ResolvedAt = rec.ResolvedAt.UTC().Format("2006-01-02T15:04:05.000Z")
 	}
+	if rec.ExpiredAt != nil {
+		out.ExpiredAt = rec.ExpiredAt.UTC().Format("2006-01-02T15:04:05.000Z")
+	}
+	if rec.CanceledAt != nil {
+		out.CanceledAt = rec.CanceledAt.UTC().Format("2006-01-02T15:04:05.000Z")
+	}
+	out.CancelReason = rec.CancelReason
 	if rec.Response != nil {
 		out.Response = *rec.Response
 	}

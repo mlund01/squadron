@@ -43,6 +43,7 @@ type Runner struct {
 	datasetIDs       map[string]string // dataset name → store ID
 	missionID        string
 	threadID         string
+	runAs            string
 
 	// Task state management
 	mu                  sync.RWMutex
@@ -142,6 +143,15 @@ func WithDebugLogger(logger *DebugLogger) RunnerOption {
 func WithThreadID(threadID string) RunnerOption {
 	return func(r *Runner) { r.threadID = threadID }
 }
+
+// WithRunAs binds the execution identity authorized by the caller to a new run.
+// Recovery reads it from the durable checkpoint instead.
+func WithRunAs(runAs string) RunnerOption {
+	return func(r *Runner) { r.runAs = runAs }
+}
+
+// RunAs returns the identity carried into a routed child mission.
+func (r *Runner) RunAs() string { return r.runAs }
 
 // ThreadID identifies the mission thread containing this run.
 func (r *Runner) ThreadID() string { return r.threadID }

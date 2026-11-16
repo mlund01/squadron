@@ -64,6 +64,9 @@ deadline so the operator can distinguish waiting from active work.
 When a route launches another mission, the parent run links directly to the
 separately recorded child run. The child has its own commander, inputs, identity,
 and execution timeline.
+The selected execution identity is saved with the run before task work starts.
+Restarting the worker restores that identity, and a routed child run inherits
+it. Connection credentials are managed separately from this run identity.
 
 Only actual runtime records appear in these views. A newly started run may show
 ready tasks before its first commander turn has finished. While a commander or

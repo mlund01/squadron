@@ -61,11 +61,20 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 		rawInputsJSON, _ := json.Marshal(r.rawInputs)
 		runID, err = r.createMissionRecord(string(rawInputsJSON), string(configuration))
 		if err == nil {
-			harness, err = missionruntime.CreateDurableHarnessWithMaxParallel(r.stores.Runtime, runID, runID+":commander", definitions, r.mission.MaxParallel)
+			runAs := r.runAs
+			if runAs == "" {
+				runAs = "user:local"
+			}
+			harness, err = missionruntime.CreateDurableHarnessWithMaxParallel(r.stores.Runtime, runID, runID+":commander", definitions, r.mission.MaxParallel, runAs)
 		}
 	}
 	if err != nil {
 		return fmt.Errorf("initialize mission runtime: %w", err)
+	}
+	r.runAs = harness.Snapshot().RunAs
+	if r.runAs == "" {
+		// Checkpoints written before run identities were persisted were local runs.
+		r.runAs = "user:local"
 	}
 	r.missionID = runID
 	fileInputDirs, err := r.materializeFileInputs(runID)
@@ -104,7 +113,7 @@ func (r *Runner) runMissionScoped(ctx context.Context, streamer streamers.Missio
 
 	memoryStore, _ := r.stores.Runtime.(store.MissionMemoryRuntimeStore)
 	grantResolver, err := NewRuntimeGrantResolver(r.mission, ExecutionGrantContext{
-		RunAs: "user:local", InputsJSON: string(inputsJSON), ConfigurationVersion: configurationVersion,
+		RunAs: r.runAs, InputsJSON: string(inputsJSON), ConfigurationVersion: configurationVersion,
 		MemoryStore: memoryStore,
 	})
 	if err != nil {

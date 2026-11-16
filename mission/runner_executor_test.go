@@ -29,7 +29,7 @@ func TestMissionScopedRunnerRestartsInFlightTaskWithoutNewAttempt(t *testing.T) 
 			Tasks: []config.Task{{Name: "work", RawObjective: "Do the work"}},
 		}},
 	}
-	first, err := NewRunner(cfg, "", "restart_policy", nil, WithProviderFactory(func() llm.Provider { return provider }))
+	first, err := NewRunner(cfg, "", "restart_policy", nil, WithRunAs("service_principal:sp-1"), WithProviderFactory(func() llm.Provider { return provider }))
 	if err != nil {
 		t.Fatalf("NewRunner(first) error = %v", err)
 	}
@@ -60,6 +60,9 @@ func TestMissionScopedRunnerRestartsInFlightTaskWithoutNewAttempt(t *testing.T) 
 		t.Fatalf("RestoreDurableHarness() error = %v", err)
 	}
 	snapshot := restored.Snapshot()
+	if snapshot.RunAs != "service_principal:sp-1" || second.RunAs() != snapshot.RunAs {
+		t.Fatalf("recovered execution identity = %q, runner = %q", snapshot.RunAs, second.RunAs())
+	}
 	if snapshot.RunState != missionruntime.RunCompleted || snapshot.Tasks["work"].Attempt != 1 {
 		t.Fatalf("restarted snapshot = %#v", snapshot)
 	}

@@ -11,6 +11,27 @@ import (
 	persistence "squadron/store"
 )
 
+func TestRunIdentitySurvivesDurableRecovery(t *testing.T) {
+	runtimeStore := persistence.NewMemoryRuntimeStore()
+	harness, err := CreateDurableHarnessWithMaxParallel(runtimeStore, "run-identity", "commander-identity", []TaskDefinition{{Name: "work"}}, 1, "service_principal:sp-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := harness.Snapshot().RunAs; got != "service_principal:sp-1" {
+		t.Fatalf("new run identity = %q", got)
+	}
+	if err := harness.Start(); err != nil {
+		t.Fatal(err)
+	}
+	restored, _, err := RestoreDurableHarness(runtimeStore, "run-identity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := restored.Snapshot().RunAs; got != "service_principal:sp-1" {
+		t.Fatalf("restored run identity = %q", got)
+	}
+}
+
 func TestExecutionLeaseTakeoverFencesStaleWorkerWrites(t *testing.T) {
 	runtimeStore := persistence.NewMemoryRuntimeStore()
 	harness, err := CreateDurableHarness(runtimeStore, "run-lease-fence", "commander-lease-fence", []TaskDefinition{{Name: "work"}})

@@ -175,7 +175,7 @@ func (c *Client) handleRunMission(env *protocol.Envelope) (*protocol.Envelope, e
 
 	// Create mission runner with no-op debug logger
 	debugLogger, _ := mission.NewDebugLogger("")
-	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithThreadID(payload.ThreadID), mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
+	runner, err := mission.NewRunner(cfg, c.configPath, payload.MissionName, payload.Inputs, mission.WithThreadID(payload.ThreadID), mission.WithRunAs(payload.RunAs), mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge))
 	if err != nil {
 		c.concurrency.NotifyMissionDone(payload.MissionName)
 		return protocol.NewResponse(env.RequestID, protocol.TypeRunMissionAck, &protocol.RunMissionAckPayload{
@@ -1341,7 +1341,7 @@ func (c *Client) runMissionChain(ctx context.Context, cancel context.CancelFunc,
 		cfg := c.getConfig()
 		debugLogger, _ := mission.NewDebugLogger("")
 		var newErr error
-		options := []mission.RunnerOption{mission.WithThreadID(parentRunner.ThreadID()), mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge)}
+		options := []mission.RunnerOption{mission.WithThreadID(parentRunner.ThreadID()), mission.WithRunAs(parentRunner.RunAs()), mission.WithDebugLogger(debugLogger), mission.WithHumanBridge(c), mission.WithGatewayBridge(c.gatewayBridge)}
 		if launchRequestID != "" {
 			options = append(options, mission.WithCrossMissionLaunch(parentMissionID, launchRequestID))
 		}
@@ -1514,6 +1514,15 @@ func (c *Client) acknowledgeRecoveredLaunch(parentRunID, launchID, childRunID st
 }
 
 func (c *Client) resumePendingCrossMissionLaunch(cfg *config.Config, parentRunID string, launch missionruntime.CrossMissionLaunch) {
+	parent, _, err := missionruntime.RestoreDurableHarness(c.stores.Runtime, parentRunID)
+	if err != nil {
+		log.Printf("auto-resume: failed to restore parent identity for launch %q: %v", launch.ID, err)
+		return
+	}
+	runAs := parent.Snapshot().RunAs
+	if runAs == "" {
+		runAs = "user:local"
+	}
 	if !c.concurrency.NotifyMissionStarted(launch.Target) {
 		log.Printf("auto-resume: pending launch %q is waiting for capacity on mission %q", launch.ID, launch.Target)
 		return
@@ -1521,6 +1530,7 @@ func (c *Client) resumePendingCrossMissionLaunch(cfg *config.Config, parentRunID
 	debugLogger, _ := mission.NewDebugLogger("")
 	runner, err := mission.NewRunner(cfg, c.configPath, launch.Target, launch.Inputs,
 		mission.WithDebugLogger(debugLogger),
+		mission.WithRunAs(runAs),
 		mission.WithCrossMissionLaunch(parentRunID, launch.ID),
 		mission.WithHumanBridge(c),
 		mission.WithGatewayBridge(c.gatewayBridge))

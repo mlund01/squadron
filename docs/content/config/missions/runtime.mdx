@@ -212,11 +212,11 @@ Cross-mission route choices and their non-secret child inputs are checkpointed
 with the parent run. Restart can reconstruct the same child-launch intent
 without asking the commander to route again.
 
-When the model calls a granted tool, the executor sends the raw call plus its
-run, task, attempt, tool, and run-as attribution to the credential broker. The
-broker authorizes the call and resolves credential references immediately
-before execution. Secret values are therefore absent from commander context,
-task prompts, capability grants, and stored model messages.
+The effective run-as identity is selected before dispatch and saved in the
+initial runtime checkpoint. Restarts restore it, and routed child missions
+inherit it. Every task grant records the same identity. Connection credential
+resolution under that identity is a separate integration concern; declaring a
+run identity alone does not grant access to an MCP server or plugin.
 
 ## Task results
 

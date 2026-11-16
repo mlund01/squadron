@@ -953,13 +953,19 @@ func CreateDurableHarness(runtimeStore store.RuntimeStore, runID, commanderSessi
 	return CreateDurableHarnessWithMaxParallel(runtimeStore, runID, commanderSessionID, definitions, 1)
 }
 
-func CreateDurableHarnessWithMaxParallel(runtimeStore store.RuntimeStore, runID, commanderSessionID string, definitions []TaskDefinition, maxParallel int) (*DurableHarness, error) {
+func CreateDurableHarnessWithMaxParallel(runtimeStore store.RuntimeStore, runID, commanderSessionID string, definitions []TaskDefinition, maxParallel int, runAs ...string) (*DurableHarness, error) {
 	if runtimeStore == nil {
 		return nil, fmt.Errorf("durable store is required")
 	}
 	inner, err := NewHarnessWithMaxParallel(runID, commanderSessionID, definitions, maxParallel)
 	if err != nil {
 		return nil, err
+	}
+	if len(runAs) > 0 {
+		if runAs[0] == "" {
+			return nil, fmt.Errorf("run identity is required")
+		}
+		inner.runAs = runAs[0]
 	}
 	checkpoint := inner.Checkpoint()
 	events := []Event{{

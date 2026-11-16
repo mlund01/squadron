@@ -208,6 +208,7 @@ type TaskResultSummary struct {
 // Snapshot is a revisioned, read-only projection of harness state.
 type Snapshot struct {
 	RunID                 string
+	RunAs                 string
 	RunState              RunState
 	Commander             CommanderSession
 	Revision              uint64
@@ -426,6 +427,7 @@ func (e *ExecutionLeaseLostError) Error() string {
 // without invoking a model, tool, or executor.
 type Checkpoint struct {
 	RunID                 string
+	RunAs                 string
 	RunState              RunState
 	Commander             CommanderSession
 	Revision              uint64
@@ -459,6 +461,7 @@ type Harness struct {
 	mu sync.RWMutex
 
 	runID       string
+	runAs       string
 	runState    RunState
 	commander   CommanderSession
 	revision    uint64
@@ -580,6 +583,7 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 
 	return &Harness{
 		runID:                 runID,
+		runAs:                 "user:local",
 		runState:              RunPending,
 		commander:             CommanderSession{ID: commanderSessionID, State: CommanderInitializing},
 		maxParallel:           maxParallel,
@@ -1376,6 +1380,9 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 	if checkpoint.RunID == "" {
 		return nil, fmt.Errorf("checkpoint run ID is required")
 	}
+	if checkpoint.RunAs == "" {
+		checkpoint.RunAs = "user:local"
+	}
 	if checkpoint.Commander.ID == "" {
 		return nil, fmt.Errorf("checkpoint commander session ID is required")
 	}
@@ -1426,6 +1433,7 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 
 	return &Harness{
 		runID:                 checkpoint.RunID,
+		runAs:                 checkpoint.RunAs,
 		runState:              checkpoint.RunState,
 		commander:             checkpoint.Commander,
 		revision:              checkpoint.Revision,
@@ -2064,6 +2072,7 @@ func (h *Harness) snapshotLocked() Snapshot {
 	sort.Slice(pendingClarifications, func(i, j int) bool { return pendingClarifications[i].RequestID < pendingClarifications[j].RequestID })
 	return Snapshot{
 		RunID:                 h.runID,
+		RunAs:                 h.runAs,
 		RunState:              h.runState,
 		Commander:             h.commander,
 		Revision:              h.revision,
@@ -2136,6 +2145,7 @@ func (h *Harness) checkpointLocked() Checkpoint {
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].Name < definitions[j].Name })
 	return Checkpoint{
 		RunID:                 h.runID,
+		RunAs:                 h.runAs,
 		RunState:              h.runState,
 		Commander:             h.commander,
 		Revision:              h.revision,

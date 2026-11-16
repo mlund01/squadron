@@ -37,4 +37,4 @@ Readers can currently view all run data in their workspace. A user can stop or r
 
 ## Current boundary
 
-Workspace RBAC answers **who may operate Squadron**. It does not yet select the downstream OAuth or API credentials used by plugins and MCP servers. Identity-aware connection authorization is planned separately.
+Workspace RBAC answers **who may operate Squadron**. Connector authorization is a separate identity-level concern. Stored MCP authorizations can currently be listed or disconnected on a user's Profile or a service-principal detail page; they are not yet used as downstream credentials for mission runs. Plugin authorization support will follow later.

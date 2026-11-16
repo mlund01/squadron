@@ -46,4 +46,8 @@ Granting a user access to a service principal does not grant blanket execution. 
 
 The run records both identities: the service principal is the effective execution identity, and the user is the initiator. This preserves accountability and lets the initiating user control the run.
 
-Authentication for plugin and MCP connections is a separate concern. Those credentials will eventually resolve against the effective run identity; they are not implied by workspace or mission permissions today.
+## Connector authorizations
+
+Connector authorizations belong to an identity, separately from workspace access and mission Run grants. Personal authorizations appear on the user's Profile; a service principal's authorizations appear with that principal. Each authorization is scoped to a workspace connector. The list identifies the connector type, such as MCP, rather than treating MCP as the name for the whole feature.
+
+The current UI lists and can disconnect stored MCP authorizations. Connecting or reauthorizing a connector and using its identity-scoped credential during a run are still in development. Plugin authorizations will use this same identity-level concept when plugin authentication is supported.

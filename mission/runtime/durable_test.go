@@ -23,6 +23,19 @@ func TestRunIdentitySurvivesDurableRecovery(t *testing.T) {
 	if err := harness.Start(); err != nil {
 		t.Fatal(err)
 	}
+	wrongGrant := testGrant("work")
+	wrongGrant.RunAs = "user:someone-else"
+	if _, err := harness.DispatchTask(DispatchRequest{RequestID: "wrong-identity", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: wrongGrant}); err == nil {
+		t.Fatal("dispatch accepted a different execution identity")
+	}
+	if got := harness.Snapshot(); got.RunAs != "service_principal:sp-1" || got.Tasks["work"].State != TaskReady {
+		t.Fatalf("rejected dispatch changed run state: %#v", got)
+	}
+	grant := testGrant("work")
+	grant.RunAs = "service_principal:sp-1"
+	if _, err := harness.DispatchTask(DispatchRequest{RequestID: "right-identity", TaskName: "work", ReadySetRevision: harness.Snapshot().Revision, Grant: grant}); err != nil {
+		t.Fatalf("dispatch with run identity: %v", err)
+	}
 	restored, _, err := RestoreDurableHarness(runtimeStore, "run-identity")
 	if err != nil {
 		t.Fatal(err)

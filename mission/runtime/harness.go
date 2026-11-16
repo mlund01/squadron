@@ -583,7 +583,6 @@ func NewHarnessWithMaxParallel(runID, commanderSessionID string, definitions []T
 
 	return &Harness{
 		runID:                 runID,
-		runAs:                 "user:local",
 		runState:              RunPending,
 		commander:             CommanderSession{ID: commanderSessionID, State: CommanderInitializing},
 		maxParallel:           maxParallel,
@@ -1380,9 +1379,6 @@ func RestoreHarness(checkpoint Checkpoint) (*Harness, error) {
 	if checkpoint.RunID == "" {
 		return nil, fmt.Errorf("checkpoint run ID is required")
 	}
-	if checkpoint.RunAs == "" {
-		checkpoint.RunAs = "user:local"
-	}
 	if checkpoint.Commander.ID == "" {
 		return nil, fmt.Errorf("checkpoint commander session ID is required")
 	}
@@ -1511,6 +1507,9 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 	if err := validateExecutionGrant(request.TaskName, request.Grant); err != nil {
 		return Dispatch{}, err
 	}
+	if h.runAs != "" && request.Grant.RunAs != h.runAs {
+		return Dispatch{}, fmt.Errorf("execution grant identity %q differs from run identity %q", request.Grant.RunAs, h.runAs)
+	}
 	if err := validateMemoryGrantPolicy(definition.MemoryPolicy, request.Grant.Memory); err != nil {
 		return Dispatch{}, err
 	}
@@ -1544,6 +1543,10 @@ func (h *Harness) DispatchTask(request DispatchRequest) (Dispatch, error) {
 		}
 	}
 
+	if h.runAs == "" {
+		// Older and direct harness callers bind the identity on first dispatch.
+		h.runAs = request.Grant.RunAs
+	}
 	h.taskStates[request.TaskName] = TaskDispatching
 	h.attempts[request.TaskName]++
 	attempt := h.attempts[request.TaskName]

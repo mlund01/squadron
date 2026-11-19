@@ -807,7 +807,7 @@ The HCL block is zero-config — just declare the URL:
 
 ```hcl
 mcp "linear" {
-  url = "https://mcp.linear.app/sse"
+  url = "https://mcp.linear.app/mcp"
 }
 ```
 

@@ -145,7 +145,7 @@ HTTP MCP servers that use OAuth 2.1 work with zero extra configuration in the HC
 
 ```hcl
 mcp "linear" {
-  url = "https://mcp.linear.app/sse"
+  url = "https://mcp.linear.app/mcp"
 }
 ```
 
@@ -192,7 +192,7 @@ Shows every configured MCP server and its current auth state without making any 
 $ squadron mcp status
 NAME                 LOCATION                                           AUTH            EXPIRES
 filesystem           npm:@modelcontextprotocol/server-filesystem        n/a             -
-linear               https://mcp.linear.app/sse                         connected       in 167h
+linear               https://mcp.linear.app/mcp                         connected       in 167h
 self                 http://localhost:8090/mcp                          no token        -
 ```
 
